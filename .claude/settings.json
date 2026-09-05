@@ -1,0 +1,176 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(cargo build:*)",
+      "Bash(cargo check:*)",
+      "Bash(cargo test:*)",
+      "Bash(cargo clippy:*)",
+      "Bash(cargo fmt:*)",
+      "Bash(cargo doc:*)",
+      "Bash(cargo tree:*)",
+      "Bash(cargo metadata:*)",
+      "Bash(cargo bench:*)",
+      "Bash(cargo deny:*)",
+      "Bash(cargo add:*)",
+      "Bash(cargo search:*)",
+      "Bash(rustfmt:*)",
+      "Bash(rustc --version)",
+      "Bash(rustup show)",
+      "Bash(rustup toolchain list)",
+      "Bash(make qualite)",
+      "Bash(make:*)",
+      "Bash(git status:*)",
+      "Bash(git diff:*)",
+      "Bash(git log:*)",
+      "Bash(git show:*)",
+      "Bash(git branch:*)",
+      "Bash(git add:*)",
+      "Bash(git restore:*)",
+      "Bash(git switch:*)",
+      "Bash(git checkout:*)",
+      "Bash(python3 .claude/hooks/test_hooks.py)",
+      "Bash(python3 .claude/hooks/verifier_versions.py)",
+      "WebFetch(domain:doc.rust-lang.org)",
+      "WebFetch(domain:docs.rs)",
+      "WebFetch(domain:crates.io)",
+      "WebFetch(domain:static.rust-lang.org)",
+      "WebFetch(domain:blog.rust-lang.org)",
+      "WebFetch(domain:rust-lang.github.io)",
+      "WebFetch(domain:gpui.rs)",
+      "WebFetch(domain:zed.dev)",
+      "WebFetch(domain:arrow.apache.org)",
+      "WebFetch(domain:www.postgresql.org)",
+      "WebFetch(domain:dev.mysql.com)",
+      "WebFetch(domain:www.sqlite.org)",
+      "WebFetch(domain:duckdb.org)",
+      "WebFetch(domain:docs.wasmtime.dev)",
+      "WebFetch(domain:component-model.bytecodealliance.org)",
+      "WebFetch(domain:code.claude.com)",
+      "WebFetch(domain:modelcontextprotocol.io)"
+    ],
+    "ask": [
+      "Bash(git push:*)",
+      "Bash(git merge:*)",
+      "Bash(git rebase:*)",
+      "Bash(git reset:*)",
+      "Bash(git clean:*)",
+      "Bash(git tag:*)",
+      "Bash(cargo install:*)",
+      "Bash(cargo update:*)",
+      "Bash(cargo yank:*)",
+      "Bash(rustup update:*)",
+      "Bash(rustup default:*)",
+      "Bash(psql:*)",
+      "Bash(mysql:*)",
+      "Bash(mongosh:*)",
+      "Bash(redis-cli:*)",
+      "Bash(docker:*)",
+      "Bash(docker compose:*)",
+      "Bash(brew:*)",
+      "Bash(curl:*)",
+      "Bash(wget:*)"
+    ],
+    "deny": [
+      "Read(./.env)",
+      "Read(./.env.*)",
+      "Read(./**/.env)",
+      "Read(./**/.env.*)",
+      "Read(./**/*.pem)",
+      "Read(./**/*.key)",
+      "Read(./**/*.p12)",
+      "Read(./**/secrets/**)",
+      "Read(./**/.ssh/**)",
+      "Read(~/.ssh/**)",
+      "Read(~/.cargo/credentials.toml)",
+      "Read(~/.aws/**)",
+      "Edit(./**/secrets/**)",
+      "Edit(./.env)",
+      "Bash(git commit --no-verify:*)",
+      "Bash(git push --force:*)",
+      "Bash(git push -f:*)",
+      "Bash(cargo publish:*)",
+      "Bash(cargo owner:*)",
+      "Bash(curl * | sh)",
+      "Bash(curl * | bash)"
+    ]
+  },
+  "enabledMcpjsonServers": ["fetch"],
+  "hooks": {
+    "SessionStart": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/contexte_session.py",
+            "args": [],
+            "timeout": 15,
+            "statusMessage": "Lecture de l'état du dépôt…"
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/code_interdit.py",
+            "args": [],
+            "timeout": 15,
+            "statusMessage": "Vérification des invariants…"
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/bash_interdit.py",
+            "args": [],
+            "timeout": 15,
+            "statusMessage": "Vérification de la commande…"
+          },
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/message_commit.py",
+            "args": [],
+            "timeout": 15,
+            "statusMessage": "Vérification du message de commit…"
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Write|Edit|MultiEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "if": "Edit(**/*.rs)",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/formater.py",
+            "args": [],
+            "timeout": 30,
+            "statusMessage": "rustfmt…"
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "matcher": "*",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PROJECT_DIR}/.claude/hooks/rappel_qualite.py",
+            "args": [],
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

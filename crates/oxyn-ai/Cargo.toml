@@ -1,0 +1,26 @@
+[package]
+name = "oxyn-ai"
+description = "Runtime d'agents : outils, contexte, niveaux de confidentialité"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+oxyn-core.workspace = true
+oxyn-catalog.workspace = true
+oxyn-llm.workspace = true
+oxyn-query.workspace = true
+async-trait.workspace = true
+futures.workspace = true
+indexmap.workspace = true
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true

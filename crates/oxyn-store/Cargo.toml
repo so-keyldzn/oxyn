@@ -1,0 +1,25 @@
+[package]
+name = "oxyn-store"
+description = "État local persistant : workspaces, historique, journal d'audit (SQLite)"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+oxyn-core.workspace = true
+chrono.workspace = true
+directories.workspace = true
+parking_lot.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

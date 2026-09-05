@@ -1,0 +1,36 @@
+[package]
+name = "oxyn"
+description = "Oxyn — the modern database workspace"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[[bin]]
+name = "oxyn"
+path = "src/main.rs"
+
+[dependencies]
+oxyn-core.workspace = true
+oxyn-catalog.workspace = true
+oxyn-data.workspace = true
+oxyn-driver.workspace = true
+oxyn-driver-postgres.workspace = true
+oxyn-driver-sqlite.workspace = true
+oxyn-exec.workspace = true
+oxyn-query.workspace = true
+oxyn-secrets.workspace = true
+oxyn-store.workspace = true
+oxyn-ui.workspace = true
+anyhow.workspace = true
+arrow.workspace = true
+directories.workspace = true
+gpui.workspace = true
+parking_lot.workspace = true
+tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time", "macros"] }
+tracing.workspace = true
+tracing-subscriber.workspace = true

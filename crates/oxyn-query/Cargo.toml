@@ -1,0 +1,21 @@
+[package]
+name = "oxyn-query"
+description = "Analyse des requêtes : dialectes, classification d'intention, formatage"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+oxyn-core.workspace = true
+serde.workspace = true
+sqlparser.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[dev-dependencies]
+rstest.workspace = true

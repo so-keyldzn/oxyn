@@ -1,0 +1,32 @@
+# Rust
+/target/
+**/*.rs.bk
+*.pdb
+
+# Secrets — doublés par permissions.deny dans .claude/settings.json.
+# Les deux sont nécessaires : git protège le dépôt, les permissions protègent
+# le contexte de la session (I-03, docs/SECURITY.md).
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+secrets/
+
+# Réglages Claude personnels, non partagés
+.claude/settings.local.json
+CLAUDE.local.md
+__pycache__/
+*.pyc
+
+# Sauvegardes locales — git garde l'historique, un .bak ne sert que localement
+*.bak
+
+# macOS
+.DS_Store
+
+# Bancs d'essai et profilage
+/criterion/
+*.perf
+*.trace
