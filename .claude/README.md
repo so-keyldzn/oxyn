@@ -4,6 +4,11 @@
 travailler**. La carte du dépôt et les invariants sont dans
 [CLAUDE.md](../CLAUDE.md).
 
+Pour Codex, l'entrée est [AGENTS.md](../AGENTS.md) et les compétences locales
+sont décrites dans [.agents/README.md](../.agents/README.md). Les procédures,
+règles, profils, gabarits et listes de contrôle restent partagés ici ; les
+hooks et permissions de `settings.json` restent propres à Claude Code.
+
 ## Les quatre supports, et pourquoi on ne les confond pas
 
 | Support | Nature | Quand |

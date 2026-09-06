@@ -31,8 +31,8 @@ MOTIF_EMPLACEMENT = re.compile(r"XXXX|NNNN|AAAA-MM-JJ")
 
 
 def _fichiers_markdown() -> list[Path]:
-    fichiers = [CLAUDE_MD]
-    for repertoire in ("docs", ".claude"):
+    fichiers = [CLAUDE_MD, RACINE / "AGENTS.md"]
+    for repertoire in ("docs", ".claude", ".agents"):
         fichiers += sorted((RACINE / repertoire).rglob("*.md"))
     return [f for f in fichiers if f.is_file()]
 

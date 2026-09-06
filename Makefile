@@ -14,7 +14,7 @@ APP := target/$(PROFIL)/Oxyn.app
 
 aide:
 	@echo "make qualite   la porte de qualité complète"
-	@echo "make socle     vérifie le socle .claude/ (utilisable sans code Rust)"
+	@echo "make socle     vérifie le socle Claude et Codex (utilisable sans code Rust)"
 	@echo "make hooks     rejoue les tests des hooks"
 	@echo "make app       assemble target/\$$PROFIL/Oxyn.app (PROFIL=release pour publier)"
 	@echo "make lancer    assemble puis ouvre l'application"
