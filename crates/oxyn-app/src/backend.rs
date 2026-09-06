@@ -29,6 +29,25 @@ use tokio::sync::broadcast;
 /// be mistaken for a real system ([I-02](../../../CLAUDE.md#i-02)).
 const BAC_A_SABLE: &str = "scratch (in-memory SQLite)";
 
+/// What the status bar is allowed to say about a connection.
+///
+/// Deliberately **not** the [`ConnectionConfig`]: that one carries parameter
+/// values and a secret reference, and it also carries the
+/// [`ConnectionId`] — none of which belongs on screen
+/// ([I-03](../../../CLAUDE.md#i-03)). Narrowing the type here is what makes the
+/// rule hold: the view cannot display what it was never handed.
+#[derive(Debug, Clone)]
+pub struct ConnectionDisplay {
+    /// The name the user gave the connection.
+    pub name: String,
+    /// The protocol, as the driver names it.
+    pub driver: String,
+    /// How the connection is marked.
+    pub environment: Environment,
+    /// Whether writes are refused on it.
+    pub read_only: bool,
+}
+
 /// The assembled backend, shared by every view.
 ///
 /// Cloneable by `Arc`: the views hold it, the runtime holds it, and neither owns
@@ -42,6 +61,8 @@ struct Inner {
     executor: Executor,
     /// The scratch connection, ready before the window opens.
     scratch: ConnectionId,
+    /// What the status bar shows about it.
+    scratch_display: ConnectionDisplay,
     /// Kept alive for as long as the backend: dropping it would abort every
     /// in-flight statement, and a dropped future does not cancel a server-side
     /// query ([I-13](../../../CLAUDE.md#i-13)).
@@ -97,13 +118,21 @@ impl Backend {
             .context("loading the saved connections")?;
         tracing::info!(connections = known, "saved connections registered");
 
-        let scratch = ouvrir_le_bac_a_sable(&store, &policy, &executor)
+        let config = ouvrir_le_bac_a_sable(&store, &policy, &executor)
             .context("preparing the scratch connection")?;
+        let scratch = config.id;
+        let scratch_display = ConnectionDisplay {
+            name: config.name.clone(),
+            driver: config.driver.to_string(),
+            environment: config.environment,
+            read_only: config.read_only,
+        };
 
         Ok(Self {
             inner: Arc::new(Inner {
                 executor,
                 scratch,
+                scratch_display,
                 runtime,
             }),
         })
@@ -112,6 +141,15 @@ impl Backend {
     /// The connection the editor runs against until a picker exists.
     pub fn scratch(&self) -> ConnectionId {
         self.inner.scratch
+    }
+
+    /// What the status bar shows about that connection.
+    ///
+    /// The status bar must name the connection a statement is about to run
+    /// against — saying "no connection" while the editor executes is the one
+    /// thing it must never do ([I-02](../../../CLAUDE.md#i-02)).
+    pub fn scratch_display(&self) -> &ConnectionDisplay {
+        &self.inner.scratch_display
     }
 
     /// The buffer behind a result id, shared with the grid **without a copy**.
@@ -156,7 +194,7 @@ fn ouvrir_le_bac_a_sable(
     store: &Arc<Store>,
     policy: &Arc<DefaultPolicy>,
     executor: &Executor,
-) -> Result<ConnectionId> {
+) -> Result<ConnectionConfig> {
     let ateliers = store.workspaces().list().context("listing workspaces")?;
     let atelier = match ateliers.into_iter().next() {
         Some(existant) => existant,
@@ -189,5 +227,5 @@ fn ouvrir_le_bac_a_sable(
     executor.register_connection(&config);
     tracing::info!(connection = %config.name, "scratch connection ready");
 
-    Ok(config.id)
+    Ok(config)
 }

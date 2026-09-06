@@ -9,8 +9,8 @@ use gpui::prelude::*;
 use gpui::{Entity, FocusHandle, Focusable, Window, div, px};
 use oxyn_core::{Actor, CancelToken, Command, Event, ExecRequest, QueryLanguage, SessionId};
 use oxyn_ui::{
-    DataGrid, EditorEvent, ExecutionStatus, GridEvent, QueryEditor, StatusBar, StatusBarEvent,
-    Theme,
+    ActiveConnection, DataGrid, EditorEvent, ExecutionStatus, GridEvent, QueryEditor, StatusBar,
+    StatusBarEvent, Theme,
 };
 use tokio::sync::broadcast::error::RecvError;
 
@@ -38,7 +38,20 @@ impl Workspace {
     pub fn new(backend: Backend, cx: &mut Context<'_, Self>) -> Self {
         let editor = cx.new(QueryEditor::new);
         let grid = cx.new(DataGrid::new);
+
+        // La barre porte la connexion dès l'ouverture. Afficher « aucune
+        // connexion » pendant que l'éditeur exécute serait le mensonge le plus
+        // coûteux de l'interface : c'est précisément ici que l'utilisateur lit
+        // contre quoi il est sur le point d'écrire
+        // ([I-02](../../../CLAUDE.md#i-02)).
+        let vue = backend.scratch_display();
+        let mut active =
+            ActiveConnection::new(vue.name.clone(), vue.driver.clone(), vue.environment);
+        if vue.read_only {
+            active = active.read_only();
+        }
         let status = cx.new(|_| StatusBar::new());
+        status.update(cx, |bar, cx| bar.set_connection(Some(active), cx));
 
         cx.subscribe(&editor, Self::on_editor_event).detach();
         cx.subscribe(&grid, Self::on_grid_event).detach();
