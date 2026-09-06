@@ -36,6 +36,7 @@
 //! avec. Sans lui, l'échéance posée ici ne se déclenche jamais.
 
 use std::fmt;
+use std::num::NonZeroUsize;
 use std::path::{Path, PathBuf};
 
 use wasmtime::component::{Component, Linker};
@@ -232,7 +233,11 @@ impl WasmHost {
             .wasm_component_model(true)
             .consume_fuel(true)
             .epoch_interruption(true)
-            .wasm_backtrace(true)
+            // `wasm_backtrace_max_frames` remplace `wasm_backtrace`, déprécié :
+            // le réglage n'est plus un booléen mais une borne. `Some(20)` est le
+            // défaut de wasmtime, écrit explicitement — une trace non bornée est
+            // un vecteur de saturation pour un plugin qui échoue en boucle.
+            .wasm_backtrace_max_frames(NonZeroUsize::new(20))
             .max_wasm_stack(limits.stack_bytes);
 
         let engine = Engine::new(&config).map_err(|err| PluginError::WasmHost {

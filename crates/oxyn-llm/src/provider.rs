@@ -456,7 +456,7 @@ mod tests {
         assert!(ProviderId::new("1ollama").is_err(), "chiffre en tête");
         assert!(ProviderId::new("open ai").is_err(), "espace");
         assert!(ProviderId::new("open.ai").is_err(), "point");
-        assert!(ProviderId::new(&"a".repeat(33)).is_err(), "trop long");
+        assert!(ProviderId::new("a".repeat(33)).is_err(), "trop long");
         assert!(ProviderId::new("a").is_ok());
         assert!(ProviderId::new("lm-studio").is_ok());
         assert!(ProviderId::new("openai_v2").is_ok());

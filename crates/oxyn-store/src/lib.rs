@@ -114,7 +114,7 @@ pub use workspaces::{Workspace, Workspaces};
 mod tests {
     use crate::{HistoryRecord, JournalRecord, Store};
     use oxyn_core::{
-        Actor, AgentId, AgentSessionId, Command, ConnectionConfig, Decision, DriverId, Environment,
+        Actor, AgentId, AgentSessionId, Command, ConnectionConfig, DriverId, Environment,
         ExecRequest, MutationRisk, PolicyGate, QueryLanguage, SessionId, StatementIntent,
     };
 

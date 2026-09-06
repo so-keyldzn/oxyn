@@ -318,6 +318,21 @@ async fn run(request: StreamRequest, cancel: CancelToken, events: mpsc::Sender<C
         // `Statement::query_with` plutôt que `sqlx::query_statement_with` : le type
         // de base y est celui de l'instruction, sans inférence à faire remonter.
         let requete = statement.query_with(arguments);
+        // `fetch_many` est déprécié parce que le multi-instruction n'a jamais
+        // marché qu'en SQLite. Ce n'est pas ce qu'on en fait : c'est le seul
+        // flux qui rende aussi le `QueryResult` final, donc le seul qui donne
+        // `rows_affected()` — le bras `Either::Left` plus bas. Le `raw_sql()`
+        // que la dépréciation propose abandonnerait l'instruction préparée,
+        // donc les valeurs liées, donc I-10 : c'est un recul de sûreté, pas un
+        // remplacement.
+        //
+        // TODO(2026-12-01, oxyn-driver-postgres) : revenir à une API non
+        // dépréciée quand sqlx exposera le compte de lignes affectées sur
+        // `fetch()`. Suivi : https://github.com/launchbadge/sqlx/issues/3108
+        #[expect(
+            deprecated,
+            reason = "seul flux exposant rows_affected() ; voir ci-dessus"
+        )]
         let mut flux = requete.fetch_many(&mut *connection);
 
         loop {
@@ -437,12 +452,11 @@ async fn run(request: StreamRequest, cancel: CancelToken, events: mpsc::Sender<C
                 .await;
         }
         Halt::Exhausted | Halt::RowLimit => {
-            if !assembleur.is_empty() {
-                if let Emission::Echouee | Emission::Abandonne =
+            if !assembleur.is_empty()
+                && let Emission::Echouee | Emission::Abandonne =
                     emettre(&mut assembleur, &driver, &events).await
-                {
-                    return;
-                }
+            {
+                return;
             }
             let _ = events
                 .send(CursorEvent::Finished {
@@ -512,6 +526,19 @@ async fn attendre(deadline: Option<tokio::time::Instant>) {
     }
 }
 
+// Le dimensionnement des lots, vérifié à la **compilation**.
+//
+// Un `assert!` d'exécution sur des constantes ne peut pas échouer autrement
+// qu'en refusant de compiler plus tard : autant le dire ici. Le seuil en octets
+// protège de l'OOM sur des BLOB ; le plafond de lignes garantit qu'un premier
+// lot arrive vite sur des colonnes étroites
+// ([drivers.md](../../../.claude/rules/drivers.md) — « le lot se dimensionne en
+// octets, pas en lignes »).
+const _: () = {
+    assert!(BATCH_BYTE_BUDGET == 1 << 20);
+    assert!(BATCH_ROW_CEILING > 0);
+};
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -536,14 +563,5 @@ mod tests {
                 "{raison:?} laisse une requête en cours"
             );
         }
-    }
-
-    #[test]
-    fn le_lot_se_dimensionne_en_octets_avec_un_plafond_de_lignes() {
-        // Le seuil en octets protège de l'OOM sur des BLOB ; le plafond de
-        // lignes garantit qu'un premier lot arrive vite sur des colonnes
-        // étroites.
-        assert_eq!(BATCH_BYTE_BUDGET, 1 << 20);
-        assert!(BATCH_ROW_CEILING > 0);
     }
 }

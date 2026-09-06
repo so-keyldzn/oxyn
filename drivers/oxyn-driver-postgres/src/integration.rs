@@ -56,6 +56,21 @@ fn cible() -> Option<(ConnectionConfig, Credentials)> {
     Some((config, identifiants))
 }
 
+/// L'erreur d'une exécution qui devait être refusée.
+///
+/// `Result::expect_err` exige `Debug` sur la variante `Ok`, donc sur
+/// `dyn Cursor`. Le curseur tient la session, qui tient les identifiants de
+/// connexion : lui donner `Debug` mettrait un secret à un `{:?}` de distance
+/// ([I-03]). Ce passage par `match` n'exige rien de `T`.
+///
+/// [I-03]: ../../../CLAUDE.md#i-03
+fn refus<T>(issue: Result<T, OxynError>, attendu: &str) -> OxynError {
+    match issue {
+        Ok(_) => panic!("{attendu}"),
+        Err(err) => err,
+    }
+}
+
 /// Ouvre une session, ou rend `None` en le disant.
 async fn session() -> Option<Box<dyn Session>> {
     let Some((config, identifiants)) = cible() else {
@@ -541,10 +556,12 @@ async fn une_erreur_de_syntaxe_est_permanente_et_porte_son_sqlstate() {
     let Some(session) = session().await else {
         return;
     };
-    let erreur = session
-        .execute(lecture("SELECT FROM WHERE"), &CancelToken::new())
-        .await
-        .expect_err("rejet attendu");
+    let erreur = refus(
+        session
+            .execute(lecture("SELECT FROM WHERE"), &CancelToken::new())
+            .await,
+        "rejet attendu",
+    );
 
     assert!(
         !erreur.is_retryable(),

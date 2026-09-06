@@ -285,7 +285,13 @@ mod tests {
         let inconnu = DriverId::new("oracle").expect("identifiant valide");
 
         assert!(registre.get(&inconnu).is_none());
-        let err = registre.require(&inconnu).expect_err("refus attendu");
+        // `expect_err` exigerait `Debug` sur la variante `Ok`, donc sur
+        // `dyn Driver` — et un driver porte des identifiants de connexion, que
+        // I-03 interdit d'exposer par `Debug`. Le `match` ne demande rien.
+        let err = match registre.require(&inconnu) {
+            Ok(_) => panic!("refus attendu : « oracle » n'est pas enregistré"),
+            Err(err) => err,
+        };
         assert!(err.to_string().contains("oracle"), "{err}");
         assert!(err.is_user_error());
     }

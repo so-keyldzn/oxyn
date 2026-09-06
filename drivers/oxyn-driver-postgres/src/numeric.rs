@@ -154,6 +154,11 @@ impl<'a> Lecteur<'a> {
     }
 
     /// La tranche est-elle épuisée ?
+    ///
+    /// `#[cfg(test)]` : le décodeur ne s'en sert pas — il lit un nombre fixe de
+    /// groupes annoncé par l'en-tête. Ce sont les tests qui vérifient qu'il n'a
+    /// rien laissé derrière lui.
+    #[cfg(test)]
     pub(crate) const fn est_vide(&self) -> bool {
         self.reste.is_empty()
     }

@@ -305,7 +305,13 @@ mod tests {
         assert!(rendu.contains("prod-eu"), "le nom est montrable : {rendu}");
         assert!(rendu.contains("host"), "les clés sont montrables : {rendu}");
         assert!(rendu.contains("postgres"));
-        assert!(rendu.contains("production"));
+        // `Production` et non `production` : le `Debug` dérivé rend le nom de la
+        // variante Rust. La minuscule est la forme serde
+        // (`rename_all = "lowercase"`), qui ne vaut que pour ce qui est persisté.
+        assert!(
+            rendu.contains("Production"),
+            "l'environnement doit rester lisible : {rendu}"
+        );
     }
 
     #[test]

@@ -795,8 +795,7 @@ mod tests {
         let dernier_outil = session
             .messages()
             .iter()
-            .filter(|m| m.role == oxyn_llm::Role::Tool)
-            .last()
+            .rfind(|m| m.role == oxyn_llm::Role::Tool)
             .expect("un résultat d'outil");
         assert!(dernier_outil.content.contains("status: denied"));
         assert!(dernier_outil.content.contains("Do not retry"));

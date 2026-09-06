@@ -598,15 +598,13 @@ fn statement_facts(statement: &Statement) -> Facts {
         | Statement::CreateUser(_)
         | Statement::AlterUser(_) => Facts::GRANT,
 
-        Statement::Set(set) => match set {
-            // `SET ROLE` et `SET SESSION AUTHORIZATION` changent l'identité
-            // sous laquelle tout le reste s'exécute.
-            Set::SetRole { .. } | Set::SetSessionAuthorization(_) => Facts::GRANT,
-            // Les autres `SET` ne sont pas anodins non plus :
-            // `SET TRANSACTION READ WRITE` défait une session en lecture seule.
-            // Faute de pouvoir les distinguer un par un, ils restent `Unknown`.
-            _ => Facts::UNKNOWN,
-        },
+        // `SET ROLE` et `SET SESSION AUTHORIZATION` changent l'identité sous
+        // laquelle tout le reste s'exécute.
+        Statement::Set(Set::SetRole { .. } | Set::SetSessionAuthorization(_)) => Facts::GRANT,
+        // Les autres `SET` ne sont pas anodins non plus : `SET TRANSACTION READ
+        // WRITE` défait une session en lecture seule. Faute de pouvoir les
+        // distinguer un par un, ils restent `Unknown`.
+        Statement::Set(_) => Facts::UNKNOWN,
 
         // ── Le reste ────────────────────────────────────────────────────────
         // `ANALYZE`, `VACUUM`, `PRAGMA`, curseurs, `EXECUTE` d'une instruction

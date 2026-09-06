@@ -253,10 +253,8 @@ impl CatalogPath {
         namespace: Option<String>,
         relation: Option<String>,
     ) -> Result<Self, CatalogPathError> {
-        for palier in [&catalog, &namespace, &relation] {
-            if let Some(nom) = palier {
-                validate_segment(nom)?;
-            }
+        for nom in [&catalog, &namespace, &relation].into_iter().flatten() {
+            validate_segment(nom)?;
         }
         Ok(Self {
             catalog,

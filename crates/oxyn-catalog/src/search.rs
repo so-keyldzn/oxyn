@@ -50,6 +50,23 @@ const FACTEUR_CHAMP: f32 = 0.6;
 /// Le terme apparaît dans un commentaire.
 const SCORE_COMMENTAIRE: f32 = 0.25;
 
+// L'ordre du barème, vérifié à la **compilation** et non par un test.
+//
+// Un `assert!` d'exécution sur des constantes ne teste rien qu'un test puisse
+// échouer à faire : clippy le signale à juste titre. En `const`, une inversion
+// du barème — la correspondance exacte passant sous le préfixe, par exemple —
+// ne produit pas un test rouge : elle ne compile pas. Le classement des
+// résultats de recherche ne peut alors plus s'inverser par inadvertance.
+const _: () = {
+    assert!(SCORE_EXACT > SCORE_PREFIXE);
+    assert!(SCORE_PREFIXE > SCORE_MOT_EXACT);
+    assert!(SCORE_MOT_EXACT > SCORE_MOT_PREFIXE);
+    assert!(SCORE_MOT_PREFIXE > SCORE_SOUS_CHAINE);
+    assert!(SCORE_SOUS_CHAINE > SCORE_COMMENTAIRE);
+    // Un facteur hors de ]0, 1[ ne pondère plus : il annule ou il amplifie.
+    assert!(FACTEUR_CHAMP > 0.0 && FACTEUR_CHAMP < 1.0);
+};
+
 /// Ce qui, dans une relation, a répondu au terme cherché.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -211,11 +228,12 @@ fn noter(
             }
         }
 
-        if let Some(texte) = &commentaire {
-            if texte.contains(terme.as_str()) && SCORE_COMMENTAIRE > score_terme {
-                score_terme = SCORE_COMMENTAIRE;
-                origine_terme = MatchKind::Comment;
-            }
+        if let Some(texte) = &commentaire
+            && texte.contains(terme.as_str())
+            && SCORE_COMMENTAIRE > score_terme
+        {
+            score_terme = SCORE_COMMENTAIRE;
+            origine_terme = MatchKind::Comment;
         }
 
         total += score_terme;
@@ -524,16 +542,6 @@ mod tests {
     fn ce_qui_ne_correspond_a_rien_ne_ressort_pas() {
         let cache = cache_essai();
         assert!(search(&cache, "facturation", &SearchOptions::default()).is_empty());
-    }
-
-    #[test]
-    fn le_bareme_est_ordonne() {
-        assert!(SCORE_EXACT > SCORE_PREFIXE);
-        assert!(SCORE_PREFIXE > SCORE_MOT_EXACT);
-        assert!(SCORE_MOT_EXACT > SCORE_MOT_PREFIXE);
-        assert!(SCORE_MOT_PREFIXE > SCORE_SOUS_CHAINE);
-        assert!(SCORE_SOUS_CHAINE > SCORE_COMMENTAIRE);
-        assert!(FACTEUR_CHAMP > 0.0 && FACTEUR_CHAMP < 1.0);
     }
 
     #[test]

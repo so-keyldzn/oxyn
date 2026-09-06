@@ -122,6 +122,21 @@ mod tests {
         session(BatchLimits::default()).await
     }
 
+    /// L'erreur d'une exécution qui devait être refusée.
+    ///
+    /// `Result::expect_err` exige `Debug` sur la variante `Ok`, donc ici sur
+    /// `dyn Cursor`. Le curseur tient la session, qui tient les identifiants de
+    /// connexion : lui donner `Debug` mettrait un secret à un `{:?}` de
+    /// distance ([I-03]). Ce passage par `match` n'exige rien de `T`.
+    ///
+    /// [I-03]: ../../../CLAUDE.md#i-03
+    fn refus<T>(issue: Result<T, OxynError>, attendu: &str) -> OxynError {
+        match issue {
+            Ok(_) => panic!("{attendu}"),
+            Err(err) => err,
+        }
+    }
+
     /// Une demande d'écriture : les limites par défaut sont en lecture seule.
     fn ecriture(sql: &str) -> ExecRequest {
         ExecRequest::new(QueryLanguage::SQL, sql).with_limits(ExecLimits::unbounded())
@@ -307,10 +322,12 @@ mod tests {
         executer(session.as_ref(), "CREATE TABLE t(v INTEGER)").await;
 
         let jeton = CancelToken::new();
-        let err = session
-            .execute(lecture("INSERT INTO t(v) VALUES (1)"), &jeton)
-            .await
-            .expect_err("refus attendu");
+        let err = refus(
+            session
+                .execute(lecture("INSERT INTO t(v) VALUES (1)"), &jeton)
+                .await,
+            "refus attendu",
+        );
         assert!(matches!(err, OxynError::PolicyDenied { .. }), "{err:?}");
 
         // Et rien n'a été écrit.
@@ -576,10 +593,10 @@ mod tests {
         let session = atelier().await;
         let jeton = CancelToken::new();
         let demande = ecriture("SELECT ?1; SELECT 2").with_params(vec![ScalarValue::Int64(1)]);
-        let err = session
-            .execute(demande, &jeton)
-            .await
-            .expect_err("rien ne dit à quelle instruction ils se rapportent");
+        let err = refus(
+            session.execute(demande, &jeton).await,
+            "rien ne dit à quelle instruction ils se rapportent",
+        );
         assert!(!err.is_retryable(), "{err:?}");
     }
 
@@ -587,13 +604,15 @@ mod tests {
     async fn un_langage_non_declare_est_refuse_pas_traduit() {
         let session = atelier().await;
         let jeton = CancelToken::new();
-        let err = session
-            .execute(
-                ExecRequest::new(QueryLanguage::Cypher, "MATCH (n) RETURN n"),
-                &jeton,
-            )
-            .await
-            .expect_err("refus attendu");
+        let err = refus(
+            session
+                .execute(
+                    ExecRequest::new(QueryLanguage::Cypher, "MATCH (n) RETURN n"),
+                    &jeton,
+                )
+                .await,
+            "refus attendu",
+        );
         assert!(matches!(err, OxynError::NotSupported { .. }), "{err:?}");
     }
 
@@ -601,10 +620,10 @@ mod tests {
     async fn une_erreur_de_syntaxe_est_permanente_et_montrable() {
         let session = atelier().await;
         let jeton = CancelToken::new();
-        let err = session
-            .execute(lecture("SLECT 1"), &jeton)
-            .await
-            .expect_err("refus attendu");
+        let err = refus(
+            session.execute(lecture("SLECT 1"), &jeton).await,
+            "refus attendu",
+        );
         assert!(
             !err.is_retryable(),
             "une erreur de syntaxe ne se retente jamais : {err:?}"

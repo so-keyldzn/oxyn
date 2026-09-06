@@ -559,6 +559,21 @@ mod tests {
         ApiKey::new("sk-test-0123456789")
     }
 
+    /// L'erreur d'un appel qui devait être refusé.
+    ///
+    /// `Result::expect_err` exige `Debug` sur la variante `Ok`, donc ici sur le
+    /// flux d'événements du fournisseur. Ce flux transporte les réponses du
+    /// modèle, et la requête qui les a produites : lui donner `Debug` mettrait
+    /// le contenu envoyé au fournisseur à un `{:?}` de distance ([I-03]).
+    ///
+    /// [I-03]: ../../../CLAUDE.md#i-03
+    fn refus<T>(issue: std::result::Result<T, OxynError>, attendu: &str) -> OxynError {
+        match issue {
+            Ok(_) => panic!("{attendu}"),
+            Err(err) => err,
+        }
+    }
+
     // ── Construction et URL ────────────────────────────────────────────────
 
     #[test]
@@ -718,8 +733,10 @@ mod tests {
     fn une_requete_sans_modele_est_refusee_avant_tout_appel_reseau() {
         let f = OpenAiCompatibleProvider::ollama().expect("construction");
         let requete = ChatRequest::new("  ", vec![ChatMessage::user("bonjour")]);
-        let err = futures::executor::block_on(f.stream(requete, &CancelToken::new()))
-            .expect_err("modèle vide");
+        let err = refus(
+            futures::executor::block_on(f.stream(requete, &CancelToken::new())),
+            "modèle vide",
+        );
         assert!(matches!(err, OxynError::Config(_)), "{err}");
     }
 
@@ -729,8 +746,10 @@ mod tests {
         let jeton = CancelToken::new();
         jeton.cancel();
         let requete = ChatRequest::new("llama3.2", vec![ChatMessage::user("bonjour")]);
-        let err =
-            futures::executor::block_on(f.stream(requete, &jeton)).expect_err("annulé d'avance");
+        let err = refus(
+            futures::executor::block_on(f.stream(requete, &jeton)),
+            "annulé d'avance",
+        );
         assert!(err.is_cancelled(), "{err}");
     }
 }

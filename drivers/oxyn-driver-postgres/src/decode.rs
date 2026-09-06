@@ -506,7 +506,7 @@ fn render_text(
                 // types d'extension : leur représentation binaire *est* leur
                 // texte.
                 Ok(texte) => builder.append_value(texte),
-                Err(_) => builder.append_value(&render_hex(bytes)),
+                Err(_) => builder.append_value(render_hex(bytes)),
             }
         }
     }

@@ -19,7 +19,6 @@
 //! ([DRIVER-CONTRACT](../../../docs/DRIVER-CONTRACT.md)).
 
 use oxyn_core::{DriverId, ErrorClass, OxynError, StatementIntent};
-use sqlx::error::DatabaseError;
 
 /// `query_canceled` : le serveur confirme l'annulation qu'on lui a demandée.
 const SQLSTATE_QUERY_CANCELED: &str = "57014";
@@ -259,6 +258,9 @@ pub(crate) fn map_stream_error(
 #[cfg(test)]
 mod tests {
     use super::*;
+    // Seul le test implémente ce trait : à la racine du module, il serait un
+    // import inutilisé dans la cible `lib`.
+    use sqlx::error::DatabaseError;
 
     /// Une erreur de base de données factice portant un SQLSTATE donné.
     ///

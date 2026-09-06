@@ -240,14 +240,14 @@ impl PostgresCatalog {
                 // Le flux a été abandonné en cours : la connexion peut porter
                 // des octets non lus, elle ne retourne pas au bassin.
                 connexion.close_on_drop();
-                if let Some(pid) = pid {
-                    if let Err(erreur) = self.canceller.cancel_backend(pid).await {
-                        tracing::warn!(
-                            target: "oxyn::driver::postgres",
-                            erreur = %erreur,
-                            "l'introspection n'a pas pu être annulée côté serveur"
-                        );
-                    }
+                if let Some(pid) = pid
+                    && let Err(erreur) = self.canceller.cancel_backend(pid).await
+                {
+                    tracing::warn!(
+                        target: "oxyn::driver::postgres",
+                        erreur = %erreur,
+                        "l'introspection n'a pas pu être annulée côté serveur"
+                    );
                 }
                 Err(OxynError::Cancelled)
             }

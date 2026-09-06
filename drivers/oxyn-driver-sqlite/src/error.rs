@@ -188,6 +188,16 @@ pub(crate) fn closed() -> OxynError {
 pub(crate) fn open(error: rusqlite::Error) -> OxynError {
     OxynError::Connection(match &error {
         rusqlite::Error::InvalidPath(_) => "the database path is not usable".to_owned(),
+        // Le message détaillé de SQLite embarque le chemin du fichier
+        // (« unable to open database file: /home/… »). Un chemin est un
+        // paramètre de connexion : il n'a pas sa place dans un message qui peut
+        // finir dans un journal, un rapport de plantage ou une invite IA
+        // ([I-03](../../../CLAUDE.md#i-03)). Le `ffi::Error` seul rend
+        // « Error code 14: unable to open database file » — le code étendu et
+        // son libellé canonique, sans rien de l'installation de l'utilisateur.
+        // Le code reste une donnée exploitable, pas une déduction à faire sur le
+        // texte ([rust.md](../../../.claude/rules/rust.md)).
+        rusqlite::Error::SqliteFailure(code, _) => code.to_string(),
         other => other.to_string(),
     })
 }

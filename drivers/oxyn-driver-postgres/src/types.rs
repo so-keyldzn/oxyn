@@ -242,10 +242,10 @@ impl PgDecoding {
 /// installation à l'autre.
 #[must_use]
 pub fn decoding_for(ty: &PgTypeInfo) -> PgDecoding {
-    if let Some(brut) = ty.oid() {
-        if let Some(decodage) = decoding_for_oid(brut.0) {
-            return decodage;
-        }
+    if let Some(brut) = ty.oid()
+        && let Some(decodage) = decoding_for_oid(brut.0)
+    {
+        return decodage;
     }
 
     match ty.kind() {

@@ -106,8 +106,9 @@ pub(crate) fn run(connection: &Connection, job: StreamJob) {
             return;
         }
     };
-    drop(batch);
-
+    // Pas de `drop(batch)` ici : `rusqlite::Batch` n'implémente pas `Drop`, donc
+    // l'appel ne libérait rien — l'emprunt de la connexion se termine de toute
+    // façon à sa dernière utilisation, juste au-dessus.
     let Some(mut statement) = last else {
         // Un texte vide, ou seulement des commentaires.
         let _ = start.send(Ok(nothing(affected)));
@@ -314,7 +315,15 @@ fn stream_rows(
     while let Some(reply) = pulls.blocking_recv() {
         if finished {
             let _ = reply.send(Ok(Pulled::Done { truncated }));
-            continue;
+            // `return` et non `continue` : la source est épuisée, il n'y a plus
+            // rien à produire, et rester dans la boucle **retient le fil
+            // porteur** jusqu'à ce que le curseur soit lâché. Un curseur laissé
+            // dans une portée après avoir été vidé bloquait alors toute
+            // exécution suivante sur la même session — le driver n'a qu'un fil.
+            // `Cursor::next_batch` court-circuite sur son propre `finished` : il
+            // ne tirera plus, et la fermeture du canal ne peut pas lui être
+            // signalée comme une erreur.
+            return;
         }
         let filled = match fill(&mut rows, &mut builders, limits, &mut remaining, effect) {
             Ok(filled) => filled,
@@ -326,13 +335,17 @@ fn stream_rows(
         finished = filled.finished;
         truncated |= filled.truncated;
 
-        let answer = if filled.rows == 0 {
+        let epuise = filled.rows == 0;
+        let answer = if epuise {
             Ok(Pulled::Done { truncated })
         } else {
             finish_batch(&mut builders, &schema).map(Pulled::Batch)
         };
         let failed = answer.is_err();
-        if reply.send(answer).is_err() || failed {
+        // `epuise` rejoint les deux autres causes d'arrêt pour la même raison
+        // qu'au-dessus : une fois `Done` annoncé, garder le fil ne sert plus
+        // qu'à empêcher la requête suivante.
+        if reply.send(answer).is_err() || failed || epuise {
             return;
         }
     }

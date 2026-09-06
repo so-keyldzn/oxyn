@@ -444,11 +444,9 @@ impl DataGrid {
                     cx.notify();
                 }
             }
-            "escape" => {
-                if self.state.is_running() {
-                    cx.emit(GridEvent::CancelRequested);
-                }
-            }
+            // Échap n'annule que pendant une exécution : sur une grille au
+            // repos, il ne doit rien faire du tout.
+            "escape" if self.state.is_running() => cx.emit(GridEvent::CancelRequested),
             _ => {}
         }
     }
@@ -563,6 +561,10 @@ pub fn fit_columns(
                 // mesurer entière ferait une colonne large de tout le document.
                 CellValue::Truncated { text, .. } => text.chars().count(),
                 CellValue::Unrenderable { reason } => reason.chars().count(),
+                // `#[non_exhaustive]` : voir `cell_element`. Une variante
+                // inconnue s'y rend en « unsupported value », dont c'est ici la
+                // largeur — mesurer autre chose couperait le texte affiché.
+                _ => "unsupported value".chars().count(),
             };
             caracteres = caracteres.max(longueur);
         }
@@ -1290,6 +1292,25 @@ fn render_cell(
                     .child(SharedString::from(reason.into_owned())),
             )
             .into_any_element(),
+        // `CellValue` est `#[non_exhaustive]` : une variante ajoutée dans
+        // `oxyn-data` arrive ici sans casser la compilation. Elle se signale
+        // pour la même raison qu'`Unrenderable` — afficher une cellule vide
+        // mentirait sur des données réelles — et la trace nomme la crate à
+        // corriger, parce que le défaut est ici, pas dans les données.
+        autre => {
+            tracing::error!(
+                cell = ?autre,
+                "unhandled CellValue variant: oxyn-ui is behind oxyn-data"
+            );
+            base.text_color(theme.colors.danger)
+                .child(
+                    div()
+                        .whitespace_nowrap()
+                        .text_ellipsis()
+                        .child(SharedString::new_static("unsupported value")),
+                )
+                .into_any_element()
+        }
     }
 }
 

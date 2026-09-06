@@ -225,11 +225,17 @@ mod tests {
     fn null_se_rend_en_majuscules_et_se_distingue_du_vide() {
         assert_eq!(ScalarValue::Null.to_string(), "NULL");
         assert_eq!(ScalarValue::Text(String::new()).to_string(), "");
-        assert_ne!(
+        // Le piège, énoncé comme tel : `Display` ne distingue pas `NULL` de la
+        // chaîne « NULL ». C'est délibéré — `Display` rend une valeur, il ne
+        // porte pas de typographie — et c'est pour cette raison que
+        // `oxyn_ui::data_grid` rend `CellValue::Null` en italique et dans une
+        // couleur propre. Quiconque écrirait une comparaison de valeurs sur ce
+        // rendu prendrait l'un pour l'autre.
+        assert_eq!(
             ScalarValue::Null.to_string(),
             ScalarValue::Text("NULL".into()).to_string(),
-            "attention : les deux se rendent identiquement, \
-             c'est à l'affichage de les distinguer visuellement"
+            "si ces deux rendus divergent un jour, la grille peut cesser de les \
+             distinguer visuellement : c'est elle qui porte la distinction"
         );
     }
 

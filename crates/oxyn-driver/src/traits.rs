@@ -543,7 +543,11 @@ mod tests {
         let jeton = CancelToken::new();
         let demande = ExecRequest::new(oxyn_core::QueryLanguage::Cypher, "MATCH (n) RETURN n");
 
-        let err = block_on(session.execute(demande, &jeton)).expect_err("refus attendu");
+        // Voir `registry.rs` : `expect_err` exigerait `Debug` sur `dyn Cursor`.
+        let err = match block_on(session.execute(demande, &jeton)) {
+            Ok(_) => panic!("refus attendu : Cypher n'est pas déclaré"),
+            Err(err) => err,
+        };
         assert!(matches!(err, OxynError::NotSupported { .. }), "{err:?}");
         assert!(err.is_user_error(), "ce n'est pas un incident");
     }

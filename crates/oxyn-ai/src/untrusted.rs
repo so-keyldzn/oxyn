@@ -141,10 +141,7 @@ fn neutralize_marker(text: &str) -> String {
     let lower = text.to_ascii_lowercase();
     let mut out = String::with_capacity(text.len());
     let mut start = 0usize;
-    loop {
-        let Some(rest) = lower.get(start..) else {
-            break;
-        };
+    while let Some(rest) = lower.get(start..) {
         let Some(offset) = rest.find(MARKER) else {
             break;
         };

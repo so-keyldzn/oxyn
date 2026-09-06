@@ -134,7 +134,7 @@ impl PostgresVariant {
     #[must_use]
     pub fn has_extension(&self, name: &str) -> bool {
         let cherche = name.to_ascii_lowercase();
-        self.extensions.iter().any(|nom| *nom == cherche)
+        self.extensions.contains(&cherche)
     }
 
     /// Le nom de produit à afficher : `PostgreSQL`, `PostgreSQL + TimescaleDB`…

@@ -307,7 +307,7 @@ mod tests {
     fn un_flux_sans_fin_de_ligne_est_borne() {
         // Sans borne, un serveur défaillant fait gonfler la mémoire sans limite.
         let mut d = SseDecoder::with_limit(64);
-        let erreur = d.push(&vec![b'x'; 128]).expect_err("dépassement attendu");
+        let erreur = d.push(&[b'x'; 128]).expect_err("dépassement attendu");
         assert_eq!(erreur.limit, 64);
     }
 

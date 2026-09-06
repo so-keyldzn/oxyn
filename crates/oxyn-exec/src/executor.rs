@@ -1161,7 +1161,13 @@ mod tests {
             let politique = Arc::new(DefaultPolicy::new());
             politique.register(connexion);
 
-            let executeur = Executor::builder(Arc::clone(&store), Arc::clone(&politique))
+            // `politique.clone()` et non `Arc::clone(&politique)` : la forme
+            // fonction résout `T` depuis le type attendu — donc `dyn PolicyGate` —
+            // et réclame un `&Arc<dyn PolicyGate>` avant toute coercition. En
+            // syntaxe de méthode, `T` vient du receveur, et l'`Arc<DefaultPolicy>`
+            // obtenu se coerce à l'affectation.
+            let gate: Arc<dyn PolicyGate> = politique.clone();
+            let executeur = Executor::builder(Arc::clone(&store), gate)
                 .with_workspace(atelier.id)
                 .build();
             executeur.register_connection(connexion);
@@ -1387,7 +1393,7 @@ mod tests {
             CommandId::new(),
             &CancelToken::new(),
         ));
-        let erreur = issue.err().expect("un accord sans objet est refusé");
+        let erreur = issue.expect_err("un accord sans objet est refusé");
         assert!(
             matches!(erreur, OxynError::PolicyDenied { .. }),
             "{erreur:?}"
@@ -1455,8 +1461,7 @@ mod tests {
             banc.executeur
                 .dispatch(Actor::Human, commande, &CancelToken::new()),
         )
-        .err()
-        .expect("l'incohérence est tranchée du côté prudent");
+        .expect_err("l'incohérence est tranchée du côté prudent");
         assert!(
             matches!(erreur, OxynError::PolicyDenied { .. }),
             "{erreur:?}"
@@ -1480,8 +1485,7 @@ mod tests {
             banc.executeur
                 .dispatch(Actor::Human, commande, &CancelToken::new()),
         )
-        .err()
-        .expect("aucune session n'est ouverte");
+        .expect_err("aucune session n'est ouverte");
         assert!(matches!(erreur, OxynError::Connection(_)), "{erreur:?}");
 
         let entrees = banc.store.journal().recent(2).expect("relecture");

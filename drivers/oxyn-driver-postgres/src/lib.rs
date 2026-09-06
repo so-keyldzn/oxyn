@@ -138,7 +138,7 @@ pub use variant::{PostgresFlavor, PostgresVariant, base_capabilities, driver_cap
 #[cfg(test)]
 mod tests {
     use oxyn_core::{Capabilities, DriverId, QueryLanguage, SqlDialect};
-    use oxyn_driver::{Driver as _, DriverRegistry};
+    use oxyn_driver::DriverRegistry;
     use std::sync::Arc;
 
     use crate::PostgresDriver;
