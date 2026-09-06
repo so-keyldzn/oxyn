@@ -96,8 +96,9 @@ oxyn/
 │   ├── oxyn-llm/                 # abstraction des fournisseurs de modèles
 │   ├── oxyn-ai/                  # runtime d'agents, outils, contexte, confidentialité
 │   ├── oxyn-plugin/              # hôte WASM (wasmtime derrière la feature `wasm-host`)
-│   ├── oxyn-ui/                  # GPUI : grille, éditeur, arbre, barre d'état, approbation
-│   └── oxyn-app/                 # binaire `oxyn` : backend, workspace (vue racine), fenêtre
+│   ├── oxyn-ui/                  # GPUI : grille, éditeur, arbre, barre d'état, approbation,
+│   │                             #   formulaire de connexion
+│   └── oxyn-app/                 # binaire `oxyn` : backend, vue racine, traduction, fenêtre
 ├── drivers/
 │   ├── oxyn-driver-sqlite/       # embarqué
 │   └── oxyn-driver-postgres/     # couvre aussi Redshift, TimescaleDB, pgvector
@@ -105,12 +106,28 @@ oxyn/
 └── docs/
 ```
 
-**`oxyn-app` tient en trois fichiers, et c'est délibéré.** `backend.rs` porte ce
-qui n'est pas des pixels — état local, drivers, politique, ordonnanceur, runtime
-Tokio. `workspace.rs` est la vue racine, et **le seul endroit du produit** où un
+**`oxyn-app` tient en six fichiers, et chacun a une raison d'exister à part.**
+
+| Fichier | Sujet | Pourquoi il n'est pas ailleurs |
+|---|---|---|
+| `backend.rs` | ce qui n'est pas des pixels : état local, drivers, politique, ordonnanceur, runtime Tokio | le thread UI ne doit rien pouvoir en atteindre directement ([I-05](../CLAUDE.md#i-05)) |
+| `root.rs` | la vue racine : l'écran de connexion, puis l'espace de travail | c'est là qu'un brouillon de connexion devient `CreateConnection` puis `Connect` |
+| `workspace.rs` | l'espace de travail sur une connexion ouverte | c'est là qu'un `Cmd+Entrée` devient `Command::Execute` |
+| `picker.rs` | traduction `DriverMetadata` → `DriverChoice` | seule crate à connaître `oxyn-driver` **et** `oxyn-ui` ; sans elle l'une dépendrait de l'autre |
+| `credentials.rs` | le seul point qui lit ou écrit le trousseau | un appel au trousseau par driver serait six endroits à auditer au lieu d'un ([I-03](../CLAUDE.md#i-03)) |
+| `main.rs` | les traces et la fenêtre | rien d'autre |
+
+`root.rs` et `workspace.rs` sont **les seuls endroits du produit** où un
 événement d'interface devient une `Command` : un test d'`oxyn-ui` échoue si un
-composant mentionne seulement ce type. `main.rs` démarre les traces et ouvre la
-fenêtre, rien d'autre.
+composant mentionne seulement ce type.
+
+**Aucune connexion n'est ouverte d'office.** Le premier écran est le choix du
+type de base, alimenté par le registre de drivers et par lui seul : montrer un
+type que le registre ne connaît pas déplacerait l'échec au moment de la
+connexion, avec un message inexploitable
+([ADR-0003](adr/0003-driver-capabilities.md)). Un champ de genre `Path` — celui
+de SQLite — ouvre le sélecteur de fichiers de la plateforme par `⌘O`, ou `⌘N`
+pour une base à créer.
 
 Le binaire nu ne suffit pas sur macOS : sans paquet `.app`, le système traite le
 processus comme un accessoire — ni Dock, ni activation propre, ni identifiant
