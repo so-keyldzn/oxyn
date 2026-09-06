@@ -128,6 +128,45 @@ passer par [`/adr`](../.claude/commands/adr.md) si elle engage l'architecture.
 > `duckdb` versionne en suivant la version amont de DuckDB (`1.10505.0`), pas en
 > semver Rust classique. Ne pas déduire une rupture d'API d'un saut de majeure.
 
+## Codex — contexte étendu
+
+Vérifié le **2026-09-07** pour la configuration locale
+[.codex/config.toml](../.codex/config.toml).
+
+| Fait | Valeur | Source | Vérifié le |
+|---|---|---|---|
+| Modèle et fenêtre maximale annoncée | `gpt-6-astra`, 1 050 000 tokens | [Fiche officielle](https://developers.openai.com/api/docs/models/gpt-6-astra) | 2026-09-07 |
+| Réglages du contexte | `model_context_window` et `model_auto_compact_token_limit` | [Référence officielle](https://learn.chatgpt.com/docs/config-file/config-reference) | 2026-09-07 |
+| Chargement local | `.codex/config.toml`, uniquement pour un projet approuvé ; les options de lancement ont priorité | [Configuration officielle](https://learn.chatgpt.com/docs/config-file/config-basic) | 2026-09-07 |
+| Client installé lors de la vérification | `codex-cli 0.153.4` | `codex --version` | 2026-09-07 |
+| Catalogue local observé avant surcharge | 272 000 tokens, 95 % utilisables ; session existante à 258 400 tokens | `~/.codex/models_cache.json`, événement `token_count` de la session | 2026-09-07 |
+
+Choix du projet : effort `high`, fenêtre déclarée de 1 050 000 tokens et
+compactage à 700 000 tokens pour garder une marge aux réponses, au raisonnement
+et aux retours d'outils. Ce seuil est un choix local, pas une limite officielle.
+La fenêtre effective dépend du client et du service ; écrire cette valeur ne
+prouve pas qu'une requête de cette taille a été acceptée. Avec la réserve locale
+observée de 5 %, la fenêtre utilisable attendue est de 997 500 tokens.
+
+Pour une utilisation facturée à l'API, la fiche du modèle annonce au-delà de
+272 000 tokens d'entrée un multiplicateur de 2 sur l'entrée et le cache, et de
+1,5 sur la sortie pour la requête entière. Ne pas extrapoler ces tarifs aux
+quotas d'un abonnement ChatGPT.
+
+Réglages complémentaires vérifiés le **2026-09-07** :
+
+| Fait | Décision locale | Source |
+|---|---|---|
+| Cache de prompts activé par défaut sur les modèles compatibles | Laisser le service gérer le cache ; aucune clé `prompt_cache`, `prompt_cache_key` ou `prompt_cache_retention` de premier niveau documentée pour le fichier Codex | [Cache API](https://developers.openai.com/api/docs/guides/prompt-caching), [référence Codex](https://learn.chatgpt.com/docs/config-file/config-reference) |
+| `web_search = "live"` permet la recherche web en direct | Vérifier les sources actuelles conformément à I-12 ; le mode web `cached` est indépendant du cache de prompts | [Référence Codex](https://learn.chatgpt.com/docs/config-file/config-reference) |
+| `tui.status_line` configure la barre de la CLI | Afficher `model-with-reasoning`, `context-remaining`, `git-branch` | [Exemple officiel](https://learn.chatgpt.com/docs/config-file/config-sample) |
+
+Le cache réutilise des préfixes identiques : garder les instructions stables et
+continuer une même tâche dans son fil favorise cette réutilisation, sans la
+garantir. Un succès de cache réduit le travail de traitement ; il ne retire pas
+les tokens de la fenêtre de contexte. Les paramètres de rétention et de routage
+documentés pour l'API ne doivent pas être transposés en clés Codex inventées.
+
 ## Écosystème MCP
 
 | Fait | Valeur | Source | Vérifié le |
