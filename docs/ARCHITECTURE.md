@@ -1,11 +1,17 @@
 # Architecture d'Oxyn
 
-Statut : **mise en œuvre en cours** — le workspace décrit ici existe sur disque.
-Cible : application desktop 100 % Rust, sans webview.
+Statut : **phase 0 en cours** — le workspace décrit ici existe sur disque, compile, et
+franchit `make qualite`. Cible : application desktop 100 % Rust, sans webview.
 
-Ce document décrit le découpage **réellement implémenté**. En cas de contradiction
-avec le code, c'est un bug — de l'un ou de l'autre. Les décisions sont justifiées dans
-les [ADR](adr/) ; ce document en dérive et ne les rejuge pas.
+Ce document décrit le découpage **réellement implémenté**, réaligné sur les sources le
+2026-09-06. En cas de contradiction avec le code, c'est un bug — de l'un ou de l'autre.
+Les décisions sont justifiées dans les [ADR](adr/) ; ce document en dérive et ne les
+rejuge pas.
+
+Ce qu'il **ne** décrit pas : ce qui reste à faire, qui vit dans
+[IMPLEMENTATION-PLAN](IMPLEMENTATION-PLAN.md). Les encadrés « où on en est » du §11 sont
+la seule exception, parce qu'un lecteur qui prend ce document pour la description d'un
+produit fini se tromperait sur tout le reste.
 
 ---
 
@@ -48,10 +54,15 @@ précisément celles où l'immediate mode coûte le plus cher.
 
 **Fait vérifié, contrairement à l'hypothèse initiale :** `gpui` est publié sur crates.io
 (**0.2.2**, non yanké). Il n'y a pas à vendorer le monorepo Zed ni à épingler un commit git.
-Une fenêtre de test utilisant `Application::new().run(...)`, `cx.open_window(...)` et
-`impl Render` compile sur macOS 26.2 / arm64 / Rust 1.89 en 1 min 52. Le risque
-« API à vendorer depuis git » qui pesait sur cette décision est retiré ; le risque
+Le risque « API à vendorer depuis git » qui pesait sur cette décision est retiré ; le risque
 « API instable entre versions mineures » demeure et reste couvert par la règle suivante.
+
+`oxyn-app` ouvre effectivement une fenêtre sur macOS 26.2 / arm64 / Rust 1.98.1 :
+`Application::new().run(…)`, `cx.open_window(…)`, `impl Render`, et
+`Context::spawn` pour ramener les événements d'exécution vers les vues. Le piège
+rencontré à l'écriture : `App::new` vient du trait `AppContext`, apporté par
+`gpui::prelude::*` — sans le prélude, la création de la vue racine ne compile pas
+et l'erreur ne nomme pas le trait manquant.
 
 > ### Règle d'isolation du toolkit
 > Aucune crate en dehors de `oxyn-ui` et `oxyn-app` ne dépend de `gpui`. Le domaine, les
@@ -70,7 +81,8 @@ Voir [ADR-0001](adr/0001-ui-toolkit.md).
 ```
 oxyn/
 ├── Cargo.toml                    # workspace : [workspace.dependencies] et lints partagés
-├── rust-toolchain.toml           # 1.89.0, épinglé
+├── rust-toolchain.toml           # 1.98.1, épinglé (ADR-0008)
+├── Makefile                      # `make qualite`, et `make app` qui produit Oxyn.app
 ├── crates/
 │   ├── oxyn-core/                # vocabulaire : ids, erreurs, capacités, valeurs,
 │   │                             #   Command bus, Policy gate, CancelToken. Zéro I/O.
@@ -84,13 +96,27 @@ oxyn/
 │   ├── oxyn-llm/                 # abstraction des fournisseurs de modèles
 │   ├── oxyn-ai/                  # runtime d'agents, outils, contexte, confidentialité
 │   ├── oxyn-plugin/              # hôte WASM (wasmtime derrière la feature `wasm-host`)
-│   ├── oxyn-ui/                  # GPUI : grille, éditeur, arbre, approbation
-│   └── oxyn-app/                 # binaire `oxyn` : câblage et fenêtre principale
+│   ├── oxyn-ui/                  # GPUI : grille, éditeur, arbre, barre d'état, approbation
+│   └── oxyn-app/                 # binaire `oxyn` : backend, workspace (vue racine), fenêtre
 ├── drivers/
 │   ├── oxyn-driver-sqlite/       # embarqué
 │   └── oxyn-driver-postgres/     # couvre aussi Redshift, TimescaleDB, pgvector
+├── assets/brand/                 # symbole, iconset, Oxyn.icns
 └── docs/
 ```
+
+**`oxyn-app` tient en trois fichiers, et c'est délibéré.** `backend.rs` porte ce
+qui n'est pas des pixels — état local, drivers, politique, ordonnanceur, runtime
+Tokio. `workspace.rs` est la vue racine, et **le seul endroit du produit** où un
+événement d'interface devient une `Command` : un test d'`oxyn-ui` échoue si un
+composant mentionne seulement ce type. `main.rs` démarre les traces et ouvre la
+fenêtre, rien d'autre.
+
+Le binaire nu ne suffit pas sur macOS : sans paquet `.app`, le système traite le
+processus comme un accessoire — ni Dock, ni activation propre, ni identifiant
+que l'outillage puisse désigner. `make app` assemble
+`target/<profil>/Oxyn.app` à partir de `crates/oxyn-app/Oxyn.app.plist` et de
+`assets/brand/Oxyn.icns`.
 
 Une crate porte **un** sujet. Pas de `oxyn-utils`, pas de `oxyn-common` : un nom
 fourre-tout est le symptôme d'un découpage qu'on n'a pas su faire, et il devient le point
@@ -102,10 +128,10 @@ Timescale et pgvector sont des extensions PostgreSQL. Les ~30 systèmes de la vi
 ramènent à ~14 implémentations réelles, différenciées par des profils de dialecte et des
 capacités déclarées **par session**.
 
-### 3.1 Contraintes de dépendances découvertes à la résolution
+### 3.1 Contraintes de dépendances découvertes à la résolution et à la compilation
 
-Trois faits que seule une résolution réelle révèle, tous consignés en commentaire dans
-le `Cargo.toml` racine :
+Cinq faits que seules une résolution puis une compilation réelles révèlent, tous
+consignés en commentaire dans le `Cargo.toml` racine :
 
 * **`reqwest` 0.13 a renommé la feature `rustls-tls` en `rustls`.**
 * **`rusqlite` est épinglé en 0.37, pas en 0.40.** `sqlx` fait entrer `sqlx-sqlite` dans
@@ -114,10 +140,26 @@ le `Cargo.toml` racine :
   `links = "sqlite3"`. Une seule version de `libsqlite3-sys` peut donc exister.
   `sqlx` 0.9 accepte `>=0.30.1, <0.38`, `rusqlite` 0.40 exige `^0.38` : aucune intersection.
   `rusqlite` 0.37 (qui demande `^0.35`) est le point de rencontre. À relever quand `sqlx` suivra.
+  Voir [ADR-0010](adr/0010-contraintes-natives-sqlite.md).
+* **`rusqlite` a besoin de la feature `column_decltype`.** SQLite n'a pas de type
+  de colonne : le type déclaré au `CREATE TABLE` est la seule indication disponible
+  avant d'avoir lu une ligne, et le driver s'en sert pour proposer un schéma Arrow
+  qu'il corrige ensuite à la sonde. Sans la feature, `Statement::columns()` et
+  `Column::decl_type()` **n'existent pas**, et l'erreur est un `E0599` sur `columns`
+  qui ne nomme jamais la fonctionnalité manquante.
+* **Le plancher de compilateur est `1.95.0`, et il est en partie invisible.**
+  `sqlx` 0.9.0 déclare `rust-version = "1.94.0"` — c'est lui qui fait échouer
+  `cargo check`. Mais `wasmtime` 48.0.1 déclare `1.95.0`, et comme il est derrière
+  la fonctionnalité `wasm-host` d'`oxyn-plugin`, désactivée par défaut, Cargo ne
+  vérifie pas son `rust-version` dans une construction ordinaire. Le `rust-version`
+  du workspace est donc fixé à `1.95`, et non à `1.94` que la seule erreur observée
+  suggérerait. La toolchain épinglée, elle, est `1.98.1` : le compilateur **utilisé**
+  et le minimum **supporté** sont deux valeurs distinctes ([ADR-0008](adr/0008-chaine-outils-rust.md)).
 * **Le fournisseur cryptographique est aws-lc-rs**, imposé par la feature `rustls` de
   `reqwest` 0.13 ; `sqlx` est aligné dessus plutôt que sur ring.
 
-Aucune version n'est écrite de mémoire : toutes proviennent de l'index crates.io.
+Aucune version n'est écrite de mémoire : toutes proviennent de l'index crates.io ou
+des sources dépaquetées du registre local. Voir [RESEARCH-NOTES](RESEARCH-NOTES.md).
 
 ---
 
@@ -128,27 +170,38 @@ Aucune version n'est écrite de mémoire : toutes proviennent de l'index crates.
 ```rust
 #[async_trait]
 pub trait Driver: Send + Sync + 'static {
-    fn id(&self) -> DriverId;
-    fn metadata(&self) -> &DriverMetadata;          // nom, icône, champs de connexion
-    fn capabilities(&self) -> Capabilities;
-    async fn connect(&self, cfg: &ConnectionConfig, ct: &CancelToken)
-        -> Result<Box<dyn Session>>;
+    fn id(&self) -> DriverId;                        // == DriverMetadata::id, vérifié
+    fn metadata(&self) -> &DriverMetadata;           // nom, champs de connexion
+    fn capabilities(&self) -> Capabilities;          // plafond indicatif, pas une promesse
+    async fn connect(
+        &self,
+        config: &ConnectionConfig,
+        credentials: &Credentials,                   // séparés de la config : cf. ci-dessous
+        cancel: &CancelToken,
+    ) -> Result<Box<dyn Session>>;
 }
 
 #[async_trait]
 pub trait Session: Send + Sync {
-    fn capabilities(&self) -> Capabilities;          // peut différer : version serveur
-    async fn execute(&self, req: ExecRequest, ct: &CancelToken)
+    fn capabilities(&self) -> Capabilities;          // fait foi : dépend du serveur
+    async fn execute(&self, request: ExecRequest, cancel: &CancelToken)
         -> Result<Box<dyn Cursor>>;
-    async fn cancel(&self, h: StatementHandle) -> Result<()>;
+    async fn cancel(&self, statement: StatementHandle) -> Result<()>;
     fn catalog(&self) -> &dyn CatalogProvider;
     async fn ping(&self) -> Result<Duration>;
     async fn close(self: Box<Self>) -> Result<()>;
+
+    // Fournies par défaut : refusent en nommant la capacité absente, plutôt que
+    // de faire semblant. Un driver sans transactions ne les redéfinit pas.
+    async fn begin(&self, cancel: &CancelToken) -> Result<()>;
+    async fn commit(&self, cancel: &CancelToken) -> Result<()>;
+    async fn rollback(&self, cancel: &CancelToken) -> Result<()>;
 }
 
 #[async_trait]
 pub trait Cursor: Send {
-    fn schema(&self) -> arrow::datatypes::SchemaRef;
+    fn handle(&self) -> StatementHandle;             // cible d'une annulation
+    fn schema(&self) -> SchemaRef;
     async fn next_batch(&mut self) -> Result<Option<RecordBatch>>;
     fn stats(&self) -> ExecStats;
 }
@@ -157,22 +210,43 @@ pub trait Cursor: Send {
 Ces traits sont utilisés derrière `Box<dyn ...>` : rester objet-sûr est une contrainte
 dure, pas une préférence.
 
+**`Credentials` est un paramètre de `connect`, pas un champ de `ConnectionConfig`.**
+La configuration est ce qui se persiste dans le fichier de workspace ; elle ne porte
+qu'une *référence* de secret. Les identifiants sont résolus au dernier moment, par
+`oxyn-exec` via un `CredentialResolver`, et ne traversent jamais le disque
+([I-03](../CLAUDE.md#i-03)).
+
+**Aucun de ces traits ne dérive `Debug`.** C'est une conséquence directe de la même
+règle : un curseur tient la session, qui tient les identifiants. Le coût est visible
+dans les tests — `Result::expect_err` exige `Debug` sur la variante `Ok` et ne
+s'utilise donc pas sur `Result<Box<dyn Cursor>>` ; les tests passent par un `match`.
+
 ### 4.2 Les capacités, pas le dénominateur commun
 
-`Capabilities` (bitflags, dans `oxyn-core` pour que l'UI et l'IA le lisent sans dépendre
-des drivers) : `TRANSACTIONS`, `PREPARED_STATEMENTS`, `SERVER_SIDE_CANCEL`,
-`STREAMING_CURSOR`, `MULTI_STATEMENT`, `EXPLAIN`, `EXPLAIN_ANALYZE`, `DDL`,
-`FOREIGN_KEYS`, `STORED_PROCEDURES`, `SCHEMALESS`, `VECTOR_SEARCH`, `GRAPH_TRAVERSAL`,
-`FULL_TEXT_SEARCH`, `TIME_PARTITIONING`, `PERMISSIONS_MODEL`.
+`Capabilities` est un `bitflags` sur 64 bits, dans `oxyn-core` pour que l'UI et l'IA
+le lisent sans dépendre des drivers. **48 drapeaux**, répartis en quatre plages qui
+laissent chacune de la place :
+
+| Plage | Drapeaux |
+|---|---|
+| Introspection du catalogue | `SCHEMAS`, `TABLES`, `VIEWS`, `MATERIALIZED_VIEWS`, `INDEXES`, `CONSTRAINTS`, `FOREIGN_KEYS`, `ROUTINES`, `TRIGGERS`, `SEQUENCES`, `USER_TYPES`, `COMMENTS`, `PERMISSIONS`, `ROW_COUNT_ESTIMATE` |
+| Exécution | `TRANSACTIONS`, `SAVEPOINTS`, `PREPARED_STATEMENTS`, `NAMED_CURSORS`, `MULTIPLE_STATEMENTS`, `SERVER_SIDE_CANCEL`, `STREAMING`, `AFFECTED_ROWS`, `EXPLAIN`, `EXPLAIN_ANALYZE`, `DDL`, `DML`, `GRANT_REVOKE`, `BULK_LOAD`, `READ_ONLY_SESSION` |
+| Langages acceptés | `SQL`, `CYPHER`, `GREMLIN`, `MONGO_QUERY`, `REDIS_COMMAND`, `SEARCH_DSL`, `CQL`, `PARTIQL`, `INFLUXQL`, `FLUX` |
+| Modèle de données | `RELATIONAL`, `DOCUMENT`, `KEY_VALUE`, `GRAPH`, `TIME_SERIES`, `SCHEMALESS`, `INFERRED_SCHEMA`, `VECTOR_SEARCH`, `FULL_TEXT_SEARCH` |
+
+Les plages sont numérotées avec du jeu, parce qu'un drapeau **retiré ou renuméroté
+casserait la relecture des fichiers de workspace déjà écrits**. Ajouter est libre ;
+déplacer ne l'est pas.
 
 L'UI et les agents interrogent ces drapeaux pour décider quelles surfaces exister. Un
 panneau « Plan d'exécution » n'existe pas face à Redis ; le Performance Agent ne propose
 pas d'index à DynamoDB. **Rien n'est simulé, rien n'est grisé sans raison.**
 
-Les capacités sont évaluées **par session** : le driver PostgreSQL interroge `version()`
-et `pg_extension` à la connexion et active `VECTOR_SEARCH` ou `TIME_PARTITIONING` selon
-qu'il trouve pgvector ou TimescaleDB. C'est précisément l'usage pour lequel le modèle
-existe.
+Les capacités sont évaluées **par session**, et c'est précisément l'usage pour lequel
+le modèle existe : le driver PostgreSQL interroge la version du serveur et
+`pg_extension` à la connexion, puis ajoute `VECTOR_SEARCH` s'il trouve pgvector et
+`TIME_SERIES` s'il trouve TimescaleDB. Le même binaire parle à une base 12 et à une
+base 17 sans mentir sur ce qu'elles savent faire.
 
 ### 4.3 Toutes les requêtes ne sont pas du SQL
 
@@ -181,16 +255,31 @@ pub struct ExecRequest {
     pub language: QueryLanguage,
     pub text: String,
     pub params: Vec<ScalarValue>,
-    pub intent: StatementIntent,     // reclassifié par oxyn-exec, cf. §8
-    pub risk: MutationRisk,
-    pub limits: ExecLimits,          // max_rows, timeout, read_only
+    pub intent: StatementIntent,     // déclaré ; reclassifié par oxyn-exec, cf. §8
+    pub risk: MutationRisk,          // déclaré ; idem
+    pub limits: ExecLimits,
+}
+
+pub struct ExecLimits {
+    pub max_rows: Option<usize>,     // défaut 10 000
+    pub timeout: Option<Duration>,   // défaut 30 s, et l'expiration annule côté serveur
+    pub read_only: bool,
 }
 
 pub enum QueryLanguage {
-    Sql(SqlDialect), Mongo, RedisCommand, Cypher,
-    EsQueryDsl, Flux, InfluxQl, PartiQl, VectorSearch(VectorQuery),
+    Sql(SqlDialect), Cypher, Gremlin, MongoQuery, RedisCommand,
+    SearchDsl, Cql, PartiQl, InfluxQl, Flux,
 }
 ```
+
+`ExecRequest::new` pose les défauts **prudents** : intention `Unknown`, aucun risque
+signalé. `Unknown` étant mutant, une demande non qualifiée passe par une approbation
+plutôt que de s'exécuter en silence. `QueryLanguage::SQL` est la constante pour
+« SQL ANSI, sans dialecte particulier ».
+
+Il n'y a pas de variante `VectorSearch` : la recherche vectorielle est une **capacité**
+(`VECTOR_SEARCH`), pas un langage — elle s'exprime dans le langage du système hôte,
+`SELECT … <-> …` en pgvector.
 
 ### 4.4 Isolation en processus séparé pour les drivers à risque
 
@@ -268,18 +357,34 @@ construire des `Command` et les envoyer.
 
 ```rust
 pub enum Command {
-    Connect(ConnectionId),
-    Disconnect(SessionId),
-    Execute { session: SessionId, request: ExecRequest },
-    Cancel(StatementHandle),
-    RefreshCatalog { session: SessionId, scope: CatalogScope },
-    Export { result: ResultId, format: ExportFormat, path: PathBuf },
-    OpenDocument(DocumentId),
-    WriteDocument { id: DocumentId, content: String },
+    Connect          { connection: ConnectionId },
+    Disconnect       { connection: ConnectionId },
+    Execute          { connection: ConnectionId, session: SessionId,
+                       request: Box<ExecRequest> },
+    Cancel           { connection: ConnectionId, statement: StatementHandle },
+    RefreshCatalog   { connection: ConnectionId },
+    Export           { connection: ConnectionId, result: ResultId,
+                       format: ExportFormat, destination: PathBuf },
+    OpenDocument     { workspace: WorkspaceId, document: DocumentId },
+    WriteDocument    { workspace: WorkspaceId, document: DocumentId, text: String },
+    CreateConnection { config: Box<ConnectionConfig> },
+    UpdateConnection { config: Box<ConnectionConfig> },
+    DeleteConnection { connection: ConnectionId },
 }
 
 pub enum Actor { Human, Agent { id: AgentId, session: AgentSessionId } }
 ```
+
+Chaque variante visant une base porte la **connexion**, et non seulement la session :
+c'est la connexion qui porte le marquage d'environnement, et le gate en a besoin
+avant qu'une session existe.
+
+`Command` n'est **pas** `#[non_exhaustive]`, contrairement à la convention du dépôt
+sur les énumérations publiques. C'est délibéré : le dispatch d'`oxyn-exec` est un
+`match` dont la compilation **doit** échouer quand une variante apparaît. Un `_ =>`
+avalerait une commande que rien n'exécute. `ScalarValue` est fermé pour la même
+raison, côté tables de correspondance de types. Toutes les autres énumérations
+publiques sont `#[non_exhaustive]`.
 
 **Les outils exposés aux agents sont exactement ces commandes.** Il n'existe pas de
 seconde API « pour l'IA ». Un agent ne peut rien faire d'inaccessible à l'utilisateur ;
@@ -296,27 +401,62 @@ pub enum Decision {
 }
 ```
 
-| | Humain | Agent |
-|---|---|---|
-| `SELECT` / lecture, `EXPLAIN`, introspection | Autorisé | Autorisé |
-| `INSERT` / `UPDATE` / `DELETE` | Autorisé | **Approbation** |
-| DDL (`CREATE`, `ALTER`, `DROP`) | Autorisé | **Approbation** |
-| `GRANT` / `REVOKE` | Autorisé | **Refusé** |
-| Connexion marquée *production* | Autorisé | **Refusé** (lecture seule stricte) |
-| Connexion marquée *read only* | **Refusé** si mutant | **Refusé** |
-| `MutationRisk` non nul (UPDATE/DELETE sans WHERE, TRUNCATE, DROP) | **Approbation** | selon les lignes ci-dessus |
+La décision se lit sur quatre entrées : l'acteur, l'intention **reclassifiée**,
+l'environnement de la connexion et son drapeau `read_only`. Les 80 cellules sont
+couvertes une à une par un test tabulaire d'`oxyn-core` — c'est le test le plus
+important du dépôt.
 
-L'approbation présente le SQL exact, la connexion cible et — quand le driver le permet —
-une estimation des lignes affectées. La matrice complète est couverte par des tests
-unitaires dans `oxyn-core` : c'est le test le plus important du dépôt.
+| Acteur / connexion | `Read` | `Write`, `Ddl` | `Unknown` | `Grant` |
+|---|---|---|---|---|
+| Humain, local / dev / staging | Allow | Allow | Allow | Allow |
+| Humain, **production** | Allow | **Approbation** | **Approbation** | **Approbation** |
+| Humain, connexion *read only* | Allow | **Refus** | **Refus** | **Refus** |
+| Agent, local / dev / staging | Allow | **Approbation** | **Approbation** | **Refus** |
+| Agent, **production** | Allow | **Refus** | **Refus** | **Refus** |
+| Agent, connexion *read only* | Allow | **Refus** | **Refus** | **Refus** |
+
+Quatre règles gouvernent cette table, et leur **ordre** compte :
+
+1. **Un agent ne touche jamais aux droits.** `Grant` d'un agent est refusé partout,
+   y compris en local. Ce n'est pas une question de confiance dans le modèle : c'est
+   la seule catégorie d'action dont un agent n'a aucun usage légitime et dont l'effet
+   survit à la session.
+2. **Une connexion inconnue de la politique ferme la porte.** Toute commande mutante
+   visant une connexion non enregistrée est refusée — on ne peut pas vérifier son
+   marquage. `DefaultPolicy` est fermée par défaut ; `oxyn-exec` doit appeler
+   `register` à la création et à chaque modification d'une `ConnectionConfig`, et
+   `forget` à la suppression. C'est un point de câblage obligatoire, pas un détail.
+3. **L'environnement retenu est le plus contraignant** entre celui que l'appelant
+   annonce et celui dont la connexion est marquée. Un appelant mal câblé ne doit pas
+   pouvoir dégrader la protection. Une connexion sans environnement renseigné vaut
+   `production` ([I-02](../CLAUDE.md#i-02)).
+4. **Le risque prime sur l'acteur dans le choix du motif.** Un `MutationRisk` non nul
+   — `UnboundedUpdate`, `UnboundedDelete`, `Truncate`, `DropObject` — déclenche
+   l'approbation avec **son** motif, parce que « `DELETE` sans `WHERE` » se lit mieux
+   que « écriture par un agent ».
+
+`PolicyGate::authorize(&self, actor, cmd, env)` ne reçoit ni le drapeau `read_only`
+ni le nom de la connexion : `DefaultPolicy` tient donc un registre interne des faits
+de connexion, alimenté par `register`/`forget`. Passer un contexte plutôt qu'un simple
+`Environment` serait plus propre — c'est une décision d'ADR, pas une correction.
+
+L'approbation présente le texte exact de l'instruction et le **nom** de la connexion
+cible — jamais son identifiant ([I-03](../CLAUDE.md#i-03)). `Preview::estimated_rows`
+vaut toujours `None` aujourd'hui : l'estimer demande le catalogue ou un `EXPLAIN`.
+Un `None` explicite vaut mieux qu'un chiffre inventé, sur lequel l'utilisateur
+fonderait sa décision.
 
 ### 7.3 Runtime d'agents
 
 Les agents de la vision (SQL, Schema, Performance, Migration, Security, Documentation,
 Data Quality, Analytics, Visualization) sont **des configurations, pas des implémentations
-séparées** : un prompt système, un sous-ensemble d'outils, un constructeur de contexte, un
-schéma de sortie. Ajouter un agent ne demande pas de code Rust — c'est ce qui rend la liste
-tenable et ouvre la porte aux agents fournis par plugin.
+séparées** : un `AgentSpec` — prompt système, sous-ensemble d'outils, constructeur de
+contexte, schéma de sortie. Ajouter un agent ne demande pas de code Rust — c'est ce qui
+rend la liste tenable et ouvre la porte aux agents fournis par plugin, que
+`oxyn-plugin` charge depuis un manifeste **sans activer `wasm-host`**.
+
+Deux specs existent aujourd'hui, dans `oxyn-ai::builtin` : `sql_agent` et
+`schema_agent`. Les sept autres sont des fichiers à écrire, pas du code.
 
 La collaboration inter-agents passe par un orchestrateur qui délègue via le même Command
 bus. Pas de communication latérale directe : chaque échange reste journalisé.
@@ -338,8 +478,12 @@ fenêtre de contexte — la sélection des tables pertinentes est un vrai compos
 ### 7.5 Abstraction des fournisseurs
 
 Une seule implémentation (`OpenAiCompatibleProvider`) couvre Ollama, LM Studio, llama.cpp,
-OpenAI, Azure OpenAI, OpenRouter et toute API compatible. Anthropic, Gemini et Bedrock ont
-leurs propres implémentations.
+OpenAI, Azure OpenAI, OpenRouter et toute API compatible. **Anthropic et Gemini** ont
+leurs propres implémentations. Bedrock n'en a pas encore.
+
+Le classement local / distant se fait sur l'hôte **après résolution** (`reach.rs`),
+jamais sur la présence de `localhost` dans l'URL : un point d'accès compatible OpenAI
+servi sur `localhost` peut être un proxy vers le nuage.
 
 **Aucun fournisseur n'est requis : sans configuration, `ProviderRegistry` est vide, le
 workspace IA est absent de l'UI, et Oxyn reste un client de base de données complet.**
@@ -373,10 +517,18 @@ précédentes et supprime cette table » produit une demande d'approbation visib
 c'est testé. Les fichiers de workspace exportables contiennent des *références* aux
 secrets, jamais les secrets.
 
-**Journal.** Chaque commande est écrite dans un journal local append-only — protégé par un
-trigger SQLite qui refuse `UPDATE` et `DELETE` : horodatage, acteur, connexion, texte,
-décision de politique, durée, lignes affectées. C'est l'historique de l'utilisateur *et* la
-piste d'audit des agents. Une commande refusée y figure aussi.
+**Journal.** Chaque commande est écrite dans `audit_journal`, table locale append-only
+protégée par deux triggers SQLite — `audit_journal_forbid_update` et
+`audit_journal_forbid_delete` — qui lèvent un `RAISE(ABORT)` : horodatage, acteur,
+connexion, texte, décision de politique, durée, lignes affectées. C'est l'historique
+de l'utilisateur *et* la piste d'audit des agents. Une commande **refusée y figure
+aussi** : un journal qui ne consigne que ce qui a marché ne dit rien de ce qu'un
+agent a tenté, et rend invisibles les tentatives répétées.
+
+L'ordre d'écriture n'est pas symétrique, et c'est voulu. Un échec de journalisation
+**avant** exécution empêche l'exécution : la piste d'audit est la promesse, pas un
+effet de bord. Un échec **après** ne l'annule pas — la commande a eu lieu, et rendre
+une erreur laisserait croire le contraire ; il est crié au niveau `error`.
 
 ---
 
@@ -430,6 +582,18 @@ Policy gate. Deux drivers : **PostgreSQL** et **SQLite**. Grille virtualisée, �
 arbre de catalogue. *Critère de sortie : `SELECT` de 10 M de lignes, premier affichage sous
 100 ms, mémoire stable, `Échap` annule vraiment.*
 
+> **Où on en est.** Les quinze crates existent, compilent, et `make qualite` passe :
+> format, `clippy -D warnings`, la suite de tests, `cargo doc -D warnings`. `make app`
+> produit `Oxyn.app`, la fenêtre s'ouvre, et `Cmd+Entrée` exécute réellement à travers
+> le command bus contre une connexion SQLite en mémoire ouverte au démarrage.
+>
+> **Le critère de sortie n'est pas atteint et n'a pas été mesuré.** Il manque le
+> sélecteur de connexion, l'introspection branchée sur l'arbre, et surtout les
+> mesures : les 10 M de lignes, les 100 ms de premier affichage et la stabilité
+> mémoire sont des chiffres à produire, pas des propriétés à supposer. La coloration
+> syntaxique, la complétion et les curseurs multiples de l'éditeur restent le plus
+> gros poste de travail du projet.
+
 **Phase 1 — Le client se suffit à lui-même.** MySQL/MariaDB, DuckDB, ClickHouse. Export.
 Historique. Édition de données avec prévisualisation du DML. *À ce stade Oxyn est un bon
 client SQL, sans une ligne d'IA.*
@@ -456,7 +620,9 @@ dictionnaires de données, comparaison de versions.
 | Windows mal supporté par GPUI | Élevée | macOS et Linux d'abord, assumé publiquement ; réévaluation en phase 2 |
 | Grille + éditeur à construire à la main | Élevée | Poste de coût n° 1 ; ne pas commencer un troisième driver avant qu'ils tiennent |
 | 30 systèmes à maintenir | Élevée | Un driver par protocole (~14 réels) ; drivers en plugins WASM dès la phase 4 |
-| `rusqlite` bloqué en 0.37 par `sqlx` | Faible | Documenté §3.1 ; à relever quand `sqlx` élargira sa borne `libsqlite3-sys` |
+| `rusqlite` bloqué en 0.37 par `sqlx` | Faible | Documenté §3.1 et ADR-0010 ; à relever quand `sqlx` élargira sa borne `libsqlite3-sys` |
+| MSRV tiré vers le haut par les dépendances, dont une invisible | Faible | §3.1 ; `rust-version = "1.95"` couvre `wasm-host` même désactivée, et RESEARCH-NOTES tient la table des MSRV relevés |
+| Code écrit sans retour du compilateur | **Élevée** | Réalisé : ~55 000 lignes ont été écrites avant la première compilation. Trois défauts qu'aucune relecture n'aurait vus en sont sortis — un interblocage du fil SQLite, un `[]` accepté comme jeu d'identifiants, un chemin de fichier fuité dans un message d'erreur. Ne pas recommencer : compiler par crate au fur et à mesure |
 | Oracle / Couchbase : dépendances C | Moyenne | Sidecar §4.4 ; reportés en phase 4 |
 | Contexte IA trop gros ou trop coûteux | Moyenne | Compaction + sélection de tables ; niveau `Metadata` par défaut |
 | Un agent casse une base de production | **Critique** | Policy gate §7.2 ; reclassification systématique §8 ; refus strict en production ; journal inviolable |
