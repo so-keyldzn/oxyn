@@ -44,11 +44,12 @@ use std::path::{Path, PathBuf};
 
 use gpui::prelude::*;
 use gpui::{
-    AnyElement, Context, EventEmitter, FocusHandle, Focusable, KeyDownEvent, PathPromptOptions,
-    SharedString, Window, div, px,
+    AnyElement, Context, Entity, EventEmitter, FocusHandle, Focusable, KeyDownEvent,
+    PathPromptOptions, SharedString, Window, div, px,
 };
 use oxyn_core::Environment;
 
+use crate::text_field::{FieldEvent, TextField};
 use crate::theme::Theme;
 
 /// Le genre d'un champ de formulaire, tel que la vue doit le rendre.
@@ -251,6 +252,9 @@ impl fmt::Debug for FormModel {
 pub struct ConnectionForm {
     focus: FocusHandle,
     model: FormModel,
+    inputs: BTreeMap<usize, Entity<TextField>>,
+    pending_focus: bool,
+    last_driver: Option<usize>,
 }
 
 impl fmt::Debug for ConnectionForm {
@@ -273,6 +277,9 @@ impl ConnectionForm {
         Self {
             focus: cx.focus_handle(),
             model: FormModel::new(drivers, saved),
+            inputs: BTreeMap::new(),
+            pending_focus: true,
+            last_driver: None,
         }
     }
 
@@ -285,18 +292,23 @@ impl ConnectionForm {
     /// Choisit un type de base et redessine.
     pub fn choose_driver(&mut self, index: usize, cx: &mut Context<'_, Self>) {
         self.model.choose_driver(index);
+        self.last_driver = Some(index);
+        self.build_inputs(cx);
+        self.pending_focus = true;
         cx.notify();
     }
 
     /// Revient à la liste des types de base.
     pub fn back_to_drivers(&mut self, cx: &mut Context<'_, Self>) {
         self.model.back_to_drivers();
+        self.pending_focus = true;
         cx.notify();
     }
 
     /// Signale que la connexion est en cours.
     pub fn set_connecting(&mut self, cx: &mut Context<'_, Self>) {
         self.model.set_connecting();
+        self.pending_focus = true;
         cx.notify();
     }
 
@@ -308,6 +320,7 @@ impl ConnectionForm {
         cx: &mut Context<'_, Self>,
     ) {
         self.model.set_failed(message, retryable);
+        self.pending_focus = true;
         cx.notify();
     }
 }
@@ -621,7 +634,7 @@ impl FormModel {
 
     /// Déplace la sélection dans la liste des types de base.
     fn move_driver(&mut self, avant: bool) {
-        let total = self.drivers.len();
+        let total = self.drivers.len() + self.saved.len();
         if total == 0 {
             return;
         }
@@ -636,42 +649,134 @@ impl FormModel {
 }
 
 impl ConnectionForm {
-    fn on_key(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<'_, Self>) {
-        let modificateurs = event.keystroke.modifiers;
-        // Une frappe de raccourci ne produit pas de caractère : `cmd-s` n'écrit
-        // pas de « s ». C'est exactement le filtre voulu pour la saisie.
-        let saisie = if modificateurs.secondary() || modificateurs.control || modificateurs.function
-        {
-            None
-        } else {
-            event.keystroke.key_char.as_deref()
-        };
-
-        // Le sélecteur de fichier est traité ici et non dans le modèle : il
-        // ouvre une fenêtre de la plateforme, ce qui n'existe pas sans écran.
-        // Le modèle garde ce qui se teste, la vue ce qui ne se teste pas.
-        if modificateurs.secondary()
-            && let Some(cle) = self.model.focused_path_field()
-        {
-            match event.keystroke.key.as_str() {
-                "o" => {
-                    self.parcourir(cle, cx);
-                    return;
+    fn build_inputs(&mut self, cx: &mut Context<'_, Self>) {
+        self.inputs.clear();
+        let mut fields = vec![(CHAMP_NOM, self.model.name.clone(), false)];
+        if let Some(driver) = self.model.current() {
+            for (rank, field) in driver.fields.iter().enumerate() {
+                if matches!(field.kind, FormFieldKind::Choice(_) | FormFieldKind::Bool) {
+                    continue;
                 }
-                "n" => {
-                    self.nommer_un_fichier(cle, cx);
-                    return;
-                }
-                _ => {}
+                fields.push((
+                    rank + CHAMPS_COMMUNS,
+                    self.model
+                        .values
+                        .get(field.key.as_ref())
+                        .cloned()
+                        .unwrap_or_default(),
+                    field.kind.is_secret(),
+                ));
             }
         }
-
-        let demande = self
-            .model
-            .key(event.keystroke.key.as_str(), modificateurs.shift, saisie);
-        if let Some(brouillon) = demande {
-            cx.emit(ConnectionFormEvent::ConnectRequested(Box::new(brouillon)));
+        for (index, value, secret) in fields {
+            let input = cx.new(|cx| TextField::new(value, secret, cx));
+            cx.subscribe(&input, move |this, input, event, cx| {
+                match event {
+                    FieldEvent::Changed => {
+                        let text = input.read(cx).text().to_owned();
+                        if index == CHAMP_NOM {
+                            this.model.name = text;
+                        } else if let Some(key) = this.model.field_key(index) {
+                            this.model.values.insert(key, text);
+                        }
+                    }
+                    FieldEvent::Focused => this.model.focused = index,
+                    FieldEvent::Next(backwards) => {
+                        this.model.focused = index;
+                        this.model.move_focus(!backwards);
+                        this.pending_focus = true;
+                    }
+                    FieldEvent::Submit => this.submit(cx),
+                    FieldEvent::Escape => this.back_to_drivers(cx),
+                    FieldEvent::Browse(create) => {
+                        this.model.focused = index;
+                        if let Some(key) = this.model.focused_path_field() {
+                            if *create {
+                                this.nommer_un_fichier(key, cx);
+                            } else {
+                                this.parcourir(key, cx);
+                            }
+                        }
+                    }
+                }
+                cx.notify();
+            })
+            .detach();
+            self.inputs.insert(index, input);
         }
+    }
+
+    fn submit(&mut self, cx: &mut Context<'_, Self>) {
+        if !matches!(self.model.state, FormState::Filling { .. }) {
+            return;
+        }
+        if self.model.is_complete()
+            && let Some(draft) = self.model.draft()
+        {
+            cx.emit(ConnectionFormEvent::ConnectRequested(Box::new(draft)));
+        }
+    }
+
+    fn correct(&mut self, cx: &mut Context<'_, Self>) {
+        if let Some(driver) = self.last_driver {
+            self.model.state = FormState::Filling { driver };
+            self.pending_focus = true;
+            cx.notify();
+        } else {
+            self.back_to_drivers(cx);
+        }
+    }
+
+    fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<'_, Self>) {
+        // Unhandled printable keys must reach the platform text-input handler.
+        // The form only owns keys while its own focus handle is active.
+        if self
+            .inputs
+            .values()
+            .any(|input| input.read(cx).focus_handle(cx).is_focused(window))
+        {
+            return;
+        }
+        let key = event.keystroke.key.as_str();
+        match self.model.state {
+            FormState::Connecting => {
+                if key == "escape" {
+                    cx.emit(ConnectionFormEvent::CancelRequested);
+                }
+            }
+            FormState::Failed { .. } => {
+                if key == "escape" || key == "enter" {
+                    self.correct(cx);
+                }
+            }
+            FormState::ChoosingDriver => {
+                if key == "enter" {
+                    let rank = self.model.focused;
+                    if rank < self.model.drivers.len() {
+                        self.choose_driver(rank, cx);
+                    } else {
+                        cx.emit(ConnectionFormEvent::SavedChosen(
+                            rank - self.model.drivers.len(),
+                        ));
+                    }
+                } else if key == "tab" && event.keystroke.modifiers.shift {
+                    self.model.move_driver(false);
+                } else {
+                    self.model.key(key, event.keystroke.modifiers.shift, None);
+                }
+            }
+            FormState::Filling { .. } => {
+                if key == "enter" {
+                    self.submit(cx);
+                } else if key == "escape" {
+                    self.back_to_drivers(cx);
+                } else {
+                    self.model.key(key, event.keystroke.modifiers.shift, None);
+                    self.pending_focus = true;
+                }
+            }
+        }
+        cx.stop_propagation();
         cx.notify();
     }
 
@@ -732,7 +837,17 @@ impl ConnectionForm {
         // un fichier que le système sait pourtant ouvrir.
         let texte = chemin.to_string_lossy().into_owned();
         let _ = this.update(cx, |form, cx| {
-            form.model.set_value(cle, texte);
+            form.model.set_value(cle, texte.clone());
+            if let Some(driver) = form.model.current()
+                && let Some(rank) = driver
+                    .fields
+                    .iter()
+                    .position(|field| field.key.as_ref() == cle.as_ref())
+                && let Some(input) = form.inputs.get(&(rank + CHAMPS_COMMUNS))
+            {
+                input.update(cx, |input, cx| input.set_text(texte, cx));
+            }
+            form.pending_focus = true;
             cx.notify();
         });
     }
@@ -760,18 +875,53 @@ pub fn environment_choice_label(environment: Environment) -> &'static str {
 // ─────────────────────────────────────────────────────────────────────────────
 
 impl Render for ConnectionForm {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
         let theme = Theme::of(cx).clone();
-
-        let corps = match &self.model.state {
-            FormState::ChoosingDriver => self.render_driver_list(&theme),
-            FormState::Filling { .. } => self.render_form(&theme),
-            FormState::Connecting => self.render_connecting(&theme, cx),
-            FormState::Failed { message, retryable } => {
-                self.render_failed(message.clone(), *retryable, &theme)
-            }
+        if self.pending_focus {
+            let focus = if matches!(self.model.state, FormState::Filling { .. }) {
+                self.inputs
+                    .get(&self.model.focused)
+                    .map(|input| input.read(cx).focus_handle(cx))
+                    .unwrap_or_else(|| self.focus.clone())
+            } else {
+                self.focus.clone()
+            };
+            window.focus(&focus);
+            self.pending_focus = false;
+        }
+        let body = match &self.model.state {
+            FormState::ChoosingDriver => self.render_driver_list(&theme, cx),
+            FormState::Filling { .. } => self.render_form(&theme, cx),
+            FormState::Connecting => div()
+                .flex()
+                .flex_col()
+                .gap_3()
+                .child("Connexion en cours…")
+                .child(self.button("cancel-connection", "Annuler", cx, |_, cx| {
+                    cx.emit(ConnectionFormEvent::CancelRequested)
+                }))
+                .into_any_element(),
+            FormState::Failed { message, .. } => div()
+                .flex()
+                .flex_col()
+                .gap_3()
+                .child(
+                    div()
+                        .text_color(theme.colors.danger)
+                        .child("La connexion a échoué"),
+                )
+                .child(message.clone())
+                .child(self.button(
+                    "correct-connection",
+                    "Corriger les paramètres",
+                    cx,
+                    |this, cx| this.correct(cx),
+                ))
+                .child(self.button("back-failed", "Retour", cx, |this, cx| {
+                    this.back_to_drivers(cx)
+                }))
+                .into_any_element(),
         };
-
         div()
             .track_focus(&self.focus)
             .key_context("ConnectionForm")
@@ -787,238 +937,278 @@ impl Render for ConnectionForm {
             .text_size(theme.typography.ui_size)
             .child(
                 div()
-                    .w(px(560.))
+                    .id("connection-panel")
+                    .w(px(680.))
+                    .max_w_full()
+                    .max_h_full()
+                    .overflow_y_scroll()
                     .flex()
                     .flex_col()
-                    .gap_3()
+                    .gap_4()
                     .p_6()
                     .rounded_md()
                     .bg(theme.colors.surface_raised)
-                    .child(corps),
+                    .child(div().text_lg().child("Oxyn"))
+                    .child(body),
             )
     }
 }
 
 impl ConnectionForm {
-    /// État initial : les types de base, groupés par famille.
-    ///
-    /// État vide compris : un registre sans driver est un défaut de câblage,
-    /// pas une absence de bases de données, et le message le dit.
-    fn render_driver_list(&self, theme: &Theme) -> AnyElement {
-        if self.model.drivers.is_empty() {
-            return div()
-                .flex()
-                .flex_col()
-                .gap_2()
-                .child(
-                    div()
-                        .text_color(theme.colors.danger)
-                        .child(SharedString::new_static(
-                            "Aucun type de base n'est enregistré.",
-                        )),
-                )
-                .child(
-                    div()
-                        .text_color(theme.colors.text_muted)
-                        .child(SharedString::new_static(
-                            "Ce n'est pas une absence de bases : aucun driver n'a été \
-                         enregistré au démarrage. C'est un défaut de câblage.",
-                        )),
-                )
-                .into_any_element();
-        }
+    fn button(
+        &self,
+        id: &'static str,
+        label: &'static str,
+        cx: &Context<'_, Self>,
+        action: impl Fn(&mut Self, &mut Context<'_, Self>) + 'static,
+    ) -> AnyElement {
+        let colors = Theme::of(cx).colors;
+        div()
+            .id(id)
+            .tab_index(0)
+            .px_3()
+            .py_2()
+            .rounded_sm()
+            .border_1()
+            .border_color(colors.border)
+            .cursor_pointer()
+            .hover(move |style| style.bg(colors.hover))
+            .on_click(cx.listener(move |this, _, window, cx| {
+                window.focus(&this.focus);
+                action(this, cx);
+                cx.notify();
+            }))
+            .child(label)
+            .into_any_element()
+    }
 
-        let mut liste = div().flex().flex_col().gap_1();
-        let mut famille_courante: Option<SharedString> = None;
-        for (rang, choix) in self.model.drivers.iter().enumerate() {
-            if famille_courante.as_ref() != Some(&choix.family) {
-                famille_courante = Some(choix.family.clone());
-                liste = liste.child(
-                    div()
-                        .pt_2()
-                        .text_size(theme.typography.small_size)
-                        .text_color(theme.colors.text_muted)
-                        .child(choix.family.clone()),
-                );
-            }
-            let choisi = self.model.focused == rang;
-            liste = liste.child(
+    fn render_driver_list(&self, theme: &Theme, cx: &Context<'_, Self>) -> AnyElement {
+        let mut list = div()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child("Nouvelle connexion")
+            .child(
                 div()
+                    .text_color(theme.colors.text_muted)
+                    .child("Choisissez votre base de données."),
+            );
+        if self.model.drivers.is_empty() {
+            list = list.child("Aucun driver disponible.");
+        }
+        for (rank, driver) in self.model.drivers.iter().enumerate() {
+            list = list.child(
+                div()
+                    .id(("driver", rank))
                     .px_3()
                     .py_2()
                     .rounded_sm()
-                    .bg(if choisi {
+                    .cursor_pointer()
+                    .bg(if self.model.focused == rank {
                         theme.colors.selection
                     } else {
                         theme.colors.surface
                     })
-                    .child(choix.display_name.clone()),
+                    .hover(|style| style.bg(theme.colors.hover))
+                    .on_click(cx.listener(move |this, _, _, cx| this.choose_driver(rank, cx)))
+                    .child(driver.display_name.clone()),
             );
         }
-
-        div()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .child(
-                div()
-                    .text_size(theme.typography.ui_size)
-                    .child(SharedString::new_static("Choisir un type de base")),
-            )
-            .child(
-                div()
-                    .text_color(theme.colors.text_muted)
-                    .text_size(theme.typography.small_size)
-                    .child(SharedString::new_static(
-                        "↑ ↓ pour parcourir, Entrée pour choisir.",
-                    )),
-            )
-            .child(liste)
-            .child(self.render_saved(theme))
-            .into_any_element()
-    }
-
-    /// Les connexions déjà enregistrées, quand il y en a.
-    fn render_saved(&self, theme: &Theme) -> AnyElement {
-        if self.model.saved.is_empty() {
-            return div().into_any_element();
+        if !self.model.saved.is_empty() {
+            list = list.child(div().pt_3().child("Connexions enregistrées"));
         }
-        let mut liste = div().flex().flex_col().gap_1().pt_3().child(
-            div()
-                .text_size(theme.typography.small_size)
-                .text_color(theme.colors.text_muted)
-                .child(SharedString::new_static("Connexions enregistrées")),
-        );
-        for connexion in &self.model.saved {
-            liste = liste.child(
+        for (rank, saved) in self.model.saved.iter().enumerate() {
+            list = list.child(
                 div()
+                    .id(("saved", rank))
                     .px_3()
-                    .py_1()
-                    .flex()
-                    .flex_row()
-                    .gap_2()
-                    .items_center()
-                    .child(connexion.name.clone())
+                    .py_2()
+                    .rounded_sm()
+                    .cursor_pointer()
+                    .bg(if self.model.focused == rank + self.model.drivers.len() {
+                        theme.colors.selection
+                    } else {
+                        theme.colors.surface
+                    })
+                    .hover(|style| style.bg(theme.colors.hover))
+                    .on_click(cx.listener(move |_, _, _, cx| {
+                        cx.emit(ConnectionFormEvent::SavedChosen(rank))
+                    }))
+                    .child(saved.name.clone())
                     .child(
                         div()
-                            .text_size(theme.typography.small_size)
+                            .text_sm()
                             .text_color(theme.colors.text_muted)
-                            .child(connexion.driver.clone()),
-                    )
-                    .child(
-                        div()
-                            .text_size(theme.typography.small_size)
-                            .text_color(if connexion.environment.is_production() {
-                                theme.colors.warning
-                            } else {
-                                theme.colors.text_muted
-                            })
-                            .child(SharedString::new_static(environment_choice_label(
-                                connexion.environment,
-                            ))),
+                            .child(format!(
+                                "{} · {}",
+                                saved.driver,
+                                environment_choice_label(saved.environment)
+                            )),
                     ),
             );
         }
-        liste.into_any_element()
+        list.into_any_element()
     }
 
-    /// État peuplé : le formulaire du driver choisi.
-    fn render_form(&self, theme: &Theme) -> AnyElement {
-        let Some(choix) = self.model.current() else {
+    fn render_form(&self, theme: &Theme, cx: &Context<'_, Self>) -> AnyElement {
+        let Some(driver) = self.model.current() else {
             return div().into_any_element();
         };
-
-        let mut colonne = div()
+        let mut form = div()
             .flex()
             .flex_col()
-            .gap_2()
+            .gap_3()
+            .child(driver.display_name.clone())
+            .child(self.input_row("Nom de la connexion", CHAMP_NOM, theme))
             .child(
                 div()
-                    .text_size(theme.typography.ui_size)
-                    .child(choix.display_name.clone()),
-            )
-            .child(self.render_text_row(
-                "Nom de la connexion",
-                &self.model.name,
-                self.model.focused == CHAMP_NOM,
-                false,
-                theme,
-            ))
-            .child(self.render_environment_row(theme));
-
-        for (rang, champ) in choix.fields.iter().enumerate() {
-            let index = rang.saturating_add(CHAMPS_COMMUNS);
-            let valeur = self
-                .model
-                .values
-                .get(champ.key.as_ref())
-                .cloned()
-                .unwrap_or_default();
-            let libelle = if champ.required {
-                format!("{} *", champ.label)
+                    .flex()
+                    .gap_2()
+                    .items_center()
+                    .child(div().w(px(180.)).child("Environnement"))
+                    .child(
+                        div()
+                            .id("environment")
+                            .flex_1()
+                            .px_2()
+                            .py_1()
+                            .border_1()
+                            .rounded_sm()
+                            .border_color(if self.model.focused == CHAMP_ENVIRONNEMENT {
+                                theme.colors.accent
+                            } else {
+                                theme.colors.border
+                            })
+                            .cursor_pointer()
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                window.focus(&this.focus);
+                                this.model.focused = CHAMP_ENVIRONNEMENT;
+                                this.model.cycle();
+                                cx.notify();
+                            }))
+                            .child(format!(
+                                "{}  ▾",
+                                environment_choice_label(
+                                    ENVIRONNEMENTS
+                                        .get(self.model.environment)
+                                        .copied()
+                                        .unwrap_or(Environment::Production)
+                                )
+                            )),
+                    ),
+            );
+        for (rank, field) in driver.fields.iter().enumerate() {
+            let index = rank + CHAMPS_COMMUNS;
+            let label = format!("{}{}", field.label, if field.required { " *" } else { "" });
+            if self.inputs.contains_key(&index) {
+                form = form.child(self.input_row(&label, index, theme));
             } else {
-                champ.label.to_string()
-            };
-            colonne = colonne.child(self.render_text_row(
-                &libelle,
-                &valeur,
-                self.model.focused == index,
-                champ.kind.is_secret(),
-                theme,
-            ));
-            if let Some(aide) = &champ.help {
-                colonne = colonne.child(
+                let value = self
+                    .model
+                    .values
+                    .get(field.key.as_ref())
+                    .cloned()
+                    .unwrap_or_default();
+                form = form.child(
                     div()
-                        .pl_2()
-                        .text_size(theme.typography.small_size)
+                        .flex()
+                        .gap_2()
+                        .child(div().w(px(180.)).child(label))
+                        .child(
+                            div()
+                                .id(("choice", index))
+                                .flex_1()
+                                .px_2()
+                                .py_1()
+                                .border_1()
+                                .rounded_sm()
+                                .border_color(if self.model.focused == index {
+                                    theme.colors.accent
+                                } else {
+                                    theme.colors.border
+                                })
+                                .cursor_pointer()
+                                .on_click(cx.listener(move |this, _, window, cx| {
+                                    window.focus(&this.focus);
+                                    this.model.focused = index;
+                                    this.model.cycle();
+                                    cx.notify();
+                                }))
+                                .child(format!("{value}  ▾")),
+                        ),
+                );
+            }
+            if matches!(field.kind, FormFieldKind::Path) {
+                let key = field.key.clone();
+                let create_key = key.clone();
+                form = form.child(
+                    div()
+                        .flex()
+                        .gap_2()
+                        .child(
+                            self.button("browse-file", "Parcourir…", cx, move |this, cx| {
+                                this.parcourir(key.clone(), cx)
+                            }),
+                        )
+                        .child(self.button(
+                            "create-file",
+                            "Nouveau fichier…",
+                            cx,
+                            move |this, cx| this.nommer_un_fichier(create_key.clone(), cx),
+                        )),
+                );
+            }
+            if let Some(help) = &field.help {
+                form = form.child(
+                    div()
+                        .text_sm()
                         .text_color(theme.colors.text_muted)
-                        .child(aide.clone()),
+                        .child(help.clone()),
                 );
             }
         }
-
-        let pret = self.model.is_complete();
-        // Le raccourci du sélecteur n'est annoncé que sur un champ qui l'accepte
-        // : une aide qui décrit un geste sans effet apprend à ignorer l'aide.
-        let aide = if self.model.focused_path_field().is_some() {
-            "⌘O pour choisir un fichier · ⌘N pour en créer un · Entrée pour se connecter"
-        } else if pret {
-            "Entrée pour se connecter · Échap pour revenir · Tab pour changer de champ"
-        } else {
-            "Les champs marqués * sont obligatoires."
-        };
-        colonne
-            .child(
-                div()
-                    .pt_2()
-                    .text_size(theme.typography.small_size)
-                    .text_color(if pret || self.model.focused_path_field().is_some() {
-                        theme.colors.text_muted
-                    } else {
-                        theme.colors.warning
-                    })
-                    .child(SharedString::new_static(aide)),
-            )
-            .into_any_element()
+        let complete = self.model.is_complete();
+        form.child(
+            div()
+                .flex()
+                .gap_2()
+                .pt_2()
+                .child(self.button("back-to-drivers", "Retour", cx, |this, cx| {
+                    this.back_to_drivers(cx)
+                }))
+                .child(
+                    div()
+                        .id("connect")
+                        .px_3()
+                        .py_2()
+                        .rounded_sm()
+                        .bg(if complete {
+                            theme.colors.selection
+                        } else {
+                            theme.colors.surface
+                        })
+                        .text_color(if complete {
+                            theme.colors.text
+                        } else {
+                            theme.colors.text_muted
+                        })
+                        .cursor_pointer()
+                        .on_click(cx.listener(|this, _, _, cx| this.submit(cx)))
+                        .child("Se connecter"),
+                ),
+        )
+        .child(
+            div()
+                .text_sm()
+                .text_color(theme.colors.text_muted)
+                .child("Tab : champ suivant · Entrée : connexion · Échap : retour"),
+        )
+        .into_any_element()
     }
 
-    /// Une ligne de saisie. Un secret n'est jamais rendu en clair.
-    fn render_text_row(
-        &self,
-        libelle: &str,
-        valeur: &str,
-        actif: bool,
-        secret: bool,
-        theme: &Theme,
-    ) -> AnyElement {
-        let affiche = if secret {
-            "•".repeat(valeur.chars().count())
-        } else {
-            valeur.to_owned()
-        };
+    fn input_row(&self, label: &str, index: usize, theme: &Theme) -> AnyElement {
         div()
             .flex()
-            .flex_row()
             .gap_2()
             .items_center()
             .child(
@@ -1026,127 +1216,12 @@ impl ConnectionForm {
                     .w(px(180.))
                     .flex_none()
                     .text_color(theme.colors.text_muted)
-                    .child(SharedString::from(libelle.to_owned())),
+                    .child(label.to_owned()),
             )
-            .child(
-                div()
-                    .flex_1()
-                    .px_2()
-                    .py_1()
-                    .rounded_sm()
-                    .bg(theme.colors.surface)
-                    .border_1()
-                    .border_color(if actif {
-                        theme.colors.accent
-                    } else {
-                        theme.colors.grid_line
-                    })
-                    .font_family(theme.typography.mono_family.clone())
-                    .child(SharedString::from(if actif {
-                        format!("{affiche}|")
-                    } else {
-                        affiche
-                    })),
-            )
-            .into_any_element()
-    }
-
-    /// L'environnement : un choix fermé, jamais un texte libre.
-    ///
-    /// Le défaut est `local`, mais une connexion **enregistrée** sans
-    /// environnement vaut `production` — c'est `oxyn-core` qui le garantit, pas
-    /// cet écran ([I-02](../../../CLAUDE.md#i-02)).
-    fn render_environment_row(&self, theme: &Theme) -> AnyElement {
-        let courant = ENVIRONNEMENTS
-            .get(self.model.environment)
-            .copied()
-            .unwrap_or(Environment::Production);
-        let actif = self.model.focused == CHAMP_ENVIRONNEMENT;
-        div()
-            .flex()
-            .flex_row()
-            .gap_2()
-            .items_center()
-            .child(
-                div()
-                    .w(px(180.))
-                    .flex_none()
-                    .text_color(theme.colors.text_muted)
-                    .child(SharedString::new_static("Environnement")),
-            )
-            .child(
-                div()
-                    .flex_1()
-                    .px_2()
-                    .py_1()
-                    .rounded_sm()
-                    .bg(theme.colors.surface)
-                    .border_1()
-                    .border_color(if actif {
-                        theme.colors.accent
-                    } else {
-                        theme.colors.grid_line
-                    })
-                    .text_color(if courant.is_production() {
-                        theme.colors.warning
-                    } else {
-                        theme.colors.text
-                    })
-                    .child(SharedString::new_static(environment_choice_label(courant))),
-            )
-            .into_any_element()
-    }
-
-    /// État en cours : toujours avec un moyen d'annuler.
-    fn render_connecting(&self, theme: &Theme, _cx: &Context<'_, Self>) -> AnyElement {
-        div()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .child(
-                div()
-                    .text_size(theme.typography.ui_size)
-                    .child(SharedString::new_static("Connexion en cours…")),
-            )
-            .child(
-                div()
-                    .text_color(theme.colors.text_muted)
-                    .text_size(theme.typography.small_size)
-                    .child(SharedString::new_static("Échap pour renoncer.")),
-            )
-            .into_any_element()
-    }
-
-    /// État d'erreur : le message du serveur, et s'il est retentable.
-    fn render_failed(&self, message: SharedString, retryable: bool, theme: &Theme) -> AnyElement {
-        div()
-            .flex()
-            .flex_col()
-            .gap_2()
-            .child(
-                div()
-                    .text_color(theme.colors.danger)
-                    .text_size(theme.typography.ui_size)
-                    .child(SharedString::new_static("La connexion a échoué")),
-            )
-            // Le message du serveur tel quel, code compris : le public de ce
-            // produit lit les erreurs de PostgreSQL (UX-SPEC).
-            .child(
-                div()
-                    .font_family(theme.typography.mono_family.clone())
-                    .text_size(theme.typography.small_size)
-                    .child(message),
-            )
-            .child(
-                div()
-                    .text_color(theme.colors.text_muted)
-                    .text_size(theme.typography.small_size)
-                    .child(SharedString::new_static(if retryable {
-                        "Échap pour corriger les paramètres, Entrée pour réessayer."
-                    } else {
-                        "Échap pour corriger les paramètres. Réessayer à l'identique \
-                         redonnera la même erreur."
-                    })),
+            .children(
+                self.inputs
+                    .get(&index)
+                    .map(|input| div().flex_1().min_w_0().child(input.clone())),
             )
             .into_any_element()
     }

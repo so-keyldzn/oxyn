@@ -71,6 +71,7 @@ pub mod connection_form;
 pub mod data_grid;
 pub mod query_editor;
 pub mod status_bar;
+mod text_field;
 pub mod theme;
 
 pub use approval::{
@@ -105,13 +106,14 @@ mod tests {
     /// `include_str!` et non une lecture de fichier : le chemin est résolu à la
     /// compilation, donc le test ne dépend pas du répertoire courant et ne peut
     /// pas rater un fichier déplacé — il ne compilerait plus.
-    const COMPOSANTS: [(&str, &str); 6] = [
+    const COMPOSANTS: [(&str, &str); 7] = [
         ("approval.rs", include_str!("approval.rs")),
         ("catalog_tree.rs", include_str!("catalog_tree.rs")),
         ("connection_form.rs", include_str!("connection_form.rs")),
         ("data_grid.rs", include_str!("data_grid.rs")),
         ("query_editor.rs", include_str!("query_editor.rs")),
         ("status_bar.rs", include_str!("status_bar.rs")),
+        ("text_field.rs", include_str!("text_field.rs")),
     ];
 
     #[test]

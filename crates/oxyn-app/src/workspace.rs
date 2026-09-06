@@ -1,266 +1,350 @@
-//! The root view: it holds the components and translates their events.
-//!
-//! This is the only place in the product where a UI event becomes a
-//! [`oxyn_core::Command`]. The components below never build one — a
-//! test in `oxyn-ui` fails if any of them so much as mentions the type
-//! ([I-01](../../../CLAUDE.md#i-01)).
+//! Connects UI gestures to the executor and correlates each response with its run.
 
 use gpui::prelude::*;
 use gpui::{Entity, FocusHandle, Focusable, Window, div, px};
 use oxyn_core::{
-    Actor, CancelToken, Command, ConnectionId, Event, ExecRequest, QueryLanguage, SessionId,
+    Actor, CancelToken, Command, CommandId, Decision, Environment, Event, ExecRequest, OxynError,
+    QueryLanguage, SessionId,
 };
+use oxyn_exec::Outcome;
 use oxyn_ui::{
-    ActiveConnection, DataGrid, EditorEvent, ExecutionStatus, GridEvent, QueryEditor, StatusBar,
-    StatusBarEvent, Theme,
+    ActiveConnection, ApprovalDialog, ApprovalEvent, ApprovalId, ApprovalOutcome, ApprovalRequest,
+    DataGrid, EditorEvent, ExecutionStatus, GridEvent, QueryEditor, StatusBar, StatusBarEvent,
+    Theme,
 };
-use tokio::sync::broadcast::error::RecvError;
+use tokio::sync::{broadcast::error::RecvError, oneshot};
 
 use crate::backend::{Backend, OpenConnection};
 
-/// The workspace window.
+/// Builds a request on the session returned by Connect. The gate still authorizes writes.
+pub(crate) fn execution_command(
+    connection: oxyn_core::ConnectionId,
+    session: SessionId,
+    read_only: bool,
+    text: String,
+) -> Command {
+    let mut request = ExecRequest::new(QueryLanguage::SQL, text);
+    request.limits.read_only = read_only;
+    Command::Execute {
+        connection,
+        session,
+        request: Box::new(request),
+    }
+}
+
+/// One connected workspace. Only one statement runs in this editor at a time.
 pub struct Workspace {
     backend: Backend,
-    /// The connection every statement runs against. Chosen by the user on the
-    /// connection screen, never defaulted ([UX-SPEC](../../../docs/UX-SPEC.md)).
-    connection: ConnectionId,
+    connection: oxyn_core::ConnectionId,
+    session: SessionId,
+    environment: Environment,
+    read_only: bool,
     editor: Entity<QueryEditor>,
     grid: Entity<DataGrid>,
     status: Entity<StatusBar>,
-    focus: FocusHandle,
+    approval: Entity<ApprovalDialog>,
+    pending: Option<ApprovalRequest>,
+    active: Option<(CommandId, CancelToken)>,
+    awaiting_approval: bool,
+    initial_focus: bool,
 }
 
 impl std::fmt::Debug for Workspace {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // No backend, no entities: see `Backend`'s own impl
-        // ([I-03](../../../CLAUDE.md#i-03)).
-        f.debug_struct("Workspace").finish_non_exhaustive()
+        f.debug_struct("Workspace")
+            .field("running", &self.active.is_some())
+            .finish_non_exhaustive()
     }
 }
 
 impl Workspace {
-    /// Builds the workspace on an open connection.
+    /// Uses the session returned by Connect, never a fresh, unregistered id.
     pub fn new(backend: Backend, open: OpenConnection, cx: &mut Context<'_, Self>) -> Self {
         let editor = cx.new(QueryEditor::new);
         let grid = cx.new(DataGrid::new);
-
-        // La barre porte la connexion dès l'ouverture. Afficher « aucune
-        // connexion » pendant que l'éditeur exécute serait le mensonge le plus
-        // coûteux de l'interface : c'est précisément ici que l'utilisateur lit
-        // contre quoi il est sur le point d'écrire
-        // ([I-02](../../../CLAUDE.md#i-02)).
-        let vue = &open.display;
-        let mut active =
-            ActiveConnection::new(vue.name.clone(), vue.driver.clone(), vue.environment);
-        if vue.read_only {
-            active = active.read_only();
+        let approval = cx.new(ApprovalDialog::new);
+        let display = &open.display;
+        let mut connection = ActiveConnection::new(
+            display.name.clone(),
+            display.driver.clone(),
+            display.environment,
+        );
+        if display.read_only {
+            connection = connection.read_only();
         }
         let status = cx.new(|_| StatusBar::new());
-        status.update(cx, |bar, cx| bar.set_connection(Some(active), cx));
-
-        cx.subscribe(&editor, Self::on_editor_event).detach();
-        cx.subscribe(&grid, Self::on_grid_event).detach();
-        cx.subscribe(&status, Self::on_status_event).detach();
-
+        status.update(cx, |bar, cx| bar.set_connection(Some(connection), cx));
+        cx.subscribe(&editor, |this, _, event, cx| match event {
+            EditorEvent::ExecuteRequested => this.execute(cx),
+            EditorEvent::CancelRequested => this.cancel(cx),
+            _ => {}
+        })
+        .detach();
+        cx.subscribe(&grid, |this, _, event, cx| {
+            if matches!(event, GridEvent::CancelRequested) {
+                this.cancel(cx);
+            }
+        })
+        .detach();
+        cx.subscribe(&status, |this, _, event, cx| {
+            if matches!(event, StatusBarEvent::CancelRequested) {
+                this.cancel(cx);
+            }
+        })
+        .detach();
+        cx.subscribe(&approval, |this, _, event, cx| {
+            let ApprovalEvent::Decided { outcome, .. } = event else {
+                return;
+            };
+            if let Some((id, cancel)) = this.active.clone() {
+                this.awaiting_approval = false;
+                let response =
+                    this.backend
+                        .decide(id, *outcome == ApprovalOutcome::Approved, cancel);
+                this.wait(id, response, cx);
+                this.initial_focus = true;
+            }
+        })
+        .detach();
         let mut events = backend.subscribe();
-        // Detached, but not unbounded: the loop ends as soon as the view is
-        // gone, because `update` on a dead entity fails. That is the handle —
-        // the view's own lifetime.
         cx.spawn(async move |this, cx| {
             loop {
                 match events.recv().await {
                     Ok(event) => {
                         if this
-                            .update(cx, |workspace, cx| workspace.on_exec_event(&event, cx))
+                            .update(cx, |this, cx| this.on_exec_event(&event, cx))
                             .is_err()
                         {
                             break;
                         }
                     }
                     Err(RecvError::Closed) => break,
-                    Err(RecvError::Lagged(missed)) => {
-                        // Saying it out loud rather than showing a silently
-                        // incomplete result: the row count on screen would be
-                        // wrong with nothing to indicate it.
-                        tracing::warn!(missed, "UI fell behind the event stream");
-                    }
+                    // The oneshot response below always restores the final buffer and state.
+                    Err(RecvError::Lagged(_)) => {}
                 }
             }
         })
         .detach();
-
         Self {
             backend,
             connection: open.connection,
+            session: open.session,
+            environment: display.environment,
+            read_only: display.read_only,
             editor,
             grid,
             status,
-            focus: cx.focus_handle(),
+            approval,
+            pending: None,
+            active: None,
+            awaiting_approval: false,
+            initial_focus: true,
         }
     }
 
-    /// `Cmd+Enter` in the editor.
-    fn on_editor_event(
-        &mut self,
-        _editor: Entity<QueryEditor>,
-        event: &EditorEvent,
-        cx: &mut Context<'_, Self>,
-    ) {
-        match event {
-            EditorEvent::ExecuteRequested => self.execute(cx),
-            EditorEvent::Changed => {}
-            // `#[non_exhaustive]` : une demande que cette version ne sait pas
-            // traduire ne devient pas une commande par défaut. Elle se trace.
-            autre => tracing::warn!(event = ?autre, "unhandled editor event"),
-        }
-    }
-
-    fn on_grid_event(
-        &mut self,
-        _grid: Entity<DataGrid>,
-        event: &GridEvent,
-        cx: &mut Context<'_, Self>,
-    ) {
-        match event {
-            GridEvent::CancelRequested => self.cancel(cx),
-            GridEvent::RowSelected(_) => {}
-            _ => {}
-        }
-    }
-
-    fn on_status_event(
-        &mut self,
-        _status: Entity<StatusBar>,
-        event: &StatusBarEvent,
-        cx: &mut Context<'_, Self>,
-    ) {
-        // `StatusBarEvent` est `#[non_exhaustive]` et n'a qu'une variante : un
-        // `match` y ressemble à un test d'égalité, et clippy le dit. La forme
-        // reste un `if` explicite plutôt qu'un appel direct, pour que l'ajout
-        // d'une variante se voie ici.
-        if event == &StatusBarEvent::CancelRequested {
-            self.cancel(cx);
-        }
-    }
-
-    /// Turns the editor's text into an execution.
-    ///
-    /// Runs against the connection the user chose. An empty statement is refused
-    /// *here*, with a notice: an editor whose `Cmd+Enter` does nothing visible
-    /// is read as a broken application ([UX-SPEC](../../../docs/UX-SPEC.md)).
     fn execute(&mut self, cx: &mut Context<'_, Self>) {
-        let texte = self.editor.read(cx).statement_text();
-        if texte.trim().is_empty() {
-            self.notice(
-                "nothing to run: the statement under the cursor is empty",
-                cx,
-            );
+        if self.active.is_some() {
             return;
         }
-
-        // The intent carried here is a *claim*, not a verdict: `oxyn-exec`
-        // reclassifies the text itself before the gate sees it, precisely so
-        // that no caller — human or agent — can under-declare what it is about
-        // to run ([I-07](../../../CLAUDE.md#i-07)).
-        let requete = ExecRequest::new(QueryLanguage::SQL, texte);
-        let commande = Command::Execute {
-            connection: self.connection,
-            session: SessionId::new(),
-            request: Box::new(requete),
-        };
-
+        let text = self.editor.read(cx).statement_text();
+        if text.trim().is_empty() {
+            self.status.update(cx, |bar, cx| {
+                bar.set_notice(Some("Écrivez une requête avant de l’exécuter."), cx)
+            });
+            return;
+        }
+        let command = execution_command(self.connection, self.session, self.read_only, text);
+        let id = CommandId::new();
+        let cancel = CancelToken::new();
+        self.active = Some((id, cancel.clone()));
+        self.editor
+            .update(cx, |editor, cx| editor.set_running(true, cx));
         self.grid.update(cx, |grid, cx| grid.start(cx));
         self.status.update(cx, |bar, cx| {
+            bar.set_notice(None::<String>, cx);
             bar.set_status(ExecutionStatus::Running { rows: 0 }, cx);
         });
+        let response = self.backend.dispatch(id, command, cancel);
+        self.wait(id, response, cx);
+        cx.notify();
+    }
 
-        // Returns immediately: the dispatch runs on the executor's runtime, and
-        // what comes back reaches this view through the event stream, never
-        // through a blocking wait ([I-05](../../../CLAUDE.md#i-05)).
-        self.backend
-            .dispatch(Actor::Human, commande, CancelToken::new(), |issue| {
-                if let Err(erreur) = issue {
-                    tracing::error!(error = %erreur, "dispatch failed");
-                }
+    fn wait(
+        &mut self,
+        id: CommandId,
+        response: oneshot::Receiver<Result<Outcome, OxynError>>,
+        cx: &mut Context<'_, Self>,
+    ) {
+        cx.spawn(async move |this, cx| {
+            let result = response.await.unwrap_or_else(|_| {
+                Err(OxynError::Internal("The executor stopped answering".into()))
             });
+            let _ = this.update(cx, |this, cx| {
+                if this.active.as_ref().map(|run| run.0) != Some(id) {
+                    return;
+                }
+                match result {
+                    Ok(Outcome::NeedsApproval {
+                        reason, preview, ..
+                    }) => {
+                        this.awaiting_approval = true;
+                        this.pending = ApprovalRequest::from_decision(
+                            ApprovalId::new(0),
+                            Actor::Human,
+                            this.environment,
+                            &Decision::RequireApproval { reason, preview },
+                        );
+                        this.status.update(cx, |bar, cx| {
+                            bar.set_notice(Some("Confirmation requise avant exécution."), cx)
+                        });
+                    }
+                    Ok(Outcome::Executed {
+                        buffer,
+                        stats,
+                        sink,
+                        ..
+                    }) => {
+                        let cancelled = matches!(sink, oxyn_data::SinkOutcome::Cancelled);
+                        this.grid.update(cx, |grid, cx| {
+                            if cancelled && buffer.row_count() == 0 {
+                                grid.cancelled(cx);
+                            } else {
+                                grid.set_buffer(buffer, cx);
+                                grid.on_batch(cx);
+                            }
+                        });
+                        this.status.update(cx, |bar, cx| {
+                            bar.set_status(
+                                if cancelled {
+                                    ExecutionStatus::Cancelled
+                                } else {
+                                    ExecutionStatus::Completed(stats)
+                                },
+                                cx,
+                            )
+                        });
+                        this.finish(cx);
+                    }
+                    Ok(Outcome::Denied { reason, .. }) => {
+                        this.fail(reason, false, cx);
+                    }
+                    Err(OxynError::Cancelled) => {
+                        this.grid.update(cx, DataGrid::cancelled);
+                        this.status
+                            .update(cx, |bar, cx| bar.set_status(ExecutionStatus::Cancelled, cx));
+                        this.finish(cx);
+                    }
+                    Err(error) => {
+                        let retryable = error.is_retryable();
+                        this.fail(error.to_string(), retryable, cx);
+                    }
+                    Ok(_) => {
+                        this.fail("Unexpected execution response".into(), false, cx);
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
-    /// The cancel path, shared by the grid and the status bar.
-    fn cancel(&mut self, cx: &mut Context<'_, Self>) {
-        // `Cancelling` and not `Cancelled`: the server has not confirmed, so the
-        // statement is still running and still holds the connection. Saying
-        // otherwise would be the button lying
-        // ([UX-SPEC](../../../docs/UX-SPEC.md#annulation)).
-        self.status.update(cx, |bar, cx| {
-            bar.set_status(ExecutionStatus::Cancelling, cx)
-        });
-    }
-
-    fn notice(&mut self, texte: &'static str, cx: &mut Context<'_, Self>) {
-        // `SharedString` nommé : `set_notice` prend un `Option<impl Into<…>>`,
-        // et `Some(texte.into())` ne dit pas vers quoi convertir.
-        let texte = gpui::SharedString::new_static(texte);
+    fn finish(&mut self, cx: &mut Context<'_, Self>) {
+        self.active = None;
+        self.awaiting_approval = false;
+        self.editor
+            .update(cx, |editor, cx| editor.set_running(false, cx));
         self.status
-            .update(cx, |bar, cx| bar.set_notice(Some(texte), cx));
+            .update(cx, |bar, cx| bar.set_notice(None::<String>, cx));
     }
 
-    /// What the executor reports, translated into what the views show.
+    fn fail(&mut self, message: String, retryable: bool, cx: &mut Context<'_, Self>) {
+        self.grid
+            .update(cx, |grid, cx| grid.fail(message.clone(), retryable, cx));
+        self.status.update(cx, |bar, cx| {
+            bar.set_status(
+                ExecutionStatus::Failed {
+                    message: message.into(),
+                    retryable,
+                },
+                cx,
+            )
+        });
+        self.finish(cx);
+    }
+
+    fn cancel(&mut self, cx: &mut Context<'_, Self>) {
+        let Some((id, cancel)) = self.active.clone() else {
+            return;
+        };
+        if self.awaiting_approval {
+            self.pending = None;
+            let response = self.backend.decide(id, false, cancel);
+            self.wait(id, response, cx);
+        } else {
+            // Executor propagates this token to the cursor and server-side cancellation.
+            cancel.cancel();
+            self.status.update(cx, |bar, cx| {
+                bar.set_status(ExecutionStatus::Cancelling, cx)
+            });
+        }
+    }
+
     fn on_exec_event(&mut self, event: &oxyn_exec::ExecEvent, cx: &mut Context<'_, Self>) {
+        if self.active.as_ref().map(|run| run.0) != Some(event.command)
+            || event.connection != Some(self.connection)
+        {
+            return;
+        }
         match &event.event {
-            // Attaché dès que le schéma est connu, avant le premier lot : les
-            // en-têtes s'affichent immédiatement, ce qui est déjà une réponse
-            // visible dans le budget des 300 ms
-            // ([PERFORMANCE](../../../docs/PERFORMANCE.md#budgets-dinteraction)).
             Event::SchemaReady { result } => {
-                if let Some(tampon) = self.backend.result(*result) {
-                    self.grid.update(cx, |grid, cx| grid.set_buffer(tampon, cx));
+                if let Some(buffer) = self.backend.result(*result) {
+                    self.grid.update(cx, |grid, cx| grid.set_buffer(buffer, cx));
                 }
             }
-            Event::BatchReady { .. } => {
-                self.grid.update(cx, DataGrid::on_batch);
-            }
-            Event::Progress { rows } => {
+            Event::BatchReady { .. } => self.grid.update(cx, DataGrid::on_batch),
+            Event::Progress { rows }
+                if !self.active.as_ref().is_some_and(|run| run.1.is_cancelled()) =>
+            {
                 let rows = *rows;
                 self.status.update(cx, |bar, cx| {
                     bar.set_status(ExecutionStatus::Running { rows }, cx)
                 });
             }
-            Event::Completed { stats, .. } => {
-                let stats = *stats;
-                self.status.update(cx, |bar, cx| {
-                    bar.set_status(ExecutionStatus::Completed(stats), cx)
-                });
-            }
-            // Le message du serveur, code compris, et non une paraphrase
-            // rassurante : le public de ce produit lit les erreurs PostgreSQL.
-            Event::Failed { error, retryable } => {
-                let message = gpui::SharedString::from(error.clone());
-                let retryable = *retryable;
-                self.status.update(cx, |bar, cx| {
-                    bar.set_status(ExecutionStatus::Failed { message, retryable }, cx)
-                });
-            }
-            Event::Cancelled => {
-                self.status
-                    .update(cx, |bar, cx| bar.set_status(ExecutionStatus::Cancelled, cx));
-            }
-            autre => tracing::debug!(event = ?autre, "unhandled execution event"),
+            // Terminal outcomes come through the reliable response channel, including
+            // errors occurring before the executor can publish a schema.
+            _ => {}
+        }
+    }
+}
+
+impl Drop for Workspace {
+    fn drop(&mut self) {
+        if let Some((_, cancel)) = &self.active {
+            cancel.cancel();
         }
     }
 }
 
 impl Focusable for Workspace {
-    fn focus_handle(&self, _cx: &gpui::App) -> FocusHandle {
-        self.focus.clone()
+    fn focus_handle(&self, cx: &gpui::App) -> FocusHandle {
+        self.editor.read(cx).focus_handle(cx)
     }
 }
 
 impl Render for Workspace {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
-        let theme = Theme::of(cx);
-
+    fn render(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
+        let theme = Theme::of(cx).clone();
+        if self.initial_focus {
+            window.focus(&self.editor.read(cx).focus_handle(cx));
+            self.initial_focus = false;
+        }
+        if let Some(request) = self.pending.take() {
+            self.approval
+                .update(cx, |dialog, cx| dialog.present(request, window, cx));
+        }
+        let busy = self.active.is_some();
         div()
-            .track_focus(&self.focus)
+            .relative()
             .size_full()
             .flex()
             .flex_col()
@@ -268,10 +352,36 @@ impl Render for Workspace {
             .text_color(theme.colors.text)
             .font_family(theme.typography.ui_family.clone())
             .text_size(theme.typography.ui_size)
-            // The editor keeps a fixed share; the grid takes what is left. A
-            // result is what the user came for, so it gets the space.
-            .child(div().h(px(180.)).flex_none().child(self.editor.clone()))
-            .child(div().flex_1().overflow_hidden().child(self.grid.clone()))
+            .child(
+                div().flex().gap_2().p_2().child(
+                    div()
+                        .id("run-query")
+                        .px_3()
+                        .py_1()
+                        .rounded_sm()
+                        .bg(if busy {
+                            theme.colors.surface_raised
+                        } else {
+                            theme.colors.selection
+                        })
+                        .cursor_pointer()
+                        .on_click(cx.listener(|this, _, _, cx| this.execute(cx)))
+                        .child(if busy {
+                            "Exécution en cours…"
+                        } else {
+                            "Exécuter · ⌘Entrée"
+                        }),
+                ),
+            )
+            .child(div().h(px(220.)).flex_none().child(self.editor.clone()))
+            .child(
+                div()
+                    .flex_1()
+                    .min_h_0()
+                    .overflow_hidden()
+                    .child(self.grid.clone()),
+            )
             .child(self.status.clone())
+            .child(self.approval.clone())
     }
 }

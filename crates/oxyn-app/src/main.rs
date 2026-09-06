@@ -36,6 +36,12 @@ fn main() -> Result<()> {
 
     Application::new().run(move |cx| {
         Theme::init(ThemeMode::Dark, cx);
+        cx.on_window_closed(|cx| {
+            if cx.windows().is_empty() {
+                cx.quit();
+            }
+        })
+        .detach();
 
         let bounds = Bounds::centered(None, size(px(LARGEUR), px(HAUTEUR)), cx);
         let ouverture = cx.open_window(

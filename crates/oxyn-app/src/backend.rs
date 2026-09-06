@@ -17,8 +17,8 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
 use oxyn_core::{
-    Actor, CancelToken, Command, ConnectionConfig, ConnectionId, DefaultPolicy, Environment,
-    OxynError, PolicyGate, ResultId,
+    Actor, CancelToken, Command, CommandId, ConnectionConfig, ConnectionId, DefaultPolicy,
+    Environment, OxynError, PolicyGate, ResultId, SessionId,
 };
 use oxyn_data::ResultBuffer;
 use oxyn_driver::DriverRegistry;
@@ -68,10 +68,24 @@ impl ConnectionDisplay {
 /// A connection that is open, with a session ready.
 #[derive(Debug, Clone)]
 pub struct OpenConnection {
+    /// The session actually opened by the executor.
+    pub session: SessionId,
     /// The connection the workspace will run against.
     pub connection: ConnectionId,
     /// What the status bar shows about it.
     pub display: ConnectionDisplay,
+}
+
+/// A connection may require approval before its local configuration is saved.
+#[derive(Debug)]
+pub enum ConnectionResponse {
+    Open(OpenConnection),
+    Approval {
+        command: CommandId,
+        config: Box<ConnectionConfig>,
+        reason: String,
+        preview: Option<oxyn_core::Preview>,
+    },
 }
 
 /// The assembled backend, shared by every view.
@@ -97,6 +111,7 @@ struct Inner {
     /// in-flight statement, and a dropped future does not cancel a server-side
     /// query ([I-13](../../../CLAUDE.md#i-13)).
     runtime: Runtime,
+    saved: Vec<(ConnectionId, SavedConnection)>,
 }
 
 // `Debug` is derived nowhere here on purpose: `Executor` and `Store` reach
@@ -167,11 +182,15 @@ impl Backend {
         let known = executor
             .load_connections()
             .context("loading the saved connections")?;
-        for config in store
+        let configs = store
             .connections()
             .list(atelier)
-            .context("listing the saved connections")?
-        {
+            .context("listing the saved connections")?;
+        let saved = configs
+            .iter()
+            .map(|config| (config.id, picker::saved_connection(config)))
+            .collect();
+        for config in configs {
             policy.register(&config);
         }
         tracing::info!(connections = known, "saved connections registered");
@@ -183,6 +202,7 @@ impl Backend {
                 policy,
                 credentials,
                 runtime,
+                saved,
             }),
         })
     }
@@ -208,18 +228,7 @@ impl Backend {
     /// # Errors
     /// If the local state cannot be read.
     pub fn saved_connections(&self) -> Result<Vec<(ConnectionId, SavedConnection)>> {
-        let configs = self
-            .inner
-            .executor
-            .store()
-            .connections()
-            .list(self.inner.executor.workspace())
-            .context("listing the saved connections")?;
-
-        Ok(configs
-            .iter()
-            .map(|config| (config.id, picker::saved_connection(config)))
-            .collect())
+        Ok(self.inner.saved.clone())
     }
 
     /// Creates the connection a draft describes and opens a session on it.
@@ -229,12 +238,16 @@ impl Backend {
     /// happens on the runtime, never on the UI thread
     /// ([I-05](../../../CLAUDE.md#i-05)).
     #[must_use]
-    pub fn connect(&self, draft: ConnectionDraft) -> oneshot::Receiver<Result<OpenConnection>> {
+    pub fn connect(
+        &self,
+        draft: ConnectionDraft,
+        cancel: CancelToken,
+    ) -> oneshot::Receiver<Result<ConnectionResponse>> {
         let (envoi, reception) = oneshot::channel();
         let inner = Arc::clone(&self.inner);
 
         self.inner.runtime.spawn(async move {
-            let issue = ouvrir(&inner, draft).await;
+            let issue = ouvrir(&inner, draft, &cancel).await;
             // The receiver is gone when the window closed mid-connect. Nothing
             // to report to, and nothing broken: the session is closed with the
             // backend.
@@ -249,16 +262,49 @@ impl Backend {
     /// # Panics
     /// Never: an unknown connection comes back as an error on the channel.
     #[must_use]
-    pub fn reconnect(&self, connection: ConnectionId) -> oneshot::Receiver<Result<OpenConnection>> {
+    pub fn reconnect(
+        &self,
+        connection: ConnectionId,
+        cancel: CancelToken,
+    ) -> oneshot::Receiver<Result<ConnectionResponse>> {
         let (envoi, reception) = oneshot::channel();
         let inner = Arc::clone(&self.inner);
 
         self.inner.runtime.spawn(async move {
-            let issue = rouvrir(&inner, connection).await;
+            let issue = rouvrir(&inner, connection, &cancel)
+                .await
+                .map(ConnectionResponse::Open);
             let _ = envoi.send(issue);
         });
 
         reception
+    }
+
+    /// Completes an explicitly approved connection setup, without bypassing the gate.
+    pub fn approve_connection(
+        &self,
+        command: CommandId,
+        config: ConnectionConfig,
+        cancel: CancelToken,
+    ) -> oneshot::Receiver<Result<ConnectionResponse>> {
+        let (sender, receiver) = oneshot::channel();
+        let inner = Arc::clone(&self.inner);
+        self.inner.runtime.spawn(async move {
+            let result = async {
+                match inner.executor.approve("human", command, &cancel).await? {
+                    Outcome::ConnectionSaved { .. } => {}
+                    Outcome::Denied { reason, .. } => anyhow::bail!("{reason}"),
+                    _ => anyhow::bail!("The connection was not saved"),
+                }
+                inner.policy.register(&config);
+                ouvrir_la_session(&inner, config, &cancel)
+                    .await
+                    .map(ConnectionResponse::Open)
+            }
+            .await;
+            let _ = sender.send(result);
+        });
+        receiver
     }
 
     /// The buffer behind a result id, shared with the grid **without a copy**.
@@ -283,15 +329,46 @@ impl Backend {
     /// dispatch happens on the runtime; `then` runs there too, so it must not
     /// touch a view — it sends, and the UI reads what it sent
     /// ([I-05](../../../CLAUDE.md#i-05)).
-    pub fn dispatch<F>(&self, actor: Actor, command: Command, cancel: CancelToken, then: F)
-    where
-        F: FnOnce(Result<Outcome, OxynError>) + Send + 'static,
-    {
+    pub fn dispatch(
+        &self,
+        id: CommandId,
+        command: Command,
+        cancel: CancelToken,
+    ) -> oneshot::Receiver<Result<Outcome, OxynError>> {
+        let (sender, receiver) = oneshot::channel();
         let inner = Arc::clone(&self.inner);
         self.inner.runtime.spawn(async move {
-            let issue = inner.executor.dispatch(actor, command, &cancel).await;
-            then(issue);
+            let outcome = inner
+                .executor
+                .dispatch_as(id, Actor::Human, command, &cancel)
+                .await;
+            let _ = sender.send(outcome);
         });
+        receiver
+    }
+
+    /// Resolves a human decision against the exact pending command.
+    pub fn decide(
+        &self,
+        id: CommandId,
+        approved: bool,
+        cancel: CancelToken,
+    ) -> oneshot::Receiver<Result<Outcome, OxynError>> {
+        let (sender, receiver) = oneshot::channel();
+        let inner = Arc::clone(&self.inner);
+        self.inner.runtime.spawn(async move {
+            let outcome = if approved {
+                inner.executor.approve("human", id, &cancel).await
+            } else {
+                inner.executor.reject(id);
+                Ok(Outcome::Denied {
+                    command: id,
+                    reason: "Operation rejected".into(),
+                })
+            };
+            let _ = sender.send(outcome);
+        });
+        receiver
     }
 }
 
@@ -318,7 +395,11 @@ fn atelier_courant(store: &Arc<Store>) -> Result<oxyn_core::WorkspaceId> {
 /// persisted. A failure after the keyring write leaves an orphan entry, which is
 /// harmless — an unreferenced secret is unreachable — where the reverse would
 /// leave a saved connection whose password does not exist.
-async fn ouvrir(inner: &Inner, draft: ConnectionDraft) -> Result<OpenConnection> {
+async fn ouvrir(
+    inner: &Inner,
+    draft: ConnectionDraft,
+    cancel: &CancelToken,
+) -> Result<ConnectionResponse> {
     let mut config = picker::config_from_draft(&draft)
         .context("the connection screen named a driver the registry does not know")?;
 
@@ -334,29 +415,55 @@ async fn ouvrir(inner: &Inner, draft: ConnectionDraft) -> Result<OpenConnection>
     // Through the command bus, like everything else — including at startup.
     // Writing to the store directly here is exactly the second execution path
     // [I-01](../../../CLAUDE.md#i-01) forbids, and it is the tempting shortcut.
-    let cancel = CancelToken::new();
-    inner
+    let outcome = inner
         .executor
         .dispatch(
             Actor::Human,
             Command::CreateConnection {
                 config: Box::new(config.clone()),
             },
-            &cancel,
+            cancel,
         )
         .await
         .context("saving the connection")?;
+
+    match outcome {
+        Outcome::NeedsApproval {
+            command,
+            reason,
+            mut preview,
+        } => {
+            if let Some(preview) = &mut preview {
+                preview.connection = config.name.clone();
+            }
+            return Ok(ConnectionResponse::Approval {
+                command,
+                config: Box::new(config),
+                reason,
+                preview,
+            });
+        }
+        Outcome::ConnectionSaved { .. } => {}
+        Outcome::Denied { reason, .. } => anyhow::bail!("{reason}"),
+        _ => anyhow::bail!("The connection was not saved"),
+    }
 
     // The gate learns about the connection here. `DefaultPolicy` is closed by
     // default: skipping this denies every write on a connection the user just
     // created, with a message they cannot act on.
     inner.policy.register(&config);
 
-    ouvrir_la_session(inner, config).await
+    ouvrir_la_session(inner, config, cancel)
+        .await
+        .map(ConnectionResponse::Open)
 }
 
 /// Reopens a connection the store already knows.
-async fn rouvrir(inner: &Inner, connection: ConnectionId) -> Result<OpenConnection> {
+async fn rouvrir(
+    inner: &Inner,
+    connection: ConnectionId,
+    cancel: &CancelToken,
+) -> Result<OpenConnection> {
     let config = inner
         .executor
         .store()
@@ -366,20 +473,23 @@ async fn rouvrir(inner: &Inner, connection: ConnectionId) -> Result<OpenConnecti
         .context("this connection is no longer in the workspace")?;
 
     inner.policy.register(&config);
-    ouvrir_la_session(inner, config).await
+    ouvrir_la_session(inner, config, cancel).await
 }
 
 /// The half both paths share: `Command::Connect`, then what may be displayed.
-async fn ouvrir_la_session(inner: &Inner, config: ConnectionConfig) -> Result<OpenConnection> {
-    let cancel = CancelToken::new();
-    inner
+async fn ouvrir_la_session(
+    inner: &Inner,
+    config: ConnectionConfig,
+    cancel: &CancelToken,
+) -> Result<OpenConnection> {
+    let outcome = inner
         .executor
         .dispatch(
             Actor::Human,
             Command::Connect {
                 connection: config.id,
             },
-            &cancel,
+            cancel,
         )
         .await
         // The server's own words, code included: the audience for this product
@@ -394,7 +504,11 @@ async fn ouvrir_la_session(inner: &Inner, config: ConnectionConfig) -> Result<Op
         "connection open"
     );
 
+    let Outcome::Connected { session, .. } = outcome else {
+        anyhow::bail!("The executor did not open a session");
+    };
     Ok(OpenConnection {
+        session,
         connection: config.id,
         display: ConnectionDisplay::of(&config),
     })
@@ -405,6 +519,180 @@ mod tests {
     use oxyn_core::DriverId;
 
     use super::*;
+
+    fn test_backend() -> Backend {
+        let store = Arc::new(Store::open_in_memory().expect("in-memory workspace"));
+        let workspace = atelier_courant(&store).expect("workspace");
+        let mut drivers = DriverRegistry::new();
+        drivers
+            .register(Arc::new(SqliteDriver::new()))
+            .expect("driver");
+        let drivers = Arc::new(drivers);
+        let policy = Arc::new(DefaultPolicy::new());
+        let credentials = Arc::new(KeyringCredentials::new(Arc::new(
+            oxyn_secrets::MemorySecretStore::new(),
+        )));
+        let executor = Executor::builder(store, policy.clone())
+            .with_workspace(workspace)
+            .with_drivers(drivers.clone())
+            .with_credentials(credentials.clone())
+            .build();
+        Backend {
+            inner: Arc::new(Inner {
+                executor,
+                drivers,
+                policy,
+                credentials,
+                runtime: tokio::runtime::Builder::new_multi_thread()
+                    .enable_all()
+                    .build()
+                    .expect("runtime"),
+                saved: Vec::new(),
+            }),
+        }
+    }
+
+    fn open_test_connection(backend: &Backend, environment: Environment) -> OpenConnection {
+        let draft = ConnectionDraft {
+            driver: "sqlite".into(),
+            name: "UI regression".into(),
+            environment,
+            values: [("path".into(), ":memory:".into())].into_iter().collect(),
+            secrets: Default::default(),
+        };
+        match backend
+            .inner
+            .runtime
+            .block_on(backend.connect(draft, CancelToken::new()))
+            .expect("response")
+            .expect("connection")
+        {
+            ConnectionResponse::Open(open) => open,
+            ConnectionResponse::Approval {
+                command, config, ..
+            } => {
+                let result = backend
+                    .inner
+                    .runtime
+                    .block_on(backend.approve_connection(command, *config, CancelToken::new()))
+                    .expect("response")
+                    .expect("approval");
+                let ConnectionResponse::Open(open) = result else {
+                    panic!("connection must open after approval")
+                };
+                open
+            }
+        }
+    }
+
+    fn run(backend: &Backend, open: &OpenConnection, text: &str) -> Result<Outcome, OxynError> {
+        let command = crate::workspace::execution_command(
+            open.connection,
+            open.session,
+            false,
+            text.to_owned(),
+        );
+        backend
+            .inner
+            .runtime
+            .block_on(backend.dispatch(CommandId::new(), command, CancelToken::new()))
+            .expect("response")
+    }
+
+    #[test]
+    fn ui_reuses_the_open_session_and_survives_a_query_error() {
+        let backend = test_backend();
+        let open = open_test_connection(&backend, Environment::Local);
+        assert!(
+            matches!(run(&backend, &open, "SELECT 42 AS answer"), Ok(Outcome::Executed { stats, .. }) if stats.rows == 1)
+        );
+        assert!(run(&backend, &open, "SELECT missing FROM nonexistent").is_err());
+        assert!(matches!(
+            run(&backend, &open, "SELECT 1"),
+            Ok(Outcome::Executed { .. })
+        ));
+        assert!(matches!(
+            run(&backend, &open, "CREATE TABLE notes (id INTEGER)"),
+            Ok(Outcome::Executed { .. })
+        ));
+        assert!(
+            matches!(run(&backend, &open, "SELECT * FROM notes"), Ok(Outcome::Executed { stats, .. }) if stats.rows == 0)
+        );
+    }
+
+    #[test]
+    fn production_write_waits_for_the_exact_human_decision() {
+        let backend = test_backend();
+        let open = open_test_connection(&backend, Environment::Production);
+        let Outcome::NeedsApproval {
+            command, preview, ..
+        } = run(&backend, &open, "CREATE TABLE approved (id INTEGER)").expect("policy response")
+        else {
+            panic!("approval required")
+        };
+        assert_eq!(preview.expect("preview").connection, "UI regression");
+        assert!(run(&backend, &open, "SELECT * FROM approved").is_err());
+        let outcome = backend
+            .inner
+            .runtime
+            .block_on(backend.decide(command, true, CancelToken::new()))
+            .expect("response")
+            .expect("approval");
+        assert!(matches!(outcome, Outcome::Executed { .. }));
+        assert!(run(&backend, &open, "SELECT * FROM approved").is_ok());
+        let Outcome::NeedsApproval { command, .. } =
+            run(&backend, &open, "DROP TABLE approved").expect("policy response")
+        else {
+            panic!("approval required")
+        };
+        let rejected = backend
+            .inner
+            .runtime
+            .block_on(backend.decide(command, false, CancelToken::new()))
+            .expect("response")
+            .expect("rejection");
+        assert!(matches!(rejected, Outcome::Denied { .. }));
+        assert!(run(&backend, &open, "SELECT * FROM approved").is_ok());
+    }
+
+    #[test]
+    fn ui_cancel_reaches_sqlite_and_session_can_be_reused() {
+        let backend = test_backend();
+        let open = open_test_connection(&backend, Environment::Local);
+        let cancel = CancelToken::new();
+        let mut events = backend.subscribe();
+        let id = CommandId::new();
+        let command = crate::workspace::execution_command(open.connection, open.session, false,
+            "WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<1000000000) SELECT x FROM n".into());
+        let receiver = backend.dispatch(id, command, cancel.clone());
+        backend.inner.runtime.block_on(async {
+            tokio::time::timeout(std::time::Duration::from_secs(10), async {
+                loop {
+                    let event = events.recv().await.expect("event");
+                    if event.command == id
+                        && matches!(event.event, oxyn_core::Event::BatchReady { .. })
+                    {
+                        break;
+                    }
+                }
+            })
+            .await
+            .expect("first batch");
+            cancel.cancel();
+            let outcome = tokio::time::timeout(std::time::Duration::from_secs(10), receiver)
+                .await
+                .expect("cancellation deadline")
+                .expect("response");
+            assert!(matches!(
+                outcome,
+                Ok(Outcome::Executed {
+                    sink: oxyn_data::SinkOutcome::Cancelled,
+                    ..
+                }) | Err(OxynError::Cancelled)
+            ));
+        });
+        assert!(run(&backend, &open, "SELECT 1").is_ok());
+    }
 
     #[test]
     fn laffichage_dune_connexion_ne_porte_ni_identifiant_ni_parametre() {

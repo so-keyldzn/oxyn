@@ -127,7 +127,17 @@ type que le registre ne connaît pas déplacerait l'échec au moment de la
 connexion, avec un message inexploitable
 ([ADR-0003](adr/0003-driver-capabilities.md)). Un champ de genre `Path` — celui
 de SQLite — ouvre le sélecteur de fichiers de la plateforme par `⌘O`, ou `⌘N`
-pour une base à créer.
+pour une base à créer. Ces actions sont aussi accessibles par des boutons.
+Les champs et l'éditeur SQL utilisent l'entrée de texte native GPUI et acceptent
+le placement du curseur et la sélection à la souris.
+
+L'espace de travail conserve la session renvoyée par `Connect`. Une seule
+exécution est active par éditeur ; ses événements sont filtrés par identifiant
+de commande et connexion. Le résultat final est également transmis par un canal
+fiable, afin qu'une perte d'événements intermédiaires ne laisse pas la grille
+bloquée. L'annulation transmet le même `CancelToken` jusqu'au driver. Les
+décisions `RequireApproval` ouvrent une confirmation avant de reprendre la
+commande correspondante. Fermer la dernière fenêtre quitte l'application.
 
 Le binaire nu ne suffit pas sur macOS : sans paquet `.app`, le système traite le
 processus comme un accessoire — ni Dock, ni activation propre, ni identifiant
@@ -602,10 +612,10 @@ arbre de catalogue. *Critère de sortie : `SELECT` de 10 M de lignes, premier af
 > **Où on en est.** Les quinze crates existent, compilent, et `make qualite` passe :
 > format, `clippy -D warnings`, la suite de tests, `cargo doc -D warnings`. `make app`
 > produit `Oxyn.app`, la fenêtre s'ouvre, et `Cmd+Entrée` exécute réellement à travers
-> le command bus contre une connexion SQLite en mémoire ouverte au démarrage.
+> le command bus contre la session choisie dans le formulaire de connexion.
 >
 > **Le critère de sortie n'est pas atteint et n'a pas été mesuré.** Il manque le
-> sélecteur de connexion, l'introspection branchée sur l'arbre, et surtout les
+> branchement de l'introspection sur l'arbre, et surtout les
 > mesures : les 10 M de lignes, les 100 ms de premier affichage et la stabilité
 > mémoire sont des chiffres à produire, pas des propriétés à supposer. La coloration
 > syntaxique, la complétion et les curseurs multiples de l'éditeur restent le plus

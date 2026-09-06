@@ -4,8 +4,11 @@
 > C'est le seul document qui parle de ce qui **reste à faire** — les documents
 > d'autorité décrivent ce qui est décidé.
 
-État au 2026-09-05 : **aucun code n'existe.** Le dépôt contient sa
-documentation, ses décisions et son socle de pilotage Claude.
+État au 2026-09-06 : les quinze crates existent, avec une application GPUI,
+un formulaire de connexion et un parcours d'exécution SQL. Les corrections
+d'interaction souris, de saisie native, de session et d'annulation sont en place.
+Les critères de performance de la phase 0 restent à mesurer ; l'existence du
+code ne valide pas à elle seule les portes de sortie ci-dessous.
 
 ## D'où viennent ces phases
 

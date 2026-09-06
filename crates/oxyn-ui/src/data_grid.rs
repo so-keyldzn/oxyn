@@ -134,6 +134,8 @@ pub enum GridState {
     Idle,
     /// Une exécution est lancée, le schéma n'est pas encore connu.
     Starting,
+    /// Execution was cancelled before any result was available.
+    Cancelled,
     /// Le schéma est connu. Les lignes arrivent, ou sont toutes arrivées :
     /// [`ResultBuffer::is_complete`] tranche, et la grille n'a pas à le savoir
     /// autrement.
@@ -159,7 +161,7 @@ impl GridState {
     pub fn buffer(&self) -> Option<&Arc<ResultBuffer>> {
         match self {
             Self::Streaming(tampon) => Some(tampon),
-            Self::Idle | Self::Starting | Self::Failed { .. } => None,
+            Self::Idle | Self::Starting | Self::Cancelled | Self::Failed { .. } => None,
         }
     }
 
@@ -173,7 +175,7 @@ impl GridState {
         match self {
             Self::Starting => true,
             Self::Streaming(tampon) => !tampon.is_complete(),
-            Self::Idle | Self::Failed { .. } => false,
+            Self::Idle | Self::Cancelled | Self::Failed { .. } => false,
         }
     }
 }
@@ -289,6 +291,12 @@ impl DataGrid {
         cx.notify();
     }
 
+    /// Shows cancellation without presenting it as a permanent server failure.
+    pub fn cancelled(&mut self, cx: &mut Context<'_, Self>) {
+        self.state = GridState::Cancelled;
+        cx.notify();
+    }
+
     /// Attache le tampon dès que le schéma est connu.
     ///
     /// À appeler à la réception de [`Event::SchemaReady`](oxyn_core::Event),
@@ -296,6 +304,14 @@ impl DataGrid {
     /// est déjà un retour visible dans le budget des 300 ms
     /// ([PERFORMANCE](../../../docs/PERFORMANCE.md#budgets-dinteraction)).
     pub fn set_buffer(&mut self, buffer: Arc<ResultBuffer>, cx: &mut Context<'_, Self>) {
+        if self
+            .state
+            .buffer()
+            .is_some_and(|current| Arc::ptr_eq(current, &buffer))
+        {
+            cx.notify();
+            return;
+        }
         let metrics = Theme::of(cx).metrics;
         self.columns = column_layouts(buffer.schema(), &metrics);
         // Le nombre de colonnes, jamais leurs noms : un nom de colonne peut
@@ -729,7 +745,23 @@ fn short_type_name(data_type: &DataType) -> String {
 impl Render for DataGrid {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
         let theme = Theme::of(cx).clone();
+        let viewport = Rc::clone(&self.viewport);
+        let entity = cx.entity_id();
         let racine = div()
+            .relative()
+            .child(
+                canvas(
+                    move |bounds: Bounds<Pixels>, _, cx: &mut App| {
+                        if viewport.replace(bounds.size.width) != bounds.size.width {
+                            // Notify after layout so the next frame uses the measured width.
+                            cx.defer(move |cx| cx.notify(entity));
+                        }
+                    },
+                    |_, (), _, _| {},
+                )
+                .absolute()
+                .inset_0(),
+            )
             .key_context("DataGrid")
             .track_focus(&self.focus)
             .id("oxyn-data-grid")
@@ -755,6 +787,12 @@ impl Render for DataGrid {
             GridState::Starting => racine.child(self.render_placeholder(
                 "Exécution…",
                 "En attente du schéma. Échap annule.",
+                theme.colors.text_muted,
+                cx,
+            )),
+            GridState::Cancelled => racine.child(self.render_placeholder(
+                "Exécution annulée",
+                "Vous pouvez modifier ou relancer la requête.",
                 theme.colors.text_muted,
                 cx,
             )),
@@ -996,8 +1034,6 @@ impl DataGrid {
 
     /// La liste virtualisée. Seules les lignes visibles sont construites.
     fn render_rows(&self, lignes: usize, cx: &Context<'_, Self>) -> AnyElement {
-        let mesure = Rc::clone(&self.viewport);
-        let identite = cx.entity_id();
         let liste = uniform_list(
             "oxyn-grid-rows",
             lignes,
@@ -1013,27 +1049,6 @@ impl DataGrid {
             .relative()
             .overflow_hidden()
             .child(liste)
-            .child(
-                // Mesure de la largeur utile : la virtualisation horizontale a
-                // besoin de la taille réelle, que seule la mise en page connaît.
-                //
-                // Le redessin n'est demandé que **si la largeur a changé**. La
-                // première trame mesure 0 et ne dessine donc aucune cellule ;
-                // sans ce redessin, la grille resterait vide jusqu'au prochain
-                // événement. Notifier sans condition, à l'inverse, redessinerait
-                // à chaque trame — une boucle qui consomme un cœur en continu.
-                canvas(
-                    move |bounds: Bounds<Pixels>, _window, cx: &mut App| {
-                        if mesure.get() != bounds.size.width {
-                            mesure.set(bounds.size.width);
-                            cx.notify(identite);
-                        }
-                    },
-                    |_bounds, _mesure, _window, _cx| {},
-                )
-                .absolute()
-                .size_full(),
-            )
             .into_any_element()
     }
 
@@ -1538,5 +1553,89 @@ mod tests {
             .is_running()
         );
         assert!(GridState::Starting.is_running());
+    }
+}
+
+#[cfg(test)]
+mod scroll_tests {
+    use super::*;
+    use gpui::{ScrollDelta, TestAppContext, TouchPhase, point};
+
+    struct GridHost(gpui::Entity<DataGrid>);
+
+    impl Render for GridHost {
+        fn render(&mut self, _: &mut Window, _: &mut Context<'_, Self>) -> impl IntoElement {
+            div()
+                .size_full()
+                .flex()
+                .flex_col()
+                .child(div().h(px(220.)).flex_none())
+                .child(
+                    div()
+                        .flex_1()
+                        .min_h_0()
+                        .overflow_hidden()
+                        .child(self.0.clone()),
+                )
+                .child(div().h(px(28.)).flex_none())
+        }
+    }
+
+    #[gpui::test]
+    fn wheel_scrolls_rows_within_the_viewport(cx: &mut TestAppContext) {
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("id", DataType::Int32, false),
+        ]));
+        let buffer = Arc::new(ResultBuffer::new(schema.clone(), 1024 * 1024));
+        buffer
+            .push(
+                RecordBatch::try_new(
+                    schema,
+                    vec![Arc::new(arrow::array::Int32Array::from_iter_values(
+                        0..1000,
+                    ))],
+                )
+                .expect("valid batch"),
+            )
+            .expect("resident batch");
+        buffer.mark_complete(oxyn_core::ExecStats::default());
+        let (host, cx) = cx.add_window_view(|_, cx| {
+            GridHost(cx.new(|cx| {
+                let mut grid = DataGrid::new(cx);
+                grid.set_buffer(buffer, cx);
+                grid
+            }))
+        });
+        let grid = host.read_with(cx, |host, _| host.0.clone());
+        cx.run_until_parked();
+        let handle = grid.read_with(cx, |grid, _| grid.scroll.clone());
+        assert!(handle.is_scrollable(), "rows must exceed the viewport");
+        let before = handle.0.borrow().base_handle.offset().y;
+        cx.simulate_event(ScrollWheelEvent {
+            position: point(px(100.), px(350.)),
+            delta: ScrollDelta::Pixels(point(px(0.), px(-300.))),
+            touch_phase: TouchPhase::Moved,
+            modifiers: Default::default(),
+        });
+        let after = handle.0.borrow().base_handle.offset().y;
+        assert!(
+            after < before,
+            "wheel must move rows: {before:?} -> {after:?}"
+        );
+        cx.simulate_event(ScrollWheelEvent {
+            position: point(px(100.), px(350.)),
+            delta: ScrollDelta::Pixels(point(px(0.), px(10000.))),
+            touch_phase: TouchPhase::Moved,
+            modifiers: Default::default(),
+        });
+        cx.run_until_parked();
+        assert_eq!(
+            handle.0.borrow().base_handle.offset().y,
+            Pixels::ZERO,
+            "scrolling above the first row must clamp at the top"
+        );
+        cx.simulate_resize(gpui::size(px(800.), px(600.)));
+        cx.run_until_parked();
+        assert!(handle.is_scrollable(), "resizing must preserve scrolling");
     }
 }

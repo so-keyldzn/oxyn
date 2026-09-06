@@ -19,11 +19,6 @@
 //!   savoir si le curseur est après un `FROM` ou dans une chaîne littérale.
 //! * `// TODO(phase 0, suite)` — **curseurs multiples**. Un seul curseur, une
 //!   seule sélection.
-//! * `// TODO(phase 1)` — **saisie par méthode d'entrée (IME)**. La saisie passe
-//!   par [`KeyDownEvent`] et non par `EntityInputHandler` ; la composition en
-//!   japonais ou en coréen ne fonctionne pas. Débloqué par l'implémentation du
-//!   trait d'entrée de GPUI, qui demande de savoir convertir un décalage de
-//!   texte en rectangle à l'écran.
 //! * `// TODO(phase 1)` — **retour à la ligne visuel**. Une ligne longue déborde
 //!   horizontalement au lieu d'être repliée.
 //!
@@ -46,7 +41,10 @@
 //! [`Command`](oxyn_core::Command) et la soumet au `PolicyGate`
 //! ([I-01](../../../CLAUDE.md#i-01)).
 
+use gpui::{Bounds, MouseButton, Pixels, ShapedLine, TextRun, canvas};
+use std::collections::BTreeMap;
 use std::ops::Range;
+mod input;
 
 use gpui::prelude::*;
 use gpui::{
@@ -426,6 +424,8 @@ pub enum EditorEvent {
     /// Le texte à exécuter est [`QueryEditor::statement_text`] ; l'éditeur ne
     /// construit ni `ExecRequest` ni `Command`.
     ExecuteRequested,
+    /// Cancel the active execution without changing the text.
+    CancelRequested,
     /// Le contenu a changé.
     Changed,
 }
@@ -444,6 +444,9 @@ pub struct QueryEditor {
     /// Vrai quand une exécution est en cours : l'éditeur reste modifiable, mais
     /// il le signale.
     running: bool,
+    selecting: bool,
+    marked: Option<Range<usize>>,
+    line_layouts: BTreeMap<usize, (ShapedLine, Bounds<Pixels>)>,
 }
 
 impl EventEmitter<EditorEvent> for QueryEditor {}
@@ -474,6 +477,9 @@ impl QueryEditor {
             redo: Vec::new(),
             scroll: UniformListScrollHandle::new(),
             running: false,
+            selecting: false,
+            marked: None,
+            line_layouts: BTreeMap::new(),
         }
     }
 
@@ -633,6 +639,7 @@ impl QueryEditor {
         let commande = modificateurs.secondary();
 
         if commande {
+            cx.stop_propagation();
             match touche {
                 "enter" => {
                     cx.emit(EditorEvent::ExecuteRequested);
@@ -728,24 +735,15 @@ impl QueryEditor {
                 cx.notify();
             }
             "escape" => {
+                if self.running {
+                    cx.emit(EditorEvent::CancelRequested);
+                }
                 self.anchor = None;
                 cx.notify();
             }
-            _ => {
-                // Une frappe imprimable. `key_char` est vide pour les raccourcis
-                // (`cmd-s` ne produit pas de « s »), ce qui est exactement le
-                // filtre voulu.
-                if commande || modificateurs.control || modificateurs.function {
-                    return;
-                }
-                if let Some(texte) = event.keystroke.key_char.as_deref()
-                    && !texte.is_empty()
-                    && !texte.chars().any(char::is_control)
-                {
-                    self.insert(texte, cx);
-                }
-            }
+            _ => return,
         }
+        cx.stop_propagation();
     }
 }
 
@@ -757,8 +755,25 @@ impl Render for QueryEditor {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
         let theme = Theme::of(cx).clone();
         let lignes = self.buffer.line_count();
+        let input = cx.entity();
 
         div()
+            .relative()
+            .child(
+                canvas(
+                    |_, _, _| (),
+                    move |bounds, (), window, cx| {
+                        let focus = input.read(cx).focus.clone();
+                        window.handle_input(
+                            &focus,
+                            gpui::ElementInputHandler::new(bounds, input.clone()),
+                            cx,
+                        );
+                    },
+                )
+                .absolute()
+                .inset_0(),
+            )
             .key_context("QueryEditor")
             .track_focus(&self.focus)
             .id("oxyn-query-editor")
@@ -771,6 +786,14 @@ impl Render for QueryEditor {
             .text_size(theme.typography.mono_size)
             .cursor_text()
             .on_key_down(cx.listener(Self::on_key))
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _, _, _| this.selecting = false),
+            )
+            .on_mouse_up_out(
+                MouseButton::Left,
+                cx.listener(|this, _, _, _| this.selecting = false),
+            )
             .child(
                 div().flex_1().overflow_hidden().child(
                     uniform_list(
@@ -778,9 +801,10 @@ impl Render for QueryEditor {
                         lignes,
                         cx.processor(|editeur: &mut Self, plage: Range<usize>, _window, cx| {
                             let theme = Theme::of(cx).clone();
+                            editeur.line_layouts.clear();
                             let mut sorties = Vec::with_capacity(plage.len());
                             for index in plage {
-                                sorties.push(editeur.render_line(index, &theme));
+                                sorties.push(editeur.render_line(index, &theme, cx));
                             }
                             sorties
                         }),
@@ -794,8 +818,25 @@ impl Render for QueryEditor {
 }
 
 impl QueryEditor {
+    fn mouse_column(&self, index: usize, x: Pixels) -> usize {
+        let Some((line, bounds)) = self.line_layouts.get(&index) else {
+            return 0;
+        };
+        // Match the gutter and padding used by render_line, using the shaped text
+        // rather than an assumed fixed character width.
+        let theme = self.mouse_metrics();
+        let byte = line.closest_index_for_x(x - bounds.left() - theme.0 - theme.1);
+        line.text.get(..byte).unwrap_or_default().chars().count()
+    }
+
+    fn mouse_metrics(&self) -> (Pixels, Pixels) {
+        // Metrics currently do not vary between theme modes.
+        let theme = Theme::default();
+        (theme.metrics.gutter_width, theme.metrics.cell_padding)
+    }
+
     /// Une ligne : gouttière figée, puis les morceaux de texte.
-    fn render_line(&self, index: usize, theme: &Theme) -> AnyElement {
+    fn render_line(&self, index: usize, theme: &Theme, cx: &Context<'_, Self>) -> AnyElement {
         let metrics = theme.metrics;
         let ligne = self.buffer.line(index).unwrap_or_default();
         let courante = self.cursor.line == index;
@@ -841,7 +882,67 @@ impl QueryEditor {
             });
         }
 
+        let text: SharedString = ligne.to_owned().into();
+        let entity = cx.entity();
+        let layout_entity = entity.clone();
         div()
+            .relative()
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, event: &gpui::MouseDownEvent, window, cx| {
+                    window.focus(&this.focus);
+                    let column = this.mouse_column(index, event.position.x);
+                    if event.click_count >= 2 {
+                        this.anchor = Some(TextPosition::new(index, 0));
+                        this.cursor = TextPosition::new(index, this.buffer.line_len(index));
+                    } else {
+                        this.move_to(TextPosition::new(index, column), event.modifiers.shift);
+                    }
+                    this.selecting = true;
+                    cx.notify();
+                    cx.stop_propagation();
+                }),
+            )
+            .on_mouse_move(
+                cx.listener(move |this, event: &gpui::MouseMoveEvent, _, cx| {
+                    if this.selecting {
+                        let column = this.mouse_column(index, event.position.x);
+                        this.move_to(TextPosition::new(index, column), true);
+                        cx.notify();
+                    }
+                }),
+            )
+            .child(
+                canvas(
+                    move |bounds, window, _cx| {
+                        let style = window.text_style();
+                        let run = TextRun {
+                            len: text.len(),
+                            font: style.font(),
+                            color: style.color,
+                            background_color: None,
+                            underline: None,
+                            strikethrough: None,
+                        };
+                        (
+                            window.text_system().shape_line(
+                                text.clone(),
+                                style.font_size.to_pixels(window.rem_size()),
+                                &[run],
+                                None,
+                            ),
+                            bounds,
+                        )
+                    },
+                    move |_, (line, bounds), _, cx| {
+                        layout_entity.update(cx, |this, _| {
+                            this.line_layouts.insert(index, (line, bounds));
+                        });
+                    },
+                )
+                .absolute()
+                .inset_0(),
+            )
             .id(ElementId::named_usize("oxyn-editor-line", index))
             .h(metrics.row_height)
             .w_full()
