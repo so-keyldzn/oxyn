@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleName</key>
+	<string>Oxyn</string>
+	<key>CFBundleDisplayName</key>
+	<string>Oxyn</string>
+	<key>CFBundleIdentifier</key>
+	<string>com.keyldzn.oxyn</string>
+	<key>CFBundleExecutable</key>
+	<string>oxyn</string>
+	<!-- assets/brand/Oxyn.icns, produit depuis l'iconset de la marque.
+	     Voir assets/brand/README.md, qui fait autorité sur le symbole. -->
+	<key>CFBundleIconFile</key>
+	<string>Oxyn</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleShortVersionString</key>
+	<string>0.0.1</string>
+	<key>CFBundleVersion</key>
+	<string>0.0.1</string>
+	<!-- Sans NSHighResolutionCapable, macOS met la fenêtre à l'échelle depuis
+	     un tampon en 1x : le texte d'une grille de données devient illisible
+	     sur un écran Retina, ce qui est exactement le public de ce produit. -->
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<key>LSMinimumSystemVersion</key>
+	<string>13.0</string>
+	<!-- `0` et non `1` : Oxyn est une application au sens plein — Dock, menus,
+	     activation. Un binaire lancé depuis un terminal sans paquet obtient le
+	     comportement d'un accessoire, et ne peut ni être activé ni recevoir le
+	     focus clavier correctement. -->
+	<key>LSUIElement</key>
+	<string>0</string>
+	<key>NSSupportsAutomaticGraphicsSwitching</key>
+	<true/>
+</dict>
+</plist>
