@@ -189,7 +189,7 @@ impl Classification {
 ///
 /// Ne renvoie jamais d'erreur : ce qui ne se lit pas est classé
 /// [`Unknown`](StatementIntent::Unknown). Pour obtenir le message de
-/// l'analyseur, voir [`validate`](crate::validate).
+/// l'analyseur, voir [`crate::validate`].
 ///
 /// ```
 /// use oxyn_core::{MutationRisk, SqlDialect, StatementIntent};

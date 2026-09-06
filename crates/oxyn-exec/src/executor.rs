@@ -22,8 +22,8 @@
 //!    au journal comme les autres : un journal qui ne consigne que ce qui a
 //!    marché ne dit rien de ce qu'un agent a tenté.
 //! 5. **Exécuter en flux**, en alimentant un
-//!    [`ResultBuffer`](oxyn_data::ResultBuffer) par un
-//!    [`BatchSink`](oxyn_data::BatchSink) — donc avec contre-pression et
+//!    [`oxyn_data::ResultBuffer`] par un
+//!    [`oxyn_data::BatchSink`] — donc avec contre-pression et
 //!    débordement disque (I-06).
 //! 6. **Émettre les événements** vers l'interface par [`EventBus`].
 //!

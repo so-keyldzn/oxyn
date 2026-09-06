@@ -570,7 +570,7 @@ impl CatalogCache {
     /// Toutes les relations connues, avec leur description quand elle a été
     /// demandée.
     ///
-    /// C'est le parcours qu'emploie [`crate::search`]. Aucun chemin n'est
+    /// C'est le parcours qu'emploie [`fn@crate::search`]. Aucun chemin n'est
     /// construit ici : chaque [`RelationRef`] porte déjà le sien, et allouer
     /// trois chaînes par relation à chaque frappe dans une barre de recherche
     /// serait un défaut de conception, pas une optimisation à faire plus tard.

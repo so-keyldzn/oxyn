@@ -23,12 +23,12 @@
 //! lot demande de garder cet emprunt vivant entre deux `await`, ce qu'aucun
 //! futur ne sait faire sans `unsafe`. La connexion reste donc sur un thread
 //! dédié, et ce qui traverse le canal est du `RecordBatch` déjà converti. Le
-//! raisonnement complet est dans [`worker`](crate::worker).
+//! raisonnement complet est dans [`crate::worker`].
 //!
 //! **L'annulation est locale, et elle est dite comme telle.** SQLite n'a pas de
 //! serveur : `sqlite3_interrupt` arrête une instruction dans **notre** processus.
 //! La session ne déclare donc jamais `SERVER_SIDE_CANCEL`, et
-//! [`SqliteSession::cancel`] refuse — mais l'interruption existe bel et bien,
+//! `SqliteSession::cancel` refuse — mais l'interruption existe bel et bien,
 //! par le [`CancelToken`](oxyn_core::CancelToken) remis à `execute`, consulté
 //! entre deux lots et surveillé pendant l'attente d'un lot.
 //!

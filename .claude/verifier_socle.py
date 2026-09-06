@@ -22,6 +22,13 @@ CLAUDE_MD = RACINE / "CLAUDE.md"
 MOTIF_ANCRE = re.compile(r'<a id="(i-\d+)"></a>')
 MOTIF_LIEN = re.compile(r"\[[^\]]+\]\(([^)#]+)(#[^)]+)?\)")
 
+# Un gabarit contient des emplacements à remplir, écrits sous forme de lien pour
+# montrer la forme attendue : `[ADR-XXXX](XXXX-titre.md)`. Ce ne sont pas des
+# liens morts, ce sont des trous. La convention des gabarits — `XXXX` pour un
+# numéro, `NNNN` pour un titre — sert de marque, ce qui évite d'exempter
+# `.claude/templates/` en entier et de cesser de vérifier ses vrais liens.
+MOTIF_EMPLACEMENT = re.compile(r"XXXX|NNNN|AAAA-MM-JJ")
+
 
 def _fichiers_markdown() -> list[Path]:
     fichiers = [CLAUDE_MD]
@@ -39,6 +46,8 @@ def controler_liens() -> list[str]:
         for lien in MOTIF_LIEN.finditer(texte):
             cible = lien.group(1).strip()
             if cible.startswith(("http://", "https://", "mailto:")):
+                continue
+            if MOTIF_EMPLACEMENT.search(cible):
                 continue
             resolu = (fichier.parent / cible).resolve()
             if not resolu.exists():

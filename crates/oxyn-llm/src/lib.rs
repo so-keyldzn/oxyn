@@ -44,7 +44,7 @@
 //! ([I-03](../../CLAUDE.md#i-03)). Tout corps de réponse repris dans une erreur
 //! est tronqué et expurgé de la clé.
 //!
-//! **L'annulation va jusqu'au bout.** Le [`CancelToken`](oxyn_core::CancelToken)
+//! **L'annulation va jusqu'au bout.** Le [`oxyn_core::CancelToken`]
 //! passé à [`LlmProvider::stream`] est cloné dans le flux rendu : l'annuler
 //! interrompt la lecture, ferme la connexion et émet
 //! `Done { stop_reason: Cancelled }`. Aucun appel d'outil partiellement reçu

@@ -10,7 +10,7 @@
 //! | [`buffer`] | accumulation bornée, débordement disque, `locate` en O(log n) | ADR-0002, PERFORMANCE |
 //! | [`cell`] | rendu d'une cellule pour la grille | UX-SPEC |
 //! | [`sink`] | contre-pression entre un curseur et un tampon | ARCHITECTURE §9 |
-//! | [`export`] | CSV, TSV, JSON, JSON par lignes, Arrow IPC | I-11 |
+//! | [`mod@export`] | CSV, TSV, JSON, JSON par lignes, Arrow IPC | I-11 |
 //! | [`error`] | la frontière d'erreurs de la couche | rust.md |
 //!
 //! # Le chemin complet

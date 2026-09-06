@@ -24,7 +24,7 @@
 //! **Un secret rangé dans les paramètres est refusé, pas transporté.**
 //! [`DsnBuilder::from_config`] rejette une clé qui ressemble à un secret plutôt
 //! que d'en faire un paramètre d'URL
-//! ([`looks_like_secret`](crate::metadata::looks_like_secret)) : un paramètre
+//! ([`crate::metadata::looks_like_secret`]) : un paramètre
 //! de requête finit dans les journaux d'accès du serveur.
 //!
 //! # Ce que ce module ne fait pas
@@ -652,7 +652,7 @@ impl DsnParts {
 
 impl fmt::Debug for DsnParts {
     /// Écrit à la main, comme celui de
-    /// [`ConnectionConfig`](oxyn_core::ConnectionConfig) : les **valeurs** des
+    /// [`oxyn_core::ConnectionConfig`] : les **valeurs** des
     /// options ne sont pas imprimées.
     ///
     /// Ce type ne porte pas de mot de passe — [`ParsedDsn::parse`] l'en retire —

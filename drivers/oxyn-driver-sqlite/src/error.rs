@@ -128,7 +128,8 @@ pub enum SqliteError {
 /// pas en réessayant.
 ///
 /// `SQLITE_INTERRUPT` n'apparaît pas ici : il est traité en amont par
-/// [`engine`], parce que sa famille dépend de ce que faisait l'instruction.
+/// `engine` — nommée et non liée : la fonction est interne à la crate —,
+/// parce que sa famille dépend de ce que faisait l'instruction.
 #[must_use]
 pub fn classify(error: &rusqlite::Error) -> ErrorClass {
     let rusqlite::Error::SqliteFailure(inner, _) = error else {

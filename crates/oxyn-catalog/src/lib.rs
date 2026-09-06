@@ -15,7 +15,7 @@
 //! | [`path`] | le chemin qualifié, et la citation d'identifiant | DRIVER-CONTRACT §6, I-10 |
 //! | [`provider`] | ce qu'une session sait dire de sa structure | DRIVER-CONTRACT §5 |
 //! | [`cache`] | l'arbre en mémoire, sa fraîcheur, son invalidation | ARCHITECTURE §6 |
-//! | [`search`] | la sélection lexicale des relations pertinentes | ARCHITECTURE §7.4 |
+//! | [`mod@search`] | la sélection lexicale des relations pertinentes | ARCHITECTURE §7.4 |
 //!
 //! # Les quatre choix qui gouvernent cette crate
 //!
@@ -27,7 +27,7 @@
 //! **Un nom d'objet est une entrée hostile.** Une table nommée
 //! `"users"; DROP TABLE audit; --` est légale dans PostgreSQL.
 //! [`CatalogPath::qualify`] est le seul chemin par lequel un identifiant rejoint
-//! une requête composée par Oxyn (I-10), et [`search`] classe des noms sans
+//! une requête composée par Oxyn (I-10), et [`fn@search`] classe des noms sans
 //! jamais composer d'invite.
 //!
 //! **Une liste vide et « je ne sais pas » sont deux réponses différentes.** Un

@@ -1,7 +1,7 @@
 //! The root view: it holds the components and translates their events.
 //!
 //! This is the only place in the product where a UI event becomes a
-//! [`Command`](oxyn_core::Command). The components below never build one — a
+//! [`oxyn_core::Command`]. The components below never build one — a
 //! test in `oxyn-ui` fails if any of them so much as mentions the type
 //! ([I-01](../../../CLAUDE.md#i-01)).
 
@@ -124,12 +124,12 @@ impl Workspace {
         }
     }
 
-    /// Turns the editor's text into an execution — or explains why it cannot.
+    /// Turns the editor's text into an execution.
     ///
-    /// Phase 0 has no connection surface yet. The honest behaviour is to say so
-    /// in the status bar: an editor whose `Cmd+Enter` does nothing visible is
-    /// read as a broken application
-    /// ([UX-SPEC](../../../docs/UX-SPEC.md)).
+    /// Runs against the scratch connection until a connection picker exists —
+    /// see `Backend`. An empty statement is refused *here*, with a notice: an
+    /// editor whose `Cmd+Enter` does nothing visible is read as a broken
+    /// application ([UX-SPEC](../../../docs/UX-SPEC.md)).
     fn execute(&mut self, cx: &mut Context<'_, Self>) {
         let texte = self.editor.read(cx).statement_text();
         if texte.trim().is_empty() {

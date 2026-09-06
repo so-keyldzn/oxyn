@@ -111,7 +111,9 @@ pub enum LlmError {
 impl LlmError {
     /// Construit une erreur HTTP à partir d'un statut et d'un corps brut.
     ///
-    /// Le corps est **tronqué** à [`MAX_MESSAGE_LEN`] et expurgé de toute
+    /// Le corps est **tronqué** à `MAX_MESSAGE_LEN` — nommé et non lié : la
+    /// constante est privée, et un lecteur de l'API publique ne pourrait pas la
+    /// suivre. Il est aussi expurgé de toute
     /// occurrence littérale de la clé. C'est le seul constructeur à utiliser
     /// pour une réponse d'échec : appeler la variante directement, c'est
     /// contourner l'expurgation.

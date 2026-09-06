@@ -135,11 +135,14 @@ impl Driver for PostgresDriver {
     /// Ouvre un bassin, détecte la variante, et rend la session.
     ///
     /// # Erreurs
-    /// [`OxynError::Config`] si la configuration est incomplète ou porte un
-    /// secret ; [`OxynError::Authentication`] si le serveur refuse les
-    /// identifiants ; [`OxynError::Connection`] s'il est injoignable ;
-    /// [`OxynError::Cancelled`] si `cancel` se déclenche pendant la poignée de
-    /// main.
+    /// Chemins complets : `OxynError` n'est pas importé dans ce module, et un
+    /// lien intra-doc ne se résout pas sur un nom absent de la portée.
+    ///
+    /// [`oxyn_core::OxynError::Config`] si la configuration est incomplète ou
+    /// porte un secret ; [`oxyn_core::OxynError::Authentication`] si le serveur
+    /// refuse les identifiants ; [`oxyn_core::OxynError::Connection`] s'il est
+    /// injoignable ; [`oxyn_core::OxynError::Cancelled`] si `cancel` se
+    /// déclenche pendant la poignée de main.
     async fn connect(
         &self,
         config: &ConnectionConfig,

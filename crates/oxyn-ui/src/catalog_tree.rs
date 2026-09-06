@@ -460,7 +460,7 @@ fn push_relations(
 
 /// Les lignes correspondant à un filtre saisi.
 ///
-/// Délègue à [`oxyn_catalog::search`] : une seconde implémentation de la
+/// Délègue à [`fn@oxyn_catalog::search`] : une seconde implémentation de la
 /// correspondance divergerait de celle qu'utilisent les agents, et l'utilisateur
 /// verrait deux classements différents pour la même saisie.
 #[must_use]

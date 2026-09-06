@@ -76,7 +76,8 @@ pub fn sanitize(raw: &str) -> String {
 ///
 /// `max_chars` compte des **caractères** et non des octets : la coupe tombe
 /// donc toujours sur une frontière de caractère, y compris au milieu d'un
-/// commentaire en cyrillique. Un texte coupé porte [`ELLIPSIS`], pour que le
+/// commentaire en cyrillique. Un texte coupé porte `ELLIPSIS` — nommée et non liée, la constante
+/// étant privée —, pour que le
 /// modèle ne prenne pas la troncature pour la fin de la valeur.
 #[must_use]
 pub fn sanitize_clamped(raw: &str, max_chars: usize) -> String {

@@ -17,7 +17,7 @@
 //! **L'interruption existe quand même**, et elle est complète : elle passe par
 //! le [`CancelToken`] remis à [`execute`](SqliteSession::execute), que le
 //! curseur consulte entre deux lots et surveille pendant qu'il en attend un.
-//! Voir [`SqliteCursor`](crate::SqliteCursor).
+//! Voir [`crate::SqliteCursor`].
 //!
 //! # Une session fait une chose à la fois
 //!

@@ -14,7 +14,7 @@
 //! # Ce que la correspondance ne prétend pas
 //!
 //! Un dialecte sans grammaire dédiée retombe sur
-//! [`GenericDialect`](sqlparser::dialect::GenericDialect), qui est **permissif**.
+//! [`sqlparser::dialect::GenericDialect`], qui est **permissif**.
 //! Ce n'est pas un défaut dangereux : ce que `sqlparser` refuse de lire est
 //! classé [`Unknown`](oxyn_core::StatementIntent::Unknown), donc traité comme
 //! mutant. Un dialecte approximatif dégrade le confort, jamais la sécurité.

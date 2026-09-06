@@ -72,7 +72,7 @@ pub struct AgentSpec {
     pub system_prompt: String,
 
     /// Les outils accordés, par leur nom dans le
-    /// [`ToolRegistry`](crate::tools::ToolRegistry).
+    /// [`crate::tools::ToolRegistry`].
     ///
     /// Une liste vide est licite et signifie **aucun outil** : un agent qui ne
     /// fait que commenter un schéma n'a rien à exécuter, et lui accorder un

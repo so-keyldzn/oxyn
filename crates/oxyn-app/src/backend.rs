@@ -2,7 +2,7 @@
 //!
 //! Lives apart from the views for one reason — the UI thread must never touch
 //! any of it directly. A view emits an event, `workspace` turns that event into
-//! a [`Command`](oxyn_core::Command), and the command is dispatched **here**, on
+//! a [`oxyn_core::Command`], and the command is dispatched **here**, on
 //! the Tokio runtime ([I-05](../../../CLAUDE.md#i-05)).
 
 use std::sync::Arc;

@@ -15,7 +15,7 @@
 //! # Les capacités, et ce qui les fait varier d'une session à l'autre
 //!
 //! Le driver déclare un **plafond** ; ce qui fait foi est
-//! [`Session::capabilities`](oxyn_driver::Session::capabilities), évalué après
+//! [`oxyn_driver::Session::capabilities`], évalué après
 //! l'ouverture (ADR-0003). Pour SQLite, une chose varie réellement : le fichier
 //! peut être ouvert en lecture seule — parce que l'utilisateur a marqué la
 //! connexion ainsi, ou parce que le système de fichiers l'impose. La session

@@ -11,7 +11,7 @@
 //! le produit en train de faire son travail : un agent a demandé quelque chose
 //! que sa déclaration ou le niveau de confidentialité de la connexion lui
 //! interdit. Ils se projettent sur
-//! [`OxynError::PolicyDenied`](oxyn_core::OxynError::PolicyDenied), qui porte
+//! [`oxyn_core::OxynError::PolicyDenied`], qui porte
 //! exactement ce sens.
 //!
 //! # Ce qui n'apparaît jamais dans un message

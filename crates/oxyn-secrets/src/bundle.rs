@@ -255,7 +255,25 @@ impl CredentialBundle {
     /// son message cite volontiers un fragment de son entrée, qui est ici le
     /// secret lui-même.
     pub fn from_secret_json(secret: &SecretString) -> Result<Self> {
-        serde_json::from_str(secret.expose_secret()).map_err(|_| SecretError::Malformed {
+        let brut = secret.expose_secret();
+
+        // Un bundle est un **objet**, et rien d'autre. Sans ce garde-fou, `[]`
+        // est accepté : serde sait construire une structure depuis une séquence,
+        // et comme tous les champs portent `#[serde(default)]`, une séquence
+        // vide donne un jeu vide parfaitement valide. Une entrée de trousseau
+        // corrompue passerait alors pour « aucun secret renseigné », et l'échec
+        // de connexion qui suit ne désignerait pas le trousseau.
+        //
+        // Le contrôle porte sur le premier caractère significatif plutôt que sur
+        // un décodage intermédiaire : passer par `serde_json::Value` recopierait
+        // le secret dans une structure de plus, qu'il faudrait ensuite effacer.
+        if !brut.trim_start().starts_with('{') {
+            return Err(SecretError::Malformed {
+                detail: SecretError::NOT_A_BUNDLE,
+            });
+        }
+
+        serde_json::from_str(brut).map_err(|_| SecretError::Malformed {
             detail: SecretError::NOT_A_BUNDLE,
         })
     }

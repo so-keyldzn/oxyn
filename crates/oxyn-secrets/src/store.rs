@@ -38,7 +38,7 @@ use crate::error::{Result, SecretError};
 /// clair dans les fichiers de workspace, elle est faite pour être vue. Masquer
 /// ce qui n'est pas secret dilue le signal des masques qui comptent — ceux de
 /// [`CredentialBundle`] et de
-/// [`ConnectionConfig`](oxyn_core::ConnectionConfig).
+/// [`oxyn_core::ConnectionConfig`].
 ///
 /// # Pourquoi la validation est stricte
 ///
