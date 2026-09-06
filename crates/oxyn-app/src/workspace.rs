@@ -7,18 +7,23 @@
 
 use gpui::prelude::*;
 use gpui::{Entity, FocusHandle, Focusable, Window, div, px};
-use oxyn_core::{Actor, CancelToken, Command, Event, ExecRequest, QueryLanguage, SessionId};
+use oxyn_core::{
+    Actor, CancelToken, Command, ConnectionId, Event, ExecRequest, QueryLanguage, SessionId,
+};
 use oxyn_ui::{
     ActiveConnection, DataGrid, EditorEvent, ExecutionStatus, GridEvent, QueryEditor, StatusBar,
     StatusBarEvent, Theme,
 };
 use tokio::sync::broadcast::error::RecvError;
 
-use crate::backend::Backend;
+use crate::backend::{Backend, OpenConnection};
 
 /// The workspace window.
 pub struct Workspace {
     backend: Backend,
+    /// The connection every statement runs against. Chosen by the user on the
+    /// connection screen, never defaulted ([UX-SPEC](../../../docs/UX-SPEC.md)).
+    connection: ConnectionId,
     editor: Entity<QueryEditor>,
     grid: Entity<DataGrid>,
     status: Entity<StatusBar>,
@@ -34,8 +39,8 @@ impl std::fmt::Debug for Workspace {
 }
 
 impl Workspace {
-    /// Builds the workspace and subscribes to everything it listens to.
-    pub fn new(backend: Backend, cx: &mut Context<'_, Self>) -> Self {
+    /// Builds the workspace on an open connection.
+    pub fn new(backend: Backend, open: OpenConnection, cx: &mut Context<'_, Self>) -> Self {
         let editor = cx.new(QueryEditor::new);
         let grid = cx.new(DataGrid::new);
 
@@ -44,7 +49,7 @@ impl Workspace {
         // coûteux de l'interface : c'est précisément ici que l'utilisateur lit
         // contre quoi il est sur le point d'écrire
         // ([I-02](../../../CLAUDE.md#i-02)).
-        let vue = backend.scratch_display();
+        let vue = &open.display;
         let mut active =
             ActiveConnection::new(vue.name.clone(), vue.driver.clone(), vue.environment);
         if vue.read_only {
@@ -86,6 +91,7 @@ impl Workspace {
 
         Self {
             backend,
+            connection: open.connection,
             editor,
             grid,
             status,
@@ -139,10 +145,9 @@ impl Workspace {
 
     /// Turns the editor's text into an execution.
     ///
-    /// Runs against the scratch connection until a connection picker exists —
-    /// see `Backend`. An empty statement is refused *here*, with a notice: an
-    /// editor whose `Cmd+Enter` does nothing visible is read as a broken
-    /// application ([UX-SPEC](../../../docs/UX-SPEC.md)).
+    /// Runs against the connection the user chose. An empty statement is refused
+    /// *here*, with a notice: an editor whose `Cmd+Enter` does nothing visible
+    /// is read as a broken application ([UX-SPEC](../../../docs/UX-SPEC.md)).
     fn execute(&mut self, cx: &mut Context<'_, Self>) {
         let texte = self.editor.read(cx).statement_text();
         if texte.trim().is_empty() {
@@ -159,7 +164,7 @@ impl Workspace {
         // to run ([I-07](../../../CLAUDE.md#i-07)).
         let requete = ExecRequest::new(QueryLanguage::SQL, texte);
         let commande = Command::Execute {
-            connection: self.backend.scratch(),
+            connection: self.connection,
             session: SessionId::new(),
             request: Box::new(requete),
         };

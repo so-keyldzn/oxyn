@@ -6,6 +6,9 @@
 //! ([ARCHITECTURE](../../../docs/ARCHITECTURE.md#le-sens-des-dépendances)).
 
 mod backend;
+mod credentials;
+mod picker;
+mod root;
 mod workspace;
 
 use anyhow::{Context as _, Result};
@@ -17,7 +20,7 @@ use oxyn_ui::{Theme, ThemeMode};
 use tracing_subscriber::EnvFilter;
 
 use crate::backend::Backend;
-use crate::workspace::Workspace;
+use crate::root::Root;
 
 /// The window Oxyn opens on first run.
 const LARGEUR: f32 = 1280.0;
@@ -47,7 +50,7 @@ fn main() -> Result<()> {
                 }),
                 ..Default::default()
             },
-            |_window, cx| cx.new(|cx| Workspace::new(backend.clone(), cx)),
+            |_window, cx| cx.new(|cx| Root::new(backend.clone(), cx)),
         );
 
         match ouverture {

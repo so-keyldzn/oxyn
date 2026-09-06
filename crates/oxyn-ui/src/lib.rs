@@ -12,12 +12,14 @@
 //! | [`query_editor`] | l'éditeur de requêtes | [ADR-0001] |
 //! | [`status_bar`] | connexion, environnement, coût, annulation | [I-02], UX-SPEC |
 //! | [`approval`] | la boîte d'approbation du Policy gate | [ADR-0004], [I-02] |
+//! | [`connection_form`] | le choix du type de base et ses paramètres | [ADR-0003], [I-03] |
 //!
 //! # Les trois règles de cette crate
 //!
 //! **Une vue ne fait rien elle-même.** Chaque composant expose un type
 //! d'événement — [`GridEvent`], [`CatalogTreeEvent`], [`EditorEvent`],
-//! [`StatusBarEvent`], [`ApprovalEvent`] — et `oxyn-app` les traduit en
+//! [`StatusBarEvent`], [`ApprovalEvent`], [`ConnectionFormEvent`] — et
+//! `oxyn-app` les traduit en
 //! [`Command`](oxyn_core::Command). Aucun composant n'appelle un driver, ne
 //! construit une requête ni ne décide d'une politique
 //! ([I-01](../../CLAUDE.md#i-01)).
@@ -57,12 +59,15 @@
 //! ```
 //!
 //! [ADR-0001]: ../../docs/adr/0001-ui-toolkit.md
+//! [ADR-0003]: ../../docs/adr/0003-driver-capabilities.md
 //! [ADR-0002]: ../../docs/adr/0002-arrow-result-model.md
 //! [ADR-0004]: ../../docs/adr/0004-command-bus.md
 //! [I-02]: ../../CLAUDE.md#i-02
+//! [I-03]: ../../CLAUDE.md#i-03
 
 pub mod approval;
 pub mod catalog_tree;
+pub mod connection_form;
 pub mod data_grid;
 pub mod query_editor;
 pub mod status_bar;
@@ -74,6 +79,10 @@ pub use approval::{
 pub use catalog_tree::{
     CatalogTree, CatalogTreeEvent, FILTER_RESULT_LIMIT, TreeRow, filtered_rows, flatten,
     icon_for_kind, icon_for_node,
+};
+pub use connection_form::{
+    ConnectionDraft, ConnectionForm, ConnectionFormEvent, DriverChoice, FormField, FormFieldKind,
+    FormModel, FormState, SavedConnection, environment_choice_label,
 };
 pub use data_grid::{
     ColumnLayout, DataGrid, GridEvent, GridState, INFERRED_FIELD_KEY, VisibleColumns,
@@ -96,9 +105,10 @@ mod tests {
     /// `include_str!` et non une lecture de fichier : le chemin est résolu à la
     /// compilation, donc le test ne dépend pas du répertoire courant et ne peut
     /// pas rater un fichier déplacé — il ne compilerait plus.
-    const COMPOSANTS: [(&str, &str); 5] = [
+    const COMPOSANTS: [(&str, &str); 6] = [
         ("approval.rs", include_str!("approval.rs")),
         ("catalog_tree.rs", include_str!("catalog_tree.rs")),
+        ("connection_form.rs", include_str!("connection_form.rs")),
         ("data_grid.rs", include_str!("data_grid.rs")),
         ("query_editor.rs", include_str!("query_editor.rs")),
         ("status_bar.rs", include_str!("status_bar.rs")),
@@ -147,6 +157,7 @@ mod tests {
 pub mod prelude {
     pub use crate::approval::{ApprovalDialog, ApprovalEvent, ApprovalOutcome, ApprovalRequest};
     pub use crate::catalog_tree::{CatalogTree, CatalogTreeEvent};
+    pub use crate::connection_form::{ConnectionDraft, ConnectionForm, ConnectionFormEvent};
     pub use crate::data_grid::{DataGrid, GridEvent, GridState};
     pub use crate::query_editor::{EditorEvent, QueryEditor};
     pub use crate::status_bar::{ActiveConnection, ExecutionStatus, StatusBar, StatusBarEvent};
