@@ -78,6 +78,29 @@ construire un paquet dont le `rust-version` dépasse la toolchain.
 >    Cargo échoue au lieu d'unifier. À vérifier avant d'ajouter toute crate qui
 >    touche aux API système macOS.
 
+### Le harnais de test de GPUI
+
+Relevé dans les sources de `gpui 0.2.2` telles que publiées sur crates.io — la
+feature `test-support` n'est pas documentée sur docs.rs, qui construit avec les
+features par défaut.
+
+| Fait | Valeur | Source | Vérifié le |
+|---|---|---|---|
+| Feature à activer | `test-support` — tire `leak-detection`, `rand`, `collections/test-support`, `util/test-support`, `http_client/test-support`, `wayland`, `x11` | `Cargo.toml` de la crate publiée | 2026-09-07 |
+| Coût réel sur macOS | `wayland` et `x11` sont déclarées sous `[target.'cfg(any(target_os = "linux", target_os = "freebsd"))'.dependencies]` : n'ajoute que `rand` et `backtrace` | `Cargo.toml`, sections `[target.…]` | 2026-09-07 |
+| Macro | `#[gpui::test]`, réexportée depuis `gpui_macros` | `src/gpui.rs:81` | 2026-09-07 |
+| Contextes | `TestAppContext`, `VisualTestContext` | `src/app/test_context.rs` | 2026-09-07 |
+| Simulation | `draw`, `simulate_click`, `simulate_mouse_down/up/move`, `simulate_keystrokes`, `simulate_input`, `simulate_modifiers_change`, `simulate_resize`, `simulate_prompt_answer`, `dispatch_action`, `run_until_parked` | `src/app/test_context.rs` | 2026-09-07 |
+| Plateforme | `TestPlatform` — aucune fenêtre, aucun GPU, aucun serveur d'affichage requis | `src/platform/test/platform.rs` | 2026-09-07 |
+| Système de texte | `NoopTextSystem` — police fictive : `advance = 600 × glyph_id`, `glyph_id = ch.len_utf16()`, `rasterize_glyph` rend un buffer vide | `src/platform.rs:594` | 2026-09-07 |
+
+> **Ce que le harnais ne mesure pas.** `NoopTextSystem` rend les métriques de
+> texte déterministes et fausses, et aucun pixel n'est produit. Donc : pas de
+> capture d'image, pas de comparaison de rendu, et **aucune assertion valable sur
+> une dimension qui dépend de la largeur d'un texte**. Un tel test est vert quelle
+> que soit l'interface réelle. Conséquence pour les tests :
+> [tests.md](../.claude/rules/tests.md#les-tests-dinterface).
+
 ## Crates candidates
 
 Relevées au registre, non encore adoptées. Aucune n'entre dans le dépôt sans

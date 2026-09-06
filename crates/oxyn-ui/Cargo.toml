@@ -19,3 +19,6 @@ gpui.workspace = true
 parking_lot.workspace = true
 smallvec.workspace = true
 tracing.workspace = true
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }

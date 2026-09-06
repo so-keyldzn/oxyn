@@ -79,3 +79,16 @@ qui ne l'offre pas gratuitement coûte une réécriture.
 Les budgets de trame ne se mesurent pas avec `criterion` : un banc `criterion`
 sur du GPUI ne mesure rien d'utile
 ([PERFORMANCE](../../docs/PERFORMANCE.md#ce-qui-se-mesure-et-comment)).
+
+Ce qui se vérifie automatiquement, en revanche : le calcul extrait en fonctions
+libres, et les interactions — clavier, souris, focus, confirmation d'écriture —
+via la feature `test-support` de GPUI. Les trois niveaux, ce qu'ils prouvent et
+la métrique de texte fictive qui piège les assertions de dimension :
+[tests.md](tests.md#les-tests-dinterface).
+
+**Cette règle-là ne se charge pas toute seule** : son `paths:` couvre
+`**/tests/**`, pas un `#[cfg(test)] mod tests` écrit au bas d'un fichier de vue.
+Elle se lit avant d'écrire le test, pas après.
+
+Conséquence de conception : une vue qui garde son calcul dans son `render` n'est
+testable à aucun niveau utile. Le calcul sort, la vue dessine.

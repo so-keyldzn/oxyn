@@ -77,6 +77,15 @@ Politique dans [SECURITY](../../docs/SECURITY.md#politique-unsafe). Le point qui
 se rate : un `// SAFETY:` qui paraphrase le code ne vaut rien. Il dit **pourquoi**
 la condition est vraie ici et **qui** la maintiendra vraie.
 
+## Tests
+
+Les conventions vivent dans [tests.md](tests.md) : ce qui se teste, les entrées
+hostiles, les trois niveaux de test d'interface, les bancs d'essai.
+
+Le renvoi est nécessaire parce que le `paths:` de cette règle-là ne couvre que
+`**/tests/**` et `**/benches/**` : un `#[cfg(test)] mod tests` écrit au bas d'un
+fichier source ne la déclenche pas. C'est pourtant la forme majoritaire ici.
+
 ## Vérifier
 
 ```bash

@@ -37,6 +37,54 @@ prouve [I-10](../../CLAUDE.md#i-10).
    sur la mémoire du processus, sinon le test passe par accident sur une machine
    de développement bien dotée.
 
+## Les tests d'interface
+
+Trois niveaux, qui ne prouvent pas la même chose.
+
+**1. La logique, sans GPUI.** Ce qu'une vue calcule avant de dessiner — fenêtre
+de colonnes visibles, découpe des lignes, position du curseur, largeur d'une
+piste — vit dans une fonction libre et se teste sans fenêtre ni contexte. C'est
+le niveau le plus rentable, et le seul qui survit à une sortie de GPUI
+([ADR-0001](../../docs/adr/0001-ui-toolkit.md)). Une vue dont rien ne se teste à
+ce niveau porte trop de logique dans son `render` : c'est un signal de découpage.
+
+**2. Les vues et les interactions.** `gpui` expose une feature `test-support` :
+`#[gpui::test]`, `VisualTestContext`, simulation du clavier, de la souris, du
+redimensionnement et des actions — sans fenêtre, sans GPU. Surface exacte et
+limites : [RESEARCH-NOTES](../../docs/RESEARCH-NOTES.md#gpui).
+
+Elle se déclare en **`[dev-dependencies]`**, jamais en dépendance normale : le
+harnais n'a rien à faire dans le binaire livré, et `resolver = "3"` ne le fait
+pas remonter dans une compilation ordinaire.
+
+Ce qui mérite ce niveau, c'est ce dont la régression est **silencieuse** — les
+points bloquants de [revue-ui](../checklists/revue-ui.md) :
+
+- la confirmation qui **nomme** la connexion avant une écriture sur `production`,
+  et le bouton par défaut qui n'est pas l'action destructrice
+  ([I-02](../../CLAUDE.md#i-02)) ;
+- l'atteignabilité au clavier, le focus visible, l'ordre de tabulation ;
+- l'état **vide**, visiblement distinct de l'erreur ;
+- le moyen d'annuler présent pendant l'état « en cours ».
+
+Aucune de ces quatre régressions ne casse une compilation ni ne rougit un test
+existant. C'est précisément le critère qui en fait des tests.
+
+**3. La fidélité visuelle.** Hors de portée par ce chemin : le harnais installe
+un système de texte fictif et ne rasterise aucun pixel. Ni capture d'image, ni
+comparaison de rendu.
+
+**Le piège qui en découle**, et il est vicieux : ne jamais asserter une dimension
+qui dépend de la largeur d'un texte — colonne ajustée au contenu, troncature,
+ellipse. La métrique du harnais est déterministe *et* fausse : le test est vert,
+l'interface est décalée chez l'utilisateur. Ce qui s'asserte, ce sont les
+dimensions qu'Oxyn **décide** lui-même.
+
+Deux choses qui ne sont pas des tests d'interface : vérifier qu'une vue se
+construit — il ne peut échouer que sur une panique, et il restera vert le jour où
+la vue n'affiche plus rien — et appeler `run_until_parked` sans rien affirmer
+ensuite.
+
 ## Bancs d'essai
 
 `criterion` pour le code pur : conversion vers `RecordBatch`, analyse,
