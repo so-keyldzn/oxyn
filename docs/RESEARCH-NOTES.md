@@ -23,15 +23,37 @@ même chose en expliquant les écarts.
 | Fait | Valeur | Source | Vérifié le |
 |---|---|---|---|
 | Rust stable courante | `1.98.1` (48a229cea, 2026-09-01) | `https://static.rust-lang.org/dist/channel-rust-stable.toml` | 2026-09-05 |
-| Toolchain de la machine de dev | `1.89.0` (29483883e, 2025-08-04) | `rustc --version` | 2026-09-05 |
+| Toolchain épinglée par le dépôt | `1.98.1` | `rust-toolchain.toml` | 2026-09-05 |
 | Édition exigée par `gpui` | `2024` | crates.io API, `gpui@0.2.2` | 2026-09-05 |
 | Rust minimum pour l'édition 2024 | `1.85` | Édition 2024 stabilisée dans Rust 1.85 | 2026-09-05 |
 
-> **Écart connu, non résolu.** La machine de développement est neuf versions
-> mineures derrière la stable. `1.89.0 >= 1.85`, donc l'édition 2024 compile,
-> mais tout diagnostic clippy ou toute API stabilisée après 1.89 sera absent en
-> local et présent en CI. `rust-toolchain.toml` doit épingler la version, sinon
-> la CI et le poste divergent en silence. Voir [ADR-0008](adr/0008-chaine-outils-rust.md).
+### MSRV imposés par les dépendances
+
+Relevés dans `~/.cargo/registry/src/.../<crate>/Cargo.toml`, champ
+`rust-version`. C'est le plancher réel du workspace : `cargo` refuse de
+construire un paquet dont le `rust-version` dépasse la toolchain.
+
+| Crate | `rust-version` | Vérifié le |
+|---|---|---|
+| `wasmtime` `48.0.1` | **`1.95.0`** | 2026-09-05 |
+| `sqlx` `0.9.0`, `sqlx-core`, `sqlx-postgres` | `1.94.0` | 2026-09-05 |
+| `arrow` `59.3.0` | `1.85` | 2026-09-05 |
+| `rusqlite` `0.37.0` | aucun | 2026-09-05 |
+| `gpui` `0.2.2` | aucun | 2026-09-05 |
+
+> **Le plancher est `1.95.0`, imposé par `wasmtime`.** Il ne se voit pas à la
+> construction par défaut : `wasmtime` est derrière la fonctionnalité
+> `wasm-host` d'`oxyn-plugin`, désactivée. Seul `sqlx` (`1.94.0`) fait échouer
+> `cargo check` aujourd'hui. Le jour où quelqu'un active `wasm-host`, c'est
+> `1.95.0` qu'il faut — d'où le `rust-version` du workspace fixé à `1.95`, et
+> non à `1.94` que la seule erreur observée suggérerait.
+
+> **Écart résolu le 2026-09-05.** La machine de développement était en `1.89.0`,
+> neuf versions mineures derrière la stable, et `rust-toolchain.toml` épinglait
+> cette valeur — celle que l'ADR-0008 écarte explicitement. `cargo check` a
+> tranché : `sqlx 0.9.0` exige `1.94.0`. La toolchain est passée à `1.98.1`,
+> conformément à la recommandation de
+> [ADR-0008](adr/0008-chaine-outils-rust.md).
 
 ## GPUI
 

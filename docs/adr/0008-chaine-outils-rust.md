@@ -1,6 +1,6 @@
 # ADR-0008 — Chaîne d'outils Rust épinglée dans le dépôt
 
-**Statut :** proposé · **Date :** 2026-09-05
+**Statut :** accepté · **Date :** 2026-09-05
 
 ## Contexte
 
@@ -41,6 +41,38 @@ deux options, et il se documente ici :
 
 La recommandation est `1.98.1` — un projet neuf n'a aucune raison de naître avec
 un an de dette d'outillage.
+
+### Valeur retenue : `1.98.1`
+
+Fixée le 2026-09-05, à la première compilation du workspace. Le `1.89.0` qui
+figurait dans `rust-toolchain.toml` était la valeur que cet ADR écarte : le
+fichier avait été écrit avant que la décision soit prise, et il contredisait
+donc le document censé le fonder.
+
+Le premier `cargo check --workspace` a rendu l'arbitrage sans appel :
+
+```
+error: rustc 1.89.0 is not supported by the following packages:
+  sqlx@0.9.0 requires rustc 1.94.0
+```
+
+Le plancher n'est pas `1.94.0` mais **`1.95.0`**, imposé par `wasmtime 48.0.1`
+([RESEARCH-NOTES](../RESEARCH-NOTES.md#msrv-imposés-par-les-dépendances)). Il ne
+se voit pas aujourd'hui, parce que `wasmtime` est derrière la fonctionnalité
+`wasm-host` d'`oxyn-plugin`, désactivée par défaut : la construction par défaut
+ne le compile pas, donc `cargo` ne vérifie pas son `rust-version`. C'est le mode
+de panne que cet ADR décrit — silencieux jusqu'au jour où quelqu'un active la
+fonctionnalité, et incompréhensible à ce moment-là.
+
+D'où deux valeurs distinctes, et non une seule :
+
+| Fichier | Valeur | Ce qu'elle exprime |
+|---|---|---|
+| `rust-toolchain.toml` | `1.98.1` | le compilateur **utilisé**, identique partout |
+| `Cargo.toml`, `rust-version` | `1.95` | le minimum **supporté**, `wasm-host` comprise |
+
+Les deux sont complémentaires, comme le dit déjà la table des alternatives
+écartées ci-dessous.
 
 ## Conséquences
 

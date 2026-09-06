@@ -5,7 +5,12 @@ members = ["crates/*", "drivers/*"]
 [workspace.package]
 version       = "0.0.1"
 edition       = "2024"
-rust-version  = "1.89"
+# 1.95 et non 1.94 : `sqlx 0.9.0` exige 1.94.0, mais `wasmtime 48.0.1` exige
+# 1.95.0. wasmtime est derrière la fonctionnalité `wasm-host` d'oxyn-plugin,
+# désactivée par défaut — cargo ne vérifie donc pas son rust-version dans une
+# construction ordinaire, et le plancher réel resterait invisible jusqu'au jour
+# où quelqu'un active la fonctionnalité. Voir ADR-0008 et RESEARCH-NOTES.
+rust-version  = "1.95"
 license       = "Apache-2.0"
 repository    = "https://github.com/keyldzn/oxyn"
 authors       = ["Oxyn contributors"]
@@ -64,7 +69,15 @@ keyring       = "4.2.0"
 # résolution (même désactivé par feature), et les deux déclarent `links = "sqlite3"`.
 # Une seule version de libsqlite3-sys peut donc exister. sqlx 0.9 accepte >=0.30.1,<0.38 ;
 # rusqlite 0.37 demande ^0.35 — c'est l'intersection. À relever quand sqlx suivra.
-rusqlite      = { version = "0.37.0", features = ["bundled", "chrono", "serde_json"] }
+#
+# `column_decltype` expose `Statement::columns()` et `Column::decl_type()`. SQLite
+# n'a pas de type de colonne : le type déclaré au CREATE TABLE est la seule
+# indication disponible avant d'avoir lu une ligne, et le driver s'en sert pour
+# proposer un schéma Arrow qu'il corrige ensuite à la sonde. Sans cette
+# fonctionnalité, la méthode n'existe simplement pas — l'erreur est un E0599 sur
+# `columns`, qui ne nomme jamais la feature manquante.
+rusqlite      = { version = "0.37.0", features = [
+    "bundled", "chrono", "serde_json", "column_decltype" ] }
 secrecy       = { version = "0.10.3", features = ["serde"] }
 zeroize       = "1.9.0"
 
