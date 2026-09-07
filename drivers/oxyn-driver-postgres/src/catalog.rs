@@ -215,12 +215,21 @@ impl PostgresCatalog {
         if cancel.is_cancelled() {
             return Err(OxynError::Cancelled);
         }
-        let mut connexion = self
-            .pool
-            .acquire()
-            .await
-            .map_err(|erreur| map_connect_error(&erreur))?;
-        let pid = backend_pid(&mut connexion).await.ok();
+        let mut connexion = tokio::select! {
+            biased;
+            () = cancel.cancelled() => return Err(OxynError::Cancelled),
+            connection = self.pool.acquire() =>
+                connection.map_err(|error| map_connect_error(&error))?,
+        };
+        let pid = tokio::select! {
+            biased;
+            () = cancel.cancelled() => {
+                connexion.close_on_drop();
+                return Err(OxynError::Cancelled);
+            },
+            pid = backend_pid(&mut connexion) =>
+                pid.map_err(|error| map_exec_error(&self.driver, StatementIntent::Read, error))?,
+        };
 
         let mut requete = sqlx::query(sql);
         for parametre in params {
@@ -240,9 +249,7 @@ impl PostgresCatalog {
                 // Le flux a été abandonné en cours : la connexion peut porter
                 // des octets non lus, elle ne retourne pas au bassin.
                 connexion.close_on_drop();
-                if let Some(pid) = pid
-                    && let Err(erreur) = self.canceller.cancel_backend(pid).await
-                {
+                if let Err(erreur) = self.canceller.cancel_backend(pid).await {
                     tracing::warn!(
                         target: "oxyn::driver::postgres",
                         erreur = %erreur,
@@ -254,12 +261,35 @@ impl PostgresCatalog {
         }
     }
 
-    pub(crate) fn preview_request(
+    pub(crate) async fn preview_request(
         &self,
         path: &CatalogPath,
         limit: u32,
+        cancel: &CancelToken,
     ) -> Result<oxyn_core::ExecRequest> {
-        crate::preview::request(&self.database, self.variant.flavor.dialect(), path, limit)
+        if cancel.is_cancelled() {
+            return Err(OxynError::Cancelled);
+        }
+        let dialect = self.variant.flavor.dialect();
+        let request = crate::preview::request(&self.database, dialect, path, limit)?;
+        // Redshift does not expose PostgreSQL's complete type catalog.
+        if dialect == oxyn_core::SqlDialect::Redshift {
+            return Ok(request);
+        }
+        let (Some(namespace), Some(relation)) = (path.namespace(), path.relation()) else {
+            return Err(OxynError::CatalogUnavailable(
+                "preview requires a relation".into(),
+            ));
+        };
+        let rows = self
+            .fetch(cancel, crate::preview::SQL_COLUMNS, &[namespace, relation])
+            .await?;
+        let columns = rows
+            .iter()
+            .map(|row| Ok((row.try_get::<String, _>(0)?, row.try_get::<bool, _>(1)?)))
+            .collect::<std::result::Result<Vec<_>, sqlx::Error>>()
+            .map_err(|error| map_exec_error(&self.driver, StatementIntent::Read, error))?;
+        crate::preview::request_with_columns(&self.database, dialect, path, limit, &columns)
     }
 
     /// Vérifie qu'un chemin vise bien la base de cette session.

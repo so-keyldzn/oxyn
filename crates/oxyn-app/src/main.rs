@@ -71,7 +71,14 @@ fn main() -> Result<()> {
                 // devient impossible à désigner dans Mission Control ou dans le
                 // sélecteur de fenêtres, là où il n'y a que le titre à lire.
                 titlebar: Some(TitlebarOptions {
-                    title: Some(if temporary { "Oxyn · Temporary workspace" } else { "Oxyn" }.into()),
+                    title: Some(
+                        if temporary {
+                            "Oxyn · Temporary workspace"
+                        } else {
+                            "Oxyn"
+                        }
+                        .into(),
+                    ),
                     ..Default::default()
                 }),
                 ..Default::default()

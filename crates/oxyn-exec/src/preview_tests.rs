@@ -290,6 +290,7 @@ struct Probe {
     cancelled: AtomicBool,
     mutating: bool,
     waiting: bool,
+    waiting_for_metadata: bool,
     catalog: catalog_tests::Probe,
 }
 
@@ -300,8 +301,17 @@ impl Session for PreviewSession {
     fn capabilities(&self) -> Capabilities {
         Capabilities::SQL | Capabilities::SERVER_SIDE_CANCEL
     }
-    fn preview_request(&self, path: &CatalogPath, limit: u32) -> Result<ExecRequest> {
+    async fn preview_request(
+        &self,
+        path: &CatalogPath,
+        limit: u32,
+        cancel: &CancelToken,
+    ) -> Result<ExecRequest> {
         self.0.prepared.lock().push((path.clone(), limit));
+        if self.0.waiting_for_metadata {
+            cancel.cancelled().await;
+            return Err(OxynError::Cancelled);
+        }
         // Deliberately wrong limits and intent test executor defenses.
         Ok(ExecRequest::new(
             QueryLanguage::Sql(SqlDialect::Sqlite),
@@ -507,6 +517,24 @@ async fn preview_enforces_read_only_and_row_limit_even_for_an_incorrect_driver()
         prepared.first().expect("prepared path").0.relation(),
         Some(HOSTILE)
     );
+}
+
+#[tokio::test]
+async fn preview_metadata_cancellation_never_executes_the_preview() {
+    let probe = Arc::new(Probe {
+        waiting_for_metadata: true,
+        ..Probe::default()
+    });
+    let (executor, connection, session) = fake(Arc::clone(&probe), None);
+    let token = CancelToken::new();
+    let mut run =
+        Box::pin(executor.dispatch(Actor::Human, preview(connection, session, 200), &token));
+    assert!(futures::poll!(&mut run).is_pending());
+    assert_eq!(probe.prepared.lock().len(), 1);
+    token.cancel();
+    assert!(matches!(run.await, Err(OxynError::Cancelled)));
+    assert!(probe.executed.lock().is_empty());
+    assert!(executor.running.is_empty());
 }
 
 #[tokio::test]

@@ -145,12 +145,18 @@ pub trait Session: Send + Sync {
     /// [`OxynError::Cancelled`] si `cancel` se déclenche.
     async fn execute(&self, request: ExecRequest, cancel: &CancelToken) -> Result<Box<dyn Cursor>>;
 
-    /// Compose a read-only preview without I/O or changes to session state.
+    /// Compose a read-only preview, with cancellable metadata I/O if needed.
     ///
     /// Implementations validate `limit` in `1..=1000`, quote every path segment
     /// according to their dialect, and set `read_only` and `max_rows` limits.
-    /// Unsupported drivers fail explicitly; this method never executes SQL.
-    fn preview_request(&self, _path: &CatalogPath, _limit: u32) -> Result<ExecRequest> {
+    /// This may read column types, but never executes the preview or changes
+    /// session state. Unsupported drivers fail explicitly.
+    async fn preview_request(
+        &self,
+        _path: &CatalogPath,
+        _limit: u32,
+        _cancel: &CancelToken,
+    ) -> Result<ExecRequest> {
         Err(OxynError::NotSupported {
             capability: "relation preview".to_owned(),
         })

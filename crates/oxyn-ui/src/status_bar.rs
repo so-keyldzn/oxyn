@@ -25,9 +25,10 @@ use std::time::Duration;
 
 use gpui::prelude::*;
 use gpui::{AnyElement, ClickEvent, Context, EventEmitter, Hsla, SharedString, Window, div, px};
-use oxyn_core::{Environment, ExecStats};
+use oxyn_core::{Capabilities, Environment, ExecStats};
 
 use crate::controls::{ControlState, ControlTone, control};
+use crate::session_capabilities::cancel_caveat;
 use crate::theme::Theme;
 
 /// Où en est la dernière commande soumise.
@@ -136,15 +137,31 @@ pub enum StatusBarEvent {
 }
 
 /// La barre d'état.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct StatusBar {
     connection: Option<ActiveConnection>,
     status: ExecutionStatus,
     /// Message d'une seule ligne, effacé au prochain changement d'état.
     notice: Option<SharedString>,
+    /// Ce que la session déclare. Décide de ce que le bouton « Annuler » a le
+    /// droit de promettre ([ADR-0003](../../../docs/adr/0003-driver-capabilities.md)).
+    capabilities: Capabilities,
 }
 
 impl EventEmitter<StatusBarEvent> for StatusBar {}
+
+impl Default for StatusBar {
+    fn default() -> Self {
+        Self {
+            connection: None,
+            status: ExecutionStatus::default(),
+            notice: None,
+            // `Capabilities` n'a pas de `Default` : ne rien déclarer est le seul
+            // défaut sûr, et l'absence de dérivation le rend explicite.
+            capabilities: Capabilities::empty(),
+        }
+    }
+}
 
 impl StatusBar {
     /// Une barre sans connexion.
@@ -163,6 +180,20 @@ impl StatusBar {
     #[must_use]
     pub fn status(&self) -> &ExecutionStatus {
         &self.status
+    }
+
+    /// Ce que la session déclare.
+    #[must_use]
+    pub const fn capabilities(&self) -> Capabilities {
+        self.capabilities
+    }
+
+    /// Déclare ce que la session sait faire.
+    pub fn set_capabilities(&mut self, capabilities: Capabilities, cx: &mut Context<'_, Self>) {
+        if self.capabilities != capabilities {
+            self.capabilities = capabilities;
+            cx.notify();
+        }
     }
 
     /// Change la connexion active.
@@ -385,6 +416,12 @@ impl StatusBar {
                     .child("Annuler"),
                 )
             })
+            // La réserve accompagne le bouton, elle ne le remplace pas : couper
+            // le flux reste utile, prétendre couper la requête ne l'est pas.
+            .when_some(
+                cancel_caveat(self.capabilities).filter(|_| self.status.is_cancellable()),
+                |element, reserve| element.child(badge(reserve, theme.colors.warning, theme)),
+            )
             .into_any_element()
     }
 }

@@ -3,7 +3,7 @@
 use super::layout::Control;
 use super::*;
 use gpui::{AnyElement, FontWeight, div, px};
-use oxyn_ui::Theme;
+use oxyn_ui::{NEVER_EMULATED, Theme, surfaces};
 
 impl Workspace {
     pub(super) fn body(&self, cx: &Context<'_, Self>) -> AnyElement {
@@ -95,7 +95,11 @@ impl Workspace {
                         .border_color(theme.colors.border)
                         .rounded(px(8.))
                         .overflow_hidden()
-                        .child(self.grid.clone()),
+                        .child(div().flex_1().min_h_0().child(self.grid.clone()))
+                        // Sous la grille et non dans une barre d'outils : le
+                        // geste porte sur le résultat qu'on voit, et ce qu'il
+                        // peut exporter dépend de l'état de ce résultat.
+                        .child(self.export.clone()),
                 )
                 .into_any_element(),
             WorkspacePanel::Object => self.object_details(cx),
@@ -126,6 +130,7 @@ impl Workspace {
                     ]
                     .map(|text| div().child(text)),
                 )
+                .child(self.session_support(cx))
                 .into_any_element(),
             _ => div()
                 .flex_1()
@@ -133,5 +138,63 @@ impl Workspace {
                 .child("SQL is not supported by this session.")
                 .into_any_element(),
         }
+    }
+
+    /// what a source cannot do is part of what a professional needs to know
+    /// before writing, not after ([ADR-0003](../../../docs/adr/0003-driver-capabilities.md)).
+    fn session_support(&self, cx: &Context<'_, Self>) -> AnyElement {
+        let theme = Theme::of(cx);
+        div()
+            .border_1()
+            .border_color(theme.colors.border)
+            .rounded(px(8.))
+            .p_4()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                div()
+                    .font_weight(FontWeight::SEMIBOLD)
+                    .child("Session capabilities"),
+            )
+            .child(
+                div()
+                    .text_size(px(11.))
+                    .text_color(theme.colors.text_muted)
+                    .child(NEVER_EMULATED),
+            )
+            .children(surfaces(self.capabilities).into_iter().map(|surface| {
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap_2()
+                    .child(div().w(px(160.)).flex_none().child(surface.surface))
+                    .child(
+                        div()
+                            .w(px(96.))
+                            .flex_none()
+                            // Le mot, pas seulement la couleur : une information
+                            // portée par la seule couleur n'existe pas pour tout
+                            // le monde (revue-ui, accessibilité).
+                            .text_color(if surface.supported {
+                                theme.colors.success
+                            } else {
+                                theme.colors.warning
+                            })
+                            .child(if surface.supported {
+                                "Supported"
+                            } else {
+                                "Unsupported"
+                            }),
+                    )
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .text_color(theme.colors.text_muted)
+                            .child(surface.detail),
+                    )
+            }))
+            .into_any_element()
     }
 }

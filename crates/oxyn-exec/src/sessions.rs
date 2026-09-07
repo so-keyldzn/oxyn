@@ -191,7 +191,8 @@ impl SessionSlot {
         guard
             .as_deref()
             .ok_or_else(session_closed)?
-            .preview_request(path, limit)
+            .preview_request(path, limit, cancel)
+            .await
     }
 
     /// Keeps the provider borrowed until cancellation cleanup finishes.

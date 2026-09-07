@@ -18,7 +18,7 @@ use std::sync::Arc;
 use anyhow::{Context as _, Result};
 use oxyn_core::{
     Actor, CancelToken, Capabilities, Command, CommandId, ConnectionConfig, ConnectionId,
-    DefaultPolicy, Environment, OxynError, PolicyGate, ResultId, SessionId,
+    DefaultPolicy, Environment, OxynError, PolicyGate, ResultId, SessionId, SqlDialect,
 };
 use oxyn_data::ResultBuffer;
 use oxyn_driver::DriverRegistry;
@@ -76,6 +76,13 @@ pub struct OpenConnection {
     pub display: ConnectionDisplay,
     /// Capabilities negotiated by the actual open session.
     pub capabilities: Capabilities,
+    /// The SQL dialect of the connected driver.
+    ///
+    /// Resolved from the driver identifier once, here, rather than defaulting
+    /// to `Ansi` at every call site: the dialect decides how a statement is
+    /// read, and reading `EXPLAIN (ANALYZE) DELETE …` as ANSI loses exactly the
+    /// distinction [I-07](../../../CLAUDE.md#i-07) depends on.
+    pub dialect: SqlDialect,
     /// Executor-owned cache, acquired off the UI thread during connection.
     pub catalog: oxyn_catalog::SharedCatalog,
 }
@@ -533,6 +540,7 @@ async fn ouvrir_la_session(
     Ok(OpenConnection {
         catalog,
         capabilities,
+        dialect: oxyn_query::dialect_for(&config.driver),
         session,
         connection: config.id,
         display: ConnectionDisplay::of(&config),
@@ -615,6 +623,7 @@ mod tests {
             open.connection,
             open.session,
             false,
+            open.dialect,
             text.to_owned(),
         );
         backend
@@ -687,7 +696,7 @@ mod tests {
         let cancel = CancelToken::new();
         let mut events = backend.subscribe();
         let id = CommandId::new();
-        let command = crate::workspace::execution_command(open.connection, open.session, false,
+        let command = crate::workspace::execution_command(open.connection, open.session, false, open.dialect,
             "WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<1000000000) SELECT x FROM n".into());
         let receiver = backend.dispatch(id, command, cancel.clone());
         backend.inner.runtime.block_on(async {

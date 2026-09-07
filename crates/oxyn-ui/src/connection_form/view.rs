@@ -92,6 +92,7 @@ impl Render for ConnectionForm {
                     .gap_3()
                     .px_4()
                     .child(logo(theme.mode))
+                    .child(icon(IconName::Logo).text_color(theme.colors.text))
                     .child(
                         div()
                             .flex()

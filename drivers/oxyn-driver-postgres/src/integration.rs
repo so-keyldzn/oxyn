@@ -45,6 +45,118 @@ use crate::PostgresDriver;
 /// La variable qui porte l'URL du serveur d'essai.
 const VARIABLE: &str = "OXYN_PG_TEST_URL";
 
+#[tokio::test]
+#[ignore = "requires an isolated PostgreSQL test server"]
+async fn previews_handle_system_types_and_preserve_native_columns() {
+    use arrow::array::{Array as _, AsArray as _};
+    use arrow::datatypes::{DataType, TimeUnit};
+    use oxyn_catalog::CatalogPath;
+
+    let Some(session) = session().await else {
+        return;
+    };
+    let token = CancelToken::new();
+    appliquer(&*session, "CREATE DOMAIN oxyn_preview_acl AS aclitem[]").await;
+    appliquer(
+        &*session,
+        "CREATE TABLE oxyn_preview_types (\
+        id bigint DEFAULT 1, at timestamptz, acl oxyn_preview_acl, function regproc, \
+        \"a\"\"; --\" text)",
+    )
+    .await;
+    appliquer(
+        &*session,
+        "INSERT INTO oxyn_preview_types VALUES \
+        (1, '2021-01-01 00:00:00.123456+00', ARRAY['=r/postgres'::aclitem, NULL], \
+         'pg_catalog.int4in'::regproc, 'quoted'), \
+        (2, NULL, NULL, NULL, NULL)",
+    )
+    .await;
+
+    let path = CatalogPath::for_relation(None, Some("public"), "oxyn_preview_types").expect("path");
+    let request = session
+        .preview_request(&path, 200, &token)
+        .await
+        .expect("metadata");
+    let mut cursor = session.execute(request, &token).await.expect("preview");
+    assert_eq!(cursor.schema().field(0).data_type(), &DataType::Int64);
+    assert_eq!(
+        cursor.schema().field(1).data_type(),
+        &DataType::Timestamp(TimeUnit::Microsecond, Some("UTC".into()))
+    );
+    assert_eq!(cursor.schema().field(4).name(), "a\"; --");
+    let batch = cursor.next_batch().await.expect("stream").expect("rows");
+    assert_eq!(batch.num_rows(), 2);
+    let functions = batch.column(3).as_string_opt::<i32>().expect("server text");
+    let acls = batch.column(2).as_string_opt::<i32>().expect("server text");
+    assert!(functions.iter().flatten().any(|value| value == "int4in"));
+    assert!(
+        acls.iter()
+            .flatten()
+            .any(|value| value.contains("=r/postgres") && value.contains("NULL"))
+    );
+    assert_eq!(acls.null_count(), 1);
+    assert!(cursor.next_batch().await.expect("end").is_none());
+
+    let mut raw = session
+        .execute(lecture("SELECT 52::regproc AS function"), &token)
+        .await
+        .expect("unmodified user SQL");
+    let schema = raw.schema();
+    assert_eq!(schema.field(0).data_type(), &DataType::Binary);
+    assert_eq!(
+        schema
+            .field(0)
+            .metadata()
+            .get(crate::META_FALLBACK)
+            .map(String::as_str),
+        Some("opaque")
+    );
+    assert!(
+        schema
+            .field(0)
+            .metadata()
+            .get(crate::META_PG_TYPE)
+            .is_some_and(|name| name.eq_ignore_ascii_case("regproc"))
+    );
+    let batch = raw
+        .next_batch()
+        .await
+        .expect("raw stream")
+        .expect("raw row");
+    assert_eq!(
+        batch
+            .column(0)
+            .as_binary_opt::<i32>()
+            .expect("binary")
+            .value(0),
+        52_u32.to_be_bytes()
+    );
+    assert!(raw.next_batch().await.expect("end").is_none());
+
+    for relation in ["pg_database", "pg_attrdef", "pg_aggregate"] {
+        let path = CatalogPath::for_relation(None, Some("pg_catalog"), relation).expect("path");
+        let request = session
+            .preview_request(&path, 1, &token)
+            .await
+            .expect("system metadata");
+        let mut cursor = session
+            .execute(request, &token)
+            .await
+            .expect("system preview");
+        assert_eq!(drainer(&mut cursor).await.0, 1, "{relation}");
+    }
+    let cancelled = CancelToken::new();
+    cancelled.cancel();
+    assert!(matches!(
+        session.preview_request(&path, 200, &cancelled).await,
+        Err(OxynError::Cancelled)
+    ));
+    appliquer(&*session, "DROP TABLE oxyn_preview_types").await;
+    appliquer(&*session, "DROP DOMAIN oxyn_preview_acl").await;
+    session.close().await.expect("close");
+}
+
 /// La configuration d'essai, ou `None` quand aucun serveur n'est déclaré.
 fn cible() -> Option<(ConnectionConfig, Credentials)> {
     let url = std::env::var(VARIABLE).ok()?;

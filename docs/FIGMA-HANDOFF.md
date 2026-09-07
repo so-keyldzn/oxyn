@@ -9,8 +9,8 @@ Cet index localise les planches ; les comportements font autorité dans
 
 La page 22 porte le workbench retenu par
 [ADR-0011](adr/0011-structure-commune-workspace.md). La sidebar est toujours
-inset, repliable en icônes, selon la page 01. Les pages 04 à 07 portent une
-mention « spécification de contenu, pas de structure de fenêtre ».
+inset, repliable en icônes, selon la page 01. Les écrans des pages 04 à 09 ont
+été migrés vers cette structure, en conservant leurs identifiants et contenus.
 
 | Planche | Nœud Figma |
 |---|---|
@@ -44,7 +44,13 @@ représentent aucune requête réellement exécutée.
 | Cellule en édition, modification, ajout et suppression locaux | `231:7954` | Conception hors premier workspace en lecture seule |
 | Revue DML sans transactions | `231:8531` | Conception hors premier workspace en lecture seule |
 | Conflit, brouillon conservé | `232:8538` | Conception hors premier workspace en lecture seule |
-| Récupération après arrêt brutal | `232:9100` | Proposition non normative, en attente d'arbitrage utilisateur |
+| Récupération après arrêt brutal | `232:9100` | Sélection de brouillons, restauration locale hors ligne |
+| Trois éléments restaurés | `282:13489` | Brouillons et emplacement d'objet, rien exécuté |
+| Démarrage vide | `282:11550` | Workspace hors ligne |
+
+Le parcours de reprise comporte huit combinaisons de sélection et leurs issues.
+Cliquer `Restore` ou `Skip` dans la première colonne change la sélection ;
+`Restore selected drafts` est désactivé lorsque la sélection est vide.
 
 Les vues de moteurs avancés de la page 05 et leurs copies dans le prototype
 portent une étiquette de phase 4. Cette étiquette ne prouve pas la disponibilité
@@ -58,9 +64,27 @@ Les alias de couleur reprennent les valeurs de `Palette` dans
 Les variables de dimensions portent les noms de `Metrics` ; les mesures du
 workbench disposent également de noms explicites.
 
-Les états des composants se trouvent dans les pages 10 à 20. `ReadOnly`
+Les états des composants de base se trouvent dans les pages 10 à 20. `ReadOnly`
 concerne les contrôles de valeur et les cellules ; un bouton ou un onglet
 indisponible utilise `Disabled`. Le focus visible est un état propre.
+
+Les pages 23 à 30 ajoutent des compositions réutilisables, employées dans les
+écrans métiers :
+
+| Page | Composant | Usage |
+|---|---|---|
+| 23 | Input Group | Recherche, conditions de filtre et saisie IA avec action intégrée |
+| 24 | Button Group | Actions voisines et pagination |
+| 25 | Item | Sources de contexte et listes compactes |
+| 26 | Message | Messages utilisateur, assistant et outil |
+| 27 | Attachment | Contexte joint, avec retrait local dans le prototype |
+| 28 | Empty | États initiaux et résultats vides |
+| 29 | Alert | Erreurs, refus et avertissements visibles |
+| 30 | Accordion | Détails secondaires repliables |
+
+Ces compositions suivent les conventions shadcn et les variables Oxyn. Les
+avertissements de production et de confidentialité restent visibles ; une
+confirmation destructrice n'est pas regroupée avec son annulation.
 
 Pour un inventaire complet, lire les collections et variables locales via
 `figma.variables.getLocalVariableCollectionsAsync()` et

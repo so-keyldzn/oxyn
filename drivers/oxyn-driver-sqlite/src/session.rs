@@ -170,7 +170,15 @@ impl Session for SqliteSession {
         })
     }
 
-    fn preview_request(&self, path: &oxyn_catalog::CatalogPath, limit: u32) -> Result<ExecRequest> {
+    async fn preview_request(
+        &self,
+        path: &oxyn_catalog::CatalogPath,
+        limit: u32,
+        cancel: &CancelToken,
+    ) -> Result<ExecRequest> {
+        if cancel.is_cancelled() {
+            return Err(OxynError::Cancelled);
+        }
         crate::preview::request(path, limit)
     }
 

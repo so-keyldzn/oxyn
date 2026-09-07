@@ -111,18 +111,22 @@ oxyn/
 └── docs/
 ```
 
-**`oxyn-app` tient en six fichiers, et chacun a une raison d'exister à part.**
+**`oxyn-app` tient en six sujets, et chacun a une raison d'exister à part.**
+L'espace de travail en occupe plusieurs fichiers — `workspace/` porte le
+catalogue, le contenu, la disposition, l'export et le conditionnement aux
+capacités — parce qu'un seul fichier y porterait cinq sujets ; le sujet, lui,
+reste un.
 
 | Fichier | Sujet | Pourquoi il n'est pas ailleurs |
 |---|---|---|
 | `backend.rs` | ce qui n'est pas des pixels : état local, drivers, politique, ordonnanceur, runtime Tokio | le thread UI ne doit rien pouvoir en atteindre directement ([I-05](../CLAUDE.md#i-05)) |
 | `root.rs` | la vue racine : l'écran de connexion, puis l'espace de travail | c'est là qu'un brouillon de connexion devient `CreateConnection` puis `Connect` |
-| `workspace.rs` | l'espace de travail sur une connexion ouverte | c'est là qu'un `Cmd+Entrée` devient `Command::Execute` |
+| `workspace.rs` + `workspace/` | l'espace de travail sur une connexion ouverte | c'est là qu'un `Cmd+Entrée` devient `Command::Execute` |
 | `picker.rs` | traduction `DriverMetadata` → `DriverChoice` | seule crate à connaître `oxyn-driver` **et** `oxyn-ui` ; sans elle l'une dépendrait de l'autre |
 | `credentials.rs` | le seul point qui lit ou écrit le trousseau | un appel au trousseau par driver serait six endroits à auditer au lieu d'un ([I-03](../CLAUDE.md#i-03)) |
 | `main.rs` | les traces et la fenêtre | rien d'autre |
 
-`root.rs` et `workspace.rs` sont **les seuls endroits du produit** où un
+`root.rs` et `workspace/` sont **les seuls endroits du produit** où un
 événement d'interface devient une `Command` : un test d'`oxyn-ui` échoue si un
 composant mentionne seulement ce type.
 
@@ -153,13 +157,21 @@ signale le caractère temporaire.
 
 L'aperçu d'une table utilise `Command::PreviewRelation` avec connexion, session,
 niveaux d'identifiant et limite explicites. Le `PolicyGate` décide avant la
-préparation ; le driver compose un `SELECT` qualifié et borné sans I/O, puis
+préparation ; le driver compose un `SELECT` qualifié et borné après une lecture
+annulable des métadonnées si nécessaire, puis
 l'exécuteur impose la lecture seule et réutilise le flux Arrow d'`Execute` sous
 le même identifiant de commande. L'interface demande 200 lignes ; le contrat du
 bus accepte de 1 à 1 000. PostgreSQL qualifie schéma et table dans la base de
 la session ; SQLite conserve la convention du catalogue pour ses bases
 attachées. La grille de l'aperçu et son annulation sont distinctes de celles de
 l'éditeur SQL.
+
+La préparation PostgreSQL examine les types des colonnes, y compris les bases
+de domaines et les éléments de tableaux. Les types sans sortie binaire, les
+types internes et les références symboliques du catalogue sont explicitement
+convertis en texte par le serveur pour cet aperçu ; ces colonnes sont donc
+annoncées comme texte. Les autres colonnes conservent leur type natif. Le SQL
+saisi dans l'éditeur reste inchangé et aucune erreur ne déclenche de rejeu.
 
 Le binaire nu ne suffit pas sur macOS : sans paquet `.app`, le système traite le
 processus comme un accessoire — ni Dock, ni activation propre, ni identifiant

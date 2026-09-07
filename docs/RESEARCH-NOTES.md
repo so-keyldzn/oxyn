@@ -272,3 +272,23 @@ Les identifiants des pages `03 · Foundations` et `22 · Database workspace` n'o
 pas été retrouvés : `get_metadata` exige un nœud connu, et les pages ne
 s'énumèrent pas. Les obtenir demande de les ouvrir dans l'application Figma, ou
 de lire l'URL `?node-id=` de chacune.
+
+## Aperçus PostgreSQL et fuseaux Arrow
+
+Vérifié le 2026-09-07 dans les sources résolues par `Cargo.lock` et les sources
+amont :
+
+- [Arrow : fuseaux](https://docs.rs/arrow-array/latest/arrow_array/timezone/struct.Tz.html) :
+  sans la fonctionnalité `chrono-tz`, seuls les décalages fixes sont acceptés.
+  Le driver fournit `UTC` pour `timestamptz` ; le workspace active donc cette
+  fonctionnalité pour la grille et les exports. Cargo résout la dépendance
+  transitive [chrono-tz 0.10.4](https://crates.io/crates/chrono-tz/0.10.4), sans
+  changer la version d'Arrow.
+- [PostgreSQL : pg_type](https://www.postgresql.org/docs/17/catalog-pg-type.html) :
+  `typsend = 0` indique l'absence de sortie binaire ; la catégorie `Z` désigne
+  les types internes. Le décodeur de catégories de SQLx installé refuse `Z`,
+  ce qui bloque notamment `pg_node_tree` avant même la lecture des lignes.
+- [PostgreSQL : alias d'OID](https://www.postgresql.org/docs/17/datatype-oid.html) :
+  la sortie texte de `regproc` et des autres alias expose les noms d'objets.
+  L'aperçu demande ce rendu au serveur ; des octets binaires valides en UTF-8
+  ne constituent pas une représentation textuelle fiable.

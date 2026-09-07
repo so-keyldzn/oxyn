@@ -899,6 +899,19 @@ mod tests {
     }
 
     #[test]
+    fn postgres_utc_microseconds_render_without_losing_precision_or_nulls() {
+        let array =
+            arrow::array::TimestampMicrosecondArray::from(vec![Some(1_609_459_200_123_456), None])
+                .with_timezone("UTC");
+        let opts = FormatOptions::default();
+        assert_eq!(
+            format_value(&array, 0, &opts).text(),
+            Some("2021-01-01T00:00:00.123456Z")
+        );
+        assert!(format_value(&array, 1, &opts).is_null());
+    }
+
+    #[test]
     fn un_motif_d_horodatage_personnalise_est_respecte() {
         let array = TimestampMillisecondArray::from(vec![1_609_459_200_000_i64]);
         let opts = FormatOptions::default().with_timestamp_format(Some(Cow::Borrowed("%Y/%m/%d")));

@@ -59,14 +59,6 @@ const UUID_LEN: usize = 16;
 /// Version attendue en tête d'un `jsonb`.
 const JSONB_VERSION: u8 = 1;
 
-/// Octets bruts au-delà desquels un type opaque n'est plus transcrit en entier.
-///
-/// Quatre kilo-octets font huit mille caractères hexadécimaux, soit seize fois
-/// ce que la grille affiche. Au-delà, la transcription coûterait deux fois la
-/// taille du BLOB en mémoire sans rien montrer de plus ; la coupe est **dite**
-/// dans la valeur rendue, jamais silencieuse.
-const OPAQUE_HEX_BUDGET: usize = 4_096;
-
 /// Ce qui peut mal tourner en décodant une réponse du serveur.
 ///
 /// Aucune variante ne porte de valeur venue de la base : seulement un rang de
@@ -276,8 +268,6 @@ enum TextSource {
     Uuid,
     /// Heure et décalage, rendus en ISO 8601.
     TimeTz,
-    /// Type inconnu : texte si c'est de l'UTF-8 valide, hexadécimal sinon.
-    Opaque,
 }
 
 /// Une colonne de listes, construite à la main.
@@ -313,8 +303,7 @@ impl ColumnBuilder {
             PgDecoding::Numeric => Self::Text(StringBuilder::new(), TextSource::Numeric),
             PgDecoding::Uuid => Self::Text(StringBuilder::new(), TextSource::Uuid),
             PgDecoding::TimeTz => Self::Text(StringBuilder::new(), TextSource::TimeTz),
-            PgDecoding::Opaque => Self::Text(StringBuilder::new(), TextSource::Opaque),
-            PgDecoding::Bytes => Self::Binary(BinaryBuilder::new()),
+            PgDecoding::Opaque | PgDecoding::Bytes => Self::Binary(BinaryBuilder::new()),
             PgDecoding::Date => Self::Date(Date32Builder::new()),
             PgDecoding::Time => Self::Time(Time64MicrosecondBuilder::new()),
             PgDecoding::Timestamp => Self::Timestamp(TimestampMicrosecondBuilder::new()),
@@ -500,42 +489,8 @@ fn render_text(
         TextSource::TimeTz => {
             builder.append_value(&render_timetz(bytes)?);
         }
-        TextSource::Opaque => {
-            match std::str::from_utf8(bytes) {
-                // Couvre les `enum`, `xml`, `citext`, `ltree` et la plupart des
-                // types d'extension : leur représentation binaire *est* leur
-                // texte.
-                Ok(texte) => builder.append_value(texte),
-                Err(_) => builder.append_value(render_hex(bytes)),
-            }
-        }
     }
     Ok(())
-}
-
-/// Transcrit des octets en hexadécimal, à la façon de `bytea` : `\x0badc0de`.
-///
-/// Au-delà de [`OPAQUE_HEX_BUDGET`] octets, la transcription est coupée et **le
-/// dit** : la valeur rendue nomme la taille réelle, pour qu'un tronçon ne passe
-/// jamais pour la valeur entière.
-fn render_hex(bytes: &[u8]) -> String {
-    const HEX: &[u8; 16] = b"0123456789abcdef";
-
-    let montres = bytes.len().min(OPAQUE_HEX_BUDGET);
-    let mut sortie = String::with_capacity(montres.saturating_mul(2).saturating_add(32));
-    sortie.push_str("\\x");
-    for octet in bytes.iter().take(montres) {
-        let haut = usize::from(octet >> 4);
-        let bas = usize::from(octet & 0x0f);
-        if let (Some(a), Some(b)) = (HEX.get(haut), HEX.get(bas)) {
-            sortie.push(char::from(*a));
-            sortie.push(char::from(*b));
-        }
-    }
-    if montres < bytes.len() {
-        let _ = write!(sortie, "… ({} octets)", bytes.len());
-    }
-    sortie
 }
 
 /// Rend un `timetz` en ISO 8601 : `14:30:00.250000+02:00`.
@@ -867,31 +822,24 @@ mod tests {
     }
 
     #[test]
-    fn un_type_inconnu_lisible_rend_son_texte() {
-        // C'est le cas des `enum`, dont la représentation binaire est
-        // l'étiquette : une erreur ici ferait échouer toute la requête.
-        assert_eq!(
-            texte_rendu(TextSource::Opaque, b"expedie").as_deref(),
-            Ok("expedie")
-        );
-    }
-
-    #[test]
-    fn un_type_inconnu_binaire_rend_de_l_hexadecimal_pas_une_erreur() {
-        let rendu = texte_rendu(TextSource::Opaque, &[0x00, 0xff, 0x10]).expect("jamais d'erreur");
-        assert_eq!(rendu, "\\x00ff10");
-    }
-
-    #[test]
-    fn une_transcription_coupee_annonce_la_taille_reelle() {
-        // Un tronçon qui passerait pour la valeur entière serait un mensonge.
-        let gros = vec![0xab_u8; OPAQUE_HEX_BUDGET + 10];
-        let rendu = render_hex(&gros);
-        assert!(rendu.contains("octets"), "la coupe doit se dire");
-        assert!(
-            rendu.contains(&(OPAQUE_HEX_BUDGET + 10).to_string()),
-            "{rendu}"
-        );
+    fn opaque_binary_is_preserved_even_when_it_is_valid_utf8() {
+        let mut column = colonne(&PgDecoding::Opaque);
+        let bytes = b"\x00\x00\x004";
+        column
+            .append(PgValueFormat::Binary, Some(bytes))
+            .expect("opaque bytes");
+        let large = vec![0xab; 9000];
+        column
+            .append(PgValueFormat::Binary, Some(&large))
+            .expect("large opaque value");
+        column.append(PgValueFormat::Binary, None).expect("null");
+        let array = column.finish().expect("binary column");
+        let values = array
+            .as_binary_opt::<i32>()
+            .expect("raw bytes, not guessed text");
+        assert_eq!(values.value(0), bytes);
+        assert_eq!(values.value(1), large);
+        assert!(values.is_null(2));
     }
 
     #[test]

@@ -40,11 +40,10 @@
 //! le précédent a été pris. Un `SELECT *` sur 500 Go ne fait donc pas gonfler la
 //! mémoire ([I-06](../../../CLAUDE.md#i-06)).
 //!
-//! **Un type inconnu ne fait pas échouer la requête.** Il devient du texte, ou
-//! de l'hexadécimal, en conservant le nom du type PostgreSQL dans les
-//! métadonnées du champ Arrow. Ce qui échoue, ce sont les seules valeurs
-//! qu'Arrow ne peut pas représenter sans mentir — une date infinie, un tableau à
-//! plusieurs dimensions —, et elles se nomment.
+//! **Unknown wire types keep their bytes and PostgreSQL type metadata.**
+//! The grid formats Arrow binary values explicitly, without guessing text from
+//! bytes that happen to be valid UTF-8. Preview composition requests server text
+//! for internal types and OID aliases; user SQL is never rewritten or retried.
 //!
 //! **Le SQL de l'utilisateur part tel quel ; celui d'Oxyn ne concatène rien.**
 //! Le texte d'une requête n'est ni analysé ni réécrit : c'est la fonctionnalité

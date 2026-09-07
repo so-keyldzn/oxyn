@@ -822,6 +822,18 @@ impl Executor {
         destination: &Path,
         cancel: &CancelToken,
     ) -> Result<Outcome> {
+        // Avant `File::create` : sinon un format que cette version ne sait pas
+        // écrire laisse un fichier de zéro octet à l'emplacement que
+        // l'utilisateur vient de nommer. La vérification vit ici et non dans la
+        // vue parce que cette commande est aussi atteignable par un plugin et
+        // par un `Actor::Agent` — un contrôle qui n'existe que dans l'interface
+        // n'est pas un contrôle du bus (I-01).
+        if !oxyn_data::is_supported(format) {
+            return Err(OxynError::NotSupported {
+                capability: format!("export:{}", format.extension()),
+            });
+        }
+
         let buffer = self
             .result(result)
             .ok_or_else(|| OxynError::Config("ce résultat n'est plus disponible".to_owned()))?;

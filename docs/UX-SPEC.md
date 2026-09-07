@@ -45,6 +45,39 @@ l'annulation atteint le serveur
 Un bouton « Annuler » qui ne fait qu'abandonner l'affichage est un mensonge :
 il laisse une requête tourner et une connexion prise.
 
+**Quand la session ne déclare pas `SERVER_SIDE_CANCEL`**, il reste trois issues
+possibles, et une seule est acceptable :
+
+| Issue | Pourquoi elle est écartée, ou retenue |
+|---|---|
+| Promettre quand même | c'est le mensonge ci-dessus |
+| Masquer le bouton | l'opération devient inarrêtable, ce que le budget de 300 ms interdit |
+| **Garder le bouton et retirer la promesse** | retenu : couper le flux reste utile, et la réserve dit ce que le bouton ne fait pas |
+
+La réserve **accompagne** le bouton, elle ne le remplace pas, et elle n'affirme
+que ce que le drapeau absent prouve : qu'aucune annulation ne part vers un
+serveur. Elle ne conclut pas que l'instruction continue de tourner — SQLite ne
+déclare pas cette capacité faute de serveur, et `sqlite3_interrupt` arrête bien
+l'instruction ([DRIVER-CONTRACT](DRIVER-CONTRACT.md#2-il-expose-lannulation-et-lannulation-coupe-vraiment)).
+
+## Ce qui est exporté est ce qui est affiché
+
+Un export ne s'offre que sur un résultat **entier**. Un tampon encore ouvert est
+refusé par `ExportOptions` ; un tampon **clos mais tronqué** — arrêté par la
+limite de lignes ou par le budget mémoire ([I-06](../CLAUDE.md#i-06)) — ne l'est
+pas, et c'est le cas dangereux : il a fini de charger, donc rien à l'écran ne le
+distingue d'un résultat complet.
+
+**Panne concrète :** `SELECT * FROM commandes` sur cinquante millions de lignes,
+le tampon s'arrête à deux millions, l'utilisateur exporte, et repart avec un CSV
+qu'il croit être la table. Rien dans le fichier ne dit qu'il en manque
+quarante-huit millions.
+
+Un format que le produit ne sait pas encore écrire s'affiche **indisponible**,
+pas absent : le proposer ferait échouer l'écriture après le choix du fichier, en
+laissant un fichier vide sur le disque ; le masquer ferait croire que le produit
+ne l'aura jamais.
+
 ## Les erreurs s'adressent à un professionnel
 
 Le public d'Oxyn lit les messages de PostgreSQL. Un message d'erreur montre le
@@ -61,9 +94,18 @@ Un onglet, une requête non exécutée, une connexion : ce qui est restauré au
 redémarrage est écrit dans un format ouvert et documenté
 ([I-11](../CLAUDE.md#i-11)), lisible sans Oxyn.
 
-## Ce qui n'est pas encore tranché
+## Restauration après un arrêt brutal
 
-- la restauration après un arrêt brutal ;
+Au redémarrage après un arrêt anormal, Oxyn présente les onglets et brouillons
+locaux récupérables. L'utilisateur choisit les éléments à restaurer ou démarre
+avec un workspace vide. Sans sélection, l'action de restauration est désactivée.
+La restauration reste hors ligne : elle ne reconnecte aucune session et ne
+réexécute aucune requête. Un onglet d'objet restauré conserve son emplacement,
+sans charger ses données avant une reconnexion explicite.
+
+Une écriture interrompue peut avoir un résultat inconnu. La reprise conserve cet
+avertissement et demande d'inspecter l'état du serveur après reconnexion ; elle
+ne retente jamais l'écriture ([I-13](../CLAUDE.md#i-13)).
 
 ## Structure commune du workspace
 
@@ -82,12 +124,12 @@ adapté à la connexion. Le panneau de travail reste dans son encart avec une
 marge de 8 px. Le workbench ne crée pas une seconde famille de sidebars et
 le repli ne masque jamais entièrement la navigation.
 
-Les pages Figma 04 à 07 **spécifient les contenus, parcours et états, pas la
-structure de la fenêtre**. Leurs titres et sous-titres identifient les scénarios ;
-ils ne prescrivent pas un second modèle de navigation. Les anciens exemples
-des pages 01, 08 et 09 restent des références de composants ou d'interactions ;
-la page 22 prévaut pour la structure commune. Les documents d'autorité du dépôt
-prévalent sur toute planche pour les comportements métier.
+Les écrans des pages Figma 04 à 09 reprennent cette structure commune. Leurs
+titres et sous-titres identifient les scénarios dans les onglets et le contexte ;
+ils ne prescrivent pas un second modèle de navigation. La page 01 définit le
+composant de sidebar et la page 22 la structure de référence du workbench.
+Les documents d'autorité du dépôt prévalent sur toute planche pour les
+comportements métier.
 
 ### Repères permanents
 

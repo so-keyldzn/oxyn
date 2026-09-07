@@ -9,14 +9,10 @@
 //!
 //! # Les trois règles qui gouvernent ce module
 //!
-//! **Un type inconnu ne fait jamais échouer la requête.** Il tombe sur
-//! [`PgDecoding::Opaque`], qui rend `Utf8` : le texte du serveur si les octets
-//! sont de l'UTF-8 valide — ce qui couvre les `enum`, `xml`, `citext`, `ltree`
-//! et la plupart des types d'extension —, sinon une transcription hexadécimale.
-//! Le **nom du type PostgreSQL est conservé** dans les métadonnées du champ
-//! Arrow (`oxyn:pg_type`), avec le mode de repli employé (`oxyn:fallback`) :
-//! l'interface peut donc dire « ceci est un `geometry` rendu en hexadécimal »
-//! plutôt que de faire passer une chaîne pour une valeur.
+//! **Unknown binary types retain their bytes.** [`PgDecoding::Opaque`] produces
+//! Arrow `Binary`, with the PostgreSQL type name in `oxyn:pg_type` metadata.
+//! Valid UTF-8 bytes are not evidence of a textual wire format: an OID can look
+//! like a printable character. Known enums are decoded as text explicitly.
 //!
 //! **`NUMERIC` ne devient jamais un flottant.** Un `NUMERIC` sans précision ne
 //! tient dans aucun `f64` ; le convertir corrompt des montants. Il devient une
@@ -36,9 +32,9 @@
 //! | `uuid` | `Utf8` | aucune : rendu canonique en minuscules avec tirets |
 //! | `timetz` | `Utf8` | aucune : heure et décalage rendus tels quels |
 //! | `interval` | `Interval(MonthDayNano)` | au-delà de ±292 ans de composante microseconde, la conversion en nanosecondes déborde : le décodage **échoue** au lieu de tronquer |
-//! | `money` | `Utf8` | l'unité monétaire dépend de `lc_monetary`, que le protocole ne transmet pas ; la valeur est rendue en unités de base |
+//! | `money` | `Binary` | raw representation retained; the currency depends on `lc_monetary`, which is not transmitted |
 //! | tableaux à plus d'une dimension | — | non représentables par une liste Arrow : le décodage **échoue** plutôt que d'aplatir en silence |
-//! | `record`, types composites | `Utf8` (opaque) | la structure n'est pas éclatée en `Struct` Arrow |
+//! | `record`, types composites | `Binary` (opaque) | la structure n'est pas éclatée en `Struct` Arrow |
 //!
 //! # Pourquoi `numeric` n'est pas un `Decimal128`
 //!
@@ -136,8 +132,8 @@ pub(crate) mod oid {
 pub const META_PG_TYPE: &str = "oxyn:pg_type";
 /// Clé de métadonnée portant le mode de repli employé pour un type inconnu.
 ///
-/// Vaut `text` quand les octets étaient de l'UTF-8 valide et `hex` sinon. Absente
-/// quand le type est reconnu.
+/// Contains `opaque` for an unknown wire format preserved as binary.
+/// Absent for recognized types.
 pub const META_FALLBACK: &str = "oxyn:fallback";
 
 /// Comment décoder une valeur PostgreSQL vers son tableau Arrow.
@@ -188,8 +184,7 @@ pub enum PgDecoding {
     Interval,
     /// Tableau à une dimension d'un type décodable.
     List(Box<PgDecoding>),
-    /// Type inconnu du driver. Rendu en `Utf8` : texte si les octets sont de
-    /// l'UTF-8 valide, hexadécimal sinon. Ne fait **jamais** échouer la requête.
+    /// Unknown wire format, preserved as raw bytes with type metadata.
     Opaque,
 }
 
@@ -208,10 +203,8 @@ impl PgDecoding {
             Self::UInt32 => DataType::UInt32,
             Self::Float32 => DataType::Float32,
             Self::Float64 => DataType::Float64,
-            Self::Text | Self::Jsonb | Self::Numeric | Self::Uuid | Self::TimeTz | Self::Opaque => {
-                DataType::Utf8
-            }
-            Self::Bytes => DataType::Binary,
+            Self::Text | Self::Jsonb | Self::Numeric | Self::Uuid | Self::TimeTz => DataType::Utf8,
+            Self::Bytes | Self::Opaque => DataType::Binary,
             Self::Date => DataType::Date32,
             Self::Time => DataType::Time64(TimeUnit::Microsecond),
             Self::Timestamp => DataType::Timestamp(TimeUnit::Microsecond, None),
@@ -337,8 +330,7 @@ pub fn schema_for(columns: &[PgColumn]) -> (SchemaRef, Vec<PgDecoding>) {
         let mut metadonnees = HashMap::with_capacity(2);
         metadonnees.insert(META_PG_TYPE.to_owned(), type_info.name().to_owned());
         if decodage.is_opaque() {
-            // Le mode exact (`text` ou `hex`) dépend de la valeur ; on annonce
-            // ici que la colonne est un repli, pas lequel.
+            // Keep the original type attached to the raw binary payload.
             metadonnees.insert(META_FALLBACK.to_owned(), "opaque".to_owned());
         }
 
@@ -395,7 +387,7 @@ mod tests {
         // 16 000 est au-delà des types intégrés : c'est un type utilisateur.
         assert_eq!(decoding_for_oid(16_000), None);
         assert_eq!(decoding_for_name("geometry"), PgDecoding::Opaque);
-        assert_eq!(PgDecoding::Opaque.arrow_type(), DataType::Utf8);
+        assert_eq!(PgDecoding::Opaque.arrow_type(), DataType::Binary);
     }
 
     #[test]
