@@ -396,6 +396,18 @@ validés par `CatalogPath` dans l'exécuteur, sans dépendance de `oxyn-core` ve
 palier, elle lit les schémas si la session déclare `SCHEMAS`, sinon les relations.
 Elle ne décrit jamais les relations et ne charge ni index ni clés étrangères.
 
+Le scope `Relation` est le seul à descendre au détail : champs, puis index si la
+session déclare `INDEXES`, puis clés étrangères si elle déclare `FOREIGN_KEYS`.
+**Une capacité absente laisse le champ non lu**, jamais une liste vide : le cache
+distingue « pas lu » de « aucun », et les confondre ferait affirmer à l'onglet
+Index qu'une table n'en a pas alors que personne n'a su le dire. Une erreur sur
+l'un de ces deux appels fait échouer le rafraîchissement entier — le patch est
+publié d'un bloc, et un onglet vide sans message se lirait comme « aucun index ».
+Les **contraintes** ne sont dans aucun scope : `CatalogProvider` n'expose pas de
+`list_constraints` et le cache n'a pas de case où les ranger. C'est délibéré
+(voir la note sur `oxyn_catalog::Constraint`), et ce sera un `list_constraints`
+par symétrie avec `list_indexes`, pas un champ de plus dans `Relation`.
+
 `Executor::catalog(connection)` donne un `Option<SharedCatalog>` en mémoire :
 présent après connexion, retiré à la déconnexion. L'UI lit ce cache sans I/O,
 sans garder sa garde pendant un `await`, et demande toute introspection au bus.
@@ -589,7 +601,12 @@ secrets, jamais les secrets.
 **Journal.** Chaque commande est écrite dans `audit_journal`, table locale append-only
 protégée par deux triggers SQLite — `audit_journal_forbid_update` et
 `audit_journal_forbid_delete` — qui lèvent un `RAISE(ABORT)` : horodatage, acteur,
-connexion, texte, décision de politique, durée, lignes affectées. C'est l'historique
+connexion, texte, décision de politique, durée, lignes affectées, et la **famille** de
+l'erreur quand il y en a une. Cette dernière est une colonne, `error_class`, jamais une
+tournure du message : la question qu'on pose au journal après incident est « cet agent
+a-t-il modifié la base ? », et seule `ambiguë` y répond « on ne sait pas » (I-13). Le
+journal étant append-only, ce qui n'y est pas écrit à l'instant de l'incident ne s'y
+ajoute jamais. C'est l'historique
 de l'utilisateur *et* la piste d'audit des agents. Une commande **refusée y figure
 aussi** : un journal qui ne consigne que ce qui a marché ne dit rien de ce qu'un
 agent a tenté, et rend invisibles les tentatives répétées.
@@ -598,6 +615,25 @@ L'ordre d'écriture n'est pas symétrique, et c'est voulu. Un échec de journali
 **avant** exécution empêche l'exécution : la piste d'audit est la promesse, pas un
 effet de bord. Un échec **après** ne l'annule pas — la commande a eu lieu, et rendre
 une erreur laisserait croire le contraire ; il est crié au niveau `error`.
+
+**Historique.** À côté du journal, `query_history` répond à « qu'est-ce que j'ai lancé
+hier ? ». Seules les `Execute` y figurent, l'ordonnanceur les inscrivant au départ de
+l'exécution puis complétant la ligne à son issue : succès avec durée et lignes, échec
+avec l'erreur, annulation, ou refus en une seule ligne — un refus n'a jamais démarré.
+Une commande en attente d'accord n'y entre qu'une fois approuvée : la rejeter ne doit
+pas laisser une ligne « en cours » perpétuelle. Contrairement au journal, **un échec
+d'écriture de l'historique n'empêche jamais l'exécution** : c'est un confort, pas une
+promesse ; il est crié. Le texte inscrit est celui de la requête, **sans les valeurs
+liées** (I-03). La famille de l'erreur y est persistée dans sa propre colonne,
+`error_class` — la même que celle du journal —, jamais fondue dans le message : c'est
+elle qu'un appelant lit pour savoir s'il peut proposer de relancer, et « délai dépassé
+après 30 s » ne dit pas que le serveur a peut-être appliqué l'écriture (I-13). La
+question se pose par `HistoryRecord::is_retryable`, jamais sur la colonne directement :
+son `NULL` veut dire « aucune erreur » sur une ligne réussie mais « famille inconnue »
+sur une ligne écrite avant la colonne, et ce sont ces lignes-là qui portent les
+écritures expirées. Un refus de politique est classé
+`denied` d'où qu'il vienne — du `PolicyGate` ou de la dernière barrière avant le driver
+— parce qu'il n'est pas une panne. L'historique est purgeable, le journal ne l'est pas.
 
 ---
 

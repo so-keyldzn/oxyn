@@ -44,15 +44,15 @@
 
 use chrono::{DateTime, Utc};
 use oxyn_core::{
-    Actor, AgentId, AgentSessionId, Command, CommandId, ConnectionId, Decision, MutationRisk,
-    OxynError, StatementIntent,
+    Actor, AgentId, AgentSessionId, Command, CommandId, ConnectionId, Decision, ErrorClass,
+    MutationRisk, OxynError, StatementIntent,
 };
 use rusqlite::{Row, params};
 use std::time::Duration;
 
 use crate::encoding::{
-    count_from_i64, count_to_i64, duration_to_ms, intent_from_text, limit_to_i64, parse_id_opt,
-    tag_from_json, tag_to_json,
+    count_from_i64, count_to_i64, duration_to_ms, error_class_from_text, intent_from_text,
+    limit_to_i64, parse_id_opt, tag_from_json, tag_to_json,
 };
 use crate::error::Result;
 use crate::store::Store;
@@ -234,6 +234,23 @@ pub struct JournalRecord {
     pub rows_affected: Option<u64>,
     /// Message d'erreur, si l'exécution a échoué.
     pub error: Option<String>,
+    /// La famille de l'erreur, quand il y en a une.
+    ///
+    /// Séparée du message pour la même raison qu'elle l'est dans
+    /// [`HistoryRecord`](crate::HistoryRecord) : un message se reformule, et un
+    /// lecteur qui l'analysait se trompe alors en silence. Ici l'enjeu est
+    /// pourtant plus grand qu'ailleurs — c'est la piste d'audit, celle qu'on
+    /// relit **après** l'incident, et elle est append-only : ce qui n'y a pas
+    /// été écrit au bon moment ne s'y ajoute jamais.
+    ///
+    /// [`Ambiguous`](ErrorClass::Ambiguous) est le cas qui justifie la colonne :
+    /// il dit qu'on ne sait pas si le serveur a appliqué l'écriture, ce qu'aucun
+    /// message ne dit de lui-même ([I-13](../../../CLAUDE.md#i-13)).
+    ///
+    /// `None` sur une commande qui n'a pas échoué — et sur toute ligne écrite
+    /// par une version d'Oxyn antérieure à la colonne, où il signifie « famille
+    /// inconnue ». Les deux sens se départagent par [`Self::error`].
+    pub error_class: Option<ErrorClass>,
 }
 
 impl JournalRecord {
@@ -272,6 +289,7 @@ impl JournalRecord {
             duration: None,
             rows_affected: None,
             error: None,
+            error_class: None,
         }
     }
 
@@ -296,17 +314,26 @@ impl JournalRecord {
         self.duration = Some(duration);
         self.rows_affected = rows_affected;
         self.error = None;
+        self.error_class = None;
         self
     }
 
-    /// Note un échec.
+    /// Note un échec, avec sa famille.
     ///
     /// Le message est celui de l'erreur du domaine. `oxyn-core` garantit qu'il
     /// ne porte ni secret ni valeur liée (I-03) ; c'est la responsabilité de
     /// qui construit la variante, pas de ce module.
+    ///
+    /// La famille est retenue **à part**, dans
+    /// [`error_class`](Self::error_class) : c'est elle, et non le texte, qui dit
+    /// si l'effet côté serveur est connu. Une piste d'audit relue après incident
+    /// où cette information n'existerait que sous forme de phrase française
+    /// obligerait son lecteur à interpréter — exactement ce que
+    /// [`ErrorClass`] existe pour éviter ([I-13](../../../CLAUDE.md#i-13)).
     #[must_use]
     pub fn failed(mut self, error: &OxynError) -> Self {
         self.error = Some(error.to_string());
+        self.error_class = Some(error.class());
         self
     }
 }
@@ -349,8 +376,9 @@ impl<'a> Journal<'a> {
                 "INSERT INTO audit_journal
                      (ts, command_id, actor_kind, actor_id, agent_session_id, connection_id,
                       command_kind, statement, intent, risk, policy_decision, decision_reason,
-                      approved_by, duration_ms, rows_affected, error)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                      approved_by, duration_ms, rows_affected, error, error_class)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16,
+                         ?17)",
                 params![
                     record.ts,
                     record.command_id.map(|id| id.to_string()),
@@ -368,6 +396,7 @@ impl<'a> Journal<'a> {
                     record.duration.map(duration_to_ms),
                     record.rows_affected.map(count_to_i64),
                     record.error,
+                    record.error_class.map(|class| class.as_str()),
                 ],
             )?;
             Ok(conn.last_insert_rowid())
@@ -452,7 +481,7 @@ impl<'a> Journal<'a> {
 /// [`depuis_ligne`] n'ait qu'une seule forme de ligne à connaître.
 const SELECT_COLONNES: &str = "SELECT id, ts, command_id, actor_kind, actor_id, agent_session_id, \
      connection_id, command_kind, statement, intent, risk, policy_decision, \
-     decision_reason, approved_by, duration_ms, rows_affected, error \
+     decision_reason, approved_by, duration_ms, rows_affected, error, error_class \
      FROM audit_journal";
 
 /// Reconstruit une [`JournalEntry`] à partir d'une ligne.
@@ -463,6 +492,7 @@ fn depuis_ligne(row: &Row<'_>) -> Result<JournalEntry> {
     let decision: String = row.get("policy_decision")?;
     let duration_ms: Option<i64> = row.get("duration_ms")?;
     let rows_affected: Option<i64> = row.get("rows_affected")?;
+    let error_class: Option<String> = row.get("error_class")?;
 
     Ok(JournalEntry {
         id: row.get("id")?,
@@ -486,6 +516,7 @@ fn depuis_ligne(row: &Row<'_>) -> Result<JournalEntry> {
             duration: duration_ms.map(|ms| Duration::from_millis(count_from_i64(ms))),
             rows_affected: rows_affected.map(count_from_i64),
             error: row.get("error")?,
+            error_class: error_class.as_deref().map(error_class_from_text),
         },
     })
 }
@@ -736,6 +767,62 @@ mod tests {
                 .as_deref()
                 .is_some_and(|e| e.contains("relation absente"))
         );
+        assert_eq!(relu.record.error_class, Some(ErrorClass::Permanent));
+    }
+
+    /// Une écriture d'agent dont l'effet est inconnu reste **dicible** dans la
+    /// piste d'audit.
+    ///
+    /// C'est la question qu'on vient poser au journal après incident : cet
+    /// agent a-t-il modifié la base ? « Délai dépassé après 30 s » ne répond
+    /// pas ; `ambiguë` répond « on ne sait pas », et c'est la seule réponse
+    /// honnête. Le journal étant append-only, une famille non écrite à
+    /// l'instant de l'incident ne s'y ajoutera jamais
+    /// ([I-13](../../../CLAUDE.md#i-13)).
+    #[test]
+    fn la_famille_d_une_erreur_survit_dans_la_piste_d_audit() {
+        let store = Store::open_in_memory().expect("ouverture");
+        let commande = execution(
+            ConnectionId::new(),
+            "INSERT INTO commandes (client) VALUES (1)",
+            StatementIntent::Write,
+        );
+        let record = JournalRecord::new(
+            &Actor::agent(AgentId::new(), AgentSessionId::new()),
+            &commande,
+            &Decision::Allow,
+        )
+        .failed(&OxynError::Timeout {
+            after: Duration::from_secs(30),
+        });
+
+        store.journal().append(&record).expect("ajout");
+        let relu = store.journal().recent(1).expect("relecture").remove(0);
+
+        assert_eq!(relu.record.error_class, Some(ErrorClass::Ambiguous));
+        assert!(
+            !relu.record.error_class.expect("une famille").is_retryable(),
+            "un `INSERT` expiré ne se rejoue pas : le serveur a peut-être appliqué"
+        );
+        // La valeur liée n'a pas suivi, ici non plus (I-03).
+        assert!(!format!("{:?}", relu.record).contains("hunter2"));
+    }
+
+    /// Une commande qui aboutit ne porte aucune famille : il n'y a pas d'erreur
+    /// à classer, et `completed` efface ce qu'un `failed` antérieur aurait posé.
+    #[test]
+    fn une_commande_reussie_ne_porte_aucune_famille() {
+        let store = Store::open_in_memory().expect("ouverture");
+        let commande = execution(ConnectionId::new(), "SELECT 1", StatementIntent::Read);
+        let record = JournalRecord::new(&Actor::Human, &commande, &Decision::Allow)
+            .failed(&OxynError::Query("rejetée".into()))
+            .completed(Duration::from_millis(3), Some(1));
+
+        store.journal().append(&record).expect("ajout");
+        let relu = store.journal().recent(1).expect("relecture").remove(0);
+
+        assert_eq!(relu.record.error_class, None);
+        assert_eq!(relu.record.error, None);
     }
 
     #[test]

@@ -4,8 +4,8 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use oxyn_catalog::{
-    CatalogCache, CatalogPath, CatalogProvider, CatalogRef, NamespaceRef, Relation, RelationRef,
-    ServerInfo, SharedCatalog,
+    CatalogCache, CatalogPath, CatalogProvider, CatalogRef, ForeignKey, Index, NamespaceRef,
+    Relation, RelationRef, ServerInfo, SharedCatalog,
 };
 use oxyn_core::{CancelToken, Capabilities, CatalogRefreshScope, OxynError, Result};
 use parking_lot::RwLock;
@@ -69,6 +69,10 @@ pub(crate) struct CatalogPatch {
     namespaces: Option<(Option<String>, Vec<NamespaceRef>)>,
     relations: Option<(CatalogPath, Vec<RelationRef>)>,
     relation: Option<(CatalogPath, Relation)>,
+    // Absent means "not read": a source without the capability must never
+    // publish an empty vector, which the tabs would read as "no index at all".
+    indexes: Option<(CatalogPath, Vec<Index>)>,
+    foreign_keys: Option<(CatalogPath, Vec<ForeignKey>)>,
 }
 
 impl CatalogPatch {
@@ -87,6 +91,11 @@ impl CatalogPatch {
                 .relation
                 .as_ref()
                 .map_or(0, |(_, value)| 1 + value.fields.len())
+            + self.indexes.as_ref().map_or(0, |(_, values)| values.len())
+            + self
+                .foreign_keys
+                .as_ref()
+                .map_or(0, |(_, values)| values.len())
     }
 
     pub fn apply(self, cache: &mut CatalogCache) -> Result<()> {
@@ -104,6 +113,14 @@ impl CatalogPatch {
         }
         if let Some((path, relation)) = self.relation {
             cache.set_relation(&path, relation)?;
+        }
+        // After `set_relation`, never before: the cache refuses to attach
+        // indexes to a relation it has neither listed nor described.
+        if let Some((path, indexes)) = self.indexes {
+            cache.set_indexes(&path, indexes)?;
+        }
+        if let Some((path, keys)) = self.foreign_keys {
+            cache.set_foreign_keys(&path, keys)?;
         }
         Ok(())
     }
@@ -176,6 +193,24 @@ pub(crate) async fn read(
         } => {
             let target = path(catalog, namespace, Some(relation.clone()))?;
             let detail = provider.describe_relation(&target, cancel).await?;
+            // Session capabilities gate these two reads. Calling anyway would
+            // turn `NotSupported` into a failed refresh of the whole relation,
+            // and swallowing that error would leave the tabs empty with no
+            // explanation — which a human reads as "this table has none".
+            if capabilities.contains(Capabilities::INDEXES) {
+                check_cancel(cancel)?;
+                let indexes = provider.list_indexes(&target, cancel).await?;
+                patch.indexes = Some((target.clone(), indexes));
+            }
+            if capabilities.contains(Capabilities::FOREIGN_KEYS) {
+                check_cancel(cancel)?;
+                let keys = provider.list_foreign_keys(&target, cancel).await?;
+                patch.foreign_keys = Some((target.clone(), keys));
+            }
+            // TODO(2026-09-07) : constraints have no `list_constraints` on
+            // `CatalogProvider` and no slot in the cache. Unblocked by the
+            // schema diff and DDL generation, per the note on
+            // `oxyn_catalog::Constraint`.
             patch.relation = Some((target, detail));
         }
         _ => {

@@ -155,7 +155,14 @@ pub enum CatalogRefreshScope {
         /// Absent when the source has no schema level.
         namespace: Option<String>,
     },
-    /// Fields and metadata of one explicitly requested relation.
+    /// Fields and metadata of one explicitly requested relation, plus its
+    /// indexes and foreign keys when the session declares `INDEXES` and
+    /// `FOREIGN_KEYS`.
+    ///
+    /// A source that declares neither leaves both unread rather than storing an
+    /// empty list: the cache distinguishes "not read" from "none", and a view
+    /// that confused them would claim a table has no index because nobody can
+    /// tell. Constraints are not part of this scope; no driver exposes them yet.
     Relation {
         /// Absent when the source has no catalog level.
         catalog: Option<String>,

@@ -24,13 +24,15 @@
 //! et une ligne dont la connexion n'existe plus reste lisible.
 
 use chrono::{DateTime, Utc};
-use oxyn_core::{Actor, AgentId, Command, ConnectionId, OxynError, QueryLanguage, StatementIntent};
+use oxyn_core::{
+    Actor, AgentId, Command, ConnectionId, ErrorClass, OxynError, QueryLanguage, StatementIntent,
+};
 use rusqlite::{Row, params};
 use std::time::Duration;
 
 use crate::encoding::{
-    count_from_i64, count_to_i64, duration_to_ms, escape_like, intent_from_text, limit_to_i64,
-    parse_id_opt, tag_from_json, tag_to_json,
+    count_from_i64, count_to_i64, duration_to_ms, error_class_from_text, escape_like,
+    intent_from_text, limit_to_i64, parse_id_opt, tag_from_json, tag_to_json,
 };
 use crate::error::Result;
 use crate::journal::ActorKind;
@@ -122,6 +124,30 @@ pub struct HistoryRecord {
     pub status: HistoryStatus,
     /// Message d'erreur ou motif de refus.
     pub error: Option<String>,
+    /// La famille de l'erreur, quand il y en a une.
+    ///
+    /// Séparée du message à dessein : c'est **elle** qu'un appelant lit pour
+    /// décider s'il peut proposer de relancer, jamais le texte. Un message
+    /// change — il se reformule, il se traduit — et un appelant qui l'analysait
+    /// casse alors en silence ([`ErrorClass`],
+    /// [I-13](../../../CLAUDE.md#i-13)).
+    ///
+    /// [`Ambiguous`](ErrorClass::Ambiguous) est le cas qui compte : le serveur a
+    /// peut-être appliqué l'écriture, et rejouer crée un doublon dans les
+    /// données de l'utilisateur.
+    ///
+    /// **`None` a deux sens, et c'est pourquoi on ne le lit pas directement.**
+    /// Sur une ligne réussie, il dit « aucune erreur » ; sur une ligne écrite
+    /// par une version d'Oxyn antérieure à la colonne, il dit « famille
+    /// inconnue » — et ces lignes-là portent précisément les écritures expirées
+    /// qu'il ne faut pas rejouer. Passer par [`Self::is_retryable`] plutôt que
+    /// par ce champ ferme la confusion.
+    ///
+    /// Sur une ligne [`Denied`](HistoryStatus::Denied), la famille ne décrit
+    /// **pas** un verdict du serveur — rien ne l'a atteint. Elle dit seulement
+    /// que la ligne n'est pas rejouable. Un comptage d'échecs serveur se filtre
+    /// donc sur `status`, pas sur cette colonne seule.
+    pub error_class: Option<ErrorClass>,
 }
 
 impl HistoryRecord {
@@ -144,6 +170,7 @@ impl HistoryRecord {
             rows: None,
             status: HistoryStatus::Running,
             error: None,
+            error_class: None,
         }
     }
 
@@ -192,6 +219,7 @@ impl HistoryRecord {
         self.duration = Some(duration);
         self.rows = rows;
         self.error = None;
+        self.error_class = None;
         self
     }
 
@@ -201,23 +229,60 @@ impl HistoryRecord {
     /// [`Cancelled`](HistoryStatus::Cancelled), pas `Failed` : ce n'est pas une
     /// panne, c'est une décision de l'utilisateur, et les confondre fausse toute
     /// lecture du taux d'échec.
+    ///
+    /// Un refus de la politique ([`OxynError::PolicyDenied`]) est classé
+    /// [`Denied`](HistoryStatus::Denied), pas `Failed` : rien n'a été soumis au
+    /// serveur, et le présenter comme une panne enverrait l'utilisateur
+    /// chercher un incident qui n'a pas eu lieu. La dernière barrière avant le
+    /// driver rend ce refus sous forme d'erreur ; il doit se lire comme les
+    /// refus rendus plus tôt par le `PolicyGate`.
+    ///
+    /// La famille de l'erreur est retenue **à part** dans
+    /// [`error_class`](Self::error_class), jamais fondue dans le message
+    /// (I-13).
     #[must_use]
     pub fn failed(mut self, error: &OxynError) -> Self {
-        self.status = if error.is_cancelled() {
-            HistoryStatus::Cancelled
-        } else {
-            HistoryStatus::Failed
+        self.status = match error {
+            _ if error.is_cancelled() => HistoryStatus::Cancelled,
+            OxynError::PolicyDenied { .. } => HistoryStatus::Denied,
+            _ => HistoryStatus::Failed,
         };
         self.error = Some(error.to_string());
+        self.error_class = Some(error.class());
         self
     }
 
     /// Marque l'exécution comme refusée par la politique.
+    ///
+    /// La famille retenue est [`Permanent`](ErrorClass::Permanent) : un refus ne
+    /// se rejoue pas, il se corrige. Toute ligne dont la famille n'est pas
+    /// [`Transient`](ErrorClass::Transient) est hors de portée d'un bouton
+    /// « relancer ».
     #[must_use]
     pub fn denied(mut self, reason: impl Into<String>) -> Self {
         self.status = HistoryStatus::Denied;
         self.error = Some(reason.into());
+        self.error_class = Some(ErrorClass::Permanent);
         self
+    }
+
+    /// Cette exécution peut-elle être resoumise telle quelle ?
+    ///
+    /// **Seule** la famille [`Transient`](ErrorClass::Transient) répond `true`.
+    /// Tout le reste répond `false`, y compris l'absence de famille : une ligne
+    /// écrite avant que la colonne n'existe peut être une écriture expirée, et
+    /// la rejouer créerait un doublon silencieux dans les données de
+    /// l'utilisateur ([I-13](../../../CLAUDE.md#i-13)).
+    ///
+    /// C'est la seule question qu'un appelant a besoin de poser : lire
+    /// [`error_class`](Self::error_class) pour y répondre soi-même, c'est
+    /// réintroduire l'interprétation de `None` que cette méthode existe pour
+    /// éviter.
+    #[must_use]
+    pub fn is_retryable(&self) -> bool {
+        // La règle vit dans `ErrorClass`, pas ici : la recopier ferait diverger
+        // deux définitions de « rejouable » le jour où une famille s'ajoute.
+        self.error_class.is_some_and(|class| class.is_retryable())
     }
 }
 
@@ -253,8 +318,8 @@ impl<'a> History<'a> {
             conn.execute(
                 "INSERT INTO query_history
                      (ts, connection_id, connection_name, actor_kind, actor_id, language,
-                      statement, intent, duration_ms, row_count, status, error)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                      statement, intent, duration_ms, row_count, status, error, error_class)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
                 params![
                     record.ts,
                     record.connection.map(|id| id.to_string()),
@@ -268,6 +333,7 @@ impl<'a> History<'a> {
                     record.rows.map(count_to_i64),
                     record.status.as_str(),
                     record.error,
+                    record.error_class.map(|class| class.as_str()),
                 ],
             )?;
             Ok(conn.last_insert_rowid())
@@ -292,7 +358,8 @@ impl<'a> History<'a> {
         self.store.with_connection(|conn| {
             let touchees = conn.execute(
                 "UPDATE query_history
-                    SET status = ?2, duration_ms = ?3, row_count = ?4, error = ?5
+                    SET status = ?2, duration_ms = ?3, row_count = ?4, error = ?5,
+                        error_class = ?6
                   WHERE id = ?1",
                 params![
                     id,
@@ -300,6 +367,7 @@ impl<'a> History<'a> {
                     record.duration.map(duration_to_ms),
                     record.rows.map(count_to_i64),
                     record.error,
+                    record.error_class.map(|class| class.as_str()),
                 ],
             )?;
             Ok(touchees > 0)
@@ -404,7 +472,7 @@ impl<'a> History<'a> {
 
 /// La liste de colonnes, partagée par toutes les lectures.
 const SELECT_COLONNES: &str = "SELECT id, ts, connection_id, connection_name, actor_kind, \
-     actor_id, language, statement, intent, duration_ms, row_count, status, error \
+     actor_id, language, statement, intent, duration_ms, row_count, status, error, error_class \
      FROM query_history";
 
 /// Reconstruit une [`HistoryEntry`] à partir d'une ligne.
@@ -415,6 +483,7 @@ fn depuis_ligne(row: &Row<'_>) -> Result<HistoryEntry> {
     let status: String = row.get("status")?;
     let duration_ms: Option<i64> = row.get("duration_ms")?;
     let rows: Option<i64> = row.get("row_count")?;
+    let error_class: Option<String> = row.get("error_class")?;
 
     Ok(HistoryEntry {
         id: row.get("id")?,
@@ -431,6 +500,7 @@ fn depuis_ligne(row: &Row<'_>) -> Result<HistoryEntry> {
             rows: rows.map(count_from_i64),
             status: HistoryStatus::from_text(&status),
             error: row.get("error")?,
+            error_class: error_class.as_deref().map(error_class_from_text),
         },
     })
 }
@@ -439,12 +509,109 @@ fn depuis_ligne(row: &Row<'_>) -> Result<HistoryEntry> {
 mod tests {
     use super::*;
     use oxyn_core::{
-        AgentSessionId, ExecRequest, ScalarValue, SessionId, SqlDialect, StatementHandle,
+        AgentSessionId, ErrorClass, ExecRequest, ScalarValue, SessionId, SqlDialect,
+        StatementHandle,
     };
 
     fn lecture(texte: &str) -> HistoryRecord {
         HistoryRecord::new(&Actor::Human, QueryLanguage::SQL, texte)
             .with_intent(StatementIntent::Read)
+    }
+
+    /// Une erreur ambiguë survit à l'aller-retour **en tant que donnée** (I-13).
+    ///
+    /// Le message ne suffit pas : « délai dépassé après 30 s » ne dit pas que le
+    /// serveur a peut-être appliqué l'écriture. Et l'analyser serait exactement
+    /// ce que `rust.md` interdit — un message se reformule, un appelant qui le
+    /// lisait casse alors sans que rien n'échoue. C'est donc la colonne que ce
+    /// test verrouille, pas le texte.
+    #[test]
+    fn la_famille_d_une_erreur_survit_a_la_relecture() {
+        let store = Store::open_in_memory().expect("ouverture");
+        let expire =
+            lecture("INSERT INTO commandes (client) VALUES (1)").failed(&OxynError::Timeout {
+                after: Duration::from_secs(30),
+            });
+        let franche = lecture("SELECT * FROM absente")
+            .failed(&OxynError::Query("relation « absente » inexistante".into()));
+
+        store.history().record(&franche).expect("écriture");
+        store.history().record(&expire).expect("écriture");
+        let relues = store.history().recent(10).expect("relecture");
+
+        let ambigue = relues
+            .iter()
+            .find(|entree| entree.record.statement.starts_with("INSERT"))
+            .expect("l'écriture expirée");
+        assert_eq!(ambigue.record.error_class, Some(ErrorClass::Ambiguous));
+        assert!(
+            !ambigue
+                .record
+                .error_class
+                .expect("une famille")
+                .is_retryable(),
+            "un `INSERT` expiré ne se rejoue pas : le serveur a peut-être appliqué"
+        );
+
+        let permanente = relues
+            .iter()
+            .find(|entree| entree.record.statement.starts_with("SELECT"))
+            .expect("la requête rejetée");
+        assert_eq!(permanente.record.error_class, Some(ErrorClass::Permanent));
+
+        // Le statut ne distingue pas les deux : c'est bien la famille qui porte
+        // l'information, et elle seule.
+        assert_eq!(ambigue.record.status, HistoryStatus::Failed);
+        assert_eq!(permanente.record.status, HistoryStatus::Failed);
+    }
+
+    /// Ne pas savoir, c'est ne pas rejouer — aux deux endroits où l'on peut
+    /// ignorer la famille d'une erreur.
+    #[test]
+    fn une_famille_inconnue_interdit_la_reprise() {
+        // À la relecture d'une valeur que ce binaire ne connaît pas.
+        assert_eq!(
+            crate::encoding::error_class_from_text("vaporisée"),
+            ErrorClass::Ambiguous
+        );
+
+        // Et sur une ligne écrite avant que la colonne n'existe : son `None` ne
+        // veut pas dire « aucune erreur », il veut dire « famille inconnue ».
+        // Rejouer l'`INSERT` expiré qu'elle porte peut-être créerait un doublon.
+        let mut heritee = lecture("INSERT INTO commandes (client) VALUES (1)");
+        heritee.status = HistoryStatus::Failed;
+        heritee.error = Some("délai dépassé après 30s".to_owned());
+        assert_eq!(heritee.error_class, None);
+        assert!(!heritee.is_retryable());
+
+        // Seule la famille transitoire ouvre la reprise.
+        let coupure = lecture("SELECT 1").failed(&OxynError::Connection("coupure".into()));
+        assert!(coupure.is_retryable());
+        for interdite in [
+            lecture("x").failed(&OxynError::Timeout {
+                after: Duration::from_secs(1),
+            }),
+            lecture("x").failed(&OxynError::Query("syntaxe".into())),
+            lecture("x").denied("lecture seule"),
+            lecture("x").succeeded(Duration::from_millis(1), Some(0)),
+        ] {
+            assert!(!interdite.is_retryable(), "{:?}", interdite.error_class);
+        }
+    }
+
+    /// Un refus rendu par la dernière barrière se lit comme un refus.
+    ///
+    /// Cette barrière-là rend une `Err`, là où le `PolicyGate` rend une
+    /// décision. Sans ce classement, deux refus identiques pour l'utilisateur
+    /// apparaîtraient l'un en « refusé », l'autre en « échec » — et le second
+    /// l'enverrait chercher un incident serveur qui n'a pas eu lieu.
+    #[test]
+    fn un_refus_de_politique_n_est_pas_une_panne() {
+        let refus = lecture("DELETE FROM clients").failed(&OxynError::PolicyDenied {
+            reason: "lecture seule".to_owned(),
+        });
+        assert_eq!(refus.status, HistoryStatus::Denied);
+        assert_eq!(refus.error_class, Some(ErrorClass::Permanent));
     }
 
     #[test]

@@ -4,8 +4,8 @@ use super::*;
 use async_trait::async_trait;
 use futures::{FutureExt, executor::block_on};
 use oxyn_catalog::{
-    CatalogPath, CatalogProvider, CatalogRef, NamespaceRef, Relation, RelationKind, RelationRef,
-    ServerInfo,
+    CatalogPath, CatalogProvider, CatalogRef, ForeignKey, ForeignKeyTarget, Index, NamespaceRef,
+    Relation, RelationKind, RelationRef, ServerInfo,
 };
 use oxyn_core::{AgentId, AgentSessionId, Capabilities, DefaultPolicy, DriverId, ErrorClass};
 use oxyn_driver::Session;
@@ -19,6 +19,8 @@ pub(crate) struct Probe {
     calls: Mutex<Vec<String>>,
     schemas: bool,
     catalogs: bool,
+    /// Whether the session declares INDEXES and FOREIGN_KEYS.
+    details: bool,
     wait: AtomicBool,
     observed_cancel: AtomicBool,
     failure: Mutex<Option<ErrorClass>>,
@@ -78,6 +80,38 @@ impl CatalogProvider for Probe {
             RelationKind::Table,
         ))
     }
+    // Both keep the trait's default when the session lacks the capability, so a
+    // call made despite an absent capability fails the refresh instead of
+    // quietly returning an empty list.
+    async fn list_indexes(&self, _: &CatalogPath, _: &CancelToken) -> Result<Vec<Index>> {
+        self.calls.lock().push("indexes".into());
+        if !self.details {
+            return Err(OxynError::NotSupported {
+                capability: "INDEXES".to_owned(),
+            });
+        }
+        Ok(vec![Index::new("pk_users", vec!["id".to_owned()]).unique()])
+    }
+    async fn list_foreign_keys(
+        &self,
+        path: &CatalogPath,
+        _: &CancelToken,
+    ) -> Result<Vec<ForeignKey>> {
+        self.calls.lock().push("foreign_keys".into());
+        if !self.details {
+            return Err(OxynError::NotSupported {
+                capability: "FOREIGN_KEYS".to_owned(),
+            });
+        }
+        Ok(vec![ForeignKey::new(
+            "fk_orders_users",
+            vec!["user_id".to_owned()],
+            ForeignKeyTarget {
+                relation: path.clone(),
+                fields: vec!["id".to_owned()],
+            },
+        )])
+    }
 }
 
 pub(crate) struct FakeSession(pub Arc<Probe>);
@@ -88,6 +122,11 @@ impl Session for FakeSession {
         Capabilities::TABLES
             | if self.0.schemas {
                 Capabilities::SCHEMAS
+            } else {
+                Capabilities::empty()
+            }
+            | if self.0.details {
+                Capabilities::INDEXES | Capabilities::FOREIGN_KEYS
             } else {
                 Capabilities::empty()
             }
@@ -235,6 +274,60 @@ fn root_skips_absent_levels_and_never_describes_relations() {
                 if schemas { "namespaces" } else { "relations:" }
             ]
         );
+    }
+}
+
+#[test]
+fn relation_scope_reads_indexes_and_foreign_keys_only_under_their_capabilities() {
+    // The whole point of the two capabilities: a source that cannot introspect
+    // indexes leaves them unread, and the cache says `None`. An empty vector
+    // would claim the table has no index — an assertion nobody made.
+    for details in [false, true] {
+        let probe = Arc::new(Probe {
+            details,
+            ..Probe::default()
+        });
+        let (executor, connection) = bench(probe.clone());
+        block_on(executor.dispatch(
+            Actor::Human,
+            refresh(
+                connection,
+                CatalogRefreshScope::Relation {
+                    catalog: None,
+                    namespace: None,
+                    relation: HOSTILE.into(),
+                },
+            ),
+            &CancelToken::new(),
+        ))
+        .expect("relation detail");
+
+        let path = CatalogPath::for_relation(None, None, HOSTILE).expect("hostile valid name");
+        let cache = executor.catalog(connection).expect("connected cache");
+        let guard = cache.read();
+        if details {
+            assert_eq!(*probe.calls.lock(), ["describe", "indexes", "foreign_keys"]);
+            assert_eq!(
+                guard.indexes(&path).map(<[_]>::len),
+                Some(1),
+                "an INDEXES source publishes what it read"
+            );
+            assert_eq!(guard.foreign_keys(&path).map(<[_]>::len), Some(1));
+        } else {
+            assert_eq!(
+                *probe.calls.lock(),
+                ["describe"],
+                "a source without the capability is never asked"
+            );
+            assert!(
+                guard.indexes(&path).is_none(),
+                "unread must not read as `no index`"
+            );
+            assert!(guard.foreign_keys(&path).is_none());
+        }
+        // Either way the relation itself is described: the two extra reads are
+        // an enrichment of this scope, not a second command.
+        assert!(guard.relation(&path).is_some());
     }
 }
 
