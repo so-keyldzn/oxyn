@@ -70,3 +70,18 @@ MCP activé. Utiliser le serveur correspondant au contexte de travail.
 
 Les formats et leurs sources sont datés dans
 [RESEARCH-NOTES](../docs/RESEARCH-NOTES.md#codex--agents-locaux-et-mcp).
+
+## Vérification
+
+Depuis la racine, `python3 .codex/verifier.py` vérifie les TOML, les guides
+référencés et les liens de ce dossier. `make socle` vérifie le socle commun ;
+`make qualite` ajoute les contrôles Rust. Aucun de ces contrôles n'appelle
+Figma ni ne lance de sous-agent.
+
+Le vérificateur local contrôle la structure du dossier ; il ne remplace pas
+le parseur du client. Pour contrôler aussi les clés de la configuration avec
+la CLI installée :
+
+```bash
+codex --strict-config app-server --stdio </dev/null
+```
