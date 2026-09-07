@@ -24,3 +24,6 @@ tracing.workspace = true
 
 [dev-dependencies]
 rstest.workspace = true
+# Relit un `FormatOptions` écrit avant l'ajout d'un champ : la compatibilité de
+# lecture d'un format persisté (I-11) ne se prouve pas sans désérialiser.
+serde_json.workspace = true

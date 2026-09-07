@@ -9,8 +9,8 @@ use oxyn_core::{
 use oxyn_exec::Outcome;
 use oxyn_ui::{
     ActiveConnection, ApprovalDialog, ApprovalEvent, ApprovalId, ApprovalOutcome, ApprovalRequest,
-    DataGrid, EditorEvent, ExecutionStatus, GridEvent, QueryEditor, StatusBar, StatusBarEvent,
-    Theme,
+    ControlState, ControlTone, DataGrid, EditorEvent, ExecutionStatus, FormatSettings,
+    FormatSettingsEvent, GridEvent, QueryEditor, StatusBar, StatusBarEvent, Theme, control,
 };
 use tokio::sync::{broadcast::error::RecvError, oneshot};
 
@@ -43,6 +43,9 @@ pub struct Workspace {
     grid: Entity<DataGrid>,
     status: Entity<StatusBar>,
     approval: Entity<ApprovalDialog>,
+    settings: Entity<FormatSettings>,
+    /// Vrai quand le panneau de réglages d'affichage est déplié.
+    settings_open: bool,
     pending: Option<ApprovalRequest>,
     active: Option<(CommandId, CancelToken)>,
     awaiting_approval: bool,
@@ -92,6 +95,22 @@ impl Workspace {
             }
         })
         .detach();
+        let settings = cx.new(|cx| FormatSettings::new(grid.read(cx).format_options().clone(), cx));
+        // Le réglage part de la vue vers la grille, jamais l'inverse : la vue
+        // de réglages ne connaît pas la grille, elle annonce (I-01).
+        cx.subscribe(&settings, {
+            let grid = grid.clone();
+            move |_workspace, _, event, cx| {
+                // `FormatSettingsEvent` est `#[non_exhaustive]` : le filtrage
+                // reste ouvert, et un réglage ajouté plus tard n'atteindra pas
+                // la grille tant que personne ne l'aura traité ici.
+                if let FormatSettingsEvent::Changed(options) = event {
+                    let options = options.clone();
+                    grid.update(cx, |grille, cx| grille.set_format_options(options, cx));
+                }
+            }
+        })
+        .detach();
         cx.subscribe(&approval, |this, _, event, cx| {
             let ApprovalEvent::Decided { outcome, .. } = event else {
                 return;
@@ -135,6 +154,8 @@ impl Workspace {
             grid,
             status,
             approval,
+            settings,
+            settings_open: false,
             pending: None,
             active: None,
             awaiting_approval: false,
@@ -353,26 +374,59 @@ impl Render for Workspace {
             .font_family(theme.typography.ui_family.clone())
             .text_size(theme.typography.ui_size)
             .child(
-                div().flex().gap_2().p_2().child(
-                    div()
-                        .id("run-query")
-                        .px_3()
-                        .py_1()
-                        .rounded_sm()
-                        .bg(if busy {
-                            theme.colors.surface_raised
-                        } else {
-                            theme.colors.selection
-                        })
-                        .cursor_pointer()
-                        .on_click(cx.listener(|this, _, _, cx| this.execute(cx)))
+                div()
+                    .flex()
+                    .h(theme.metrics.toolbar_height)
+                    .flex_none()
+                    .items_center()
+                    .gap(theme.spacing.small)
+                    .px(theme.spacing.large)
+                    .child(
+                        // Occupé veut dire désactivé : le bouton sort du
+                        // parcours clavier et cesse de réagir, au lieu de
+                        // rester cliquable en changeant seulement de fond.
+                        control(
+                            "run-query",
+                            if busy {
+                                ControlState::Disabled
+                            } else {
+                                ControlState::Enabled
+                            },
+                            ControlTone::Primary,
+                            &theme,
+                            cx.listener(|this, _, _, cx| this.execute(cx)),
+                        )
+                        .px(theme.spacing.medium)
+                        .py(theme.spacing.tiny)
                         .child(if busy {
                             "Exécution en cours…"
                         } else {
                             "Exécuter · ⌘Entrée"
                         }),
-                ),
+                    )
+                    .child(
+                        control(
+                            "toggle-format-settings",
+                            ControlState::Enabled,
+                            ControlTone::Neutral,
+                            &theme,
+                            cx.listener(|this, _, _, cx| {
+                                this.settings_open = !this.settings_open;
+                                cx.notify();
+                            }),
+                        )
+                        .px(theme.spacing.medium)
+                        .py(theme.spacing.tiny)
+                        .child(if self.settings_open {
+                            "Masquer l'affichage"
+                        } else {
+                            "Affichage…"
+                        }),
+                    ),
             )
+            .when(self.settings_open, |element| {
+                element.child(div().flex_none().child(self.settings.clone()))
+            })
             .child(div().h(px(220.)).flex_none().child(self.editor.clone()))
             .child(
                 div()

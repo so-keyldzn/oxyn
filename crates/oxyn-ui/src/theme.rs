@@ -102,9 +102,19 @@ pub struct Palette {
     pub grid_stripe: Hsla,
     /// Trait entre deux cellules.
     pub grid_line: Hsla,
-    /// Texte d'une cellule absente. Distinct de [`text_faint`](Self::text_faint)
-    /// : une valeur absente n'est pas une valeur discrète, et la grille
-    /// l'écrit aussi en italique.
+    /// Texte d'une cellule absente.
+    ///
+    /// **Ce champ vaut aujourd'hui la même chose que
+    /// [`text_muted`](Self::text_muted) et [`text_faint`](Self::text_faint)**
+    /// dans les deux variantes : l'actualisation de palette du 2026-09-07 les a
+    /// fait converger vers le jeton `text_muted` de la maquette, faute d'un
+    /// jeton dédié. La distinction visuelle d'une valeur absente ne tient donc
+    /// plus qu'à l'italique que la grille applique.
+    ///
+    /// Le champ reste séparé parce que la distinction est **voulue** — une
+    /// valeur absente n'est pas une valeur discrète — et qu'un rôle fusionné
+    /// avec un autre ne se défusionne plus. À relire dans la maquette :
+    /// [RESEARCH-NOTES](../../../docs/RESEARCH-NOTES.md#ce-qui-na-pas-pu-être-lu-et-pourquoi).
     pub null: Hsla,
 }
 
@@ -113,32 +123,32 @@ impl Palette {
     #[must_use]
     pub fn dark() -> Self {
         Self {
-            background: rgb(0x11131a).into(),
-            surface: rgb(0x161923).into(),
-            surface_raised: rgb(0x1c2029).into(),
-            scrim: hsla_from(rgb(0x05060a).into(), 0.72),
+            background: rgb(0x151413).into(),
+            surface: rgb(0x1c1b1a).into(),
+            surface_raised: rgb(0x262422).into(),
+            scrim: hsla_from(rgb(0x151413).into(), 0.72),
 
-            border: rgb(0x2a2f3d).into(),
-            border_focus: rgb(0x4c8dff).into(),
+            border: rgb(0x443c37).into(),
+            border_focus: rgb(0xbf4c22).into(),
 
-            text: rgb(0xe6e8ef).into(),
-            text_muted: rgb(0x9aa2b5).into(),
-            text_faint: rgb(0x656d80).into(),
-            text_on_accent: rgb(0x0b0d12).into(),
+            text: rgb(0xeeebea).into(),
+            text_muted: rgb(0xb9ada5).into(),
+            text_faint: rgb(0xb9ada5).into(),
+            text_on_accent: rgb(0xffffff).into(),
 
-            accent: rgb(0x4c8dff).into(),
-            selection: hsla_from(rgb(0x4c8dff).into(), 0.22),
-            hover: hsla_from(rgb(0xffffff).into(), 0.05),
+            accent: rgb(0xbf4c22).into(),
+            selection: rgb(0x262422).into(),
+            hover: rgb(0x262422).into(),
 
             success: rgb(0x4ec9a5).into(),
             warning: rgb(0xe0b155).into(),
             danger: rgb(0xf2616b).into(),
 
-            grid_header: rgb(0x1c2029).into(),
-            grid_gutter: rgb(0x171a23).into(),
-            grid_stripe: hsla_from(rgb(0xffffff).into(), 0.02),
-            grid_line: rgb(0x262b37).into(),
-            null: rgb(0x6f7891).into(),
+            grid_header: rgb(0x262422).into(),
+            grid_gutter: rgb(0x1c1b1a).into(),
+            grid_stripe: hsla_from(rgb(0xeeebea).into(), 0.02),
+            grid_line: rgb(0x443c37).into(),
+            null: rgb(0xb9ada5).into(),
         }
     }
 
@@ -146,32 +156,32 @@ impl Palette {
     #[must_use]
     pub fn light() -> Self {
         Self {
-            background: rgb(0xfbfbfd).into(),
-            surface: rgb(0xf4f5f8).into(),
-            surface_raised: rgb(0xeceef3).into(),
-            scrim: hsla_from(rgb(0x1a1d25).into(), 0.40),
+            background: rgb(0xeeebea).into(),
+            surface: rgb(0xf7f5f3).into(),
+            surface_raised: rgb(0xe3deda).into(),
+            scrim: hsla_from(rgb(0x1c1b1a).into(), 0.40),
 
-            border: rgb(0xd7dae2).into(),
-            border_focus: rgb(0x1f6feb).into(),
+            border: rgb(0xd5ccc6).into(),
+            border_focus: rgb(0xbf4c22).into(),
 
-            text: rgb(0x1b1e26).into(),
-            text_muted: rgb(0x5a6072).into(),
-            text_faint: rgb(0x8b91a1).into(),
+            text: rgb(0x1c1b1a).into(),
+            text_muted: rgb(0x6e625c).into(),
+            text_faint: rgb(0x6e625c).into(),
             text_on_accent: rgb(0xffffff).into(),
 
-            accent: rgb(0x1f6feb).into(),
-            selection: hsla_from(rgb(0x1f6feb).into(), 0.16),
-            hover: hsla_from(rgb(0x1b1e26).into(), 0.05),
+            accent: rgb(0xbf4c22).into(),
+            selection: rgb(0xe3deda).into(),
+            hover: rgb(0xe3deda).into(),
 
             success: rgb(0x1a7f5a).into(),
             warning: rgb(0x9a6b00).into(),
             danger: rgb(0xc0323c).into(),
 
-            grid_header: rgb(0xeceef3).into(),
-            grid_gutter: rgb(0xf1f2f6).into(),
-            grid_stripe: hsla_from(rgb(0x1b1e26).into(), 0.025),
-            grid_line: rgb(0xdfe2e9).into(),
-            null: rgb(0x8b91a1).into(),
+            grid_header: rgb(0xe3deda).into(),
+            grid_gutter: rgb(0xf7f5f3).into(),
+            grid_stripe: hsla_from(rgb(0x1c1b1a).into(), 0.025),
+            grid_line: rgb(0xd5ccc6).into(),
+            null: rgb(0x6e625c).into(),
         }
     }
 
@@ -215,10 +225,9 @@ pub struct Typography {
 impl Default for Typography {
     fn default() -> Self {
         Self {
-            // Une famille absente du système est remplacée par le moteur de
-            // texte ; nommer une police d'interface générique évite de
-            // dépendre d'un fichier livré avec l'application.
-            ui_family: SharedString::new_static("Helvetica"),
+            // UiAssets::fonts supplies the Figma family at application startup.
+            // GPUI retains its platform fallback if font registration fails.
+            ui_family: SharedString::new_static("Geist"),
             mono_family: SharedString::new_static("Menlo"),
             ui_size: px(13.0),
             mono_size: px(12.0),
@@ -228,16 +237,140 @@ impl Default for Typography {
     }
 }
 
-/// Les dimensions qui gouvernent la grille et les listes.
+/// L'échelle d'espacement de la maquette.
+///
+/// # Pourquoi une échelle et non des nombres à l'appel
+///
+/// Un `px(10.)` écrit dans une vue n'est comparable à rien : il ne se relit pas,
+/// ne se retrouve pas, et rien ne signale qu'il est le seul de la crate à valoir
+/// 10. Une échelle fermée rend l'écart visible — un espacement qui n'a pas de
+/// nom ici est un espacement que la maquette ne prévoit pas.
+///
+/// # D'où viennent les chiffres
+///
+/// Collection `Oxyn / Primitives` du fichier Figma `Yviemi4brBczzdRdBp1ONv`,
+/// variables `space/0`, `space/4`, `space/8`, `space/12`, `space/16` et
+/// `space/24`, lues le **2026-09-07** sur les écrans `13:291` (workspace sombre)
+/// et `47:8222` (préférences). Ce sont les six seules valeurs que ces deux
+/// écrans emploient ; voir [`Radii`] pour la même remarque sur les rayons.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub struct Spacing {
+    /// `space/0` — collé, sans gouttière.
+    pub none: Pixels,
+    /// `space/4` — entre une icône et son libellé.
+    pub tiny: Pixels,
+    /// `space/8` — entre deux contrôles d'une même rangée.
+    pub small: Pixels,
+    /// `space/12` — marge intérieure d'un contrôle, gouttière entre deux champs.
+    pub medium: Pixels,
+    /// `space/16` — marge d'un panneau.
+    pub large: Pixels,
+    /// `space/24` — marge d'un écran, entre deux groupes de réglages.
+    pub huge: Pixels,
+}
+
+impl Default for Spacing {
+    fn default() -> Self {
+        Self {
+            none: px(0.0),
+            tiny: px(4.0),
+            small: px(8.0),
+            medium: px(12.0),
+            large: px(16.0),
+            huge: px(24.0),
+        }
+    }
+}
+
+/// Les rayons de coin de la maquette.
+///
+/// Lus le **2026-09-07** dans la collection `Oxyn / Primitives` du fichier
+/// Figma `Yviemi4brBczzdRdBp1ONv` : `radius/6`, `radius/8` et `radius/full`.
+/// `radius/full` vaut littéralement `999` dans la maquette — c'est la
+/// convention qui rend un côté parfaitement semi-circulaire quelle que soit la
+/// hauteur ; la valeur est reprise telle quelle plutôt que traduite en une
+/// moitié de hauteur qui divergerait au premier changement de contrôle.
+#[derive(Debug, Clone, Copy, PartialEq)]
+#[non_exhaustive]
+pub struct Radii {
+    /// `radius/6` — contrôles : bouton, champ, cellule d'en-tête.
+    pub control: Pixels,
+    /// `radius/8` — surfaces : panneau, boîte de dialogue, carte.
+    pub surface: Pixels,
+    /// `radius/full` — pastilles et badges d'environnement.
+    pub full: Pixels,
+}
+
+impl Default for Radii {
+    fn default() -> Self {
+        Self {
+            control: px(6.0),
+            surface: px(8.0),
+            full: px(999.0),
+        }
+    }
+}
+
+/// Les dimensions qui gouvernent la grille, les listes et le cadre de fenêtre.
 ///
 /// [`row_height`](Self::row_height) est **fixe et non négociable** : c'est la
 /// précondition de `uniform_list`, qui mesure un élément et en déduit la
 /// position de tous les autres ([ADR-0002](../../../docs/adr/0002-arrow-result-model.md)).
 /// Une hauteur de ligne variable rendrait la virtualisation impossible, donc
 /// l'affichage de 10 millions de lignes aussi.
+///
+/// # L'état de la vérification, au 2026-09-07
+///
+/// Les hauteurs de cadre — barre d'outils, barre d'état, panneau latéral,
+/// contrôle — sont **nommées ici parce qu'elles étaient des tailles de frame
+/// dispersées**. Chaque champ dit d'où vient son chiffre. Trois d'entre eux
+/// viennent du fichier Figma ; deux n'ont pas pu y être relus et le disent.
+///
+/// Les dimensions de grille, elles, préexistent à cette lecture et **n'ont pas
+/// été confrontées à la maquette** : le quota du serveur Figma Dev Mode a été
+/// épuisé avant que les pages `03 · Foundations` et `22 · Database workspace`
+/// aient pu être localisées. Elles sont conservées telles quelles ; les
+/// remplacer par des valeurs plausibles aurait été pire que de les laisser
+/// signalées ([I-12](../../../CLAUDE.md#i-12)).
 #[derive(Debug, Clone, Copy, PartialEq)]
 #[non_exhaustive]
 pub struct Metrics {
+    /// Hauteur de la barre d'outils du workspace.
+    ///
+    /// Figma `47:8422` « Workspace toolbar », lu le 2026-09-07.
+    pub toolbar_height: Pixels,
+    /// Hauteur de la barre d'état.
+    ///
+    /// **Non relu dans la maquette** : le nœud n'a pas pu être atteint le
+    /// 2026-09-07 (quota du serveur Dev Mode épuisé). La valeur vient de la
+    /// consigne de tâche et reste à confirmer. Elle corrige tout de même un
+    /// défaut réel — [`crate::status_bar`] se dimensionnait jusqu'ici avec
+    /// [`header_height`](Self::header_height), c'est-à-dire avec la hauteur
+    /// d'en-tête de la grille de résultats.
+    pub status_bar_height: Pixels,
+    /// Largeur du panneau latéral déplié.
+    ///
+    /// Figma `8:4` « Sidebar / Expanded » et son instance `13:292`, lus le
+    /// 2026-09-07.
+    pub sidebar_width: Pixels,
+    /// Largeur du panneau latéral replié sur ses icônes.
+    ///
+    /// Figma `13:165` « Sidebar / Collapsed » et son instance `13:484`, lus le
+    /// 2026-09-07.
+    pub sidebar_collapsed_width: Pixels,
+    /// Hauteur d'un contrôle : bouton, champ de saisie, onglet.
+    ///
+    /// Figma `47:8461`, `47:8465` et `47:8469` — les trois cadres `Input` de
+    /// l'écran de préférences `47:8222` — lus le 2026-09-07.
+    pub control_height: Pixels,
+    /// Épaisseur de l'anneau de focus clavier.
+    ///
+    /// **Non relu dans la maquette.** Deux pixels sont le minimum pour qu'un
+    /// anneau reste visible sur un écran non HiDPI ; un anneau d'un pixel se
+    /// confond avec la bordure ordinaire du contrôle, ce qui revient à ne pas
+    /// avoir de focus visible ([ADR-0001](../../../docs/adr/0001-ui-toolkit.md)).
+    pub focus_ring: Pixels,
     /// Hauteur d'une ligne de grille ou d'un nœud d'arbre.
     pub row_height: Pixels,
     /// Hauteur de la ligne d'en-têtes.
@@ -269,6 +402,12 @@ pub struct Metrics {
 impl Default for Metrics {
     fn default() -> Self {
         Self {
+            toolbar_height: px(52.0),
+            status_bar_height: px(32.0),
+            sidebar_width: px(280.0),
+            sidebar_collapsed_width: px(64.0),
+            control_height: px(38.0),
+            focus_ring: px(2.0),
             row_height: px(24.0),
             header_height: px(28.0),
             gutter_width: px(60.0),
@@ -294,6 +433,10 @@ pub struct Theme {
     pub typography: Typography,
     /// Dimensions.
     pub metrics: Metrics,
+    /// Espacements.
+    pub spacing: Spacing,
+    /// Rayons de coin.
+    pub radii: Radii,
 }
 
 impl Theme {
@@ -305,6 +448,8 @@ impl Theme {
             colors: Palette::dark(),
             typography: Typography::default(),
             metrics: Metrics::default(),
+            spacing: Spacing::default(),
+            radii: Radii::default(),
         }
     }
 
@@ -316,6 +461,8 @@ impl Theme {
             colors: Palette::light(),
             typography: Typography::default(),
             metrics: Metrics::default(),
+            spacing: Spacing::default(),
+            radii: Radii::default(),
         }
     }
 
@@ -416,10 +563,63 @@ mod tests {
     }
 
     #[test]
-    fn les_valeurs_absentes_ne_se_confondent_pas_avec_le_texte_discret() {
+    fn les_valeurs_absentes_ne_se_confondent_pas_avec_le_texte_principal() {
+        // Le nom dit exactement ce qui est vérifié. La comparaison avec
+        // `text_faint` **échouerait** aujourd'hui : les deux rôles ont convergé
+        // lors de l'actualisation de palette, ce que documente le champ `null`.
+        // Écrire ici un test qui passe en laissant croire à une distinction qui
+        // n'existe pas serait pire que de ne rien tester.
         for palette in [Palette::dark(), Palette::light()] {
             assert_ne!(palette.null, palette.text);
         }
+    }
+
+    #[test]
+    fn les_metriques_lues_dans_la_maquette_gardent_leur_valeur() {
+        // Ces quatre chiffres viennent du fichier Figma `Yviemi4brBczzdRdBp1ONv`
+        // et sont cités nœud par nœud dans la documentation de `Metrics`. Le
+        // test existe parce qu'une métrique de maquette se « corrige » très
+        // facilement à l'œil pendant un ajustement d'écran : le jour où l'un de
+        // ces nombres change, il doit être relu dans la maquette et sa
+        // documentation mise à jour, pas ajusté en silence.
+        let metrics = Metrics::default();
+        assert_eq!(metrics.toolbar_height, px(52.0), "Figma 47:8422");
+        assert_eq!(metrics.sidebar_width, px(280.0), "Figma 8:4");
+        assert_eq!(metrics.sidebar_collapsed_width, px(64.0), "Figma 13:165");
+        assert_eq!(metrics.control_height, px(38.0), "Figma 47:8461");
+    }
+
+    #[test]
+    fn lechelle_despacement_est_celle_de_la_maquette() {
+        // L'échelle est fermée : `space/0` à `space/24`. Un espacement absent
+        // d'ici est un espacement que la maquette ne prévoit pas, et l'ajouter
+        // demande de le lire d'abord.
+        let spacing = Spacing::default();
+        assert_eq!(
+            [
+                spacing.none,
+                spacing.tiny,
+                spacing.small,
+                spacing.medium,
+                spacing.large,
+                spacing.huge,
+            ],
+            [px(0.0), px(4.0), px(8.0), px(12.0), px(16.0), px(24.0)],
+        );
+    }
+
+    #[test]
+    fn lanneau_de_focus_est_plus_epais_quune_bordure_ordinaire() {
+        // Un anneau d'un pixel se confond avec la bordure du contrôle : le
+        // focus serait « présent » sans être visible, ce que la liste de
+        // contrôle d'interface refuse comme un défaut bloquant.
+        assert!(Metrics::default().focus_ring > px(1.0));
+    }
+
+    #[test]
+    fn le_panneau_replie_est_plus_etroit_que_le_panneau_deplie() {
+        let metrics = Metrics::default();
+        assert!(metrics.sidebar_collapsed_width < metrics.sidebar_width);
     }
 
     #[test]

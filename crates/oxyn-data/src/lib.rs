@@ -68,7 +68,8 @@ mod spill;
 
 pub use buffer::{BatchIndex, BufferLimits, DEFAULT_MEMORY_BUDGET, Pressure, ResultBuffer};
 pub use cell::{
-    BinaryDisplay, CellValue, DEFAULT_MAX_LEN, FormatOptions, format_cell, format_value,
+    BinaryDisplay, CellValue, DEFAULT_MAX_LEN, FormatOptions, GROUP_SEPARATOR, NumberGrouping,
+    format_cell, format_value,
 };
 pub use error::{DataError, Result};
 pub use export::{ExportOptions, ExportSummary, export};
@@ -77,7 +78,7 @@ pub use sink::{BatchProgress, BatchSink, BatchSource, SinkOutcome};
 /// Ce qu'on importe d'un coup quand on travaille avec des résultats.
 pub mod prelude {
     pub use crate::buffer::{BatchIndex, BufferLimits, Pressure, ResultBuffer};
-    pub use crate::cell::{BinaryDisplay, CellValue, FormatOptions, format_cell};
+    pub use crate::cell::{BinaryDisplay, CellValue, FormatOptions, NumberGrouping, format_cell};
     pub use crate::error::{DataError, Result};
     pub use crate::export::{ExportOptions, ExportSummary, export};
     pub use crate::sink::{BatchProgress, BatchSink, BatchSource, SinkOutcome};

@@ -57,6 +57,7 @@ use gpui::{
 use oxyn_data::cell::{CellValue, FormatOptions, format_cell};
 use oxyn_data::{BatchIndex, ResultBuffer};
 
+use crate::controls::{ControlState, ControlTone, control};
 use crate::theme::{Metrics, Theme};
 
 /// Lignes échantillonnées pour estimer la largeur des colonnes.
@@ -884,28 +885,22 @@ impl DataGrid {
     /// ([UX-SPEC](../../../docs/UX-SPEC.md#annulation)).
     fn render_cancel_button(&self, cx: &Context<'_, Self>) -> AnyElement {
         let theme = Theme::of(cx);
-        div()
-            .id("oxyn-grid-cancel")
-            // Atteignable au clavier : l'accessibilité de GPUI est partielle et
-            // se construit vue par vue (ADR-0001).
-            .tab_index(0)
-            .mt_2()
-            .px_3()
-            .py_1()
-            .rounded_md()
-            .border_1()
-            .border_color(theme.colors.border)
-            .bg(theme.colors.surface_raised)
-            .text_color(theme.colors.text)
-            .font_family(theme.typography.ui_family.clone())
-            .text_size(theme.typography.small_size)
-            .cursor_pointer()
-            .hover(|style| style.bg(theme.colors.hover))
-            .on_click(cx.listener(|_grille, _event: &ClickEvent, _window, cx| {
+        control(
+            "oxyn-grid-cancel",
+            ControlState::Enabled,
+            ControlTone::Neutral,
+            theme,
+            cx.listener(|_grille, _event: &ClickEvent, _window, cx| {
                 cx.emit(GridEvent::CancelRequested);
-            }))
-            .child("Annuler (Échap)")
-            .into_any_element()
+            }),
+        )
+        .mt(theme.spacing.small)
+        .px(theme.spacing.medium)
+        .py(theme.spacing.tiny)
+        .font_family(theme.typography.ui_family.clone())
+        .text_size(theme.typography.small_size)
+        .child("Annuler (Échap)")
+        .into_any_element()
     }
 
     /// La ligne d'en-têtes, figée au-dessus des lignes.

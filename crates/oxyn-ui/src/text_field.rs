@@ -1,5 +1,6 @@
 //! Single-line native text input shared by connection fields.
 use crate::Theme;
+use crate::controls::focus_ring;
 use gpui::prelude::*;
 use gpui::{
     Bounds, ClipboardItem, ElementInputHandler, EntityInputHandler, EventEmitter, FocusHandle,
@@ -305,17 +306,23 @@ impl Render for TextField {
             .track_focus(&self.focus)
             .cursor_text()
             .w_full()
-            .h(px(30.))
-            .px_2()
-            .py_1()
+            // La hauteur de contrôle de la maquette, et non un `px(30.)` que
+            // rien ne rattachait à une source.
+            .h(theme.metrics.control_height)
+            .px(theme.spacing.small)
+            .py(theme.spacing.tiny)
             .bg(color.surface)
             .border_1()
-            .rounded_sm()
+            .rounded(theme.radii.control)
             .border_color(if focused {
-                color.accent
+                color.border_focus
             } else {
                 color.grid_line
             })
+            // Le même anneau que les autres contrôles : un champ dont le focus
+            // se signale autrement que le reste de l'interface se cherche à
+            // chaque tabulation.
+            .when(focused, |element| element.shadow(vec![focus_ring(&theme)]))
             .overflow_hidden()
             .on_key_down(cx.listener(Self::key))
             .on_mouse_down(

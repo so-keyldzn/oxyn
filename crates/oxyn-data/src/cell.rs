@@ -143,6 +143,42 @@ pub enum BinaryDisplay {
     Size,
 }
 
+/// Comment grouper les chiffres d'un nombre.
+///
+/// # Pourquoi ce réglage existe
+///
+/// `4823917` et `102` alignés dans une colonne ne se comparent pas d'un coup
+/// d'œil : il faut compter les chiffres. C'est le seul travail que la grille
+/// puisse épargner à quelqu'un qui lit une colonne d'entiers.
+///
+/// # Pourquoi il vaut [`None`](Self::None) par défaut
+///
+/// L'export construit ses propres options ([`crate::export::ExportOptions`]) et
+/// ne passe pas par ici, mais la règle de tête de module — *ce que la grille
+/// affiche doit être exactement ce que l'export écrit* — vaut comme garde-fou :
+/// un groupement actif par défaut ferait diverger l'écran du fichier sans que
+/// personne l'ait demandé. C'est un confort de lecture, donc c'est un choix
+/// explicite de l'utilisateur.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[non_exhaustive]
+pub enum NumberGrouping {
+    /// Les chiffres à la suite : `4823917`. C'est ce qu'écrit le serveur.
+    #[default]
+    None,
+    /// Par tranches de trois, séparées d'une espace insécable : `4 823 917`.
+    ///
+    /// Une espace insécable ([`GROUP_SEPARATOR`]) et non une virgule ni un
+    /// point : ces deux-là sont des séparateurs **décimaux** dans la moitié du
+    /// monde, et `1,234` lu par quelqu'un dont c'est la convention vaut un
+    /// millième de ce qui est affiché. Une espace ne se confond avec rien.
+    Thousands,
+}
+
+/// Ce qui sépare deux tranches de trois chiffres : U+00A0, espace insécable.
+///
+/// Insécable pour que le nombre ne se coupe pas en fin de cellule.
+pub const GROUP_SEPARATOR: char = '\u{a0}';
+
 /// Réglages de rendu d'une cellule.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
@@ -159,6 +195,14 @@ pub struct FormatOptions {
     pub timestamp_format: Option<Cow<'static, str>>,
     /// Rendu des colonnes binaires.
     pub binary_display: BinaryDisplay,
+    /// Groupement des chiffres des entiers et des décimaux.
+    ///
+    /// `#[serde(default)]` : un document écrit avant l'existence de ce champ
+    /// reste lisible ([I-11](../../../CLAUDE.md#i-11)). Sans cette annotation,
+    /// ajouter un réglage d'affichage rendrait illisible un workspace
+    /// enregistré la veille.
+    #[serde(default)]
+    pub number_grouping: NumberGrouping,
 }
 
 impl Default for FormatOptions {
@@ -168,6 +212,7 @@ impl Default for FormatOptions {
             null_text: Cow::Borrowed("NULL"),
             timestamp_format: None,
             binary_display: BinaryDisplay::default(),
+            number_grouping: NumberGrouping::default(),
         }
     }
 }
@@ -198,6 +243,13 @@ impl FormatOptions {
     #[must_use]
     pub fn with_binary_display(mut self, mode: BinaryDisplay) -> Self {
         self.binary_display = mode;
+        self
+    }
+
+    /// Change le groupement des chiffres.
+    #[must_use]
+    pub fn with_number_grouping(mut self, mode: NumberGrouping) -> Self {
+        self.number_grouping = mode;
         self
     }
 
@@ -327,7 +379,10 @@ pub fn format_value<'a>(array: &'a dyn Array, row: usize, opts: &FormatOptions) 
         // `value_as_string` place la virgule décimale d'après l'échelle de la
         // colonne. Formater l'entier sous-jacent afficherait 12345 pour 123,45.
         DataType::Decimal128(_, _) => match array.as_primitive_opt::<Decimal128Type>() {
-            Some(valeurs) => finish(Cow::Owned(valeurs.value_as_string(row)), opts.max_len),
+            Some(valeurs) => finish(
+                Cow::Owned(group(valeurs.value_as_string(row), opts.number_grouping)),
+                opts.max_len,
+            ),
             None => delegate(array, row, opts),
         },
 
@@ -349,10 +404,65 @@ where
             if write!(texte, "{}", valeurs.value(row)).is_err() {
                 return unrenderable("integer formatting failed");
             }
-            finish(Cow::Owned(texte), opts.max_len)
+            finish(Cow::Owned(group(texte, opts.number_grouping)), opts.max_len)
         }
         None => delegate(array, row, opts),
     }
+}
+
+/// Insère les séparateurs de milliers dans un nombre déjà formaté.
+///
+/// Rend la chaîne **telle quelle** quand le groupement est au repos : c'est le
+/// défaut, donc le cas de très loin le plus fréquent, et il ne doit rien coûter.
+/// Cette fonction est appelée une fois par cellule numérique visible et par
+/// trame — le budget est de 8 ms pour la trame entière
+/// ([PERFORMANCE](../../../docs/PERFORMANCE.md#budgets-dinteraction)).
+///
+/// Ne groupe que la partie entière, et laisse intacts le signe, la partie
+/// décimale et un éventuel exposant : `-1234.5678` devient `-1 234.5678`, jamais
+/// `-1 234.567 8`. Grouper après la virgule est une faute de typographie qui
+/// rend les décimales illisibles.
+fn group(texte: String, mode: NumberGrouping) -> String {
+    if matches!(mode, NumberGrouping::None) {
+        return texte;
+    }
+    // La partie entière s'arrête au premier caractère qui n'est pas un chiffre,
+    // en sautant un signe de tête. Un texte sans chiffre — qui ne devrait pas
+    // atteindre cette fonction — ressort inchangé plutôt que mutilé.
+    //
+    // Tout est découpé avec `get`, jamais indexé : les bornes se déduisent du
+    // texte, et ce texte vient du formatage d'une valeur **serveur**. Un
+    // découpage prouvé juste aujourd'hui devient une panique au premier type
+    // dont le formateur d'Arrow rend autre chose que ce qu'on suppose ici
+    // ([I-09](../../../CLAUDE.md#i-09)).
+    let debut = usize::from(texte.starts_with(['-', '+']));
+    let Some(reste) = texte.get(debut..) else {
+        return texte;
+    };
+    let chiffres = reste.bytes().take_while(u8::is_ascii_digit).count();
+    if chiffres <= 3 {
+        return texte;
+    }
+    let fin = debut.saturating_add(chiffres);
+    let (Some(signe), Some(entier), Some(suite)) =
+        (texte.get(..debut), texte.get(debut..fin), texte.get(fin..))
+    else {
+        return texte;
+    };
+
+    let mut sortie =
+        String::with_capacity(texte.len() + (chiffres / 3) * GROUP_SEPARATOR.len_utf8());
+    sortie.push_str(signe);
+    for (rang, chiffre) in entier.chars().enumerate() {
+        // Une séparation tombe là où il reste un multiple de trois chiffres à
+        // écrire, jamais en tête du nombre.
+        if rang > 0 && (chiffres - rang).is_multiple_of(3) {
+            sortie.push(GROUP_SEPARATOR);
+        }
+        sortie.push(chiffre);
+    }
+    sortie.push_str(suite);
+    sortie
 }
 
 /// Passe la main aux formateurs d'Arrow.
@@ -543,6 +653,86 @@ mod tests {
             .text()
             .map(str::to_owned)
             .unwrap_or_else(|| "<non rendu>".to_owned())
+    }
+
+    #[test]
+    fn le_groupement_au_repos_ne_touche_a_rien() {
+        // C'est le défaut, donc le chemin chaud : ce que le serveur a envoyé
+        // ressort tel quel, quel que soit le nombre de chiffres.
+        for valeur in ["0", "-7", "1234567", "-1234567.89", "abc"] {
+            assert_eq!(
+                group(valeur.to_owned(), NumberGrouping::None),
+                valeur,
+                "{valeur}"
+            );
+        }
+    }
+
+    #[test]
+    fn le_groupement_par_milliers_respecte_signe_et_decimales() {
+        let cas = [
+            ("0", "0"),
+            ("999", "999"),
+            ("1000", "1\u{a0}000"),
+            ("-1000", "-1\u{a0}000"),
+            ("+1000", "+1\u{a0}000"),
+            ("4823917", "4\u{a0}823\u{a0}917"),
+            // La partie décimale ne se groupe jamais : « 1 234.567 8 » est
+            // illisible, et ce n'est pas ce que demande la typographie.
+            ("1234.5678", "1\u{a0}234.5678"),
+            ("-1234567.89", "-1\u{a0}234\u{a0}567.89"),
+            // Rien à grouper : le texte ressort intact plutôt que mutilé.
+            ("", ""),
+            ("-", "-"),
+            ("NaN", "NaN"),
+            ("inf", "inf"),
+            // Le formateur d'Arrow rend autre chose qu'un nombre pour bien des
+            // types. Aucun découpage ne doit tomber au milieu d'un caractère.
+            ("—12345", "—12345"),
+            ("1 234 €", "1 234 €"),
+            ("日本語", "日本語"),
+            ("+日本", "+日本"),
+        ];
+        for (entree, attendu) in cas {
+            assert_eq!(
+                group(entree.to_owned(), NumberGrouping::Thousands),
+                attendu,
+                "{entree}"
+            );
+        }
+    }
+
+    #[test]
+    fn les_entiers_et_les_decimaux_suivent_le_reglage() {
+        let opts = FormatOptions::default().with_number_grouping(NumberGrouping::Thousands);
+        let entiers = Arc::new(Int64Array::from(vec![Some(-4_823_917)])) as Arc<dyn Array>;
+        assert_eq!(
+            rendu(entiers, &opts),
+            CellValue::Text(Cow::Owned("-4\u{a0}823\u{a0}917".to_owned()))
+        );
+
+        // `value_as_string` place la virgule décimale ; le groupement doit
+        // s'arrêter avant elle.
+        let decimaux = Decimal128Array::from(vec![Some(123_456_789_i128)])
+            .with_precision_and_scale(12, 2)
+            .expect("précision et échelle valides pour un littéral de test");
+        assert_eq!(
+            rendu(Arc::new(decimaux), &opts),
+            CellValue::Text(Cow::Owned("1\u{a0}234\u{a0}567.89".to_owned()))
+        );
+    }
+
+    #[test]
+    fn un_reglage_ecrit_avant_le_groupement_reste_lisible() {
+        // I-11 : un workspace enregistré avant l'ajout du champ ne doit pas
+        // devenir illisible. C'est ce que garantit `#[serde(default)]`, et
+        // c'est le genre de garantie qui se perd au premier champ ajouté sans
+        // y penser.
+        let ancien =
+            r#"{"max_len":512,"null_text":"NULL","timestamp_format":null,"binary_display":"Hex"}"#;
+        let options: FormatOptions =
+            serde_json::from_str(ancien).expect("un document antérieur reste lisible");
+        assert_eq!(options.number_grouping, NumberGrouping::None);
     }
 
     #[test]

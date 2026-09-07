@@ -97,12 +97,17 @@ oxyn/
 │   ├── oxyn-ai/                  # runtime d'agents, outils, contexte, confidentialité
 │   ├── oxyn-plugin/              # hôte WASM (wasmtime derrière la feature `wasm-host`)
 │   ├── oxyn-ui/                  # GPUI : grille, éditeur, arbre, barre d'état, approbation,
-│   │                             #   formulaire de connexion
+│   │                             #   formulaire de connexion, thème, contrôles, icônes,
+│   │                             #   réglages d'affichage
 │   └── oxyn-app/                 # binaire `oxyn` : backend, vue racine, traduction, fenêtre
 ├── drivers/
 │   ├── oxyn-driver-sqlite/       # embarqué
 │   └── oxyn-driver-postgres/     # couvre aussi Redshift, TimescaleDB, pgvector
-├── assets/brand/                 # symbole, iconset, Oxyn.icns
+├── assets/
+│   ├── brand/                    # symbole, iconset, Oxyn.icns
+│   ├── fonts/                    # Geist, incluse à la compilation par oxyn-ui::icons
+│   └── ui/                       # glyphes Hugeicons et logo, idem — provenance et licences
+│                                 #   dans provenance.json et docs/RESEARCH-NOTES.md
 └── docs/
 ```
 

@@ -49,6 +49,7 @@ use gpui::{
 };
 use oxyn_core::Environment;
 
+use crate::controls::{ControlState, ControlTone, control};
 use crate::text_field::{FieldEvent, TextField};
 use crate::theme::Theme;
 
@@ -962,24 +963,22 @@ impl ConnectionForm {
         cx: &Context<'_, Self>,
         action: impl Fn(&mut Self, &mut Context<'_, Self>) + 'static,
     ) -> AnyElement {
-        let colors = Theme::of(cx).colors;
-        div()
-            .id(id)
-            .tab_index(0)
-            .px_3()
-            .py_2()
-            .rounded_sm()
-            .border_1()
-            .border_color(colors.border)
-            .cursor_pointer()
-            .hover(move |style| style.bg(colors.hover))
-            .on_click(cx.listener(move |this, _, window, cx| {
+        let theme = Theme::of(cx);
+        control(
+            id,
+            ControlState::Enabled,
+            ControlTone::Neutral,
+            theme,
+            cx.listener(move |this, _, window, cx| {
                 window.focus(&this.focus);
                 action(this, cx);
                 cx.notify();
-            }))
-            .child(label)
-            .into_any_element()
+            }),
+        )
+        .px(theme.spacing.medium)
+        .py(theme.spacing.small)
+        .child(label)
+        .into_any_element()
     }
 
     fn render_driver_list(&self, theme: &Theme, cx: &Context<'_, Self>) -> AnyElement {
@@ -1177,24 +1176,25 @@ impl ConnectionForm {
                     this.back_to_drivers(cx)
                 }))
                 .child(
-                    div()
-                        .id("connect")
-                        .px_3()
-                        .py_2()
-                        .rounded_sm()
-                        .bg(if complete {
-                            theme.colors.selection
+                    // Tant que le formulaire est incomplet, le bouton est
+                    // vraiment **désactivé** : hors du parcours de tabulation,
+                    // sans survol ni pression. Avant, il changeait seulement de
+                    // couleur de texte tout en restant cliquable — il paraissait
+                    // disponible et ne faisait rien.
+                    control(
+                        "connect",
+                        if complete {
+                            ControlState::Enabled
                         } else {
-                            theme.colors.surface
-                        })
-                        .text_color(if complete {
-                            theme.colors.text
-                        } else {
-                            theme.colors.text_muted
-                        })
-                        .cursor_pointer()
-                        .on_click(cx.listener(|this, _, _, cx| this.submit(cx)))
-                        .child("Se connecter"),
+                            ControlState::Disabled
+                        },
+                        ControlTone::Primary,
+                        theme,
+                        cx.listener(|this, _, _, cx| this.submit(cx)),
+                    )
+                    .px(theme.spacing.medium)
+                    .py(theme.spacing.small)
+                    .child("Se connecter"),
                 ),
         )
         .child(
