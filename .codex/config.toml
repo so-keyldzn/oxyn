@@ -1,15 +1,13 @@
 # Project defaults and verified limits: ../docs/RESEARCH-NOTES.md.
 model = "gpt-6-astra"
 model_reasoning_effort = "high"
-
-# Leave room for reasoning, responses and tool results before compaction.
 model_context_window = 1050000
 model_auto_compact_token_limit = 700000
-
-# I-12 requires checking current upstream documentation and registries.
 web_search = "live"
 
-# Prompt caching is service-managed; no prompt_cache key is supported here.
-
 [tui]
-status_line = ["model-with-reasoning", "context-remaining", "git-branch"]
+status_line = [
+    "model-with-reasoning",
+    "context-remaining",
+    "git-branch",
+]
