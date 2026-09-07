@@ -765,6 +765,9 @@ impl Render for DataGrid {
             .key_context("DataGrid")
             .track_focus(&self.focus)
             .id("oxyn-data-grid")
+            .border_1()
+            .border_color(theme.colors.background)
+            .focus(|style| style.border_color(theme.colors.border_focus))
             .size_full()
             .flex()
             .flex_col()
@@ -1156,13 +1159,12 @@ impl DataGrid {
             })
             .when(selectionnee, |element| element.bg(theme.colors.selection))
             .hover(|style| style.bg(theme.colors.hover))
-            .on_click(
-                cx.listener(move |grille, _event: &ClickEvent, _window, cx| {
-                    grille.selected_row = Some(ligne);
-                    cx.emit(GridEvent::RowSelected(ligne));
-                    cx.notify();
-                }),
-            )
+            .on_click(cx.listener(move |grille, _event: &ClickEvent, window, cx| {
+                window.focus(&grille.focus);
+                grille.selected_row = Some(ligne);
+                cx.emit(GridEvent::RowSelected(ligne));
+                cx.notify();
+            }))
             .child(
                 div()
                     .w(metrics.gutter_width)

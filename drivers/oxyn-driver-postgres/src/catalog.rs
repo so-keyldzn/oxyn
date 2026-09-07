@@ -254,6 +254,14 @@ impl PostgresCatalog {
         }
     }
 
+    pub(crate) fn preview_request(
+        &self,
+        path: &CatalogPath,
+        limit: u32,
+    ) -> Result<oxyn_core::ExecRequest> {
+        crate::preview::request(&self.database, self.variant.flavor.dialect(), path, limit)
+    }
+
     /// Vérifie qu'un chemin vise bien la base de cette session.
     ///
     /// # Erreurs

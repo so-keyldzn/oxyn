@@ -349,6 +349,10 @@ impl Session for PostgresSession {
         self.canceller.cancel_backend(backend_pid).await
     }
 
+    fn preview_request(&self, path: &oxyn_catalog::CatalogPath, limit: u32) -> Result<ExecRequest> {
+        self.catalog.preview_request(path, limit)
+    }
+
     fn catalog(&self) -> &dyn CatalogProvider {
         &self.catalog
     }

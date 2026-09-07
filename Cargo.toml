@@ -120,6 +120,12 @@ dbg_macro     = "warn"
 todo          = "allow"
 unwrap_used   = "warn"
 expect_used   = "allow"
+# `deny` explicite, et non hérité de `all` : c'est la liste de `clippy.toml` qui
+# porte les invariants ramenés à un chemin d'appel. La laisser dépendre du
+# regroupement de `all` reviendrait à ce qu'un changement de catégorie chez
+# clippy désarme un mur sans que rien ne le signale.
+disallowed_methods = "deny"
+disallowed_types   = "deny"
 
 [profile.dev]
 opt-level = 1              # le rendu GPUI est injouable en opt-level 0

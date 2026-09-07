@@ -13,10 +13,17 @@ from __future__ import annotations
 
 import re
 import sys
+import tomllib
 from pathlib import Path
 
 RACINE = Path(__file__).resolve().parents[1]
 CLAUDE_MD = RACINE / "CLAUDE.md"
+
+# I-08 : les deux seules crates qui ont le droit de connaître GPUI. La liste est
+# indexée par RÉPERTOIRE et non par nom de paquet — `crates/oxyn-app` publie un
+# paquet nommé `oxyn`, et une liste par nom de paquet aurait laissé passer
+# exactement le cas qu'elle prétend couvrir.
+REPERTOIRES_UI = {"oxyn-ui", "oxyn-app"}
 
 # Les invariants sont ancrés dans CLAUDE.md par <a id="i-NN"></a>.
 MOTIF_ANCRE = re.compile(r'<a id="(i-\d+)"></a>')
@@ -31,7 +38,7 @@ MOTIF_EMPLACEMENT = re.compile(r"XXXX|NNNN|AAAA-MM-JJ")
 
 
 def _fichiers_markdown() -> list[Path]:
-    fichiers = [CLAUDE_MD, RACINE / "AGENTS.md"]
+    fichiers = [CLAUDE_MD, RACINE / "AGENTS.md", RACINE / "README.md"]
     for repertoire in ("docs", ".claude", ".agents"):
         fichiers += sorted((RACINE / repertoire).rglob("*.md"))
     return [f for f in fichiers if f.is_file()]
@@ -139,12 +146,88 @@ def controler_paths_inertes() -> list[str]:
     return avertissements
 
 
+def _manifestes() -> list[Path]:
+    """Les manifestes des membres du workspace, dans l'ordre du dépôt."""
+    fichiers = []
+    for repertoire in ("crates", "drivers"):
+        base = RACINE / repertoire
+        if base.is_dir():
+            fichiers += sorted(base.glob("*/Cargo.toml"))
+    return fichiers
+
+
+def _dependances(manifeste: dict) -> list[tuple[str, str, object]]:
+    """(section, nom, déclaration) pour toutes les dépendances déclarées."""
+    trouvees = []
+    for section in ("dependencies", "dev-dependencies", "build-dependencies"):
+        for nom, declaration in manifeste.get(section, {}).items():
+            trouvees.append((section, nom, declaration))
+    return trouvees
+
+
+def controler_graphe_dependances() -> list[str]:
+    """I-08 et conformité des manifestes, lus plutôt que relus.
+
+    Ces trois défauts ont le même mode de panne : le projet compile, les tests
+    passent, clippy se tait, et le coût n'apparaît qu'au moment où il est trop
+    tard pour l'annuler.
+
+    - un `gpui` hors de `oxyn-ui`/`oxyn-app` ferme définitivement la CLI, les
+      tests sans écran, et la sortie de GPUI que l'ADR-0001 veut garder
+      ouverte ;
+    - un manifeste sans `[lints] workspace = true` retire à sa crate TOUS les
+      lints du dépôt, `unsafe_code = "deny"` compris ;
+    - une dépendance déclarée avec sa propre version fait entrer deux copies de
+      la même crate dans le graphe, avec des types mutuellement incompatibles.
+
+    Le contrôle n'exige pas de code Rust : sans `Cargo.toml` à la racine, il n'a
+    rien à dire et le dit en ne disant rien.
+    """
+    if not (RACINE / "Cargo.toml").is_file():
+        return []
+
+    erreurs = []
+    for chemin in _manifestes():
+        repertoire = chemin.parent.name
+        rel = chemin.relative_to(RACINE)
+        manifeste = tomllib.loads(chemin.read_text(encoding="utf-8"))
+
+        if manifeste.get("lints", {}).get("workspace") is not True:
+            erreurs.append(
+                f"{rel} : pas de `[lints] workspace = true` — la crate échappe "
+                "à tous les lints du dépôt, sans que rien ne le signale"
+            )
+
+        if not manifeste.get("package", {}).get("description"):
+            erreurs.append(
+                f"{rel} : pas de `description` — c'est la seule phrase qui dit "
+                "pourquoi cette crate existe à part"
+            )
+
+        for section, nom, declaration in _dependances(manifeste):
+            if nom == "gpui" and repertoire not in REPERTOIRES_UI:
+                erreurs.append(
+                    f"I-08 : {rel} dépend de `gpui` en [{section}]. Seules "
+                    f"{' et '.join(sorted(REPERTOIRES_UI))} le peuvent "
+                    "(ADR-0001)"
+                )
+            herite = isinstance(declaration, dict) and declaration.get("workspace")
+            if not herite:
+                erreurs.append(
+                    f"{rel} : `{nom}` en [{section}] n'hérite pas du workspace "
+                    f"— écrire `{nom}.workspace = true` et résoudre la version "
+                    "dans le Cargo.toml racine"
+                )
+    return erreurs
+
+
 def principal() -> int:
     erreurs = (
         controler_liens()
         + controler_invariants()
         + controler_regles()
         + controler_hooks()
+        + controler_graphe_dependances()
     )
     avertissements = controler_paths_inertes()
 

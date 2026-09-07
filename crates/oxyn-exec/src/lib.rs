@@ -101,6 +101,7 @@
 
 pub mod approval;
 pub mod cancel;
+mod catalog;
 pub mod events;
 pub mod executor;
 pub mod sessions;

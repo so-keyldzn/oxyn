@@ -1,0 +1,61 @@
+# La porte de qualité, exécutée par une machine.
+#
+# Le Makefile affirme depuis toujours que « la CI l'appelle ». Ce fichier est ce
+# qui rend cette phrase vraie. Il n'ajoute AUCUN contrôle : un contrôle qui
+# n'existerait qu'ici serait invisible en local, et personne ne saurait le
+# reproduire avant de pousser. Tout ce qui doit tourner est dans `make qualite`.
+name: qualite
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: ["**"]
+
+# Une deuxième poussée sur la même branche rend la première sans objet : la
+# laisser finir consomme un runner macOS pour un résultat que personne ne lira.
+concurrency:
+  group: qualite-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: "0"
+  RUST_BACKTRACE: "1"
+
+jobs:
+  qualite:
+    # macOS et pas Linux : `oxyn-ui` dépend de GPUI, dont la cible de référence
+    # est macOS (ADR-0001), et `make app` produit un paquet `.app`. Construire
+    # ailleurs vérifierait un sous-ensemble du dépôt en laissant croire au
+    # contraire.
+    runs-on: macos-latest
+    timeout-minutes: 60
+
+    steps:
+      - name: Récupérer le dépôt
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Installer la chaîne d'outils épinglée
+        # Aucune action tierce : `rust-toolchain.toml` fait autorité (ADR-0008),
+        # et rustup l'applique seul. Une action qui prendrait une version en
+        # paramètre créerait une deuxième source de vérité, qui divergerait.
+        run: rustup show active-toolchain || rustup toolchain install
+
+      - name: Restaurer le cache Cargo
+        # Swatinem/rust-cache v2.9.2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
+
+      - name: Installer cargo-nextest
+        # Le profil de `.config/nextest.toml` — exécution sérialisée des tests
+        # de driver, arrêt d'un test qui pend — ne s'applique que si nextest est
+        # présent. Sans cette étape, `make test` retomberait silencieusement sur
+        # `cargo test` et le profil ne servirait jamais.
+        run: curl -LsSf https://get.nexte.st/latest/mac | tar zxf - -C "${CARGO_HOME:-$HOME/.cargo}/bin"
+
+      - name: make qualite
+        run: make qualite

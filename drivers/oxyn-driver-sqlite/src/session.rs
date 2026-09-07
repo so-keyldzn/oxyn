@@ -170,6 +170,10 @@ impl Session for SqliteSession {
         })
     }
 
+    fn preview_request(&self, path: &oxyn_catalog::CatalogPath, limit: u32) -> Result<ExecRequest> {
+        crate::preview::request(path, limit)
+    }
+
     fn catalog(&self) -> &dyn CatalogProvider {
         &self.catalog
     }

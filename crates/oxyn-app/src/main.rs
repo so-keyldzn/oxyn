@@ -32,9 +32,20 @@ fn main() -> Result<()> {
     // Before the window, deliberately: a failure here has to reach the user as
     // a message on stderr. A window that opens onto a broken backend is worse
     // than no window at all.
-    let backend = Backend::open().context("starting Oxyn")?;
+    let temporary = std::env::args()
+        .skip(1)
+        .any(|arg| arg == "--temporary-workspace");
+    let backend = if temporary {
+        Backend::open_temporary()
+    } else {
+        Backend::open()
+    }
+    .context("starting Oxyn")?;
 
-    Application::new().run(move |cx| {
+    Application::new().with_assets(oxyn_ui::UiAssets).run(move |cx| {
+        if let Err(error) = cx.text_system().add_fonts(oxyn_ui::UiAssets::fonts()) {
+            tracing::warn!(%error, "Bundled fonts could not be registered; using system fallback");
+        }
         Theme::init(ThemeMode::Dark, cx);
         cx.on_window_closed(|cx| {
             if cx.windows().is_empty() {
@@ -51,7 +62,7 @@ fn main() -> Result<()> {
                 // devient impossible à désigner dans Mission Control ou dans le
                 // sélecteur de fenêtres, là où il n'y a que le titre à lire.
                 titlebar: Some(TitlebarOptions {
-                    title: Some("Oxyn".into()),
+                    title: Some(if temporary { "Oxyn · Temporary workspace" } else { "Oxyn" }.into()),
                     ..Default::default()
                 }),
                 ..Default::default()

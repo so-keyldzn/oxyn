@@ -139,6 +139,23 @@ bloquée. L'annulation transmet le même `CancelToken` jusqu'au driver. Les
 décisions `RequireApproval` ouvrent une confirmation avant de reprendre la
 commande correspondante. Fermer la dernière fenêtre quitte l'application.
 
+L'option explicite `--temporary-workspace` ouvre un état et un magasin de secrets
+en mémoire pour les vérifications locales. Elle ne lit ni le workspace enregistré
+ni le trousseau et n'ouvre aucune base automatiquement. Les connexions choisies
+restent soumises au même command bus et au même `PolicyGate` ; l'option n'isole
+pas un serveur que l'utilisateur déciderait de contacter. Le titre de fenêtre
+signale le caractère temporaire.
+
+L'aperçu d'une table utilise `Command::PreviewRelation` avec connexion, session,
+niveaux d'identifiant et limite explicites. Le `PolicyGate` décide avant la
+préparation ; le driver compose un `SELECT` qualifié et borné sans I/O, puis
+l'exécuteur impose la lecture seule et réutilise le flux Arrow d'`Execute` sous
+le même identifiant de commande. L'interface demande 200 lignes ; le contrat du
+bus accepte de 1 à 1 000. PostgreSQL qualifie schéma et table dans la base de
+la session ; SQLite conserve la convention du catalogue pour ses bases
+attachées. La grille de l'aperçu et son annulation sont distinctes de celles de
+l'éditeur SQL.
+
 Le binaire nu ne suffit pas sur macOS : sans paquet `.app`, le système traite le
 processus comme un accessoire — ni Dock, ni activation propre, ni identifiant
 que l'outillage puisse désigner. `make app` assemble
@@ -370,6 +387,30 @@ L'introspection est coûteuse (des minutes sur un schéma à 20 000 objets). Ell
 mise en cache dans `oxyn-store`, paresseuse et hiérarchique, rafraîchie en tâche de fond
 avec invalidation immédiate après tout DDL émis depuis Oxyn, et consultable hors ligne.
 
+Le bus expose `RefreshCatalog { connection }` pour la racine et
+`RefreshCatalogScope { connection, scope }` pour un seul palier explicite :
+`Root`, `Namespaces { catalog }`, `Relations { catalog, namespace }` ou
+`Relation { catalog, namespace, relation }`. Les noms sont des identifiants bruts,
+validés par `CatalogPath` dans l'exécuteur, sans dépendance de `oxyn-core` vers
+`oxyn-catalog`. La racine lit l'identité et les catalogues ; en l'absence de ce
+palier, elle lit les schémas si la session déclare `SCHEMAS`, sinon les relations.
+Elle ne décrit jamais les relations et ne charge ni index ni clés étrangères.
+
+`Executor::catalog(connection)` donne un `Option<SharedCatalog>` en mémoire :
+présent après connexion, retiré à la déconnexion. L'UI lit ce cache sans I/O,
+sans garder sa garde pendant un `await`, et demande toute introspection au bus.
+Les lectures d'une connexion sont sérialisées, annulables pendant l'attente des
+verrous et coopérativement chez le provider ; la déconnexion annule la lecture
+avant de fermer la session. Une panne conserve les données précédentes.
+`Outcome::CatalogRefreshed { connection, scope }` et l'événement `CatalogUpdated`
+(enveloppé avec la connexion) signalent une publication réussie sans transporter
+le catalogue. Le bus refuse avant fusion de dépasser 1 024 scopes ou 50 000 objets de
+métadonnées par connexion (listes, relations et champs), en conservant les données
+précédentes. Le décompte garde les maxima des scopes déjà lus, car relister un
+parent conserve ses détails enfants ; la déconnexion remet ce budget à zéro.
+Cette borne ne limite pas les octets des chaînes ni les vecteurs temporaires
+rendus par le provider, et ce trajet ne fournit pas de persistance hors ligne.
+
 Ce cache est aussi ce qui rend le workspace IA viable : le contexte d'un agent se construit
 à partir du catalogue local, pas d'un aller-retour serveur à chaque question.
 
@@ -390,6 +431,7 @@ pub enum Command {
                        request: Box<ExecRequest> },
     Cancel           { connection: ConnectionId, statement: StatementHandle },
     RefreshCatalog   { connection: ConnectionId },
+    RefreshCatalogScope { connection: ConnectionId, scope: CatalogRefreshScope },
     Export           { connection: ConnectionId, result: ResultId,
                        format: ExportFormat, destination: PathBuf },
     OpenDocument     { workspace: WorkspaceId, document: DocumentId },
@@ -614,8 +656,8 @@ arbre de catalogue. *Critère de sortie : `SELECT` de 10 M de lignes, premier af
 > produit `Oxyn.app`, la fenêtre s'ouvre, et `Cmd+Entrée` exécute réellement à travers
 > le command bus contre la session choisie dans le formulaire de connexion.
 >
-> **Le critère de sortie n'est pas atteint et n'a pas été mesuré.** Il manque le
-> branchement de l'introspection sur l'arbre, et surtout les
+> **Le critère de sortie n'est pas atteint et n'a pas été mesuré.** Le catalogue
+> est branché par paliers sur le command bus. Il reste à produire les
 > mesures : les 10 M de lignes, les 100 ms de premier affichage et la stabilité
 > mémoire sont des chiffres à produire, pas des propriétés à supposer. La coloration
 > syntaxique, la complétion et les curseurs multiples de l'éditeur restent le plus

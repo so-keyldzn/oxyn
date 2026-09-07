@@ -21,6 +21,10 @@ d'eux, c'est un bug : le signaler, ne pas trancher seul.
 
 ## Décisions d'architecture (ADR)
 
+Pour localiser les planches et leurs états avant implémentation, consulter
+[FIGMA-HANDOFF](FIGMA-HANDOFF.md). Les comportements restent définis dans
+[UX-SPEC](UX-SPEC.md).
+
 | # | Décision | Statut |
 |---|---|---|
 | [0001](adr/0001-ui-toolkit.md) | Toolkit UI : GPUI, avec isolation stricte | proposé |
@@ -32,6 +36,8 @@ d'eux, c'est un bug : le signaler, ne pas trancher seul.
 | [0007](adr/0007-driver-sidecar.md) | Processus sidecar pour les drivers à dépendances natives | proposé |
 | [0008](adr/0008-chaine-outils-rust.md) | Chaîne d'outils Rust épinglée dans le dépôt | proposé |
 | [0009](adr/0009-source-dependance-gpui.md) | GPUI consommé depuis crates.io, non depuis le dépôt Zed | proposé |
+| [0010](adr/0010-contraintes-natives-sqlite.md) | Une seule version de libsqlite3-sys dans le graphe | accepté |
+| [0011](adr/0011-structure-commune-workspace.md) | Workbench dense comme structure commune du workspace | proposé |
 
 Les ADR restent `proposé` jusqu'au premier commit de code qui les met en œuvre.
 

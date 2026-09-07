@@ -148,20 +148,26 @@ def verifier_manifeste(rel: str, texte: str) -> None:
 # positif bloque le travail à chaque tour jusqu'à ce qu'on désactive le hook.
 EXTENSIONS_CODE = (".rs", ".toml", ".py", ".wit", ".sql")
 
+# Les deux formes acceptées, et la même définition que `script/verifier-todo`,
+# qui applique le contrôle à tout le dépôt dans `make qualite`. Une phase du
+# plan d'implémentation vaut une date : le plan dit ce qu'elle contient, donc
+# quand elle arrive. Si l'une des deux définitions bouge, l'autre doit suivre —
+# sinon le hook refuse ce que la porte de qualité accepte.
+MOTIF_ECHEANCE = r"TODO\s*\(\s*(?:\d{4}-\d{2}-\d{2}|phase\s+\d+)"
+
 
 def verifier_code(rel: str, texte: str) -> None:
     """Hygiène applicable au code seul."""
     if not rel.endswith(EXTENSIONS_CODE):
         return
     for numero, ligne in _lignes_de_code(texte):
-        if re.search(r"\bTODO\b", ligne) and not re.search(
-            r"TODO\s*\(\s*\d{4}-\d{2}-\d{2}", ligne
-        ):
+        if re.search(r"\bTODO\b", ligne) and not re.search(MOTIF_ECHEANCE, ligne):
             p.demander(
                 EVENEMENT,
-                f"{rel}:{numero} contient un `TODO` sans date. Un TODO non daté "
-                "ne sera jamais relu. Écrire `TODO(2026-09-05) : ce qui le "
-                "débloque`, ou faire le travail maintenant.",
+                f"{rel}:{numero} contient un `TODO` sans échéance. Un TODO qui "
+                "ne dit pas quand ne sera jamais relu. Écrire "
+                "`TODO(2026-09-05) : ce qui le débloque` ou `TODO(phase 2)`, "
+                "ou faire le travail maintenant.",
             )
 
 

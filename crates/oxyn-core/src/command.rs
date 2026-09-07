@@ -134,6 +134,38 @@ impl std::fmt::Display for ExportFormat {
     }
 }
 
+/// One lazily loaded metadata level, independent of the catalog crate.
+///
+/// Names are raw identifiers, never SQL. The executor validates their paths.
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case", tag = "scope")]
+#[non_exhaustive]
+pub enum CatalogRefreshScope {
+    /// Server identity and the first available hierarchy level.
+    Root,
+    /// Schemas in a catalog, or directly on a source without catalogs.
+    Namespaces {
+        /// Absent when the source has no catalog level.
+        catalog: Option<String>,
+    },
+    /// Relation summaries only; no fields, indexes or foreign keys.
+    Relations {
+        /// Absent when the source has no catalog level.
+        catalog: Option<String>,
+        /// Absent when the source has no schema level.
+        namespace: Option<String>,
+    },
+    /// Fields and metadata of one explicitly requested relation.
+    Relation {
+        /// Absent when the source has no catalog level.
+        catalog: Option<String>,
+        /// Absent when the source has no schema level.
+        namespace: Option<String>,
+        /// Raw relation name.
+        relation: String,
+    },
+}
+
 /// Une action soumise au bus.
 ///
 /// Une commande fait **une** chose. Une commande « pratique » qui en emballe
@@ -171,6 +203,22 @@ pub enum Command {
         request: Box<ExecRequest>,
     },
 
+    /// Read a bounded preview using identifiers quoted by the session driver.
+    PreviewRelation {
+        /// Connection whose policy applies.
+        connection: ConnectionId,
+        /// Open session belonging to that connection.
+        session: SessionId,
+        /// Catalog from the metadata path, when present.
+        catalog: Option<String>,
+        /// Namespace from the metadata path, when present.
+        namespace: Option<String>,
+        /// Exact relation name, never SQL text.
+        relation: String,
+        /// Maximum rows requested, in `1..=1000`.
+        limit: u32,
+    },
+
     /// Annuler une exécution en cours.
     ///
     /// Toujours autorisée : refuser une annulation ne protège rien et laisse
@@ -186,6 +234,14 @@ pub enum Command {
     RefreshCatalog {
         /// La connexion visée.
         connection: ConnectionId,
+    },
+
+    /// Refresh one metadata level through an existing session.
+    RefreshCatalogScope {
+        /// Connection whose policy and cache apply.
+        connection: ConnectionId,
+        /// Explicit lazy scope; never recursively loads descendants.
+        scope: CatalogRefreshScope,
     },
 
     /// Écrire un jeu de résultats dans un fichier.
@@ -266,6 +322,8 @@ impl Command {
             | Self::Disconnect { .. }
             | Self::Cancel { .. }
             | Self::RefreshCatalog { .. }
+            | Self::RefreshCatalogScope { .. }
+            | Self::PreviewRelation { .. }
             | Self::Export { .. }
             | Self::OpenDocument { .. }
             | Self::WriteDocument { .. } => StatementIntent::Read,
@@ -287,6 +345,8 @@ impl Command {
             | Self::Execute { connection, .. }
             | Self::Cancel { connection, .. }
             | Self::RefreshCatalog { connection }
+            | Self::RefreshCatalogScope { connection, .. }
+            | Self::PreviewRelation { connection, .. }
             | Self::Export { connection, .. }
             | Self::DeleteConnection { connection } => Some(*connection),
             Self::CreateConnection { config } | Self::UpdateConnection { config } => {
@@ -320,6 +380,8 @@ impl Command {
                 | Self::Execute { .. }
                 | Self::Cancel { .. }
                 | Self::RefreshCatalog { .. }
+                | Self::RefreshCatalogScope { .. }
+                | Self::PreviewRelation { .. }
                 | Self::Export { .. }
         )
     }
@@ -340,8 +402,10 @@ impl Command {
             Self::Connect { .. } => "Connect",
             Self::Disconnect { .. } => "Disconnect",
             Self::Execute { .. } => "Execute",
+            Self::PreviewRelation { .. } => "PreviewRelation",
             Self::Cancel { .. } => "Cancel",
             Self::RefreshCatalog { .. } => "RefreshCatalog",
+            Self::RefreshCatalogScope { .. } => "RefreshCatalogScope",
             Self::Export { .. } => "Export",
             Self::OpenDocument { .. } => "OpenDocument",
             Self::WriteDocument { .. } => "WriteDocument",
@@ -379,6 +443,83 @@ mod tests {
                     .with_intent(intent)
                     .with_risk(risk),
             ),
+        }
+    }
+
+    #[test]
+    fn preview_is_a_remote_read_with_its_own_audit_name() {
+        let connection = ConnectionId::new();
+        let command = Command::PreviewRelation {
+            connection,
+            session: SessionId::new(),
+            catalog: Some("database".into()),
+            namespace: Some("schema".into()),
+            relation: "table\"; DROP TABLE audit; --".into(),
+            limit: 200,
+        };
+        assert_eq!(command.intent(), StatementIntent::Read);
+        assert_eq!(command.target_connection(), Some(connection));
+        assert_eq!(command.name(), "PreviewRelation");
+        assert!(command.touches_database());
+        assert!(!command.is_mutating());
+        assert_eq!(command.statement_text(), None);
+        let json = serde_json::to_string(&command).expect("serializable command");
+        let decoded: Command = serde_json::from_str(&json).expect("typed round trip");
+        assert_eq!(decoded, command);
+    }
+
+    #[test]
+    fn catalog_scopes_are_reads_for_both_actors_even_in_production() {
+        use crate::{DefaultPolicy, Environment, PolicyGate};
+        let config = ConnectionConfig::new("fixture", DriverId::sqlite()).read_only();
+        let gate = DefaultPolicy::new();
+        gate.register(&config);
+        for command in [
+            Command::RefreshCatalog {
+                connection: config.id,
+            },
+            Command::RefreshCatalogScope {
+                connection: config.id,
+                scope: CatalogRefreshScope::Root,
+            },
+            Command::RefreshCatalogScope {
+                connection: config.id,
+                scope: CatalogRefreshScope::Namespaces { catalog: None },
+            },
+            Command::RefreshCatalogScope {
+                connection: config.id,
+                scope: CatalogRefreshScope::Relations {
+                    catalog: None,
+                    namespace: None,
+                },
+            },
+            Command::RefreshCatalogScope {
+                connection: config.id,
+                scope: CatalogRefreshScope::Relation {
+                    catalog: None,
+                    namespace: None,
+                    relation: "users".into(),
+                },
+            },
+        ] {
+            assert_eq!(command.target_connection(), Some(config.id));
+            assert!(command.touches_database());
+            assert!(!command.is_mutating());
+            assert!(command.statement_text().is_none());
+            for actor in [
+                Actor::Human,
+                Actor::agent(AgentId::new(), AgentSessionId::new()),
+            ] {
+                assert!(
+                    gate.authorize(&actor, &command, Environment::Production)
+                        .is_allowed()
+                );
+            }
+            let json = serde_json::to_string(&command).expect("serializable command");
+            assert_eq!(
+                serde_json::from_str::<Command>(&json).expect("round trip"),
+                command
+            );
         }
     }
 

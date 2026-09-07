@@ -38,7 +38,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use futures::future::BoxFuture;
-use oxyn_catalog::CatalogProvider;
+use oxyn_catalog::{CatalogPath, CatalogProvider};
 use oxyn_core::{
     CancelToken, Capabilities, ConnectionConfig, DriverId, ExecRequest, ExecStats, OxynError,
     Result, StatementHandle,
@@ -144,6 +144,17 @@ pub trait Session: Send + Sync {
     /// manque, [`OxynError::Query`] si le serveur rejette l'instruction,
     /// [`OxynError::Cancelled`] si `cancel` se déclenche.
     async fn execute(&self, request: ExecRequest, cancel: &CancelToken) -> Result<Box<dyn Cursor>>;
+
+    /// Compose a read-only preview without I/O or changes to session state.
+    ///
+    /// Implementations validate `limit` in `1..=1000`, quote every path segment
+    /// according to their dialect, and set `read_only` and `max_rows` limits.
+    /// Unsupported drivers fail explicitly; this method never executes SQL.
+    fn preview_request(&self, _path: &CatalogPath, _limit: u32) -> Result<ExecRequest> {
+        Err(OxynError::NotSupported {
+            capability: "relation preview".to_owned(),
+        })
+    }
 
     /// Demande au **serveur** d'interrompre une exécution.
     ///

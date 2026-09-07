@@ -10,13 +10,13 @@
 //! the one place that knows both sides ([I-01](../../../CLAUDE.md#i-01)).
 
 use gpui::prelude::*;
-use gpui::{Entity, FocusHandle, Focusable, SharedString, Window, div};
+use gpui::{Entity, FocusHandle, Focusable, SharedString, Window, div, px};
 use oxyn_core::{CancelToken, ConnectionId};
 use oxyn_ui::Theme;
 use oxyn_ui::connection_form::{ConnectionForm, ConnectionFormEvent};
 
 use crate::backend::{Backend, ConnectionResponse, OpenConnection};
-use crate::workspace::Workspace;
+use crate::workspace::{Workspace, WorkspaceEvent};
 use oxyn_core::{Actor, CommandId, ConnectionConfig, Decision};
 use oxyn_ui::{ApprovalDialog, ApprovalEvent, ApprovalId, ApprovalOutcome, ApprovalRequest};
 
@@ -30,6 +30,7 @@ pub struct Root {
     /// Built the moment a session opens, and never torn down after: closing a
     /// connection is a separate gesture that phase 0 does not have yet.
     workspace: Option<Entity<Workspace>>,
+    showing_connections: bool,
     focus: FocusHandle,
     connecting: Option<CancelToken>,
     attempt: u64,
@@ -86,6 +87,7 @@ impl Root {
             form,
             saved,
             workspace: None,
+            showing_connections: true,
             focus: cx.focus_handle(),
             connecting: None,
             attempt: 0,
@@ -181,10 +183,46 @@ impl Root {
 
     /// A session is open: the workspace replaces the form.
     fn connectee(&mut self, ouverte: OpenConnection, cx: &mut Context<'_, Self>) {
+        if !self.saved.contains(&ouverte.connection) {
+            self.saved.push(ouverte.connection);
+            let saved = oxyn_ui::SavedConnection {
+                name: ouverte.display.name.clone().into(),
+                driver: ouverte.display.driver.clone().into(),
+                environment: ouverte.display.environment,
+            };
+            self.form.update(cx, |form, cx| form.add_saved(saved, cx));
+        }
         let backend = self.backend.clone();
+        let draft = self
+            .workspace
+            .as_ref()
+            .map(|workspace| workspace.read(cx).draft_text(cx));
         let workspace = cx.new(|cx| Workspace::new(backend, ouverte, cx));
+        if let Some(draft) = draft {
+            workspace.update(cx, |workspace, cx| workspace.set_draft_text(&draft, cx));
+        }
+        cx.subscribe(&workspace, |this, _, event, cx| {
+            if matches!(event, WorkspaceEvent::NewConnectionRequested) {
+                this.showing_connections = true;
+                this.form.update(cx, ConnectionForm::back_to_drivers);
+                cx.notify();
+            }
+        })
+        .detach();
         self.workspace = Some(workspace);
+        self.showing_connections = false;
         cx.notify();
+    }
+
+    fn return_to_workspace(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) {
+        if self.connecting.is_some() || self.pending.is_some() {
+            return;
+        }
+        if let Some(workspace) = &self.workspace {
+            self.showing_connections = false;
+            window.focus(&workspace.read(cx).focus_handle(cx));
+            cx.notify();
+        }
     }
 
     /// The attempt failed: the form says so, in the server's own words.
@@ -213,9 +251,9 @@ impl Focusable for Root {
     fn focus_handle(&self, cx: &gpui::App) -> FocusHandle {
         // The focus follows the visible view, so the keyboard reaches what is on
         // screen rather than what the root happens to hold.
-        match &self.workspace {
-            Some(workspace) => workspace.read(cx).focus_handle(cx),
-            None => self.form.read(cx).focus_handle(cx),
+        match (&self.workspace, self.showing_connections) {
+            (Some(workspace), false) => workspace.read(cx).focus_handle(cx),
+            _ => self.form.read(cx).focus_handle(cx),
         }
     }
 }
@@ -228,18 +266,132 @@ impl Render for Root {
                 .update(cx, |dialog, cx| dialog.present(request, window, cx));
         }
 
-        let contenu = match &self.workspace {
-            Some(workspace) => workspace.clone().into_any_element(),
-            None => self.form.clone().into_any_element(),
+        let contenu = match (&self.workspace, self.showing_connections) {
+            (Some(workspace), false) => workspace.clone().into_any_element(),
+            _ => self.form.clone().into_any_element(),
         };
 
         div()
             .relative()
             .track_focus(&self.focus)
+            .capture_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, window, cx| {
+                if this.showing_connections
+                    && event.keystroke.key == "escape"
+                    && matches!(
+                        this.form.read(cx).model().state(),
+                        oxyn_ui::FormState::ChoosingDriver
+                    )
+                    && this.workspace.is_some()
+                {
+                    this.return_to_workspace(window, cx);
+                    cx.stop_propagation();
+                }
+            }))
             .size_full()
             .bg(theme.colors.surface)
             .text_color(theme.colors.text)
             .child(contenu)
+            .when(
+                self.showing_connections
+                    && self.workspace.is_some()
+                    && self.connecting.is_none()
+                    && self.pending.is_none(),
+                |root| {
+                    root.child(
+                        div()
+                            .id("return-to-workspace")
+                            .absolute()
+                            .top(px(20.))
+                            .right(px(24.))
+                            .px_3()
+                            .py_2()
+                            .rounded(px(6.))
+                            .border_1()
+                            .border_color(theme.colors.border)
+                            .cursor_pointer()
+                            .hover(|style| style.bg(theme.colors.hover))
+                            .on_click(cx.listener(|this, _, window, cx| {
+                                this.return_to_workspace(window, cx)
+                            }))
+                            .child("Return to workspace · Esc"),
+                    )
+                },
+            )
             .child(self.approval.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use oxyn_core::Environment;
+    use oxyn_ui::ConnectionDraft;
+
+    fn open_connection(backend: &Backend, name: &str) -> OpenConnection {
+        let draft = ConnectionDraft {
+            driver: "sqlite".into(),
+            name: name.to_owned(),
+            environment: Environment::Local,
+            values: [("path".to_owned(), ":memory:".to_owned())]
+                .into_iter()
+                .collect(),
+            secrets: Default::default(),
+        };
+        let response = backend
+            .connect(draft, CancelToken::new())
+            .blocking_recv()
+            .expect("connection response")
+            .expect("local connection");
+        match response {
+            ConnectionResponse::Open(open) => open,
+            ConnectionResponse::Approval {
+                command, config, ..
+            } => {
+                let response = backend
+                    .approve_connection(command, *config, CancelToken::new())
+                    .blocking_recv()
+                    .expect("approval response")
+                    .expect("approved connection");
+                let ConnectionResponse::Open(open) = response else {
+                    panic!("approved connection opens")
+                };
+                open
+            }
+        }
+    }
+
+    #[gpui::test]
+    fn switching_connections_preserves_unexecuted_sql_and_updates_saved_list(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let backend = Backend::open_temporary().expect("isolated backend");
+        let first = open_connection(&backend, "First local connection");
+        let second = open_connection(&backend, "Second local connection");
+        let (root, cx) = cx.add_window_view(|_, cx| {
+            let mut root = Root::new(backend, cx);
+            root.connectee(first, cx);
+            root
+        });
+        cx.simulate_input("SELECT 'unsaved draft';");
+        let old_workspace = root.read_with(cx, |root, _| {
+            root.workspace.clone().expect("connected workspace")
+        });
+        old_workspace.update(cx, |_, cx| cx.emit(WorkspaceEvent::NewConnectionRequested));
+        cx.run_until_parked();
+        assert!(root.read_with(cx, |root, _| root.showing_connections));
+        cx.simulate_keystrokes("escape");
+        assert!(!root.read_with(cx, |root, _| root.showing_connections));
+        root.update(cx, |root, cx| root.connectee(second, cx));
+        cx.run_until_parked();
+        root.read_with(cx, |root, cx| {
+            let workspace = root
+                .workspace
+                .as_ref()
+                .expect("new connected workspace")
+                .read(cx);
+            assert_eq!(workspace.draft_text(cx), "SELECT 'unsaved draft';");
+            assert_eq!(root.saved.len(), 2);
+            assert_eq!(root.form.read(cx).model().saved().len(), 2);
+        });
     }
 }

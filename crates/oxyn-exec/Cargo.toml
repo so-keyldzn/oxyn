@@ -26,4 +26,6 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+arrow.workspace = true
+oxyn-driver-sqlite.workspace = true
 rstest.workspace = true

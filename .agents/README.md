@@ -1,8 +1,9 @@
 # Codex dans Oxyn
 
 Cette adaptation est locale au dépôt : [AGENTS.md](../AGENTS.md) est le point
-d’entrée et `skills/` contient les compétences de projet. Aucun réglage global,
-modèle, serveur MCP ou agent autonome n’est installé.
+d’entrée et `skills/` contient les compétences de projet. Les réglages du
+modèle, les serveurs MCP et les profils de sous-agents sont décrits dans
+[.codex/README.md](../.codex/README.md). Aucun réglage global n’est installé.
 
 ## Utilisation
 
@@ -32,7 +33,7 @@ redémarrer la session dans le dépôt.
 | `CLAUDE.md` | Lecture demandée par `AGENTS.md`, invariants conservés à leur source |
 | `.claude/rules/` | Lecture explicite selon les chemins, avant modification ou création |
 | `.claude/commands/` | Procédures partagées appelées par les dix compétences |
-| `.claude/agents/` | Guides de spécialité, sans transposition des métadonnées de modèle, outils ou mémoire |
+| `.claude/agents/` | Guides de spécialité lus par les profils de `.codex/agents/`, sans transposition des métadonnées Claude |
 | Checklists, templates, workflows | Réutilisés avec les adaptations de syntaxe de `AGENTS.md` |
 | `SessionStart` | Inspection explicite de Git, des manifestes et du plan |
 | `PreToolUse` et permissions | Aucun branchement Codex ; consignes et permissions effectives de la session |
@@ -60,8 +61,10 @@ Les profils restent consultables selon la tâche :
   [frontières](../.claude/agents/relecteur-frontiere.md),
   [divergence](../.claude/agents/detecteur-divergence.md).
 
-Une demande de revue reste une revue. Les profils ne créent pas une isolation
-technique en lecture seule et ne déclenchent pas de sous-agent automatiquement.
+Une demande de revue reste une revue. Les profils Codex des relecteurs déclarent
+un défaut de lecture seule, soumis aux permissions effectives de la session.
+Les guides Claude seuls ne créent aucune isolation technique. Les profils
+ne déclenchent pas de sous-agent automatiquement.
 
 ## Maintenance
 

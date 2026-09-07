@@ -4919,12 +4919,14 @@ dependencies = [
 name = "oxyn-exec"
 version = "0.0.1"
 dependencies = [
+ "arrow",
  "async-trait",
  "futures",
  "oxyn-catalog",
  "oxyn-core",
  "oxyn-data",
  "oxyn-driver",
+ "oxyn-driver-sqlite",
  "oxyn-query",
  "oxyn-store",
  "parking_lot",

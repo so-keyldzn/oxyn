@@ -1,0 +1,32 @@
+# Le profil d'exécution des tests.
+#
+# Deux modes de panne que `cargo test` ne sait pas traiter :
+#
+# 1. **Un test qui pend.** Un driver qui attend une réponse qui ne viendra
+#    jamais n'échoue pas : il attend. En local on l'interrompt ; en CI il
+#    consomme le runner jusqu'au délai du job, et le rapport ne désigne pas le
+#    coupable. `slow-timeout` avec `terminate-after` le tue et le nomme.
+#
+# 2. **Des tests qui se marchent dessus.** Les tests d'intégration PostgreSQL
+#    créent et détruisent des objets dans le schéma `public` du même serveur.
+#    Leur module impose `--test-threads=1` en commentaire — c'est-à-dire qu'il
+#    l'impose à qui pense à le lire. Un groupe le rend vrai sans qu'on y pense.
+#
+# nextest n'exécute PAS les tests de documentation : `make test` lance
+# `cargo test --doc` en plus. Sans ça, les exemples des `//!` cesseraient
+# silencieusement d'être compilés.
+
+[profile.default]
+slow-timeout = { period = "60s", terminate-after = 1 }
+
+[test-groups]
+# Un seul test à la fois sur le serveur d'essai partagé.
+serveur-partage = { max-threads = 1 }
+
+# Le délai est relevé pour ce paquet : deux de ses tests prouvent l'annulation
+# côté serveur et le flux sur un volume qui ne tient pas en mémoire. Ils sont
+# lents par construction, et 60 s les tuerait alors qu'ils font leur travail.
+[[profile.default.overrides]]
+filter = 'package(oxyn-driver-postgres)'
+test-group = 'serveur-partage'
+slow-timeout = { period = "300s", terminate-after = 1 }

@@ -639,7 +639,9 @@ impl QueryEditor {
         let commande = modificateurs.secondary();
 
         if commande {
-            cx.stop_propagation();
+            if matches!(touche, "enter" | "a" | "c" | "x" | "v" | "z") {
+                cx.stop_propagation();
+            }
             match touche {
                 "enter" => {
                     cx.emit(EditorEvent::ExecuteRequested);

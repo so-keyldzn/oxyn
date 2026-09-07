@@ -54,10 +54,11 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use oxyn_catalog::SharedCatalog;
 use oxyn_core::{
-    Actor, CancelToken, Command, CommandId, ConnectionConfig, ConnectionId, Decision, DocumentId,
-    Environment, Event, ExecRequest, ExecStats, ExportFormat, OxynError, PolicyGate, Preview,
-    Result, ResultId, SessionId, StatementHandle, WorkspaceId,
+    Actor, CancelToken, CatalogRefreshScope, Command, CommandId, ConnectionConfig, ConnectionId,
+    Decision, DocumentId, Environment, Event, ExecRequest, ExecStats, ExportFormat, OxynError,
+    PolicyGate, Preview, Result, ResultId, SessionId, StatementHandle, WorkspaceId,
 };
 use oxyn_data::{
     BatchProgress, BatchSink, BatchSource, BufferLimits, DEFAULT_MEMORY_BUDGET, ExportOptions,
@@ -94,6 +95,14 @@ pub enum Outcome {
         connection: ConnectionId,
         /// Combien de sessions ont été fermées.
         closed: usize,
+    },
+
+    /// Metadata was refreshed without including its contents in the outcome.
+    CatalogRefreshed {
+        /// Connection owning the updated cache.
+        connection: ConnectionId,
+        /// Requested scope, including Root for the legacy command.
+        scope: CatalogRefreshScope,
     },
 
     /// Une instruction a été exécutée et son résultat est disponible.
@@ -224,6 +233,7 @@ pub struct Executor {
     approvals: ApprovalRegistry,
     events: EventBus,
     results: RwLock<HashMap<ResultId, Arc<ResultBuffer>>>,
+    catalogs: RwLock<HashMap<ConnectionId, Arc<crate::catalog::ConnectionCatalog>>>,
     connections: RwLock<HashMap<ConnectionId, ConnectionConfig>>,
     workspace: WorkspaceId,
     memory_budget: usize,
@@ -452,18 +462,61 @@ impl Executor {
                     .await
             }
 
+            Command::PreviewRelation {
+                connection,
+                session,
+                catalog,
+                namespace,
+                relation,
+                limit,
+            } => {
+                if !(1..=1000).contains(limit) {
+                    return Err(OxynError::Config(
+                        "preview limit must be in 1..=1000".into(),
+                    ));
+                }
+                let path = oxyn_catalog::CatalogPath::for_relation(
+                    catalog.as_deref(),
+                    namespace.as_deref(),
+                    relation,
+                )?;
+                let slot = self
+                    .sessions
+                    .get(*session)
+                    .ok_or_else(|| OxynError::Connection("preview session is not open".into()))?;
+                if slot.connection() != *connection {
+                    return Err(OxynError::Config(
+                        "preview session belongs to another connection".into(),
+                    ));
+                }
+                let request = slot.preview_request(&path, *limit, cancel).await?;
+                let mut request = oxyn_query::reclassify(&request).qualify(request);
+                if request.is_mutating() {
+                    return Err(OxynError::PolicyDenied {
+                        reason: "driver preview request is not read-only".into(),
+                    });
+                }
+                // Enforce the command contract even if a driver omitted its limits.
+                request.limits.read_only = true;
+                request.limits.max_rows = Some(usize::try_from(*limit).map_err(|_| {
+                    OxynError::Config("preview limit exceeds platform capacity".into())
+                })?);
+                self.execute_statement(id, *connection, *session, request, cancel)
+                    .await
+            }
+
             Command::Cancel { statement, .. } => {
                 let report = self.running.cancel(&self.sessions, *statement).await;
                 Ok(Outcome::Cancelled { report })
             }
 
-            // TODO(phase 1) : câbler sur le cache de `oxyn-catalog`. Refuser
-            // franchement plutôt que de rendre un succès qui n'a rien relu :
-            // une arborescence qui prétend être à jour est pire qu'une
-            // arborescence qui dit ne pas savoir.
-            Command::RefreshCatalog { .. } => Err(OxynError::NotSupported {
-                capability: "catalog refresh".to_owned(),
-            }),
+            Command::RefreshCatalog { connection } => {
+                self.refresh_catalog(id, *connection, &CatalogRefreshScope::Root, cancel)
+                    .await
+            }
+            Command::RefreshCatalogScope { connection, scope } => {
+                self.refresh_catalog(id, *connection, scope, cancel).await
+            }
 
             Command::Export {
                 result,
@@ -491,6 +544,10 @@ impl Executor {
         let credentials = self.credentials.resolve(&config)?;
         let session = driver.connect(&config, &credentials, cancel).await?;
         let slot = self.sessions.insert(SessionSlot::new(connection, session));
+        self.catalogs
+            .write()
+            .entry(connection)
+            .or_insert_with(|| Arc::new(crate::catalog::ConnectionCatalog::new()));
         Ok(Outcome::Connected {
             connection,
             session: slot.id(),
@@ -505,6 +562,9 @@ impl Executor {
             .cancel_connection(&self.sessions, connection)
             .await;
 
+        if let Some(catalog) = self.catalogs.write().remove(&connection) {
+            catalog.closed.cancel();
+        }
         let mut closed = 0;
         for slot in self.sessions.drain_connection(connection) {
             if let Err(erreur) = slot.close().await {
@@ -515,6 +575,76 @@ impl Executor {
             closed += 1;
         }
         Ok(Outcome::Disconnected { connection, closed })
+    }
+
+    /// Returns the connected source's in-memory cache without any I/O.
+    ///
+    /// None before Connect or after Disconnect. Hold read guards briefly and
+    /// never across await; refreshes are issued through dispatch only.
+    #[must_use]
+    pub fn catalog(&self, connection: ConnectionId) -> Option<SharedCatalog> {
+        self.catalogs
+            .read()
+            .get(&connection)
+            .map(|state| Arc::clone(&state.cache))
+    }
+
+    async fn refresh_catalog(
+        &self,
+        id: CommandId,
+        connection: ConnectionId,
+        scope: &CatalogRefreshScope,
+        cancel: &CancelToken,
+    ) -> Result<Outcome> {
+        let state = self
+            .catalogs
+            .read()
+            .get(&connection)
+            .cloned()
+            .ok_or_else(|| OxynError::Connection("no open catalog session".to_owned()))?;
+        let mut budget = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Err(OxynError::Cancelled),
+            _ = state.closed.cancelled() => return Err(OxynError::Cancelled),
+            guard = state.refresh.lock() => guard,
+        };
+        let slot = self
+            .sessions
+            .for_connection(connection)
+            .into_iter()
+            .next()
+            .ok_or_else(|| OxynError::Connection("no open catalog session".to_owned()))?;
+        let operation = cancel.child();
+        let read = slot.read_catalog(scope, &operation);
+        tokio::pin!(read);
+        let patch = tokio::select! {
+            biased;
+            _ = state.closed.cancelled() => {
+                operation.cancel();
+                // Let the provider finish cancellation and protocol cleanup.
+                let _ = read.await;
+                return Err(OxynError::Cancelled);
+            }
+            result = &mut read => result?,
+        };
+        // The registry read guard orders publication against Disconnect.
+        let catalogs = self.catalogs.read();
+        if cancel.is_cancelled()
+            || state.closed.is_cancelled()
+            || !catalogs
+                .get(&connection)
+                .is_some_and(|current| Arc::ptr_eq(current, &state))
+        {
+            return Err(OxynError::Cancelled);
+        }
+        budget.reserve(scope, &patch)?;
+        patch.apply(&mut state.cache.write())?;
+        self.events
+            .publish(id, Some(connection), Event::CatalogUpdated);
+        Ok(Outcome::CatalogRefreshed {
+            connection,
+            scope: scope.clone(),
+        })
     }
 
     /// Exécute une instruction et draine son curseur dans un tampon.
@@ -957,6 +1087,9 @@ impl Executor {
     /// fermeture à cet instant : il est journalisé au niveau `warn`. Rend le
     /// nombre de sessions fermées.
     pub async fn shutdown(&self) -> usize {
+        for (_, catalog) in self.catalogs.write().drain() {
+            catalog.closed.cancel();
+        }
         let sessions = self.sessions.drain_all();
         for slot in &sessions {
             for entree in self.running.for_session(slot.id()) {
@@ -1108,6 +1241,7 @@ impl ExecutorBuilder {
             approvals: self.approvals,
             events: self.events,
             results: RwLock::new(HashMap::new()),
+            catalogs: RwLock::new(HashMap::new()),
             connections: RwLock::new(HashMap::new()),
             workspace: self.workspace,
             memory_budget: self.memory_budget,
@@ -1549,3 +1683,11 @@ mod tests {
         assert!(!report.was_running, "l'exécution visée n'existe pas");
     }
 }
+
+#[cfg(test)]
+#[path = "catalog_tests.rs"]
+pub(crate) mod catalog_tests;
+
+#[cfg(test)]
+#[path = "preview_tests.rs"]
+mod preview_tests;

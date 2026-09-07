@@ -1,0 +1,44 @@
+# Les interdits de CLAUDE.md, écrits pour clippy plutôt que pour un relecteur.
+#
+# Un invariant violé ne fait rien échouer au moment de la faute : c'est sa
+# définition. Tout ce qui peut être ramené à un chemin d'appel interdit doit
+# l'être ici, parce que `-D warnings` en fait alors un mur et non un rappel.
+#
+# Ce fichier vaut pour TOUT le workspace : clippy le résout une seule fois, à la
+# racine. Un interdit qui ne doit valoir que pour `oxyn-ui` — « aucun I/O sur le
+# thread UI » au sens large — n'a donc pas sa place ici ; il demande un lint
+# écrit à la main. Ne sont listées que des méthodes qu'AUCUNE crate n'appelle
+# aujourd'hui : ajouter un interdit déjà violé transformerait la porte de
+# qualité en dette, et la première réaction serait de le retirer.
+#
+# Les `reason` sont en anglais : elles sortent dans le diagnostic du compilateur.
+
+# Le workspace est en 0.0.1 et n'a aucun consommateur externe. Sans ce réglage,
+# clippy se tait sur tout ce qui toucherait à une API publique — c'est-à-dire
+# sur presque tout, puisque les crates s'exposent mutuellement.
+avoid-breaking-exported-api = false
+
+disallowed-methods = [
+    # I-05 — rien ne bloque le thread qui dessine. `thread::sleep` sur le thread
+    # UI fige la fenêtre entière ; l'utilisateur conclut au plantage.
+    { path = "std::thread::sleep", reason = "Blocking sleep freezes the UI thread (I-05). Use the async executor's timer, or `tokio::time::sleep` on a worker.", replacement = "tokio::time::sleep" },
+
+    # I-05 — un appel réseau synchrone n'a aucun délai maximal et aucune
+    # annulation : il ne peut pas exister dans ce dépôt.
+    { path = "std::net::TcpStream::connect", reason = "Synchronous network I/O has no timeout and no cancellation path (I-05). Drivers connect through their async runtime." },
+
+    # I-03 — un processus enfant hérite de l'environnement du parent, donc de
+    # tout secret qui s'y trouverait, et son démarrage bloque l'appelant pour
+    # une durée inconnue.
+    { path = "std::process::Command::new", reason = "Spawning a child process leaks the parent environment, including secrets (I-03), and blocks the caller for an unknown duration." },
+
+    # I-03 — `set_var` est en outre non sûr en présence de plusieurs fils
+    # depuis l'édition 2024.
+    { path = "std::env::set_var", reason = "Mutating the process environment is unsound with threads and is how a secret reaches a child process (I-03)." },
+    { path = "std::env::remove_var", reason = "Mutating the process environment is unsound with threads (I-03)." },
+
+    # Analyser depuis un lecteur relit octet par octet ; c'est aussi le chemin
+    # sur lequel une réponse serveur arrive (I-09), et il faut pouvoir borner sa
+    # taille avant de la désérialiser.
+    { path = "serde_json::from_reader", reason = "Parsing from a reader is far slower than from a slice, and gives no way to bound the input before deserializing it (I-09). Read into a buffer first.", replacement = "serde_json::from_slice" },
+]

@@ -77,6 +77,7 @@ pub mod driver;
 pub mod error;
 pub mod options;
 pub mod params;
+mod preview;
 pub mod session;
 pub mod stream;
 pub mod worker;

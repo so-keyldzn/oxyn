@@ -4,11 +4,30 @@
 > C'est le seul document qui parle de ce qui **reste à faire** — les documents
 > d'autorité décrivent ce qui est décidé.
 
-État au 2026-09-06 : les quinze crates existent, avec une application GPUI,
-un formulaire de connexion et un parcours d'exécution SQL. Les corrections
-d'interaction souris, de saisie native, de session et d'annulation sont en place.
+État au 2026-09-07 : les quinze crates existent, avec une application GPUI,
+un formulaire de connexion et un parcours d'exécution SQL. L'intégration UI/UX
+reprend la maquette Figma : sidebar repliable, thèmes clair/sombre, Hugeicons et
+Geist embarqués, catalogue réel chargé par paliers à travers le command bus.
+Les corrections d'interaction souris, de saisie native, de session et
+d'annulation sont en place.
 Les critères de performance de la phase 0 restent à mesurer ; l'existence du
 code ne valide pas à elle seule les portes de sortie ci-dessous.
+
+Le premier workspace propose l'éditeur SQL, l'exploration des métadonnées et
+l'aperçu automatique des 200 premières lignes d'une table SQL. Historique
+visible, requêtes sauvegardées et restauration des brouillons après fermeture
+restent à réaliser. L'aperçu ne propose pas encore de pagination ni de filtre
+des lignes côté serveur.
+La lecture asynchrone des pages de résultats débordées sur disque et une borne
+en octets du cache de métadonnées restent également à compléter.
+
+L'alignement complet du workspace sur la structure retenue par
+[ADR-0011](adr/0011-structure-commune-workspace.md) reste à réaliser : remplacer
+les grands en-têtes conservés dans l'éditeur et la vue d'objet, appliquer les
+repères permanents et la bascule compacte définis dans
+[UX-SPEC](UX-SPEC.md#structure-commune-du-workspace), puis vérifier le focus de
+confirmation et l'aide de l'édition désactivée. Les planches de la page Figma 22
+fixent la cible ; elles ne prouvent pas l'implémentation de ces comportements.
 
 ## D'où viennent ces phases
 

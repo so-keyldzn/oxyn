@@ -20,12 +20,8 @@
 //! frontière qui empêche l'ordonnanceur d'aller lire un mot de passe lui-même,
 //! et qui rend les tests possibles sans trousseau.
 //!
-//! **Le catalogue.** [`Session::catalog`] rend une référence empruntée à la
-//! session, qui ne peut pas sortir du verrou. Le rafraîchissement du catalogue
-//! demande donc une méthode dédiée sur ce module.
-// TODO(phase 1) : exposer ici la lecture du catalogue, quand `oxyn-catalog`
-// sera câblé sur le cache de `oxyn-store`. Aujourd'hui `Command::RefreshCatalog`
-// est refusée franchement plutôt que de faire semblant.
+//! Catalog reads keep the session read guard until provider completion.
+//! Cancellation reaches the provider token, including during disconnect.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -178,6 +174,39 @@ impl SessionSlot {
             return Err(session_closed());
         };
         session.execute(request, cancel).await
+    }
+
+    /// Compose a preview while retaining the open session; lock waiting is cancellable.
+    pub(crate) async fn preview_request(
+        &self,
+        path: &oxyn_catalog::CatalogPath,
+        limit: u32,
+        cancel: &CancelToken,
+    ) -> Result<ExecRequest> {
+        let guard = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Err(OxynError::Cancelled),
+            guard = self.session.read() => guard,
+        };
+        guard
+            .as_deref()
+            .ok_or_else(session_closed)?
+            .preview_request(path, limit)
+    }
+
+    /// Keeps the provider borrowed until cancellation cleanup finishes.
+    pub(crate) async fn read_catalog(
+        &self,
+        scope: &oxyn_core::CatalogRefreshScope,
+        cancel: &CancelToken,
+    ) -> Result<crate::catalog::CatalogPatch> {
+        let guard = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Err(OxynError::Cancelled),
+            guard = self.session.read() => guard,
+        };
+        let session = guard.as_deref().ok_or_else(session_closed)?;
+        crate::catalog::read(session.catalog(), self.capabilities, scope, cancel).await
     }
 
     /// Demande au serveur d'interrompre une exécution.
@@ -350,6 +379,52 @@ mod tests {
         assert!(registre.is_empty());
         assert!(registre.get(SessionId::new()).is_none());
         assert!(registre.drain_connection(ConnectionId::new()).is_empty());
+    }
+
+    #[test]
+    fn catalog_waiting_for_session_lock_is_cancellable() {
+        use crate::executor::catalog_tests::{FakeSession, Probe};
+        use futures::{FutureExt, executor::block_on};
+        let slot = SessionSlot::new(
+            ConnectionId::new(),
+            Box::new(FakeSession(Arc::new(Probe::default()))),
+        );
+        let guard = block_on(slot.session.write());
+        let token = CancelToken::new();
+        let read = slot.read_catalog(&oxyn_core::CatalogRefreshScope::Root, &token);
+        futures::pin_mut!(read);
+        assert!(read.as_mut().now_or_never().is_none());
+        token.cancel();
+        assert!(matches!(block_on(read), Err(OxynError::Cancelled)));
+        drop(guard);
+    }
+
+    #[test]
+    fn preview_waiting_for_session_lock_is_cancellable() {
+        use crate::executor::catalog_tests::{FakeSession, Probe};
+        use futures::{FutureExt, executor::block_on};
+        let slot = SessionSlot::new(
+            ConnectionId::new(),
+            Box::new(FakeSession(Arc::new(Probe::default()))),
+        );
+        let guard = block_on(slot.session.write());
+        let token = CancelToken::new();
+        let path = oxyn_catalog::CatalogPath::for_relation(None, None, "t").expect("valid path");
+        let read = slot.preview_request(&path, 200, &token);
+        futures::pin_mut!(read);
+        assert!(read.as_mut().now_or_never().is_none());
+        token.cancel();
+        assert!(matches!(block_on(read), Err(OxynError::Cancelled)));
+        drop(guard);
+        assert!(matches!(
+            block_on(slot.preview_request(&path, 200, &CancelToken::new())),
+            Err(OxynError::NotSupported { .. })
+        ));
+        block_on(slot.close()).expect("closed session");
+        assert!(matches!(
+            block_on(slot.preview_request(&path, 200, &CancelToken::new())),
+            Err(OxynError::Connection(_))
+        ));
     }
 
     #[test]

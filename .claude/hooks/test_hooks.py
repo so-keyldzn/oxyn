@@ -108,6 +108,12 @@ CAS: list[tuple[str, str, dict, str | None]] = [
      ecriture("crates/oxyn-core/src/lib.rs", "// x\npub fn a() {} // TODO revoir\n"), "ask"),
     ("TODO daté", "code_interdit.py",
      ecriture("crates/oxyn-core/src/lib.rs", "pub fn a() {} // TODO(2026-10-01) : après ADR-0010\n"), None),
+    # Une phase du plan est une échéance au même titre qu'une date, et c'est la
+    # forme que le code emploie le plus. Le hook et `script/verifier-todo`
+    # doivent l'accepter tous les deux : ce cas est ce qui empêche l'un des deux
+    # de se resserrer sans que l'autre le sache.
+    ("TODO rattaché à une phase", "code_interdit.py",
+     ecriture("crates/oxyn-core/src/lib.rs", "pub fn a() {} // TODO(phase 2) : quand le catalogue répond\n"), None),
     # Faux positif constaté en usage réel : un document qui *parle* des TODO en
     # contient légitimement. Le contrôle ne vaut que pour du code.
     ("TODO faux positif : documentation qui parle des TODO", "code_interdit.py",

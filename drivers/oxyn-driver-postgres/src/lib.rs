@@ -113,6 +113,7 @@ pub mod catalog;
 pub mod cursor;
 pub mod decode;
 pub mod driver;
+mod preview;
 pub mod session;
 pub mod types;
 pub mod variant;

@@ -303,19 +303,16 @@ impl Render for TextField {
         div()
             .id("text-field")
             .track_focus(&self.focus)
+            .tab_index(0)
             .cursor_text()
             .w_full()
-            .h(px(30.))
+            .h(px(32.))
             .px_2()
             .py_1()
             .bg(color.surface)
             .border_1()
-            .rounded_sm()
-            .border_color(if focused {
-                color.accent
-            } else {
-                color.grid_line
-            })
+            .rounded(px(6.))
+            .border_color(if focused { color.accent } else { color.border })
             .overflow_hidden()
             .on_key_down(cx.listener(Self::key))
             .on_mouse_down(

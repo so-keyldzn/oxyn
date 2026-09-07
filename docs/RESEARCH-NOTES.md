@@ -101,6 +101,22 @@ features par défaut.
 > que soit l'interface réelle. Conséquence pour les tests :
 > [tests.md](../.claude/rules/tests.md#les-tests-dinterface).
 
+## Ressources de l'interface Figma
+
+Sources vérifiées le **2026-09-07** lors de l'intégration GPUI :
+
+| Ressource | Source figée | Usage |
+|---|---|---|
+| Hugeicons Stroke Rounded | [Dépôt source](https://github.com/hugeicons/hugeicons-static/tree/f9dbcca8d72cc2777a0ccd873c274d9bf7a153e6), contours exportés du [Figma Oxyn](https://www.figma.com/design/Yviemi4brBczzdRdBp1ONv/Oxyn?node-id=13-291) | Douze SVG de 16 × 16 px, octets exacts embarqués ; notice amont conservée |
+| Marque Oxyn | Même Figma, composant `149:22199`, relu après la mise à jour des couleurs | Deux SVG 32 × 32 px selon le thème, fragment orangé et marges internes conservés |
+| Geist | [vercel/geist-font](https://github.com/vercel/geist-font/tree/10dc7658f13c38a474cde201bb09a4617267545b/fonts/Geist/ttf) | Regular, Medium et SemiBold, TTF embarqués sous SIL OFL |
+
+Nœuds, dimensions et SHA-256 : [icônes](../assets/ui/provenance.json) et
+[polices](../assets/fonts/provenance.json). Les notices de licence restent avec
+les ressources. Les fichiers ne sont pas chargés depuis Figma au démarrage :
+`UiAssets` rend les octets inclus à la compilation et les polices sont
+enregistrées avant l'ouverture de la fenêtre.
+
 ## Crates candidates
 
 Relevées au registre, non encore adoptées. Aucune n'entre dans le dépôt sans
@@ -166,6 +182,23 @@ continuer une même tâche dans son fil favorise cette réutilisation, sans la
 garantir. Un succès de cache réduit le travail de traitement ; il ne retire pas
 les tokens de la fenêtre de contexte. Les paramètres de rétention et de routage
 documentés pour l'API ne doivent pas être transposés en clés Codex inventées.
+
+## Codex — agents locaux et MCP
+
+Vérifié le **2026-09-07** pour [.codex/](../.codex/README.md).
+
+| Fait | Décision locale | Source |
+|---|---|---|
+| Les agents de projet sont découverts dans `.codex/agents/*.toml` ; `name`, `description` et `developer_instructions` sont requis | Onze profils courts renvoient aux guides communs et aux adaptations d'AGENTS.md | [Agents personnalisés](https://learn.chatgpt.com/docs/agent-configuration/subagents#custom-agents) |
+| Les réglages de modèle et d'effort omis héritent du contexte de lancement | Aucune surcharge de modèle dans les profils | [Sous-agents](https://learn.chatgpt.com/docs/agent-configuration/subagents) |
+| `agents.max_concurrent_threads_per_session` borne les sous-agents simultanés, hors agent principal | Trois sous-agents au maximum ; choix local, pas une limite du service | [Référence de configuration](https://learn.chatgpt.com/docs/config-file/config-reference) |
+| Un profil peut déclarer `sandbox_mode`, mais les surcharges actives du parent peuvent primer | Défaut `read-only` pour les quatre relecteurs ; conserver aussi la consigne de ne rien modifier | [Permissions des sous-agents](https://learn.chatgpt.com/docs/agent-configuration/subagents#approvals-and-sandbox-controls) |
+| `mcp_servers.<id>.required = false` laisse le serveur facultatif au démarrage | Conserver les deux déclarations Figma préexistantes sans exiger leur disponibilité | [Référence de configuration](https://learn.chatgpt.com/docs/config-file/config-reference) |
+
+La délégation reste soumise à la demande et aux consignes d'AGENTS.md. Les
+profils n'installent aucun hook Claude et ne modifient pas la configuration
+globale. La disponibilité et l'authentification Figma doivent être vérifiées
+dans la session qui utilise le service.
 
 ## Écosystème MCP
 
