@@ -172,12 +172,49 @@ CREATE TABLE documents (
 CREATE INDEX documents_by_workspace ON documents (workspace_id, updated_at DESC);
 ";
 
+/// Migration 2 — la famille de l'erreur, à côté de son message.
+///
+/// Le message seul ne suffit pas : « délai dépassé après 30 s » ne dit pas que
+/// le serveur a peut-être appliqué l'écriture. Sans cette colonne, une interface
+/// qui veut refuser un bouton « relancer » n'a d'autre choix que d'analyser du
+/// texte français — ce que `.claude/rules/rust.md` interdit précisément parce
+/// qu'un message change et qu'un appelant qui l'analysait casse en silence
+/// (I-13).
+///
+/// `NULL` sur les lignes antérieures, et sur toute ligne qui n'a pas échoué.
+const M0002_HISTORY_ERROR_CLASS: &str = "\
+ALTER TABLE query_history ADD COLUMN error_class TEXT;";
+
+/// Migration 3 — la même famille d'erreur, dans la piste d'audit.
+///
+/// `query_history` la porte depuis la migration 2 ; l'absence dans
+/// `audit_journal` serait l'asymétrie prise à l'envers. C'est la table qu'on
+/// relit **après** incident, celle qui consigne les commandes que l'historique
+/// ignore, et celle qu'on ne peut pas corriger ensuite : elle est append-only.
+///
+/// `ALTER TABLE ... ADD COLUMN` n'est pas un `UPDATE` : le déclencheur
+/// d'inviolabilité ne s'y oppose pas, et aucune ligne existante n'est réécrite.
+const M0003_JOURNAL_ERROR_CLASS: &str = "\
+ALTER TABLE audit_journal ADD COLUMN error_class TEXT;";
+
 /// Toutes les migrations, dans l'ordre d'application.
-pub(crate) const MIGRATIONS: &[Migration] = &[Migration {
-    version: 1,
-    name: "initial",
-    sql: M0001_INITIAL,
-}];
+pub(crate) const MIGRATIONS: &[Migration] = &[
+    Migration {
+        version: 1,
+        name: "initial",
+        sql: M0001_INITIAL,
+    },
+    Migration {
+        version: 2,
+        name: "history_error_class",
+        sql: M0002_HISTORY_ERROR_CLASS,
+    },
+    Migration {
+        version: 3,
+        name: "journal_error_class",
+        sql: M0003_JOURNAL_ERROR_CLASS,
+    },
+];
 
 /// Version de schéma que ce binaire sait produire.
 #[must_use]
@@ -312,6 +349,72 @@ mod tests {
             i64::from(latest_version()),
             "une migration ne doit être inscrite qu'une fois"
         );
+    }
+
+    /// Une base **déjà en v1, avec des lignes**, monte sans les perdre.
+    ///
+    /// `migrer_est_idempotent` part de zéro et applique tout d'un bloc : il ne
+    /// prouve rien sur le seul cas qui existe chez un utilisateur, celui d'un
+    /// fichier écrit par une version précédente. Ce test traverse les deux
+    /// migrations incrémentales du dépôt, dont celle qui touche la table
+    /// **append-only** : un `ADD COLUMN` n'est pas un `UPDATE`, mais c'est
+    /// exactement le genre d'affirmation qui mérite un test plutôt qu'un
+    /// raisonnement.
+    #[test]
+    fn une_base_deja_en_v1_monte_sans_perdre_ses_lignes() {
+        let mut conn = Connection::open_in_memory().expect("base en mémoire");
+        conn.execute_batch(SCHEMA_VERSION_TABLE).expect("suivi");
+        conn.execute_batch(M0001_INITIAL).expect("schéma de la v1");
+        conn.execute(
+            "INSERT INTO schema_version (version, name, applied_at) VALUES (1, 'initial', ?1)",
+            rusqlite::params![chrono::Utc::now()],
+        )
+        .expect("inscription de la v1");
+        conn.execute(
+            "INSERT INTO query_history
+                 (ts, actor_kind, language, statement, intent, status, error)
+             VALUES (?1, 'human', '\"sql\"', 'INSERT INTO commandes VALUES (1)', 'write',
+                     'failed', 'délai dépassé après 30s')",
+            rusqlite::params![chrono::Utc::now()],
+        )
+        .expect("une ligne écrite par la version précédente");
+        conn.execute(
+            "INSERT INTO audit_journal
+                 (ts, actor_kind, command_kind, intent, risk, policy_decision, error)
+             VALUES (?1, 'agent', 'Execute', 'write', '\"none\"', 'allow',
+                     'délai dépassé après 30s')",
+            rusqlite::params![chrono::Utc::now()],
+        )
+        .expect("une entrée d'audit écrite par la version précédente");
+
+        migrate(&mut conn).expect("montée jusqu'à la version courante");
+
+        assert_eq!(current_version(&conn).expect("version"), latest_version());
+        // La ligne survit, et sa famille est `NULL` : personne ne peut la
+        // deviner sans analyser son texte, ce que la colonne existe pour
+        // remplacer. `HistoryRecord::is_retryable` traite ce `NULL` comme
+        // « on ne sait pas », donc comme non rejouable (I-13).
+        let (statement, class): (String, Option<String>) = conn
+            .query_row(
+                "SELECT statement, error_class FROM query_history",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("la ligne antérieure a survécu");
+        assert!(statement.starts_with("INSERT"));
+        assert_eq!(class, None);
+
+        // La piste d'audit aussi : ajouter une colonne ne réécrit aucune ligne,
+        // donc le déclencheur d'inviolabilité n'a rien à refuser.
+        let (kind, class): (String, Option<String>) = conn
+            .query_row(
+                "SELECT command_kind, error_class FROM audit_journal",
+                [],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .expect("l'entrée d'audit antérieure a survécu");
+        assert_eq!(kind, "Execute");
+        assert_eq!(class, None);
     }
 
     #[test]

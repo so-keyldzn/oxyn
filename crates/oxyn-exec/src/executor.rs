@@ -54,17 +54,18 @@ use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
+use oxyn_catalog::SharedCatalog;
 use oxyn_core::{
-    Actor, CancelToken, Command, CommandId, ConnectionConfig, ConnectionId, Decision, DocumentId,
-    Environment, Event, ExecRequest, ExecStats, ExportFormat, OxynError, PolicyGate, Preview,
-    Result, ResultId, SessionId, StatementHandle, WorkspaceId,
+    Actor, CancelToken, CatalogRefreshScope, Command, CommandId, ConnectionConfig, ConnectionId,
+    Decision, DocumentId, Environment, Event, ExecRequest, ExecStats, ExportFormat, OxynError,
+    PolicyGate, Preview, Result, ResultId, SessionId, StatementHandle, WorkspaceId,
 };
 use oxyn_data::{
     BatchProgress, BatchSink, BatchSource, BufferLimits, DEFAULT_MEMORY_BUDGET, ExportOptions,
     ResultBuffer, SinkOutcome, export,
 };
 use oxyn_driver::{Cursor, DriverRegistry};
-use oxyn_store::{Document, JournalRecord, Store};
+use oxyn_store::{Document, HistoryRecord, JournalRecord, Store};
 use parking_lot::RwLock;
 
 use crate::approval::{ApprovalRegistry, PendingCommand};
@@ -94,6 +95,14 @@ pub enum Outcome {
         connection: ConnectionId,
         /// Combien de sessions ont été fermées.
         closed: usize,
+    },
+
+    /// Metadata was refreshed without including its contents in the outcome.
+    CatalogRefreshed {
+        /// Connection owning the updated cache.
+        connection: ConnectionId,
+        /// Requested scope, including Root for the legacy command.
+        scope: CatalogRefreshScope,
     },
 
     /// Une instruction a été exécutée et son résultat est disponible.
@@ -224,6 +233,7 @@ pub struct Executor {
     approvals: ApprovalRegistry,
     events: EventBus,
     results: RwLock<HashMap<ResultId, Arc<ResultBuffer>>>,
+    catalogs: RwLock<HashMap<ConnectionId, Arc<crate::catalog::ConnectionCatalog>>>,
     connections: RwLock<HashMap<ConnectionId, ConnectionConfig>>,
     workspace: WorkspaceId,
     memory_budget: usize,
@@ -300,6 +310,7 @@ impl Executor {
 
         match decision {
             Decision::Deny { reason } => {
+                self.history_denied(&actor, &command, &reason);
                 self.events.publish(
                     id,
                     connection,
@@ -374,6 +385,7 @@ impl Executor {
             {
                 tracing::error!(error = %erreur, command = %command, "late denial could not be journaled");
             }
+            self.history_denied(&attente.actor, &attente.command, &reason);
             self.events.publish(
                 command,
                 connection,
@@ -420,9 +432,15 @@ impl Executor {
         cancel: &CancelToken,
         approved_by: Option<&str>,
     ) -> Result<Outcome> {
+        // L'historique s'inscrit ici et pas au dispatch : une commande mise en
+        // attente d'accord puis rejetée laisserait sinon une ligne « en cours »
+        // éternelle, alors qu'elle n'a jamais été soumise au serveur.
+        let en_cours = self.history_start(actor, &command);
         let debut = Instant::now();
         let issue = self.execute_command(id, &command, cancel).await;
-        self.journal_result(id, actor, &command, &issue, debut.elapsed(), approved_by);
+        let duree = debut.elapsed();
+        self.journal_result(id, actor, &command, &issue, duree, approved_by);
+        self.history_finish(en_cours, &issue, duree);
         issue
     }
 
@@ -457,13 +475,13 @@ impl Executor {
                 Ok(Outcome::Cancelled { report })
             }
 
-            // TODO(phase 1) : câbler sur le cache de `oxyn-catalog`. Refuser
-            // franchement plutôt que de rendre un succès qui n'a rien relu :
-            // une arborescence qui prétend être à jour est pire qu'une
-            // arborescence qui dit ne pas savoir.
-            Command::RefreshCatalog { .. } => Err(OxynError::NotSupported {
-                capability: "catalog refresh".to_owned(),
-            }),
+            Command::RefreshCatalog { connection } => {
+                self.refresh_catalog(id, *connection, &CatalogRefreshScope::Root, cancel)
+                    .await
+            }
+            Command::RefreshCatalogScope { connection, scope } => {
+                self.refresh_catalog(id, *connection, scope, cancel).await
+            }
 
             Command::Export {
                 result,
@@ -491,6 +509,10 @@ impl Executor {
         let credentials = self.credentials.resolve(&config)?;
         let session = driver.connect(&config, &credentials, cancel).await?;
         let slot = self.sessions.insert(SessionSlot::new(connection, session));
+        self.catalogs
+            .write()
+            .entry(connection)
+            .or_insert_with(|| Arc::new(crate::catalog::ConnectionCatalog::new()));
         Ok(Outcome::Connected {
             connection,
             session: slot.id(),
@@ -505,6 +527,9 @@ impl Executor {
             .cancel_connection(&self.sessions, connection)
             .await;
 
+        if let Some(catalog) = self.catalogs.write().remove(&connection) {
+            catalog.closed.cancel();
+        }
         let mut closed = 0;
         for slot in self.sessions.drain_connection(connection) {
             if let Err(erreur) = slot.close().await {
@@ -515,6 +540,76 @@ impl Executor {
             closed += 1;
         }
         Ok(Outcome::Disconnected { connection, closed })
+    }
+
+    /// Returns the connected source's in-memory cache without any I/O.
+    ///
+    /// None before Connect or after Disconnect. Hold read guards briefly and
+    /// never across await; refreshes are issued through dispatch only.
+    #[must_use]
+    pub fn catalog(&self, connection: ConnectionId) -> Option<SharedCatalog> {
+        self.catalogs
+            .read()
+            .get(&connection)
+            .map(|state| Arc::clone(&state.cache))
+    }
+
+    async fn refresh_catalog(
+        &self,
+        id: CommandId,
+        connection: ConnectionId,
+        scope: &CatalogRefreshScope,
+        cancel: &CancelToken,
+    ) -> Result<Outcome> {
+        let state = self
+            .catalogs
+            .read()
+            .get(&connection)
+            .cloned()
+            .ok_or_else(|| OxynError::Connection("no open catalog session".to_owned()))?;
+        let mut budget = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => return Err(OxynError::Cancelled),
+            _ = state.closed.cancelled() => return Err(OxynError::Cancelled),
+            guard = state.refresh.lock() => guard,
+        };
+        let slot = self
+            .sessions
+            .for_connection(connection)
+            .into_iter()
+            .next()
+            .ok_or_else(|| OxynError::Connection("no open catalog session".to_owned()))?;
+        let operation = cancel.child();
+        let read = slot.read_catalog(scope, &operation);
+        tokio::pin!(read);
+        let patch = tokio::select! {
+            biased;
+            _ = state.closed.cancelled() => {
+                operation.cancel();
+                // Let the provider finish cancellation and protocol cleanup.
+                let _ = read.await;
+                return Err(OxynError::Cancelled);
+            }
+            result = &mut read => result?,
+        };
+        // The registry read guard orders publication against Disconnect.
+        let catalogs = self.catalogs.read();
+        if cancel.is_cancelled()
+            || state.closed.is_cancelled()
+            || !catalogs
+                .get(&connection)
+                .is_some_and(|current| Arc::ptr_eq(current, &state))
+        {
+            return Err(OxynError::Cancelled);
+        }
+        budget.reserve(scope, &patch)?;
+        patch.apply(&mut state.cache.write())?;
+        self.events
+            .publish(id, Some(connection), Event::CatalogUpdated);
+        Ok(Outcome::CatalogRefreshed {
+            connection,
+            scope: scope.clone(),
+        })
     }
 
     /// Exécute une instruction et draine son curseur dans un tampon.
@@ -820,6 +915,90 @@ impl Executor {
         }
     }
 
+    // ── L'historique du requêteur ───────────────────────────────────────────
+    //
+    // Il répond à « qu'est-ce que j'ai lancé hier ? », là où le journal d'audit
+    // répond à « qu'est-ce qui a été autorisé, et à qui ? ». C'est pourquoi
+    // aucune des trois méthodes ci-dessous ne rend d'erreur : un historique
+    // qu'on ne peut pas écrire est une gêne, pas une promesse rompue, et refuser
+    // d'exécuter pour autant serait pire que le défaut. L'échec est crié.
+    //
+    // Seules les exécutions y figurent : `HistoryRecord::from_command` rend
+    // `None` pour tout le reste, et une `Connect` au milieu des requêtes rendrait
+    // la liste illisible. Le journal, lui, les consigne toutes.
+
+    /// Inscrit une exécution qui démarre, et rend de quoi la compléter.
+    fn history_start(&self, actor: &Actor, command: &Command) -> Option<(i64, HistoryRecord)> {
+        let record = self.history_record(actor, command)?;
+        match self.store.history().record(&record) {
+            Ok(id) => Some((id, record)),
+            Err(erreur) => {
+                tracing::error!(error = %erreur, "a submitted statement could not be recorded in the query history");
+                None
+            }
+        }
+    }
+
+    /// Complète l'entrée inscrite par [`Self::history_start`].
+    fn history_finish(
+        &self,
+        en_cours: Option<(i64, HistoryRecord)>,
+        issue: &Result<Outcome>,
+        duration: Duration,
+    ) {
+        let Some((id, record)) = en_cours else {
+            return;
+        };
+        let record = match issue {
+            // Un drainage interrompu rend `Ok` : la commande n'a pas échoué,
+            // mais elle n'a pas rendu son résultat entier. La classer « réussie »
+            // ferait lire un résultat tronqué comme un résultat complet.
+            Ok(Outcome::Executed {
+                stats,
+                sink: SinkOutcome::Cancelled,
+                ..
+            }) => record
+                .succeeded(duration, Some(stats.rows))
+                .failed(&OxynError::Cancelled),
+            Ok(outcome) => record.succeeded(duration, outcome.rows()),
+            Err(erreur) => {
+                // Un échec a une durée, lui aussi : « expiré après 30 s » et
+                // « rejeté en 2 ms » ne décrivent pas le même incident.
+                let mut echouee = record.failed(erreur);
+                echouee.duration = Some(duration);
+                echouee
+            }
+        };
+        if let Err(erreur) = self.store.history().finish(id, &record) {
+            tracing::error!(error = %erreur, "the outcome of a statement could not be written to the query history");
+        }
+    }
+
+    /// Inscrit un refus, en une seule ligne : il n'a jamais démarré, donc il n'y
+    /// a pas d'entrée « en cours » à compléter.
+    fn history_denied(&self, actor: &Actor, command: &Command, reason: &str) {
+        let Some(record) = self.history_record(actor, command) else {
+            return;
+        };
+        if let Err(erreur) = self.store.history().record(&record.denied(reason)) {
+            tracing::error!(error = %erreur, "a denied statement could not be recorded in the query history");
+        }
+    }
+
+    /// L'entrée d'historique d'une commande d'exécution, connexion nommée.
+    ///
+    /// Le nom est recopié pour que la ligne reste lisible après la suppression
+    /// de la connexion. Ce qui n'y entre **pas** : les valeurs liées, que
+    /// `ExecRequest` garde séparées du texte, et qui contiennent précisément ce
+    /// qu'un historique relu six mois plus tard ne doit pas exposer (I-03).
+    fn history_record(&self, actor: &Actor, command: &Command) -> Option<HistoryRecord> {
+        let mut record = HistoryRecord::from_command(actor, command)?;
+        record.connection_name = record
+            .connection
+            .and_then(|id| self.connections.read().get(&id).map(|c| c.name.clone()));
+        Some(record)
+    }
+
     // ── Ce que l'ordonnanceur sait des connexions ───────────────────────────
 
     /// Fait connaître une connexion à l'ordonnanceur.
@@ -957,6 +1136,9 @@ impl Executor {
     /// fermeture à cet instant : il est journalisé au niveau `warn`. Rend le
     /// nombre de sessions fermées.
     pub async fn shutdown(&self) -> usize {
+        for (_, catalog) in self.catalogs.write().drain() {
+            catalog.closed.cancel();
+        }
         let sessions = self.sessions.drain_all();
         for slot in &sessions {
             for entree in self.running.for_session(slot.id()) {
@@ -1108,6 +1290,7 @@ impl ExecutorBuilder {
             approvals: self.approvals,
             events: self.events,
             results: RwLock::new(HashMap::new()),
+            catalogs: RwLock::new(HashMap::new()),
             connections: RwLock::new(HashMap::new()),
             workspace: self.workspace,
             memory_budget: self.memory_budget,
@@ -1131,10 +1314,10 @@ mod tests {
 
     use futures::executor::block_on;
     use oxyn_core::{
-        AgentId, AgentSessionId, DefaultPolicy, DriverId, ExecLimits, MutationRisk, QueryLanguage,
-        SqlDialect, StatementIntent,
+        AgentId, AgentSessionId, Capabilities, DefaultPolicy, DriverId, ErrorClass, ExecLimits,
+        MutationRisk, QueryLanguage, SqlDialect, StatementIntent,
     };
-    use oxyn_store::{ActorKind, PolicyOutcome};
+    use oxyn_store::{ActorKind, HistoryStatus, PolicyOutcome};
 
     /// Un banc complet : état local en mémoire, politique par défaut, aucune
     /// session ouverte. Aucun driver n'est enregistré — les tests qui suivent
@@ -1548,4 +1731,249 @@ mod tests {
         };
         assert!(!report.was_running, "l'exécution visée n'existe pas");
     }
+
+    // ── L'historique du requêteur ───────────────────────────────────────────
+
+    /// Une session qui rend un seul lot de deux lignes, sans serveur.
+    ///
+    /// Elle ne sert qu'à prouver le chemin nominal de l'historique : sans
+    /// exécution qui aboutit, la ligne `succeeded` n'existe dans aucun test, et
+    /// c'est exactement celle qui manquait jusqu'ici.
+    struct SessionFactice;
+
+    #[async_trait::async_trait]
+    impl oxyn_driver::Session for SessionFactice {
+        fn capabilities(&self) -> Capabilities {
+            Capabilities::SQL | Capabilities::TABLES
+        }
+        async fn execute(&self, _: ExecRequest, _: &CancelToken) -> Result<Box<dyn Cursor>> {
+            Ok(Box::new(CurseurFactice {
+                handle: StatementHandle::new(),
+                rendu: false,
+                stats: ExecStats::default(),
+            }))
+        }
+        async fn cancel(&self, _: StatementHandle) -> Result<()> {
+            Ok(())
+        }
+        fn catalog(&self) -> &dyn oxyn_catalog::CatalogProvider {
+            unreachable!("les tests d'historique n'introspectent rien")
+        }
+        async fn ping(&self) -> Result<Duration> {
+            Ok(Duration::ZERO)
+        }
+        async fn close(self: Box<Self>) -> Result<()> {
+            Ok(())
+        }
+    }
+
+    struct CurseurFactice {
+        handle: StatementHandle,
+        rendu: bool,
+        stats: ExecStats,
+    }
+
+    fn schema_factice() -> arrow::datatypes::SchemaRef {
+        Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("id", arrow::datatypes::DataType::Int32, false),
+        ]))
+    }
+
+    #[async_trait::async_trait]
+    impl Cursor for CurseurFactice {
+        fn handle(&self) -> StatementHandle {
+            self.handle
+        }
+        fn schema(&self) -> arrow::datatypes::SchemaRef {
+            schema_factice()
+        }
+        async fn next_batch(&mut self) -> Result<Option<arrow::record_batch::RecordBatch>> {
+            if self.rendu {
+                return Ok(None);
+            }
+            self.rendu = true;
+            let lot = arrow::record_batch::RecordBatch::try_new(
+                schema_factice(),
+                vec![Arc::new(arrow::array::Int32Array::from(vec![1, 2]))],
+            )
+            .expect("la colonne correspond au schéma construit juste au-dessus");
+            self.stats.record_batch(2, 0);
+            Ok(Some(lot))
+        }
+        fn stats(&self) -> ExecStats {
+            self.stats
+        }
+    }
+
+    /// **Une exécution qui aboutit laisse une trace complète.**
+    ///
+    /// Durée et lignes comprises : un historique qui ne dit pas combien de
+    /// lignes une requête a rendues ne répond pas à la question qu'on lui pose.
+    #[test]
+    fn une_execution_reussie_est_inscrite_avec_sa_duree_et_ses_lignes() {
+        let connexion = ConnectionConfig::new("atelier", DriverId::sqlite())
+            .with_environment(Environment::Local);
+        let banc = Banc::new(&connexion);
+        let session = banc
+            .executeur
+            .sessions
+            .insert(SessionSlot::new(connexion.id, Box::new(SessionFactice)));
+
+        let commande = Command::Execute {
+            connection: connexion.id,
+            session: session.id(),
+            request: Box::new(
+                ExecRequest::new(
+                    QueryLanguage::Sql(SqlDialect::Sqlite),
+                    "SELECT id FROM clients",
+                )
+                .with_intent(StatementIntent::Read)
+                // Sans délai : `block_on` n'a pas d'horloge tokio, et le
+                // délai par défaut en réclamerait une.
+                .with_limits(ExecLimits::default().with_timeout(None::<Duration>)),
+            ),
+        };
+        block_on(
+            banc.executeur
+                .dispatch(Actor::Human, commande, &CancelToken::new()),
+        )
+        .expect("l'exécution aboutit");
+
+        let entree = banc
+            .store
+            .history()
+            .recent(10)
+            .expect("relecture de l'historique")
+            .pop()
+            .expect("une exécution laisse une entrée");
+        assert_eq!(entree.record.status, HistoryStatus::Succeeded);
+        assert_eq!(entree.record.rows, Some(2));
+        assert!(entree.record.duration.is_some(), "une durée est mesurée");
+        assert_eq!(entree.record.statement, "SELECT id FROM clients");
+        // Le nom est recopié pour survivre à la suppression de la connexion.
+        assert_eq!(entree.record.connection_name.as_deref(), Some("atelier"));
+        assert!(entree.record.error.is_none());
+    }
+
+    /// **Une exécution qui échoue laisse l'erreur, pas un silence.**
+    ///
+    /// Avec sa **famille**, qui est la donnée dont dépend le droit de rejouer :
+    /// c'est elle qui interdira d'offrir « relancer » sur un `INSERT` dont
+    /// l'effet côté serveur est inconnu (I-13).
+    #[test]
+    fn un_echec_est_inscrit_avec_son_erreur_et_sa_famille() {
+        let connexion = ConnectionConfig::new("atelier", DriverId::sqlite())
+            .with_environment(Environment::Local);
+        let banc = Banc::new(&connexion);
+
+        // Aucune session n'est ouverte : l'exécution échoue avant le driver.
+        let commande = execution(connexion.id, "SELECT 1", StatementIntent::Read);
+        block_on(
+            banc.executeur
+                .dispatch(Actor::Human, commande, &CancelToken::new()),
+        )
+        .expect_err("aucune session sous cet identifiant");
+
+        let entree = banc
+            .store
+            .history()
+            .recent(10)
+            .expect("relecture")
+            .pop()
+            .expect("un échec laisse une entrée");
+        assert_eq!(entree.record.status, HistoryStatus::Failed);
+        assert!(entree.record.error.is_some(), "l'erreur est conservée");
+        assert!(entree.record.duration.is_some(), "un échec a une durée");
+        // La famille est retenue en tant que donnée, jamais déduite du message.
+        assert_eq!(
+            entree.record.error_class,
+            Some(ErrorClass::Transient),
+            "une session absente se rouvre : c'est transitoire"
+        );
+    }
+
+    /// **Un refus figure à l'historique, avec son motif.**
+    ///
+    /// Un historique qui ne montre que ce qui a marché laisse l'utilisateur
+    /// chercher une requête qu'il a bel et bien lancée.
+    #[test]
+    fn un_refus_est_inscrit_avec_son_motif_et_sans_valeur_liee() {
+        let connexion = ConnectionConfig::new("base client", DriverId::postgres())
+            .with_environment(Environment::Production);
+        let banc = Banc::new(&connexion);
+
+        // Le secret voyage en valeur liée, jamais dans le texte (I-03).
+        let commande = Command::Execute {
+            connection: connexion.id,
+            session: SessionId::new(),
+            request: Box::new(
+                ExecRequest::new(
+                    QueryLanguage::Sql(SqlDialect::Postgres),
+                    "DELETE FROM clients WHERE jeton = $1",
+                )
+                .with_intent(StatementIntent::Read)
+                .with_params(vec![oxyn_core::ScalarValue::Text(
+                    "hunter2-le-secret".to_owned(),
+                )])
+                .with_limits(ExecLimits::default().writable()),
+            ),
+        };
+        let issue = block_on(
+            banc.executeur
+                .dispatch(agent(), commande, &CancelToken::new()),
+        )
+        .expect("un refus n'est pas une panne");
+        assert!(issue.is_denied(), "{issue:?}");
+
+        let entrees = banc.store.history().recent(10).expect("relecture");
+        assert_eq!(entrees.len(), 1, "un refus, une ligne — pas deux");
+        let record = &entrees[0].record;
+        assert_eq!(record.status, HistoryStatus::Denied);
+        assert!(
+            record
+                .error
+                .as_deref()
+                .is_some_and(|motif| motif.contains("production")),
+            "{:?}",
+            record.error
+        );
+        // L'intention inscrite est celle que le texte porte, pas celle que
+        // l'agent a déclarée.
+        assert_eq!(record.intent, StatementIntent::Write);
+        assert!(
+            !format!("{record:?}").contains("hunter2"),
+            "aucune valeur liée ne rejoint l'historique (I-03)"
+        );
+    }
+
+    /// **L'historique ne consigne que des exécutions.**
+    ///
+    /// Une `Connect` ou une `Cancel` au milieu des requêtes rendrait la liste
+    /// illisible ; elles restent au journal, qui les consigne toutes.
+    #[test]
+    fn une_commande_qui_n_est_pas_une_execution_ne_touche_pas_l_historique() {
+        let connexion = ConnectionConfig::new("atelier", DriverId::sqlite())
+            .with_environment(Environment::Local);
+        let banc = Banc::new(&connexion);
+
+        block_on(banc.executeur.dispatch(
+            Actor::Human,
+            Command::Cancel {
+                connection: connexion.id,
+                statement: StatementHandle::new(),
+            },
+            &CancelToken::new(),
+        ))
+        .expect("annuler ne se refuse pas");
+
+        assert_eq!(banc.store.history().count().expect("comptage"), 0);
+        assert!(
+            banc.store.journal().count().expect("comptage") > 0,
+            "le journal, lui, les consigne toutes"
+        );
+    }
 }
+
+#[cfg(test)]
+#[path = "catalog_tests.rs"]
+pub(crate) mod catalog_tests;

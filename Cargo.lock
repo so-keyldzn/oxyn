@@ -4919,6 +4919,7 @@ dependencies = [
 name = "oxyn-exec"
 version = "0.0.1"
 dependencies = [
+ "arrow",
  "async-trait",
  "futures",
  "oxyn-catalog",

@@ -26,4 +26,7 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+# Un curseur factice rend des `RecordBatch` : la seule façon de prouver le
+# chemin nominal de l'historique — durée et lignes — sans serveur.
+arrow.workspace = true
 rstest.workspace = true

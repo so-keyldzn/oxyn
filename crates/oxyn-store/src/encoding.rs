@@ -29,7 +29,7 @@
 use std::str::FromStr;
 use std::time::Duration;
 
-use oxyn_core::{Environment, IdParseError, StatementIntent};
+use oxyn_core::{Environment, ErrorClass, IdParseError, StatementIntent};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
@@ -103,6 +103,26 @@ pub(crate) fn intent_from_text(raw: &str) -> StatementIntent {
                 "unknown statement intent in local state, falling back to `unknown`"
             );
             StatementIntent::Unknown
+        }
+    }
+}
+
+/// Relit une famille d'erreur.
+///
+/// Une valeur inconnue rend [`ErrorClass::Ambiguous`], et c'est le sens de
+/// I-13 appliqué jusqu'à la relecture : une erreur dont on ne sait plus dire
+/// si le serveur a appliqué l'écriture ne se retente pas.
+pub(crate) fn error_class_from_text(raw: &str) -> ErrorClass {
+    match raw {
+        "transitoire" => ErrorClass::Transient,
+        "permanente" => ErrorClass::Permanent,
+        "ambiguë" => ErrorClass::Ambiguous,
+        _ => {
+            tracing::warn!(
+                column = "error_class",
+                "unknown error class in local state, falling back to `ambiguous`"
+            );
+            ErrorClass::Ambiguous
         }
     }
 }

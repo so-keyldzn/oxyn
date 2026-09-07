@@ -193,6 +193,7 @@ impl DispatchReport {
 fn summarize(outcome: &Outcome) -> String {
     match outcome {
         Outcome::Connected { .. } => "session opened".to_owned(),
+        Outcome::CatalogRefreshed { .. } => "catalog refreshed".to_owned(),
         Outcome::Disconnected { closed, .. } => format!("{closed} session(s) closed"),
         Outcome::Cancelled { report } => {
             if report.was_running {

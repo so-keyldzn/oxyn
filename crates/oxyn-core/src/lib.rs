@@ -82,7 +82,7 @@ pub mod value;
 
 pub use cancel::CancelToken;
 pub use capabilities::Capabilities;
-pub use command::{Actor, Command, ExportFormat};
+pub use command::{Actor, CatalogRefreshScope, Command, ExportFormat};
 pub use connection::{ConnectionConfig, Environment};
 pub use error::{ErrorClass, OxynError, Result};
 pub use event::Event;
