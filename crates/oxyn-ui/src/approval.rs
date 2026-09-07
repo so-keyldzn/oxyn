@@ -38,7 +38,7 @@
 use gpui::prelude::*;
 use gpui::{
     AnyElement, App, ClickEvent, Context, EventEmitter, FocusHandle, Focusable, Hsla, KeyDownEvent,
-    SharedString, Window, div, px,
+    ScrollHandle, SharedString, Window, div, point, px,
 };
 use oxyn_core::{Actor, Decision, Environment, Preview};
 
@@ -165,6 +165,7 @@ pub fn actor_label(actor: &Actor) -> &'static str {
 pub struct ApprovalDialog {
     focus: FocusHandle,
     request: Option<ApprovalRequest>,
+    preview_scroll: ScrollHandle,
 }
 
 impl EventEmitter<ApprovalEvent> for ApprovalDialog {}
@@ -181,6 +182,7 @@ impl ApprovalDialog {
         Self {
             focus: cx.focus_handle(),
             request: None,
+            preview_scroll: ScrollHandle::new(),
         }
     }
 
@@ -204,6 +206,7 @@ impl ApprovalDialog {
         cx: &mut Context<'_, Self>,
     ) {
         self.request = Some(request);
+        self.preview_scroll.set_offset(point(px(0.), px(0.)));
         // Le focus vient sur l'écran, pas sur le bouton d'approbation : la
         // frappe en cours de l'utilisateur ne doit pas valider ce qu'il n'a pas
         // encore lu.
@@ -235,8 +238,22 @@ impl ApprovalDialog {
             // Approuver demande un raccourci composé. `Entrée` seul ne fait
             // rien, exprès : c'est la touche qu'on presse sans lire.
             "enter" if commande => self.decide(ApprovalOutcome::Approved, cx),
+            "up" | "down" | "pageup" | "pagedown" | "home" | "end" => {
+                let mut offset = self.preview_scroll.offset();
+                offset.y = match touche {
+                    "up" => offset.y + px(24.),
+                    "down" => offset.y - px(24.),
+                    "pageup" => offset.y + px(200.),
+                    "pagedown" => offset.y - px(200.),
+                    "home" => px(0.),
+                    _ => -self.preview_scroll.max_offset().height,
+                };
+                self.preview_scroll.set_offset(offset);
+                cx.notify();
+            }
             _ => {}
         }
+        cx.stop_propagation();
     }
 }
 
@@ -355,8 +372,10 @@ impl ApprovalDialog {
             )
             .child(
                 div()
+                    .id("approval-statement")
                     .max_h(px(220.0))
-                    .overflow_hidden()
+                    .overflow_scroll()
+                    .track_scroll(&self.preview_scroll)
                     .p_2()
                     .rounded_md()
                     .border_1()
@@ -463,6 +482,38 @@ mod tests {
 
     fn apercu() -> Preview {
         Preview::new("DELETE FROM commandes", "Base client")
+    }
+
+    #[gpui::test]
+    fn long_sql_is_scrollable_without_approving_on_enter(cx: &mut gpui::TestAppContext) {
+        let sql = "DELETE FROM audit;\n".repeat(100);
+        let (dialog, cx) = cx.add_window_view(|window, cx| {
+            let mut dialog = ApprovalDialog::new(cx);
+            let request = ApprovalRequest::from_decision(
+                ApprovalId::new(42),
+                Actor::Human,
+                Environment::Production,
+                &Decision::approval(
+                    "Production write",
+                    Some(Preview::new(&sql, "QA production")),
+                ),
+            )
+            .expect("write requires a preview");
+            dialog.present(request, window, cx);
+            dialog
+        });
+        cx.run_until_parked();
+        assert!(
+            dialog.read_with(cx, |dialog, _| dialog.preview_scroll.max_offset().height
+                > px(0.))
+        );
+        cx.simulate_keystrokes("pagedown");
+        cx.run_until_parked();
+        assert!(dialog.read_with(cx, |dialog, _| dialog.preview_scroll.offset().y < px(0.)));
+        cx.simulate_keystrokes("enter");
+        assert!(dialog.read_with(cx, |dialog, _| dialog.is_open()));
+        cx.simulate_keystrokes("escape");
+        assert!(!dialog.read_with(cx, |dialog, _| dialog.is_open()));
     }
 
     #[test]

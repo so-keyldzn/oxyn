@@ -34,3 +34,6 @@ parking_lot.workspace = true
 tokio = { workspace = true, features = ["rt-multi-thread", "sync", "time", "macros"] }
 tracing.workspace = true
 tracing-subscriber.workspace = true
+
+[dev-dependencies]
+gpui = { workspace = true, features = ["test-support"] }

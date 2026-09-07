@@ -1,29 +1,56 @@
 //! Connects UI gestures to the executor and correlates each response with its run.
 
 use gpui::prelude::*;
-use gpui::{Entity, FocusHandle, Focusable, Window, div, px};
+use gpui::{Entity, EventEmitter, FocusHandle, Focusable, Window};
+use oxyn_catalog::{CatalogPath, CatalogScope};
+use oxyn_core::Capabilities;
+
+mod capabilities;
+mod catalog;
+mod content;
+mod export;
+mod layout;
+mod sidebar;
+#[cfg(test)]
+mod tests;
+use catalog::CatalogState;
+use layout::WorkspacePanel;
 use oxyn_core::{
-    Actor, CancelToken, Command, CommandId, Decision, Environment, Event, ExecRequest, OxynError,
-    QueryLanguage, SessionId,
+    Actor, CancelToken, Command, CommandId, Decision, Environment, Event, ExecRequest,
+    ExportFormat, OxynError, QueryLanguage, ResultId, SessionId, SqlDialect,
 };
 use oxyn_exec::Outcome;
 use oxyn_ui::{
     ActiveConnection, ApprovalDialog, ApprovalEvent, ApprovalId, ApprovalOutcome, ApprovalRequest,
-    DataGrid, EditorEvent, ExecutionStatus, GridEvent, QueryEditor, StatusBar, StatusBarEvent,
-    Theme,
+    CatalogTree, CatalogTreeEvent, DataGrid, EditorEvent, ExecutionStatus, ExportEvent, GridEvent,
+    NotExportable, QueryEditor, ResultExport, StatusBar, StatusBarEvent,
 };
+use std::path::PathBuf;
 use tokio::sync::{broadcast::error::RecvError, oneshot};
 
-use crate::backend::{Backend, OpenConnection};
+use crate::backend::{Backend, ConnectionDisplay, OpenConnection};
+
+/// Requests navigation owned by the root, without discarding this workspace.
+#[derive(Debug, Clone, Copy)]
+pub enum WorkspaceEvent {
+    /// Open the connection chooser while keeping this session and draft alive.
+    NewConnectionRequested,
+}
+impl EventEmitter<WorkspaceEvent> for Workspace {}
 
 /// Builds a request on the session returned by Connect. The gate still authorizes writes.
+///
+/// The dialect travels with the request rather than defaulting to `Ansi`: it is
+/// what lets the gate classify `EXPLAIN (ANALYZE) DELETE …` for the server that
+/// will actually run it.
 pub(crate) fn execution_command(
     connection: oxyn_core::ConnectionId,
     session: SessionId,
     read_only: bool,
+    dialect: SqlDialect,
     text: String,
 ) -> Command {
-    let mut request = ExecRequest::new(QueryLanguage::SQL, text);
+    let mut request = ExecRequest::new(QueryLanguage::Sql(dialect), text);
     request.limits.read_only = read_only;
     Command::Execute {
         connection,
@@ -39,14 +66,39 @@ pub struct Workspace {
     session: SessionId,
     environment: Environment,
     read_only: bool,
+    /// The SQL dialect of the connected driver, resolved once at connection.
+    dialect: SqlDialect,
     editor: Entity<QueryEditor>,
     grid: Entity<DataGrid>,
     status: Entity<StatusBar>,
     approval: Entity<ApprovalDialog>,
+    export: Entity<ResultExport>,
+    /// The last result the executor produced, and still holds. Dropped as soon
+    /// as a new execution starts: exporting the previous result under the new
+    /// one's heading is the mistake this field exists to avoid.
+    last_result: Option<ResultId>,
+    /// The export under way, if any, with the token that stops it.
+    export_active: Option<(CommandId, CancelToken)>,
+    /// Whether the statement being run can modify anything. Read once at
+    /// submission from the text the user wrote, so that the row count shown
+    /// afterwards can carry the `AFFECTED_ROWS` caveat when it needs one.
+    last_mutating: bool,
     pending: Option<ApprovalRequest>,
     active: Option<(CommandId, CancelToken)>,
     awaiting_approval: bool,
     initial_focus: bool,
+    shell_focus: FocusHandle,
+    display: ConnectionDisplay,
+    capabilities: Capabilities,
+    sidebar_collapsed: bool,
+    panel: WorkspacePanel,
+    catalog: Option<Entity<CatalogTree>>,
+    catalog_cache: oxyn_catalog::SharedCatalog,
+    catalog_state: CatalogState,
+    catalog_active: Option<(CommandId, CancelToken)>,
+    catalog_scope: CatalogScope,
+    catalog_focus_pending: bool,
+    selected_path: Option<CatalogPath>,
 }
 
 impl std::fmt::Debug for Workspace {
@@ -62,7 +114,29 @@ impl Workspace {
     pub fn new(backend: Backend, open: OpenConnection, cx: &mut Context<'_, Self>) -> Self {
         let editor = cx.new(QueryEditor::new);
         let grid = cx.new(DataGrid::new);
+        grid.update(cx, |grid, cx| {
+            grid.set_capabilities(open.capabilities, cx);
+        });
         let approval = cx.new(ApprovalDialog::new);
+        let export = cx.new(ResultExport::new);
+        cx.subscribe(&export, |this, _, event, cx| match event {
+            ExportEvent::Requested(format) => this.choose_export_destination(*format, cx),
+            ExportEvent::CancelRequested => this.cancel_export(cx),
+            _ => {}
+        })
+        .detach();
+        let catalog = cx.new(|cx| CatalogTree::new(open.catalog.clone(), open.capabilities, cx));
+        cx.subscribe(&catalog, |this, _, event, cx| match event {
+            CatalogTreeEvent::ExpandRequested(scope) => this.refresh_catalog(scope.clone(), cx),
+            CatalogTreeEvent::SelectionChanged(path)
+            | CatalogTreeEvent::RelationActivated(path) => {
+                this.selected_path = Some(path.clone());
+                this.panel = WorkspacePanel::Object;
+                cx.notify();
+            }
+            _ => {}
+        })
+        .detach();
         let display = &open.display;
         let mut connection = ActiveConnection::new(
             display.name.clone(),
@@ -73,7 +147,10 @@ impl Workspace {
             connection = connection.read_only();
         }
         let status = cx.new(|_| StatusBar::new());
-        status.update(cx, |bar, cx| bar.set_connection(Some(connection), cx));
+        status.update(cx, |bar, cx| {
+            bar.set_connection(Some(connection), cx);
+            bar.set_capabilities(open.capabilities, cx);
+        });
         cx.subscribe(&editor, |this, _, event, cx| match event {
             EditorEvent::ExecuteRequested => this.execute(cx),
             EditorEvent::CancelRequested => this.cancel(cx),
@@ -131,19 +208,47 @@ impl Workspace {
             session: open.session,
             environment: display.environment,
             read_only: display.read_only,
+            dialect: open.dialect,
             editor,
             grid,
             status,
             approval,
+            export,
+            last_result: None,
+            export_active: None,
+            last_mutating: false,
             pending: None,
             active: None,
             awaiting_approval: false,
             initial_focus: true,
+            shell_focus: cx.focus_handle(),
+            display: open.display.clone(),
+            capabilities: open.capabilities,
+            sidebar_collapsed: false,
+            panel: WorkspacePanel::Sql,
+            catalog: Some(catalog),
+            catalog_cache: open.catalog.clone(),
+            catalog_state: CatalogState::Initial,
+            catalog_active: None,
+            catalog_scope: CatalogScope::Server,
+            catalog_focus_pending: false,
+            selected_path: None,
         }
     }
 
+    /// Returns the unsaved editor draft for root-owned connection navigation.
+    pub fn draft_text(&self, cx: &gpui::App) -> String {
+        self.editor.read(cx).text()
+    }
+
+    /// Transfers an existing draft without executing it.
+    pub fn set_draft_text(&mut self, text: &str, cx: &mut Context<'_, Self>) {
+        self.editor
+            .update(cx, |editor, cx| editor.set_text(text, cx));
+    }
+
     fn execute(&mut self, cx: &mut Context<'_, Self>) {
-        if self.active.is_some() {
+        if self.active.is_some() || !self.capabilities.contains(Capabilities::SQL) {
             return;
         }
         let text = self.editor.read(cx).statement_text();
@@ -153,10 +258,33 @@ impl Workspace {
             });
             return;
         }
-        let command = execution_command(self.connection, self.session, self.read_only, text);
+        // Announced here rather than left to the server: a session that has no
+        // EXPLAIN ANALYZE answers with a syntax error naming a keyword, and
+        // nothing in that message says which capability is missing.
+        if let Some(manque) = capabilities::missing_for(&text, self.dialect, self.capabilities) {
+            self.status
+                .update(cx, |bar, cx| bar.set_notice(Some(manque.message), cx));
+            return;
+        }
+        // Read once, at submission and not per frame: `classify` parses, and the
+        // 8 ms frame budget has no room for a parser.
+        self.last_mutating = oxyn_query::classify(&text, self.dialect).is_mutating();
+        let command = execution_command(
+            self.connection,
+            self.session,
+            self.read_only,
+            self.dialect,
+            text,
+        );
         let id = CommandId::new();
         let cancel = CancelToken::new();
         self.active = Some((id, cancel.clone()));
+        // The previous result is no longer what the screen shows; keeping it
+        // exportable would write the old rows under the new query's heading.
+        self.last_result = None;
+        self.export.update(cx, |export, cx| {
+            export.set_result_ready(Some(NotExportable::NoResult), cx);
+        });
         self.editor
             .update(cx, |editor, cx| editor.set_running(true, cx));
         self.grid.update(cx, |grid, cx| grid.start(cx));
@@ -199,12 +327,20 @@ impl Workspace {
                         });
                     }
                     Ok(Outcome::Executed {
+                        result,
                         buffer,
                         stats,
                         sink,
                         ..
                     }) => {
                         let cancelled = matches!(sink, oxyn_data::SinkOutcome::Cancelled);
+                        // Read before `buffer` moves into the grid, and after
+                        // the sink sealed it, so neither value can still change.
+                        let blocked = export::exportability(
+                            cancelled,
+                            buffer.is_complete(),
+                            buffer.stats().truncated,
+                        );
                         this.grid.update(cx, |grid, cx| {
                             if cancelled && buffer.row_count() == 0 {
                                 grid.cancelled(cx);
@@ -212,6 +348,11 @@ impl Workspace {
                                 grid.set_buffer(buffer, cx);
                                 grid.on_batch(cx);
                             }
+                        });
+                        this.last_result = blocked.is_none().then_some(result);
+                        this.export.update(cx, |export, cx| {
+                            export.reset(cx);
+                            export.set_result_ready(blocked, cx);
                         });
                         this.status.update(cx, |bar, cx| {
                             bar.set_status(
@@ -224,6 +365,16 @@ impl Workspace {
                             )
                         });
                         this.finish(cx);
+                        // After `finish`, which clears the notice: the caveat is
+                        // about the number just displayed, so it must outlive
+                        // the reset rather than be wiped by it.
+                        if let Some(reserve) = capabilities::affected_rows_caveat(
+                            this.last_mutating,
+                            this.capabilities,
+                        ) {
+                            this.status
+                                .update(cx, |bar, cx| bar.set_notice(Some(reserve), cx));
+                        }
                     }
                     Ok(Outcome::Denied { reason, .. }) => {
                         this.fail(reason, false, cx);
@@ -319,6 +470,12 @@ impl Workspace {
 
 impl Drop for Workspace {
     fn drop(&mut self) {
+        if let Some((_, cancel)) = &self.export_active {
+            cancel.cancel();
+        }
+        if let Some((_, cancel)) = &self.catalog_active {
+            cancel.cancel();
+        }
         if let Some((_, cancel)) = &self.active {
             cancel.cancel();
         }
@@ -327,61 +484,10 @@ impl Drop for Workspace {
 
 impl Focusable for Workspace {
     fn focus_handle(&self, cx: &gpui::App) -> FocusHandle {
-        self.editor.read(cx).focus_handle(cx)
-    }
-}
-
-impl Render for Workspace {
-    fn render(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
-        let theme = Theme::of(cx).clone();
-        if self.initial_focus {
-            window.focus(&self.editor.read(cx).focus_handle(cx));
-            self.initial_focus = false;
+        if self.capabilities.contains(Capabilities::SQL) {
+            self.editor.read(cx).focus_handle(cx)
+        } else {
+            self.shell_focus.clone()
         }
-        if let Some(request) = self.pending.take() {
-            self.approval
-                .update(cx, |dialog, cx| dialog.present(request, window, cx));
-        }
-        let busy = self.active.is_some();
-        div()
-            .relative()
-            .size_full()
-            .flex()
-            .flex_col()
-            .bg(theme.colors.surface)
-            .text_color(theme.colors.text)
-            .font_family(theme.typography.ui_family.clone())
-            .text_size(theme.typography.ui_size)
-            .child(
-                div().flex().gap_2().p_2().child(
-                    div()
-                        .id("run-query")
-                        .px_3()
-                        .py_1()
-                        .rounded_sm()
-                        .bg(if busy {
-                            theme.colors.surface_raised
-                        } else {
-                            theme.colors.selection
-                        })
-                        .cursor_pointer()
-                        .on_click(cx.listener(|this, _, _, cx| this.execute(cx)))
-                        .child(if busy {
-                            "Exécution en cours…"
-                        } else {
-                            "Exécuter · ⌘Entrée"
-                        }),
-                ),
-            )
-            .child(div().h(px(220.)).flex_none().child(self.editor.clone()))
-            .child(
-                div()
-                    .flex_1()
-                    .min_h_0()
-                    .overflow_hidden()
-                    .child(self.grid.clone()),
-            )
-            .child(self.status.clone())
-            .child(self.approval.clone())
     }
 }

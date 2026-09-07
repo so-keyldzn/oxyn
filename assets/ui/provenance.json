@@ -1,0 +1,101 @@
+{
+  "verified_on": "2026-09-07",
+  "figma_file": "Yviemi4brBczzdRdBp1ONv",
+  "screen_nodes": [
+    "13:291",
+    "14:603"
+  ],
+  "assets": [
+    {
+      "file": "search.svg",
+      "source_node": "11:22",
+      "sha256": "cf797e9dd96d9eae3d523aeb60c63d63561730482981f02b00f347fb3a389966",
+      "bytes": 622,
+      "size": 16
+    },
+    {
+      "file": "plus.svg",
+      "source_node": "11:36",
+      "sha256": "a1ecee83acedf084c304dc24b9a5a23d8fcbea61f22ab8d6e4840803c5cd51e2",
+      "bytes": 460,
+      "size": 16
+    },
+    {
+      "file": "panel.svg",
+      "source_node": "11:30",
+      "sha256": "2b716f1f260e143c264fa8c4b92e385806a432e09ff5afff18ca91bf28076037",
+      "bytes": 1053,
+      "size": 16
+    },
+    {
+      "file": "settings.svg",
+      "source_node": "11:27",
+      "sha256": "d98602fd0df923e149a14a7f460b128f3a58cfc9fc8d1d02f4210ff89430b305",
+      "bytes": 2737,
+      "size": 16
+    },
+    {
+      "file": "book.svg",
+      "source_node": "11:39",
+      "sha256": "8bac6df7f182229b1c226a3b51f01c9ae80f1e3797a799a7df5a7be14c455114",
+      "bytes": 1091,
+      "size": 16
+    },
+    {
+      "file": "database.svg",
+      "source_node": "11:2",
+      "sha256": "e694a268115d5a8e383d4c6fc3a7b98ddd7960c7e1f925bad3b6724c87122bf1",
+      "bytes": 1001,
+      "size": 16
+    },
+    {
+      "file": "chevron.svg",
+      "source_node": "11:34",
+      "sha256": "16302847caa454a6e9b1f213b730e855d9ffd25b036c29c5fc3453cb296d4956",
+      "bytes": 379,
+      "size": 16
+    },
+    {
+      "file": "table.svg",
+      "source_node": "11:8",
+      "sha256": "152d320e0078691c2308128e5be82c417755f563f0835a02673acc50f696b7b9",
+      "bytes": 1123,
+      "size": 16
+    },
+    {
+      "file": "folder.svg",
+      "source_node": "11:25",
+      "sha256": "56531871db20ce2fd2b6c95888351011998116f4e30aa697cfc68528d570da7e",
+      "bytes": 902,
+      "size": 16
+    },
+    {
+      "file": "terminal.svg",
+      "source_node": "11:14",
+      "sha256": "744cb33d92b8ccadd1c8a6f02ba20c859898cbb57784b7dec0338c7f235fd8cb",
+      "bytes": 1047,
+      "size": 16
+    },
+    {
+      "file": "history.svg",
+      "source_node": "11:18",
+      "sha256": "e15e4f3b6f89c5ef7faae1b1f0ce036cb7749cf1d1223d5d203da0cd604b0f43",
+      "bytes": 1143,
+      "size": 16
+    },
+    {
+      "file": "logo.svg",
+      "source_node": "13:181",
+      "sha256": "27b6e4b989f1624dfac09efb8de821e3f6be99e8c453aa416e6f070c939cd081",
+      "bytes": 1207,
+      "size": 32
+    },
+    {
+      "file": "down.svg",
+      "source_node": "12:143",
+      "sha256": "02e0d548066f9db0940818ee311bea361880c2ba0548789fa017334d54ace77f",
+      "bytes": 378,
+      "size": 16
+    }
+  ]
+}

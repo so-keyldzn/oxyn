@@ -113,32 +113,32 @@ impl Palette {
     #[must_use]
     pub fn dark() -> Self {
         Self {
-            background: rgb(0x11131a).into(),
-            surface: rgb(0x161923).into(),
-            surface_raised: rgb(0x1c2029).into(),
-            scrim: hsla_from(rgb(0x05060a).into(), 0.72),
+            background: rgb(0x09090b).into(),
+            surface: rgb(0x18181b).into(),
+            surface_raised: rgb(0x27272a).into(),
+            scrim: hsla_from(rgb(0x09090b).into(), 0.72),
 
-            border: rgb(0x2a2f3d).into(),
-            border_focus: rgb(0x4c8dff).into(),
+            border: rgb(0x3f3f46).into(),
+            border_focus: rgb(0xfafafa).into(),
 
-            text: rgb(0xe6e8ef).into(),
-            text_muted: rgb(0x9aa2b5).into(),
-            text_faint: rgb(0x656d80).into(),
-            text_on_accent: rgb(0x0b0d12).into(),
+            text: rgb(0xfafafa).into(),
+            text_muted: rgb(0xa1a1aa).into(),
+            text_faint: rgb(0x71717a).into(),
+            text_on_accent: rgb(0x18181b).into(),
 
-            accent: rgb(0x4c8dff).into(),
-            selection: hsla_from(rgb(0x4c8dff).into(), 0.22),
-            hover: hsla_from(rgb(0xffffff).into(), 0.05),
+            accent: rgb(0xfafafa).into(),
+            selection: rgb(0x27272a).into(),
+            hover: rgb(0x27272a).into(),
 
             success: rgb(0x4ec9a5).into(),
             warning: rgb(0xe0b155).into(),
             danger: rgb(0xf2616b).into(),
 
-            grid_header: rgb(0x1c2029).into(),
-            grid_gutter: rgb(0x171a23).into(),
+            grid_header: rgb(0x27272a).into(),
+            grid_gutter: rgb(0x18181b).into(),
             grid_stripe: hsla_from(rgb(0xffffff).into(), 0.02),
-            grid_line: rgb(0x262b37).into(),
-            null: rgb(0x6f7891).into(),
+            grid_line: rgb(0x3f3f46).into(),
+            null: rgb(0x71717a).into(),
         }
     }
 
@@ -146,32 +146,32 @@ impl Palette {
     #[must_use]
     pub fn light() -> Self {
         Self {
-            background: rgb(0xfbfbfd).into(),
-            surface: rgb(0xf4f5f8).into(),
-            surface_raised: rgb(0xeceef3).into(),
-            scrim: hsla_from(rgb(0x1a1d25).into(), 0.40),
+            background: rgb(0xffffff).into(),
+            surface: rgb(0xfafafa).into(),
+            surface_raised: rgb(0xf4f4f5).into(),
+            scrim: hsla_from(rgb(0x18181b).into(), 0.40),
 
-            border: rgb(0xd7dae2).into(),
-            border_focus: rgb(0x1f6feb).into(),
+            border: rgb(0xe4e4e7).into(),
+            border_focus: rgb(0x18181b).into(),
 
-            text: rgb(0x1b1e26).into(),
-            text_muted: rgb(0x5a6072).into(),
-            text_faint: rgb(0x8b91a1).into(),
+            text: rgb(0x18181b).into(),
+            text_muted: rgb(0x71717a).into(),
+            text_faint: rgb(0x71717a).into(),
             text_on_accent: rgb(0xffffff).into(),
 
-            accent: rgb(0x1f6feb).into(),
-            selection: hsla_from(rgb(0x1f6feb).into(), 0.16),
-            hover: hsla_from(rgb(0x1b1e26).into(), 0.05),
+            accent: rgb(0x18181b).into(),
+            selection: rgb(0xf4f4f5).into(),
+            hover: rgb(0xf4f4f5).into(),
 
             success: rgb(0x1a7f5a).into(),
             warning: rgb(0x9a6b00).into(),
             danger: rgb(0xc0323c).into(),
 
-            grid_header: rgb(0xeceef3).into(),
-            grid_gutter: rgb(0xf1f2f6).into(),
-            grid_stripe: hsla_from(rgb(0x1b1e26).into(), 0.025),
-            grid_line: rgb(0xdfe2e9).into(),
-            null: rgb(0x8b91a1).into(),
+            grid_header: rgb(0xf4f4f5).into(),
+            grid_gutter: rgb(0xfafafa).into(),
+            grid_stripe: hsla_from(rgb(0x18181b).into(), 0.025),
+            grid_line: rgb(0xe4e4e7).into(),
+            null: rgb(0x71717a).into(),
         }
     }
 
@@ -215,10 +215,9 @@ pub struct Typography {
 impl Default for Typography {
     fn default() -> Self {
         Self {
-            // Une famille absente du système est remplacée par le moteur de
-            // texte ; nommer une police d'interface générique évite de
-            // dépendre d'un fichier livré avec l'application.
-            ui_family: SharedString::new_static("Helvetica"),
+            // UiAssets::fonts supplies the Figma family at application startup.
+            // GPUI retains its platform fallback if font registration fails.
+            ui_family: SharedString::new_static("Geist"),
             mono_family: SharedString::new_static("Menlo"),
             ui_size: px(13.0),
             mono_size: px(12.0),

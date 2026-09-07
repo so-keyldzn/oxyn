@@ -17,8 +17,8 @@ use std::sync::Arc;
 
 use anyhow::{Context as _, Result};
 use oxyn_core::{
-    Actor, CancelToken, Command, CommandId, ConnectionConfig, ConnectionId, DefaultPolicy,
-    Environment, OxynError, PolicyGate, ResultId, SessionId,
+    Actor, CancelToken, Capabilities, Command, CommandId, ConnectionConfig, ConnectionId,
+    DefaultPolicy, Environment, OxynError, PolicyGate, ResultId, SessionId, SqlDialect,
 };
 use oxyn_data::ResultBuffer;
 use oxyn_driver::DriverRegistry;
@@ -74,6 +74,17 @@ pub struct OpenConnection {
     pub connection: ConnectionId,
     /// What the status bar shows about it.
     pub display: ConnectionDisplay,
+    /// Capabilities negotiated by the actual open session.
+    pub capabilities: Capabilities,
+    /// The SQL dialect of the connected driver.
+    ///
+    /// Resolved from the driver identifier once, here, rather than defaulting
+    /// to `Ansi` at every call site: the dialect decides how a statement is
+    /// read, and reading `EXPLAIN (ANALYZE) DELETE …` as ANSI loses exactly the
+    /// distinction [I-07](../../../CLAUDE.md#i-07) depends on.
+    pub dialect: SqlDialect,
+    /// Executor-owned cache, acquired off the UI thread during connection.
+    pub catalog: oxyn_catalog::SharedCatalog,
 }
 
 /// A connection may require approval before its local configuration is saved.
@@ -133,13 +144,28 @@ impl Backend {
     /// # Errors
     /// Local state unreadable, driver registry inconsistent, keyring absent.
     pub fn open() -> Result<Self> {
+        KeyringSecretStore::availability().context("the system keyring is unavailable")?;
+        Self::assemble(
+            Arc::new(Store::open_default().context("opening the local workspace state")?),
+            Arc::new(KeyringSecretStore::new()),
+        )
+    }
+
+    /// Explicit ephemeral workspace for local QA; never touches saved state or keyring.
+    /// Database connections remain the user's explicit choice.
+    pub fn open_temporary() -> Result<Self> {
+        Self::assemble(
+            Arc::new(Store::open_in_memory().context("opening temporary workspace state")?),
+            Arc::new(oxyn_secrets::MemorySecretStore::new()),
+        )
+    }
+
+    fn assemble(store: Arc<Store>, secrets: Arc<dyn SecretStore>) -> Result<Self> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .thread_name("oxyn-exec")
             .build()
             .context("starting the async runtime")?;
-
-        let store = Arc::new(Store::open_default().context("opening the local workspace state")?);
 
         let mut drivers = DriverRegistry::new();
         drivers
@@ -151,12 +177,6 @@ impl Backend {
         tracing::info!(drivers = drivers.len(), "driver registry ready");
         let drivers = Arc::new(drivers);
 
-        // Refusing to start rather than falling back to a file: a silent
-        // downgrade would put every password of every user on disk the first
-        // time a platform backend misbehaved
-        // ([SECURITY](../../../docs/SECURITY.md#secrets)).
-        KeyringSecretStore::availability().context("the system keyring is unavailable")?;
-        let secrets: Arc<dyn SecretStore> = Arc::new(KeyringSecretStore::new());
         let credentials = Arc::new(KeyringCredentials::new(secrets));
 
         let policy = Arc::new(DefaultPolicy::new());
@@ -507,7 +527,20 @@ async fn ouvrir_la_session(
     let Outcome::Connected { session, .. } = outcome else {
         anyhow::bail!("The executor did not open a session");
     };
+    let capabilities = inner
+        .executor
+        .sessions()
+        .get(session)
+        .context("The opened session is no longer registered")?
+        .capabilities();
+    let catalog = inner
+        .executor
+        .catalog(config.id)
+        .context("The opened connection has no catalog cache")?;
     Ok(OpenConnection {
+        catalog,
+        capabilities,
+        dialect: oxyn_query::dialect_for(&config.driver),
         session,
         connection: config.id,
         display: ConnectionDisplay::of(&config),
@@ -590,6 +623,7 @@ mod tests {
             open.connection,
             open.session,
             false,
+            open.dialect,
             text.to_owned(),
         );
         backend
@@ -662,7 +696,7 @@ mod tests {
         let cancel = CancelToken::new();
         let mut events = backend.subscribe();
         let id = CommandId::new();
-        let command = crate::workspace::execution_command(open.connection, open.session, false,
+        let command = crate::workspace::execution_command(open.connection, open.session, false, open.dialect,
             "WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<1000000000) SELECT x FROM n".into());
         let receiver = backend.dispatch(id, command, cancel.clone());
         backend.inner.runtime.block_on(async {

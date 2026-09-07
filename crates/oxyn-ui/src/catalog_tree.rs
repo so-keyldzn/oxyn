@@ -47,6 +47,8 @@ use oxyn_catalog::{
 };
 use oxyn_core::Capabilities;
 
+use crate::icons::{IconName, icon};
+use crate::text_field::{FieldEvent, TextField};
 use crate::theme::Theme;
 
 /// Résultats affichés au plus quand un filtre est saisi.
@@ -114,6 +116,7 @@ pub struct CatalogTree {
     loading: BTreeSet<CatalogPath>,
     selected: Option<CatalogPath>,
     filter: String,
+    filter_input: gpui::Entity<TextField>,
     rows: Vec<TreeRow>,
     scroll: UniformListScrollHandle,
 }
@@ -137,6 +140,15 @@ impl CatalogTree {
         capabilities: Capabilities,
         cx: &mut Context<'_, Self>,
     ) -> Self {
+        let filter_input = cx.new(|cx| TextField::new(String::new(), false, cx));
+        cx.subscribe(&filter_input, |this, input, event, cx| {
+            if matches!(event, FieldEvent::Changed) {
+                this.filter = input.read(cx).text().to_owned();
+                this.rebuild();
+                cx.notify();
+            }
+        })
+        .detach();
         let mut arbre = Self {
             focus: cx.focus_handle(),
             catalog,
@@ -145,6 +157,7 @@ impl CatalogTree {
             loading: BTreeSet::new(),
             selected: None,
             filter: String::new(),
+            filter_input,
             rows: Vec::new(),
             scroll: UniformListScrollHandle::new(),
         };
@@ -173,6 +186,8 @@ impl CatalogTree {
     /// Change le filtre et reconstruit les lignes.
     pub fn set_filter(&mut self, filter: impl Into<String>, cx: &mut Context<'_, Self>) {
         self.filter = filter.into();
+        self.filter_input
+            .update(cx, |field, cx| field.set_text(self.filter.clone(), cx));
         self.rebuild();
         cx.notify();
     }
@@ -186,6 +201,13 @@ impl CatalogTree {
             self.loading
                 .retain(|chemin| !cache.freshness(&CatalogScope::of(chemin)).is_known());
         }
+        self.rebuild();
+        cx.notify();
+    }
+
+    /// Clears loading indicators after a failed or cancelled explicit request.
+    pub fn finish_loading(&mut self, cx: &mut Context<'_, Self>) {
+        self.loading.clear();
         self.rebuild();
         cx.notify();
     }
@@ -593,6 +615,10 @@ impl Render for CatalogTree {
         div()
             .key_context("CatalogTree")
             .track_focus(&self.focus)
+            .tab_index(0)
+            .border_1()
+            .border_color(theme.colors.surface)
+            .focus(|style| style.border_color(theme.colors.border_focus))
             .id("oxyn-catalog-tree")
             .size_full()
             .flex()
@@ -602,46 +628,37 @@ impl Render for CatalogTree {
             .font_family(theme.typography.ui_family.clone())
             .text_size(theme.typography.ui_size)
             .on_key_down(cx.listener(Self::on_key))
+            .child(
+                div()
+                    .text_size(theme.typography.small_size)
+                    .text_color(theme.colors.text_muted)
+                    .px_2()
+                    .child("Filter loaded objects"),
+            )
             .child(self.render_filter(cx))
             .child(div().flex_1().overflow_hidden().child(corps))
     }
 }
 
 impl CatalogTree {
-    /// La zone de filtre.
-    ///
-    /// La saisie elle-même passe par [`crate::query_editor`] côté `oxyn-app` :
-    /// cette crate n'a qu'un champ de texte, et en écrire un second ici
-    /// dupliquerait la gestion du curseur.
-    /// TODO(phase 0, suite) : brancher un champ de saisie réel ; en attendant,
-    /// [`set_filter`](Self::set_filter) est l'entrée de ce filtre et la ligne
-    /// ci-dessous en montre l'état plutôt que de prétendre le recevoir.
+    /// Native input over cached objects only; never issues a remote search.
     fn render_filter(&self, cx: &Context<'_, Self>) -> AnyElement {
         let theme = Theme::of(cx);
-        let vide = self.filter.trim().is_empty();
         div()
             .flex()
-            .flex_row()
             .items_center()
             .gap_2()
             .flex_none()
-            .h(theme.metrics.header_height)
+            .h(px(32.))
             .px_2()
-            .bg(theme.colors.surface_raised)
             .border_b_1()
             .border_color(theme.colors.border)
-            .text_size(theme.typography.small_size)
-            .text_color(if vide {
-                theme.colors.text_faint
-            } else {
-                theme.colors.text
-            })
-            .child("⌕")
-            .child(if vide {
-                SharedString::new_static("Filtrer le catalogue")
-            } else {
-                SharedString::from(self.filter.clone())
-            })
+            .child(
+                icon(IconName::Search)
+                    .size(px(16.))
+                    .text_color(theme.colors.text_muted),
+            )
+            .child(div().flex_1().min_w_0().child(self.filter_input.clone()))
             .into_any_element()
     }
 
@@ -651,8 +668,8 @@ impl CatalogTree {
         let theme = Theme::of(cx);
         let (titre, detail) = if self.filter.trim().is_empty() {
             (
-                "Catalogue vide",
-                "Aucun objet lu pour l'instant. Connectez-vous, ou rafraîchissez le catalogue.",
+                "No objects",
+                "The loaded catalog contains no visible objects.",
             )
         } else {
             (
@@ -701,7 +718,8 @@ impl CatalogTree {
             .when(selectionnee, |element| element.bg(theme.colors.selection))
             .hover(|style| style.bg(theme.colors.hover))
             .cursor_pointer()
-            .on_click(cx.listener(move |arbre, event: &ClickEvent, _window, cx| {
+            .on_click(cx.listener(move |arbre, event: &ClickEvent, window, cx| {
+                window.focus(&arbre.focus);
                 let chemin = chemin_clic.clone();
                 // Un double-clic ouvre les données ; un simple clic sélectionne.
                 if event.click_count() >= 2 {
@@ -713,7 +731,7 @@ impl CatalogTree {
             }))
             .child(
                 div()
-                    .w(px(14.0))
+                    .w(px(16.0))
                     .flex_none()
                     .text_color(theme.colors.text_faint)
                     // `on_mouse_down` et non `on_click` : `on_click` exige un
@@ -727,25 +745,32 @@ impl CatalogTree {
                             }),
                         )
                     })
-                    .child(if ouvrable {
-                        icon_for_node(ligne.expanded, ligne.loading)
-                    } else {
-                        " "
+                    .when(ouvrable, |el| {
+                        el.child(
+                            icon(if ligne.expanded {
+                                IconName::Down
+                            } else {
+                                IconName::Chevron
+                            })
+                            .size(px(16.))
+                            .text_color(theme.colors.text_muted),
+                        )
                     }),
             )
             .child(
                 div()
-                    .w(px(14.0))
+                    .w(px(16.0))
                     .flex_none()
                     .text_color(theme.colors.text_muted)
-                    .child(match ligne.kind {
-                        Some(kind) => icon_for_kind(kind),
-                        None => match ligne.level {
-                            CatalogLevel::Catalog => "🗄",
-                            CatalogLevel::Namespace => "🗂",
-                            CatalogLevel::Server | CatalogLevel::Relation => "•",
-                        },
-                    }),
+                    .child(
+                        icon(match ligne.level {
+                            CatalogLevel::Namespace => IconName::Folder,
+                            CatalogLevel::Relation => IconName::Table,
+                            _ => IconName::Database,
+                        })
+                        .size(px(16.))
+                        .text_color(theme.colors.text_muted),
+                    ),
             )
             .child(
                 div()
@@ -987,5 +1012,35 @@ mod tests {
         ];
         let glyphes: BTreeSet<_> = natures.iter().map(|k| icon_for_kind(*k)).collect();
         assert_eq!(glyphes.len(), natures.len(), "deux natures se confondent");
+    }
+    #[gpui::test]
+    fn native_filter_changes_visible_objects_without_requesting_the_server(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let cache = std::sync::Arc::new(parking_lot::RwLock::new(cache_postgres()));
+        let (tree, cx) =
+            cx.add_window_view(|_, cx| CatalogTree::new(cache, Capabilities::TABLES, cx));
+        cx.update(|window, cx| {
+            window.focus(&tree.read(cx).filter_input.read(cx).focus_handle(cx));
+        });
+        cx.simulate_input("zzzz");
+        tree.read_with(cx, |tree, _| {
+            assert_eq!(tree.filter(), "zzzz");
+            assert!(tree.rows().is_empty());
+            assert!(
+                tree.loading.is_empty(),
+                "local filtering must not request introspection"
+            );
+        });
+        cx.simulate_keystrokes("cmd-a");
+        cx.simulate_input("clients");
+        tree.read_with(cx, |tree, _| {
+            assert_eq!(tree.filter(), "clients");
+            assert!(
+                !tree.rows().is_empty(),
+                "matching cached objects must reappear"
+            );
+            assert!(tree.loading.is_empty());
+        });
     }
 }

@@ -71,7 +71,7 @@ pub use cell::{
     BinaryDisplay, CellValue, DEFAULT_MAX_LEN, FormatOptions, format_cell, format_value,
 };
 pub use error::{DataError, Result};
-pub use export::{ExportOptions, ExportSummary, export};
+pub use export::{ExportOptions, ExportSummary, export, is_supported};
 pub use sink::{BatchProgress, BatchSink, BatchSource, SinkOutcome};
 
 /// Ce qu'on importe d'un coup quand on travaille avec des résultats.
@@ -79,7 +79,7 @@ pub mod prelude {
     pub use crate::buffer::{BatchIndex, BufferLimits, Pressure, ResultBuffer};
     pub use crate::cell::{BinaryDisplay, CellValue, FormatOptions, format_cell};
     pub use crate::error::{DataError, Result};
-    pub use crate::export::{ExportOptions, ExportSummary, export};
+    pub use crate::export::{ExportOptions, ExportSummary, export, is_supported};
     pub use crate::sink::{BatchProgress, BatchSink, BatchSource, SinkOutcome};
 }
 

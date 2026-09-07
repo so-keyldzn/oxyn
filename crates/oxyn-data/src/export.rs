@@ -101,6 +101,28 @@ pub struct ExportSummary {
     pub bytes: u64,
 }
 
+/// Ce format est-il réellement écrit par [`export`] ?
+///
+/// Existe pour que l'interface n'offre pas un format qu'elle ne peut pas
+/// produire : sans cela, le geste part, le sélecteur de fichier s'ouvre,
+/// l'utilisateur nomme sa destination — et l'échec n'arrive qu'après, en
+/// laissant un fichier vide sur son disque. Ce qui n'est pas disponible
+/// s'annonce avant le clic.
+///
+/// Reste aligné sur le `match` d'[`export`] : le test
+/// `chaque_format_declare_ecrivable_secrit_vraiment` échoue sinon.
+#[must_use]
+pub const fn is_supported(format: ExportFormat) -> bool {
+    matches!(
+        format,
+        ExportFormat::Csv
+            | ExportFormat::Tsv
+            | ExportFormat::Json
+            | ExportFormat::JsonLines
+            | ExportFormat::ArrowIpc
+    )
+}
+
 /// Écrit le contenu de `buffer` dans `writer`.
 ///
 /// Relit les lots un par un, y compris depuis le fichier de débordement, et
@@ -504,6 +526,41 @@ mod tests {
         ) {
             Err(DataError::Cancelled) => {}
             autre => panic!("attendu Cancelled, obtenu {autre:?}"),
+        }
+    }
+
+    #[test]
+    fn chaque_format_declare_ecrivable_secrit_vraiment() {
+        // `is_supported` gouverne ce que l'interface propose. Une divergence
+        // entre cette liste et le `match` d'`export` ne casse rien ici : elle
+        // casse trois clics plus loin, après que l'utilisateur a nommé son
+        // fichier, et laisse un fichier vide derrière elle.
+        let tampon = tampon_deborde();
+        for format in [
+            ExportFormat::Csv,
+            ExportFormat::Tsv,
+            ExportFormat::Json,
+            ExportFormat::JsonLines,
+            ExportFormat::Parquet,
+            ExportFormat::ArrowIpc,
+            ExportFormat::Sql,
+            ExportFormat::Markdown,
+        ] {
+            let mut sortie: Vec<u8> = Vec::new();
+            let ecrit = export(
+                &tampon,
+                format,
+                &mut sortie,
+                &ExportOptions::default(),
+                &CancelToken::new(),
+            )
+            .is_ok();
+            assert_eq!(
+                ecrit,
+                is_supported(format),
+                "{format} : `is_supported` dit {}, `export` dit {ecrit}",
+                is_supported(format)
+            );
         }
     }
 

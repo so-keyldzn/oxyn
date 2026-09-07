@@ -54,9 +54,11 @@ use gpui::{
     ScrollStrategy, ScrollWheelEvent, SharedString, UniformListScrollHandle, Window, canvas, div,
     px, uniform_list,
 };
+use oxyn_core::Capabilities;
 use oxyn_data::cell::{CellValue, FormatOptions, format_cell};
 use oxyn_data::{BatchIndex, ResultBuffer};
 
+use crate::session_capabilities::cancel_caveat;
 use crate::theme::{Metrics, Theme};
 
 /// Lignes échantillonnées pour estimer la largeur des colonnes.
@@ -220,6 +222,9 @@ pub struct DataGrid {
     viewport: Rc<Cell<Pixels>>,
     selected_row: Option<usize>,
     drag: Option<ColumnDrag>,
+    /// What the connected session declares. Governs what the cancel control is
+    /// allowed to promise ([ADR-0003](../../../docs/adr/0003-driver-capabilities.md)).
+    capabilities: Capabilities,
 }
 
 impl EventEmitter<GridEvent> for DataGrid {}
@@ -244,7 +249,24 @@ impl DataGrid {
             viewport: Rc::new(Cell::new(px(0.0))),
             selected_row: None,
             drag: None,
+            // Empty until a session is connected: promising nothing is the safe
+            // default, promising server-side cancellation is not.
+            capabilities: Capabilities::empty(),
         }
+    }
+
+    /// Declares what the connected session can do.
+    pub fn set_capabilities(&mut self, capabilities: Capabilities, cx: &mut Context<'_, Self>) {
+        if self.capabilities != capabilities {
+            self.capabilities = capabilities;
+            cx.notify();
+        }
+    }
+
+    /// What the session declares.
+    #[must_use]
+    pub const fn capabilities(&self) -> Capabilities {
+        self.capabilities
     }
 
     /// L'état courant.
@@ -882,7 +904,33 @@ impl DataGrid {
     /// `SERVER_SIDE_CANCEL` est là. Un bouton qui abandonnerait seulement
     /// l'affichage laisserait une requête tourner et une connexion prise
     /// ([UX-SPEC](../../../docs/UX-SPEC.md#annulation)).
+    ///
+    /// Quand la session ne déclare pas `SERVER_SIDE_CANCEL`, le bouton reste —
+    /// il coupe bien le flux — mais il cesse de promettre ce qu'il ne tient
+    /// pas : la mention l'accompagne, elle ne le remplace pas.
     fn render_cancel_button(&self, cx: &Context<'_, Self>) -> AnyElement {
+        let theme = Theme::of(cx);
+        let Some(reserve) = cancel_caveat(self.capabilities) else {
+            return self.cancel_control(cx);
+        };
+        div()
+            .flex()
+            .flex_col()
+            .items_center()
+            .gap_1()
+            .child(self.cancel_control(cx))
+            .child(
+                div()
+                    .text_color(theme.colors.warning)
+                    .font_family(theme.typography.ui_family.clone())
+                    .text_size(theme.typography.small_size)
+                    .child(reserve),
+            )
+            .into_any_element()
+    }
+
+    /// Le bouton lui-même, sans la mention qui l'accompagne.
+    fn cancel_control(&self, cx: &Context<'_, Self>) -> AnyElement {
         let theme = Theme::of(cx);
         div()
             .id("oxyn-grid-cancel")

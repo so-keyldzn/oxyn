@@ -69,10 +69,15 @@ pub mod approval;
 pub mod catalog_tree;
 pub mod connection_form;
 pub mod data_grid;
+pub mod icons;
 pub mod query_editor;
+pub mod result_export;
+pub mod session_capabilities;
 pub mod status_bar;
 mod text_field;
 pub mod theme;
+
+pub use icons::{IconName, UiAssets, icon};
 
 pub use approval::{
     ApprovalDialog, ApprovalEvent, ApprovalId, ApprovalOutcome, ApprovalRequest, actor_label,
@@ -93,6 +98,13 @@ pub use query_editor::{
     EditorEvent, LinePiece, QueryEditor, TAB_WIDTH, TextBuffer, TextPosition, UNDO_DEPTH,
     line_pieces,
 };
+pub use result_export::{
+    ExportEvent, ExportPhase, KNOWN_FORMATS, NotExportable, ResultExport, format_label,
+};
+pub use session_capabilities::{
+    NEVER_EMULATED, ROLLBACK_WHEN_SUPPORTED, SurfaceSupport, UNSUPPORTED_SERVER_CANCEL,
+    cancel_caveat, surfaces,
+};
 pub use status_bar::{
     ActiveConnection, ExecutionStatus, StatusBar, StatusBarEvent, environment_label,
     format_duration, format_stats,
@@ -106,12 +118,21 @@ mod tests {
     /// `include_str!` et non une lecture de fichier : le chemin est résolu à la
     /// compilation, donc le test ne dépend pas du répertoire courant et ne peut
     /// pas rater un fichier déplacé — il ne compilerait plus.
-    const COMPOSANTS: [(&str, &str); 7] = [
+    const COMPOSANTS: [(&str, &str); 10] = [
         ("approval.rs", include_str!("approval.rs")),
         ("catalog_tree.rs", include_str!("catalog_tree.rs")),
         ("connection_form.rs", include_str!("connection_form.rs")),
+        (
+            "connection_form/view.rs",
+            include_str!("connection_form/view.rs"),
+        ),
         ("data_grid.rs", include_str!("data_grid.rs")),
         ("query_editor.rs", include_str!("query_editor.rs")),
+        ("result_export.rs", include_str!("result_export.rs")),
+        (
+            "session_capabilities.rs",
+            include_str!("session_capabilities.rs"),
+        ),
         ("status_bar.rs", include_str!("status_bar.rs")),
         ("text_field.rs", include_str!("text_field.rs")),
     ];

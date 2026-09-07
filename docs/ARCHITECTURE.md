@@ -106,18 +106,22 @@ oxyn/
 └── docs/
 ```
 
-**`oxyn-app` tient en six fichiers, et chacun a une raison d'exister à part.**
+**`oxyn-app` tient en six sujets, et chacun a une raison d'exister à part.**
+L'espace de travail en occupe plusieurs fichiers — `workspace/` porte le
+catalogue, le contenu, la disposition, l'export et le conditionnement aux
+capacités — parce qu'un seul fichier y porterait cinq sujets ; le sujet, lui,
+reste un.
 
 | Fichier | Sujet | Pourquoi il n'est pas ailleurs |
 |---|---|---|
 | `backend.rs` | ce qui n'est pas des pixels : état local, drivers, politique, ordonnanceur, runtime Tokio | le thread UI ne doit rien pouvoir en atteindre directement ([I-05](../CLAUDE.md#i-05)) |
 | `root.rs` | la vue racine : l'écran de connexion, puis l'espace de travail | c'est là qu'un brouillon de connexion devient `CreateConnection` puis `Connect` |
-| `workspace.rs` | l'espace de travail sur une connexion ouverte | c'est là qu'un `Cmd+Entrée` devient `Command::Execute` |
+| `workspace.rs` + `workspace/` | l'espace de travail sur une connexion ouverte | c'est là qu'un `Cmd+Entrée` devient `Command::Execute` |
 | `picker.rs` | traduction `DriverMetadata` → `DriverChoice` | seule crate à connaître `oxyn-driver` **et** `oxyn-ui` ; sans elle l'une dépendrait de l'autre |
 | `credentials.rs` | le seul point qui lit ou écrit le trousseau | un appel au trousseau par driver serait six endroits à auditer au lieu d'un ([I-03](../CLAUDE.md#i-03)) |
 | `main.rs` | les traces et la fenêtre | rien d'autre |
 
-`root.rs` et `workspace.rs` sont **les seuls endroits du produit** où un
+`root.rs` et `workspace/` sont **les seuls endroits du produit** où un
 événement d'interface devient une `Command` : un test d'`oxyn-ui` échoue si un
 composant mentionne seulement ce type.
 
