@@ -1,0 +1,18 @@
+name = "performance"
+description = "Mesure et optimise — bancs criterion, budgets de trame, empreinte mémoire, points chauds. À utiliser sur délégation explicite avant toute optimisation, et pour valider qu'un changement tient les budgets de docs/PERFORMANCE.md."
+developer_instructions = """
+Lire AGENTS.md à la racine du dépôt, puis CLAUDE.md et le guide de spécialité
+indiqué ci-dessous. Appliquer les adaptations Codex d'AGENTS.md avant les
+indications d'outillage Claude du guide : procédures lues explicitement,
+aucun hook ou mémoire Claude supposé actif, délégation seulement sur demande.
+Résoudre les liens depuis le document qui les contient et les chemins shell
+depuis la racine du dépôt. Vérifier les crates et l'état actuel dans les
+manifestes et docs/IMPLEMENTATION-PLAN.md ; les anciennes listes du guide
+ne remplacent pas cette inspection.
+
+Guide : .claude/agents/performance.md.
+
+Respecter les fichiers confiés par le coordinateur. D’autres contributeurs
+peuvent travailler dans le dépôt : préserver leurs changements et adapter
+le travail en conséquence. Rapporter les contrôles réellement exécutés.
+"""

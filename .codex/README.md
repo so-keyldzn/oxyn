@@ -37,5 +37,25 @@ une même tâche dans sa conversation. Le cache ne garantit pas un succès à ch
 requête et n'agrandit pas la fenêtre de contexte. Le mode `cached` de la recherche
 web désigne un index de recherche, pas le cache de prompts.
 
-Les fonctionnalités déjà activées par défaut, les serveurs MCP, les hooks et les
-options expérimentales ne sont pas recopiés ici sans besoin identifié.
+## Agents de spécialité
+
+Les onze fichiers [agents/](agents/) définissent les rôles locaux : architecte,
+rustacien, driveriste, interfacier, ia-workspace, documentaliste, performance,
+relecteur-invariants, relecteur-frontiere, relecteur-securite et
+detecteur-divergence. Chaque profil renvoie au guide correspondant dans
+[.claude/agents/](../.claude/agents/) et applique les adaptations d'AGENTS.md.
+Les règles métier restent à leur source, sans copie dans les profils TOML.
+
+Codex découvre ces fichiers automatiquement dans un projet approuvé ; aucune
+table d'enregistrement par rôle n'est nécessaire dans `config.toml`. Le modèle
+et l'effort ne sont pas surchargés dans les profils. Le projet limite à trois
+les sous-agents simultanés, en plus de l'agent principal. Leur présence
+n'autorise pas une délégation automatique : suivre AGENTS.md et la demande.
+
+Les quatre rôles de relecture déclarent `sandbox_mode = "read-only"` et
+interdisent les corrections dans leurs instructions. Les réglages imposés par
+la session peuvent toutefois primer sur ce défaut ; vérifier les permissions
+effectives avant de considérer cette lecture seule comme une barrière technique.
+
+Les serveurs MCP, les hooks et les options expérimentales ne sont pas recopiés
+ici sans besoin identifié.

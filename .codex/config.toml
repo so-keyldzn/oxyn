@@ -5,6 +5,10 @@ model_context_window = 1050000
 model_auto_compact_token_limit = 700000
 web_search = "live"
 
+# Keep delegated work bounded; roles are discovered in agents/*.toml.
+[agents]
+max_concurrent_threads_per_session = 3
+
 [tui]
 status_line = [
     "model-with-reasoning",
