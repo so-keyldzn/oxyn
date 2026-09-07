@@ -3,6 +3,23 @@
 Date : 2026-09-07. Périmètre : `theme.rs`, nouveau `icons.rs`, `assets/ui/`
 et `assets/fonts/`. Aucun commit ni push.
 
+> **Mise à jour du 2026-09-07, lot suivant — ce document n'est plus à jour sur
+> trois points.** Il est conservé tel quel parce qu'il porte les contrôles
+> réellement exécutés par son auteur ; ce qui a changé depuis :
+>
+> 1. **L'intégration décrite plus bas est faite.** `lib.rs` déclare `pub mod
+>    icons;` et exporte `IconName, UiAssets, icon, logo` ; `main.rs` appelle
+>    `Application::with_assets(UiAssets)` et `text_system().add_fonts(...)`.
+>    La phrase « `lib.rs` ne déclare pas encore le module » ne vaut plus.
+> 2. **La palette n'est pas « zinc »** mais graphite/os : c'est `README.md` de
+>    ce même répertoire, § « Actualisation de la palette », qui est exact.
+> 3. **Geist et Hugeicons sont désormais dans `docs/RESEARCH-NOTES.md`**, avec
+>    leurs commits amont et la question de redistribution, comme ce document le
+>    demandait.
+>
+> Reste vrai, et non traité : aucune icône n'est encore affichée par une vue, et
+> aucun rendu de l'application n'a été inspecté visuellement.
+
 ## Livré
 
 - Palette zinc Figma claire/sombre dans l’interface `Theme` existante ; couleurs

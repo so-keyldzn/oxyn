@@ -27,6 +27,7 @@ use gpui::prelude::*;
 use gpui::{AnyElement, ClickEvent, Context, EventEmitter, Hsla, SharedString, Window, div, px};
 use oxyn_core::{Environment, ExecStats};
 
+use crate::controls::{ControlState, ControlTone, control};
 use crate::theme::Theme;
 
 /// Où en est la dernière commande soumise.
@@ -256,7 +257,10 @@ impl Render for StatusBar {
             .id("oxyn-status-bar")
             .w_full()
             .flex_none()
-            .h(theme.metrics.header_height)
+            // Sa propre hauteur, et non celle de l'en-tête de la grille de
+            // résultats : deux métriques distinctes que rien n'oblige à rester
+            // égales.
+            .h(theme.metrics.status_bar_height)
             .flex()
             .flex_row()
             .items_center()
@@ -365,23 +369,20 @@ impl StatusBar {
             .child(ligne)
             .when(self.status.is_cancellable(), |element| {
                 element.child(
-                    div()
-                        .id("oxyn-status-cancel")
-                        // Atteignable au clavier : GPUI n'offre pas
-                        // l'accessibilité gratuitement, et la rattraper après
-                        // coup coûte une réécriture (ADR-0001).
-                        .tab_index(0)
-                        .px_2()
-                        .rounded_sm()
-                        .border_1()
-                        .border_color(theme.colors.border)
-                        .text_color(theme.colors.text)
-                        .cursor_pointer()
-                        .hover(|style| style.bg(theme.colors.hover))
-                        .on_click(cx.listener(|_barre, _event: &ClickEvent, _window, cx| {
+                    // Atteignable au clavier, focus visible, état pressé :
+                    // GPUI n'offre rien de tout cela gratuitement, et le
+                    // rattraper après coup coûte une réécriture (ADR-0001).
+                    control(
+                        "oxyn-status-cancel",
+                        ControlState::Enabled,
+                        ControlTone::Neutral,
+                        theme,
+                        cx.listener(|_barre, _event: &ClickEvent, _window, cx| {
                             cx.emit(StatusBarEvent::CancelRequested);
-                        }))
-                        .child("Annuler"),
+                        }),
+                    )
+                    .px(theme.spacing.small)
+                    .child("Annuler"),
                 )
             })
             .into_any_element()
@@ -393,7 +394,8 @@ fn badge(texte: &'static str, couleur: Hsla, theme: &Theme) -> AnyElement {
     div()
         .flex_none()
         .px_1p5()
-        .rounded_sm()
+        // Une pastille : le rayon `full` de la maquette.
+        .rounded(theme.radii.full)
         .border_1()
         .border_color(couleur)
         .text_color(couleur)

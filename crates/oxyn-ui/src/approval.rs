@@ -42,6 +42,7 @@ use gpui::{
 };
 use oxyn_core::{Actor, Decision, Environment, Preview};
 
+use crate::controls::{ControlState, ControlTone, control};
 use crate::theme::Theme;
 
 /// Ce que l'utilisateur répond.
@@ -290,7 +291,9 @@ impl Render for ApprovalDialog {
                     .flex_col()
                     .gap_3()
                     .p_4()
-                    .rounded_lg()
+                    // Le rayon de surface de la maquette : c'est un panneau,
+                    // pas un contrôle.
+                    .rounded(theme.radii.surface)
                     .border_1()
                     .border_color(if production {
                         theme.colors.danger
@@ -336,7 +339,8 @@ impl ApprovalDialog {
                 div()
                     .flex_none()
                     .px_1p5()
-                    .rounded_sm()
+                    // Une pastille : le rayon `full` de la maquette.
+                    .rounded(theme.radii.full)
                     .border_1()
                     .border_color(couleur_environnement)
                     .text_color(couleur_environnement)
@@ -378,7 +382,7 @@ impl ApprovalDialog {
                     .overflow_scroll()
                     .track_scroll(&self.preview_scroll)
                     .p_2()
-                    .rounded_md()
+                    .rounded(theme.radii.surface)
                     .border_1()
                     .border_color(theme.colors.border)
                     .bg(theme.colors.background)
@@ -419,57 +423,49 @@ impl ApprovalDialog {
         div()
             .flex()
             .flex_row()
-            .gap_2()
+            .gap(theme.spacing.small)
             .justify_end()
             .child(
-                div()
-                    .id("oxyn-approval-reject")
-                    .tab_index(0)
-                    .px_3()
-                    .py_1()
-                    .rounded_md()
-                    .border_1()
-                    .border_color(theme.colors.border)
-                    .bg(theme.colors.surface_raised)
-                    .text_color(theme.colors.text)
-                    .cursor_pointer()
-                    .hover(|style| style.bg(theme.colors.hover))
-                    .on_click(cx.listener(|ecran, _event: &ClickEvent, _window, cx| {
+                control(
+                    "oxyn-approval-reject",
+                    ControlState::Enabled,
+                    ControlTone::Neutral,
+                    theme,
+                    cx.listener(|ecran, _event: &ClickEvent, _window, cx| {
                         ecran.decide(ApprovalOutcome::Rejected, cx);
-                    }))
-                    .child("Refuser (Échap)"),
+                    }),
+                )
+                .px(theme.spacing.medium)
+                .py(theme.spacing.tiny)
+                .child("Refuser (Échap)"),
             )
             .child(
-                div()
-                    .id("oxyn-approval-approve")
-                    .tab_index(1)
-                    .px_3()
-                    .py_1()
-                    .rounded_md()
-                    .border_1()
-                    // Sur une connexion de production, l'action porte la couleur
-                    // de danger : elle ne doit pas ressembler au bouton de
-                    // validation d'un formulaire ordinaire.
-                    .border_color(if production {
-                        theme.colors.danger
+                control(
+                    "oxyn-approval-approve",
+                    ControlState::Enabled,
+                    // Sur une connexion de production, l'action porte la
+                    // tonalité de danger : elle ne doit pas ressembler au
+                    // bouton de validation d'un formulaire ordinaire.
+                    if production {
+                        ControlTone::Danger
                     } else {
-                        theme.colors.accent
-                    })
-                    .bg(if production {
-                        theme.colors.danger
-                    } else {
-                        theme.colors.accent
-                    })
-                    .text_color(theme.colors.text_on_accent)
-                    .cursor_pointer()
-                    .on_click(cx.listener(|ecran, _event: &ClickEvent, _window, cx| {
+                        ControlTone::Primary
+                    },
+                    theme,
+                    cx.listener(|ecran, _event: &ClickEvent, _window, cx| {
                         ecran.decide(ApprovalOutcome::Approved, cx);
-                    }))
-                    .child(if production {
-                        "Exécuter en PRODUCTION (Cmd+Entrée)"
-                    } else {
-                        "Exécuter (Cmd+Entrée)"
                     }),
+                )
+                // Second dans l'ordre de tabulation : le refus vient d'abord,
+                // et c'est lui que porte `Échap`.
+                .tab_index(1)
+                .px(theme.spacing.medium)
+                .py(theme.spacing.tiny)
+                .child(if production {
+                    "Exécuter en PRODUCTION (Cmd+Entrée)"
+                } else {
+                    "Exécuter (Cmd+Entrée)"
+                }),
             )
             .into_any_element()
     }

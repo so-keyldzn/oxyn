@@ -22,8 +22,8 @@ use oxyn_core::{
 use oxyn_exec::Outcome;
 use oxyn_ui::{
     ActiveConnection, ApprovalDialog, ApprovalEvent, ApprovalId, ApprovalOutcome, ApprovalRequest,
-    CatalogTree, CatalogTreeEvent, DataGrid, EditorEvent, ExecutionStatus, GridEvent, QueryEditor,
-    StatusBar, StatusBarEvent,
+    CatalogTree, CatalogTreeEvent, DataGrid, EditorEvent, ExecutionStatus, FormatSettings,
+    FormatSettingsEvent, GridEvent, QueryEditor, StatusBar, StatusBarEvent,
 };
 use preview::ObjectTab;
 use tokio::sync::{broadcast::error::RecvError, oneshot};
@@ -65,6 +65,9 @@ pub struct Workspace {
     grid: Entity<DataGrid>,
     status: Entity<StatusBar>,
     approval: Entity<ApprovalDialog>,
+    settings: Entity<FormatSettings>,
+    /// Vrai quand le panneau de réglages d'affichage est déplié.
+    settings_open: bool,
     pending: Option<ApprovalRequest>,
     active: Option<(CommandId, CancelToken)>,
     awaiting_approval: bool,
@@ -148,6 +151,22 @@ impl Workspace {
             }
         })
         .detach();
+        let settings = cx.new(|cx| FormatSettings::new(grid.read(cx).format_options().clone(), cx));
+        // Le réglage part de la vue vers la grille, jamais l'inverse : la vue
+        // de réglages ne connaît pas la grille, elle annonce (I-01).
+        cx.subscribe(&settings, {
+            let grid = grid.clone();
+            move |_workspace, _, event, cx| {
+                // `FormatSettingsEvent` est `#[non_exhaustive]` : le filtrage
+                // reste ouvert, et un réglage ajouté plus tard n'atteindra pas
+                // la grille tant que personne ne l'aura traité ici.
+                if let FormatSettingsEvent::Changed(options) = event {
+                    let options = options.clone();
+                    grid.update(cx, |grille, cx| grille.set_format_options(options, cx));
+                }
+            }
+        })
+        .detach();
         cx.subscribe(&approval, |this, _, event, cx| {
             let ApprovalEvent::Decided { outcome, .. } = event else {
                 return;
@@ -191,6 +210,8 @@ impl Workspace {
             grid,
             status,
             approval,
+            settings,
+            settings_open: false,
             pending: None,
             active: None,
             awaiting_approval: false,

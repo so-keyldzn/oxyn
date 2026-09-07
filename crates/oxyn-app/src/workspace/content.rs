@@ -53,8 +53,22 @@ impl Workspace {
                             Control::Run,
                             false,
                             cx,
+                        ))
+                        .child(self.control(
+                            "toggle-format-settings",
+                            if self.settings_open {
+                                "Hide display settings"
+                            } else {
+                                "Display settings"
+                            },
+                            Control::FormatSettings,
+                            false,
+                            cx,
                         )),
                 )
+                .when(self.settings_open, |element| {
+                    element.child(div().flex_none().child(self.settings.clone()))
+                })
                 .child(
                     div()
                         .h(px(220.))

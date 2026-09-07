@@ -16,7 +16,7 @@ use anyhow::{Context as _, Result};
 // de la vue racine ne compile pas, et l'erreur ne nomme pas le trait manquant.
 use gpui::prelude::*;
 use gpui::{Application, Bounds, TitlebarOptions, WindowBounds, WindowOptions, px, size};
-use oxyn_ui::{Theme, ThemeMode};
+use oxyn_ui::{Theme, ThemeMode, UiAssets};
 use tracing_subscriber::EnvFilter;
 
 use crate::backend::Backend;
@@ -42,9 +42,18 @@ fn main() -> Result<()> {
     }
     .context("starting Oxyn")?;
 
-    Application::new().with_assets(oxyn_ui::UiAssets).run(move |cx| {
-        if let Err(error) = cx.text_system().add_fonts(oxyn_ui::UiAssets::fonts()) {
-            tracing::warn!(%error, "Bundled fonts could not be registered; using system fallback");
+    // `with_assets` avant tout : sans lui, `AssetSource::load` n'est jamais
+    // consulté et les SVG de `oxyn_ui::icons` ne rendent rien — en silence,
+    // puisqu'une ressource absente n'est pas une erreur pour GPUI.
+    Application::new().with_assets(UiAssets).run(move |cx| {
+        // Et l'enregistrement des polices avant la fenêtre, parce que
+        // `Typography::ui_family` nomme « Geist » : une famille non
+        // enregistrée tombe sur le repli de plateforme, et l'application
+        // dessine dans une autre police que celle de la maquette sans que rien
+        // ne le signale. L'échec est rapporté, pas avalé : le repli reste
+        // lisible, mais il ne doit pas passer pour le résultat voulu.
+        if let Err(erreur) = cx.text_system().add_fonts(UiAssets::fonts()) {
+            tracing::error!(%erreur, "Geist non enregistrée : repli de plateforme");
         }
         Theme::init(ThemeMode::Dark, cx);
         cx.on_window_closed(|cx| {

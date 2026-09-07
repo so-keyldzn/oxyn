@@ -26,6 +26,7 @@ pub(super) enum Control {
     Describe,
     Data,
     Preview,
+    FormatSettings,
 }
 
 impl Workspace {
@@ -95,6 +96,10 @@ impl Workspace {
                 if self.preview_path.is_none() {
                     self.load_preview(cx);
                 }
+            }
+            Control::FormatSettings => {
+                self.settings_open = !self.settings_open;
+                cx.notify();
             }
             Control::Preview => {
                 if self.preview_active.is_some() {
@@ -184,7 +189,7 @@ impl Workspace {
             Control::Sql | Control::Run => IconName::Terminal,
             Control::Catalog | Control::Refresh => IconName::Database,
             Control::Help => IconName::Book,
-            Control::Theme => IconName::Settings,
+            Control::Theme | Control::FormatSettings => IconName::Settings,
             Control::NewConnection => IconName::Plus,
             Control::Describe | Control::Data | Control::Preview => IconName::Table,
         };

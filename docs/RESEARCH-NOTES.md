@@ -211,3 +211,64 @@ dans la session qui utilise le service.
 > PostgreSQL ni SQLite. Tout serveur de base de données branché sur Oxyn serait
 > un serveur tiers, à auditer. Le raisonnement complet est dans
 > [MCP.md](MCP.md).
+
+## Jetons de la maquette Figma
+
+Fichier `Yviemi4brBczzdRdBp1ONv`, collection `Oxyn / Primitives`. Lus par le
+serveur MCP Figma Dev Mode local (`get_metadata`, `get_variable_defs`), pas
+recopiés d'une capture. Les couleurs et les icônes ont leur propre provenance,
+plus détaillée, dans [`assets/ui/provenance.json`](../assets/ui/provenance.json).
+
+Les dimensions, espacements et rayons sont publiés dans
+`crates/oxyn-ui/src/theme.rs` — `Metrics`, `Spacing`, `Radii` — où chaque champ
+cite son nœud. **La typographie ne l'est que partiellement** : `Typography` ne
+porte ni graisses ni styles nommés, et deux de ses valeurs restent sans source —
+voir la table des manques ci-dessous.
+
+| Fait | Valeur | Source | Vérifié le |
+|---|---|---|---|
+| Échelle d'espacement | `space/0`=0, `space/4`=4, `space/8`=8, `space/12`=12, `space/16`=16, `space/24`=24 | Nœuds `13:291` et `47:8222` | 2026-09-07 |
+| Rayons de coin | `radius/6`=6, `radius/8`=8, `radius/full`=999 | idem | 2026-09-07 |
+| Hauteur de barre d'outils | `52` | Nœud `47:8422` « Workspace toolbar » | 2026-09-07 |
+| Largeur du panneau latéral déplié | `280` | Nœuds `8:4`, `13:292` | 2026-09-07 |
+| Largeur du panneau latéral replié | `64` | Nœuds `13:165`, `13:484` | 2026-09-07 |
+| Hauteur d'un contrôle | `38` | Nœuds `47:8461`, `47:8465`, `47:8469` | 2026-09-07 |
+| Familles et graisses | Geist — Title 24/32 SemiBold, Body 13/20 Regular, Label 13/20 Medium, Caption 11/16 Regular, Section 11/16 Medium | Nœuds `13:291`, `47:8222` | 2026-09-07 |
+
+### Les binaires embarqués et leurs licences
+
+Ces fichiers sont liés au binaire par `include_bytes!` dans
+`crates/oxyn-ui/src/icons.rs`. Ils portent un commit amont exact, comme une
+dépendance de code.
+
+| Fait | Valeur | Source | Vérifié le |
+|---|---|---|---|
+| Police d'interface | Geist Regular, Medium, SemiBold, commit `10dc7658f13c38a474cde201bb09a4617267545b` | [vercel/geist-font](https://github.com/vercel/geist-font) ; SHA-256 dans [`assets/fonts/provenance.json`](../assets/fonts/provenance.json) | 2026-09-07 |
+| Licence de la police | SIL Open Font License 1.1 | `assets/fonts/OFL.txt`, `assets/fonts/LICENSE.txt` | 2026-09-07 |
+| Icônes | Hugeicons Stroke Rounded, 12 glyphes, commit `f9dbcca8d72cc2777a0ccd873c274d9bf7a153e6` | [hugeicons/hugeicons-static](https://github.com/hugeicons/hugeicons-static) ; SHA-256 dans [`assets/ui/provenance.json`](../assets/ui/provenance.json) | 2026-09-07 |
+| Licence des icônes | **Aucune licence MIT attribuée** ; le README amont autorise l'usage tel quel, sans mention d'un droit de redistribution | [`assets/ui/HUGEICONS-UPSTREAM-README.txt`](../assets/ui/HUGEICONS-UPSTREAM-README.txt) | 2026-09-07 |
+
+> **À trancher avant la première publication de binaire.** Oxyn redistribue ces
+> douze glyphes en les liant dans l'exécutable. Tant qu'aucune version n'est
+> publiée, la question ne se pose pas ; elle se posera d'un coup le jour de la
+> première release, et c'est une question de droit, pas de code.
+
+### Ce qui n'a pas pu être lu, et pourquoi
+
+Le serveur Dev Mode applique un **quota journalier**, épuisé le 2026-09-07 par un
+balayage d'identifiants de pages. Sont donc restés non vérifiés, et ne doivent
+pas être considérés comme sourcés tant qu'ils ne sont pas relus :
+
+| Non lu | Où le chercher | Conséquence dans le code |
+|---|---|---|
+| Hauteur de barre d'état | pages `03 · Foundations` ou `22 · Database workspace` | `Metrics::status_bar_height` vaut 32, valeur de consigne **non confirmée** |
+| Espacements 20 et 32 | idem | **non publiés** : absents des deux écrans lus, qui n'emploient que 0/4/8/12/16/24 |
+| Métriques de grille — hauteur de ligne et d'en-tête, largeurs de colonne, gouttière | page `22 · Database workspace` | les valeurs préexistantes de `Metrics` sont conservées telles quelles, sans être attribuées à la maquette |
+| Épaisseur de l'anneau de focus | composant `Focus 11:69` | `Metrics::focus_ring` vaut 2, justifié par la lisibilité et non par la maquette |
+| Interligne de l'éditeur à chasse fixe | page `03 · Foundations` | `Typography::line_height` vaut 18 : ni 20 ni 16, les deux interlignes lues ; c'est une valeur d'éditeur, à ne pas « corriger » d'après la ligne de typographie ci-dessus |
+| Famille à chasse fixe | idem | `Typography::mono_family` vaut `Menlo`, une police système macOS ; la maquette n'a pas pu être consultée sur ce point |
+
+Les identifiants des pages `03 · Foundations` et `22 · Database workspace` n'ont
+pas été retrouvés : `get_metadata` exige un nœud connu, et les pages ne
+s'énumèrent pas. Les obtenir demande de les ouvrir dans l'application Figma, ou
+de lire l'URL `?node-id=` de chacune.
