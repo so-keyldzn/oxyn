@@ -115,3 +115,15 @@ de style ou de structure. Les repères permanents suivent
 Les vérifications de maquette portent sur les captures, dimensions, propriétés
 et destinations des interactions Figma. Elles ne valident pas l'exécution
 GPUI, le réseau, une base réelle ni la restauration après plantage.
+
+Dernière recette : le trajet Table → Structure → Constraints a été cliqué et
+contrôlé visuellement dans Figma Desktop. Le contrôle statique des pages 08,
+09 et 22 compte 1 099 liaisons vers 146 destinations existantes, sans référence
+manquante. Cela ne constitue pas une recette interactive exhaustive. Les huit
+sélections de reprise sont reliées à leurs issues ; leur recette complète dans
+le lecteur reste à effectuer.
+
+Le contrôle des variables préexistantes et des styles typographiques ne relève
+aucune modification. Les textes des revues de production, des filtres liés et
+des erreurs permanentes ou ambiguës sont conservés, y compris dans les slots
+des composants composés.
