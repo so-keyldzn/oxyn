@@ -190,7 +190,13 @@ def controler_graphe_dependances() -> list[str]:
     for chemin in _manifestes():
         repertoire = chemin.parent.name
         rel = chemin.relative_to(RACINE)
-        manifeste = tomllib.loads(chemin.read_text(encoding="utf-8"))
+        try:
+            manifeste = tomllib.loads(chemin.read_text(encoding="utf-8"))
+        except tomllib.TOMLDecodeError as err:
+            # Une trace Python ici ferait croire à un défaut du contrôle. Le
+            # manifeste est illisible : c'est ça qu'il faut afficher.
+            erreurs.append(f"{rel} : TOML illisible — {err}")
+            continue
 
         if manifeste.get("lints", {}).get("workspace") is not True:
             erreurs.append(

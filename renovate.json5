@@ -1,0 +1,89 @@
+// I-12, exécuté par une machine.
+//
+// « Aucune version, aucune limite externe recopiée de mémoire. Vérifiée au
+// registre, datée. » Renovate ne fait rien d'autre : il lit le registre, ouvre
+// une PR par montée, et la date est celle du commit. C'est `/versions` sans le
+// risque qu'une valeur plausible et fausse passe — elle ne se voit ni à la
+// compilation, ni aux tests, ni en revue.
+//
+// Ce qu'il ne fait PAS, et qui reste à la charge de l'humain : reporter la
+// valeur et sa source dans docs/RESEARCH-NOTES.md, dans le même commit. C'est
+// pour ça qu'aucune PR n'est fusionnée automatiquement.
+//
+// Format JSON5 et non JSON : ce fichier a besoin de dire pourquoi, et JSON ne
+// sait pas porter un commentaire. Renovate lit `renovate.json5` nativement.
+{
+  $schema: "https://docs.renovatebot.com/renovate-schema.json",
+
+  extends: [
+    "config:recommended",
+    // Regroupe les mises à jour de sécurité et les remonte en priorité.
+    ":enableVulnerabilityAlertsWithLabel(sécurité)",
+  ],
+
+  // Le format est imposé par .claude/hooks/message_commit.py : un type parmi
+  // une liste fermée, une portée entre parenthèses, un sujet en minuscules sans
+  // point final. `chore(deps): update rust crate serde to v1.0.230` le respecte.
+  semanticCommits: "enabled",
+  semanticCommitType: "chore",
+  semanticCommitScope: "deps",
+
+  // La version ÉCRITE dans le manifeste doit être celle qui a été vérifiée.
+  // Avec la stratégie par défaut, une montée compatible ne toucherait que le
+  // Cargo.lock : le numéro lisible dans Cargo.toml resterait celui d'avant, et
+  // RESEARCH-NOTES daterait une valeur qui n'est plus la bonne.
+  rangeStrategy: "bump",
+
+  // Personne ne relit vingt PR de dépendances. Une fenêtre hebdomadaire et une
+  // limite basse font que celles qui existent sont effectivement regardées.
+  schedule: ["before 9am on monday"],
+  prConcurrentLimit: 5,
+  prHourlyLimit: 2,
+  dependencyDashboard: true,
+
+  // Rien ne fusionne seul : la PR n'est complète qu'une fois RESEARCH-NOTES à
+  // jour, et ça, Renovate ne sait pas le faire.
+  automerge: false,
+
+  prBodyNotes: [
+    "**Avant de fusionner (I-12)** : reporter la version et sa source dans `docs/RESEARCH-NOTES.md`, avec la date du jour, **dans le même commit**. Une montée non datée fait mentir le document qui fait autorité sur les versions.",
+    "Vérifier aussi `make qualite` : plusieurs épinglages de ce dépôt existent pour des raisons qui ne se voient pas dans le graphe (voir les commentaires de `Cargo.toml`).",
+  ],
+
+  ignoreDeps: [
+    // rusqlite est épinglé en 0.37 à dessein : sqlx tire `sqlx-sqlite` dans le
+    // graphe et les deux déclarent `links = "sqlite3"`, donc une seule version
+    // de libsqlite3-sys peut exister (ADR-0010). Une montée automatique casse
+    // la résolution, et le message d'erreur ne nomme jamais la cause. À relever
+    // à la main quand sqlx suivra.
+    "rusqlite",
+  ],
+
+  packageRules: [
+    // gpui épingle plusieurs dépendances système avec `=` (cocoa,
+    // core-foundation). Une montée de gpui peut donc rendre le graphe
+    // insoluble, et ce n'est pas une PR à regarder distraitement un lundi
+    // matin : ADR-0009 fait autorité sur la source, RESEARCH-NOTES sur les
+    // épinglages.
+    {
+      matchPackageNames: ["gpui"],
+      addLabels: ["frontière"],
+      prBodyNotes: [
+        "gpui épingle `cocoa` et `core-foundation` avec `=`. Vérifier `cargo update --dry-run` avant toute chose : un graphe insoluble se manifeste par une erreur de résolution qui ne nomme pas gpui.",
+      ],
+    },
+    // Les crates qui parlent à un serveur ou à un fournisseur IA changent le
+    // comportement sur une frontière externe. Elles se relisent, elles ne se
+    // survolent pas.
+    {
+      matchPackageNames: ["sqlx", "reqwest", "arrow", "wasmtime", "keyring", "secrecy"],
+      addLabels: ["frontière"],
+    },
+  ],
+
+  // À noter, et c'est voulu : Renovate n'a pas de gestionnaire pour
+  // `rust-toolchain.toml`. La chaîne d'outils reste donc hors de son champ, ce
+  // qui correspond à ADR-0008 — une montée de toolchain est un commit
+  // délibéré, qui met RESEARCH-NOTES à jour en même temps, pas une
+  // notification du lundi.
+}

@@ -5,6 +5,12 @@ paths:
   - "rust-toolchain.toml"
   - "Makefile"
   - "deny.toml"
+  - "clippy.toml"
+  - ".cargo/config.toml"
+  - ".config/nextest.toml"
+  - "renovate.json5"
+  - ".github/workflows/*.yml"
+  - "script/*"
 ---
 
 # Manifestes et outillage — conventions
@@ -54,5 +60,32 @@ documenter.
 ## `make qualite`
 
 C'est la porte de qualité, et le seul point d'entrée. Si un contrôle n'y est pas,
-il ne tourne pas : la CI l'appelle, le hook `Stop` le rappelle, la définition de
-« terminé » s'y adosse. Ajouter un contrôle ailleurs, c'est le rendre optionnel.
+il ne tourne pas : la CI l'appelle
+([.github/workflows/qualite.yml](../../.github/workflows/qualite.yml)), le hook
+`Stop` le rappelle, la définition de « terminé » s'y adosse. Ajouter un contrôle
+ailleurs, c'est le rendre optionnel.
+
+**La CI n'ajoute aucun contrôle.** Elle appelle `make qualite` et rien d'autre.
+Un contrôle qui n'existerait que dans le fichier de workflow serait irreproductible
+en local : on découvrirait son existence en le voyant échouer.
+
+## Où vivent les interdits mécanisables
+
+| Fichier | Ce qu'il refuse |
+|---|---|
+| [clippy.toml](../../clippy.toml) | les chemins d'appel interdits — `disallowed-methods`, avec la raison et le remplacement |
+| [.cargo/config.toml](../../.cargo/config.toml) | rien ; il impose les drapeaux qui doivent valoir pour tout le monde, dont la cible macOS |
+| [.config/nextest.toml](../../.config/nextest.toml) | un test qui pend, et deux tests qui se partagent un serveur |
+| [renovate.json5](../../renovate.json5) | une version recopiée de mémoire — c'est [I-12](../../CLAUDE.md#i-12) mécanisé |
+
+Un invariant qui se ramène à un chemin d'appel appartient à `clippy.toml`, pas à
+une relecture. `clippy.toml` vaut pour **tout** le workspace : un interdit qui ne
+doit valoir que pour `oxyn-ui` n'y a pas sa place.
+
+## Une crate ne se crée pas à la main
+
+`script/nouvelle-crate <nom> "<description>"`. La raison est écrite dans
+[CLAUDE.md](../../CLAUDE.md) : une règle `paths:` se charge quand un fichier est
+**lu**, pas quand il est créé. Un manifeste écrit de mémoire oublie
+`[lints] workspace = true`, et la crate échappe alors à tous les lints du dépôt
+sans que rien n'échoue. `make socle` le rattrape après coup ; le script l'évite.

@@ -168,6 +168,15 @@ fn preview_fixture() -> (Backend, OpenConnection) {
     (backend, open)
 }
 
+// The interdict in `clippy.toml` targets the product's UI thread, where a
+// blocking sleep freezes the window (I-05). This is a test harness polling an
+// executor that GPUI's virtual clock does not drive, and the loop right below
+// carries its own deadline. `expect` rather than `allow`: if the sleep ever
+// goes away, the exemption must go with it.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "test harness polling a wall-clock executor, not the UI thread"
+)]
 fn wait_for_preview(view: &Entity<Workspace>, cx: &mut gpui::VisualTestContext) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {

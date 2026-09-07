@@ -50,7 +50,8 @@ Aucune version ne s'écrit de mémoire : voir [I-12](#i-12).
 
 | | |
 |---|---|
-| `make qualite` | **la** porte de qualité : format, clippy, tests, doc. Rien n'est terminé sans elle |
+| `make qualite` | **la** porte de qualité : socle, TODO datés, format, clippy, tests, doc. Rien n'est terminé sans elle, et la CI n'appelle qu'elle |
+| `script/nouvelle-crate` | crée une crate déjà conforme — voir le piège des règles plus bas |
 | [`/plan`](.claude/commands/plan.md) [`/implementer`](.claude/commands/implementer.md) [`/relire`](.claude/commands/relire.md) | le cycle courant |
 | [`/driver`](.claude/commands/driver.md) [`/commande`](.claude/commands/commande.md) [`/vue`](.claude/commands/vue.md) | les gestes qui ont un contrat à respecter |
 | [`/adr`](.claude/commands/adr.md) [`/versions`](.claude/commands/versions.md) [`/benchmark`](.claude/commands/benchmark.md) [`/securite`](.claude/commands/securite.md) | les gestes rares et faciles à rater |
@@ -172,15 +173,15 @@ quand Claude **lit** un fichier correspondant à leur `paths:`.
 | [ia.md](.claude/rules/ia.md) | `crates/oxyn-ai/**` |
 | [tests.md](.claude/rules/tests.md) | `**/tests/**`, `**/benches/**` |
 | [documentation.md](.claude/rules/documentation.md) | `docs/**/*.md`, `*.md` |
-| [manifestes.md](.claude/rules/manifestes.md) | `**/Cargo.toml`, `rust-toolchain.toml` |
+| [manifestes.md](.claude/rules/manifestes.md) | `**/Cargo.toml`, `rust-toolchain.toml`, `clippy.toml`, `script/*`, workflows |
 
 > **Le piège à connaître.** Une règle `paths:` se charge quand Claude *lit* un
 > fichier correspondant, **pas quand il en crée un**. Le premier fichier d'un
-> répertoire vide s'écrit donc sans sa règle. Ici, **aucun `paths:` ne
-> correspond encore à un fichier existant** : il n'y a pas de code. Ce sont les
-> commandes de `.claude/commands/` qui compensent, en chargeant la procédure
-> explicitement. **Utiliser `/driver`, `/commande` ou `/vue` n'est pas une
-> option de confort tant que `crates/` est vide.**
+> répertoire neuf s'écrit donc sans sa règle, et un manifeste sans
+> `[lints] workspace = true` ne fait rien échouer. Deux choses compensent, et
+> aucune n'est une option de confort : `script/nouvelle-crate`, qui écrit un
+> squelette déjà conforme, et les commandes de `.claude/commands/`, qui
+> chargent la procédure explicitement — `/driver`, `/commande`, `/vue`.
 
 ## Ce qui est exécuté
 
@@ -188,3 +189,15 @@ quand Claude **lit** un fichier correspondant à leur `paths:`.
 interdites, contournements par le shell, format de commit, injection de l'état
 réel au démarrage. Un hook n'est pas un rappel, c'est un mur. Détail et
 protocole : [.claude/hooks/README.md](.claude/hooks/README.md).
+
+Les hooks ne valent que pour une session Claude. Ce qui vaut pour **tout le
+monde**, humain compris, passe par `make qualite` — appelée par la CI
+([.github/workflows/qualite.yml](.github/workflows/qualite.yml)), qui n'ajoute
+aucun contrôle de son côté :
+
+| Ce qui refuse | L'invariant tenu |
+|---|---|
+| [clippy.toml](clippy.toml) | les chemins d'appel interdits ([I-03](#i-03), [I-05](#i-05), [I-09](#i-09)) |
+| `.claude/verifier_socle.py` | `gpui` hors de l'UI, un manifeste hors du workspace ([I-08](#i-08)) |
+| `script/verifier-todo` | une marque de travail restant sans échéance |
+| [renovate.json5](renovate.json5) | une version recopiée de mémoire ([I-12](#i-12)) |
