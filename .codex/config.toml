@@ -15,3 +15,11 @@ status_line = [
     "context-remaining",
     "git-branch",
 ]
+
+[mcp_servers.figma]
+url = "https://mcp.figma.com/mcp"
+
+
+[mcp_servers.figma-desktop]
+url = "http://127.0.0.1:3845/mcp"
+

@@ -57,5 +57,16 @@ interdisent les corrections dans leurs instructions. Les réglages imposés par
 la session peuvent toutefois primer sur ce défaut ; vérifier les permissions
 effectives avant de considérer cette lecture seule comme une barrière technique.
 
-Les serveurs MCP, les hooks et les options expérimentales ne sont pas recopiés
-ici sans besoin identifié.
+## Figma
+
+Deux serveurs MCP sont déclarés : `figma` pour le service distant et
+`figma-desktop` pour l'application locale. Ils sont facultatifs au démarrage
+(`required = false`). Aucun identifiant n'est stocké dans ces fichiers.
+Leur déclaration ne prouve ni leur disponibilité ni une authentification.
+
+Si le service distant demande une connexion, lancer `codex mcp login figma`
+depuis le dépôt. Pour le serveur local, ouvrir Figma Desktop avec son serveur
+MCP activé. Utiliser le serveur correspondant au contexte de travail.
+
+Les formats et leurs sources sont datés dans
+[RESEARCH-NOTES](../docs/RESEARCH-NOTES.md#codex--agents-locaux-et-mcp).
