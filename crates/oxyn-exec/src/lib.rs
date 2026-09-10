@@ -136,3 +136,5 @@ pub mod prelude {
     pub use crate::sessions::{CredentialResolver, NoCredentials, SessionRegistry};
     pub use crate::sink::{DispatchReport, ExecutorSink};
 }
+
+mod retained;

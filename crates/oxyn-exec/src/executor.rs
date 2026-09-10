@@ -37,14 +37,11 @@
 //!
 //! # Ce que cette version ne fait pas
 //!
-//! `oxyn-exec` ne possède pas de runtime : `tokio` n'est au contrat de
-//! dépendances qu'avec `sync`, `time` et `macros`. Il n'y a donc ni
-//! `spawn_blocking` ni `spawn` ici, et les appels à `oxyn-store` — SQLite local,
-//! de l'ordre de la dizaine de microsecondes — sont faits en ligne.
-// TODO(phase 1) : porter les accès au `Store` et l'écriture d'export sur le pool
-// bloquant, dès que `oxyn-exec` reçoit une poignée de runtime. Aujourd'hui ils
-// s'exécutent sur le thread appelant du runtime, ce qui est acceptable pour du
-// SQLite local et ne l'est plus pour un export de dix gigaoctets.
+//! Page reads use the application's Tokio blocking pool; the executor does not
+//! create a runtime. Other local Store accesses and export writes remain inline
+//! on the dispatching worker, never on the UI thread.
+// TODO(2026-09-10): move remaining Store and export I/O to the blocking pool
+// when their command handlers are split into owned operations.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -90,6 +87,20 @@ pub enum Outcome {
     },
 
     /// Les sessions d'une connexion ont été fermées.
+    /// One session was closed; sibling sessions and the catalog remain available.
+    SessionClosed { session: SessionId },
+
+    /// The server accepted a new resolution context for one session.
+    ///
+    /// Carries what the session reports afterwards, not what was requested: a
+    /// server may normalise or reject part of it, and the interface must show
+    /// the former.
+    SessionContextSet {
+        /// The session that moved. No sibling session is affected.
+        session: SessionId,
+        /// What the session reports now, `None` when it reports nothing.
+        context: Option<oxyn_driver::SessionContext>,
+    },
     Disconnected {
         /// La connexion.
         connection: ConnectionId,
@@ -119,6 +130,45 @@ pub enum Outcome {
         /// Pourquoi le flux s'est arrêté. Seul
         /// [`Exhausted`](SinkOutcome::Exhausted) décrit un résultat entier.
         sink: SinkOutcome,
+    },
+
+    /// A bounded text page of a single value. Its Debug implementation hides text.
+    ValueInspected {
+        /// The page, without changing the result buffer.
+        page: oxyn_data::value_page::ValuePage,
+    },
+
+    /// A locally stored page is now available in the result's bounded cache.
+    ResultPageRead {
+        /// Existing result; no new execution was created.
+        result: ResultId,
+        /// Zero-based batch index.
+        batch: usize,
+    },
+
+    /// Preferences read or saved in the local workspace.
+    WorkspacePreferences {
+        snapshot: oxyn_core::PreferencesSnapshot,
+    },
+
+    /// A bounded library page, with no complete SQL bodies.
+    QueryDocumentsListed {
+        page: oxyn_store::documents::DocumentPage,
+    },
+    /// A local history page; retained identities may expire before opening.
+    HistoryListed {
+        page: oxyn_store::history::HistoryPage,
+    },
+    /// One selected execution record, never automatically replayed.
+    HistoryEntryRead {
+        entry: Box<oxyn_store::HistoryEntry>,
+    },
+    /// A document was closed or deleted locally.
+    DocumentClosed { document: DocumentId },
+    /// The same retained buffer, without an execution event.
+    RetainedResultOpened {
+        result: ResultId,
+        buffer: Arc<ResultBuffer>,
     },
 
     /// Une annulation a été demandée.
@@ -218,6 +268,11 @@ impl Outcome {
     }
 }
 
+pub(crate) struct StoredResult {
+    pub(crate) connection: ConnectionId,
+    pub(crate) buffer: Arc<ResultBuffer>,
+}
+
 /// L'ordonnanceur.
 ///
 /// Se partage par `Arc` entre l'interface, le runtime d'agents
@@ -232,7 +287,7 @@ pub struct Executor {
     running: CancelRegistry,
     approvals: ApprovalRegistry,
     events: EventBus,
-    results: RwLock<HashMap<ResultId, Arc<ResultBuffer>>>,
+    results: RwLock<crate::retained::RetainedResults>,
     catalogs: RwLock<HashMap<ConnectionId, Arc<crate::catalog::ConnectionCatalog>>>,
     connections: RwLock<HashMap<ConnectionId, ConnectionConfig>>,
     workspace: WorkspaceId,
@@ -460,13 +515,41 @@ impl Executor {
             Command::Connect { connection } => self.connect(*connection, cancel).await,
 
             Command::Disconnect { connection } => self.disconnect(*connection).await,
+            Command::CloseSession {
+                connection,
+                session,
+            } => {
+                if cancel.is_cancelled() {
+                    return Err(OxynError::Cancelled);
+                }
+                self.close_session(*connection, *session).await
+            }
+
+            Command::SetSessionContext {
+                connection,
+                session,
+                catalog,
+                namespace,
+            } => {
+                if cancel.is_cancelled() {
+                    return Err(OxynError::Cancelled);
+                }
+                self.set_session_context(
+                    *connection,
+                    *session,
+                    catalog.as_deref(),
+                    namespace.as_deref(),
+                    cancel,
+                )
+                .await
+            }
 
             Command::Execute {
                 connection,
                 session,
                 request,
             } => {
-                self.execute_statement(id, *connection, *session, (**request).clone(), cancel)
+                self.execute_statement(id, *connection, *session, (**request).clone(), cancel, None)
                     .await
             }
 
@@ -477,6 +560,7 @@ impl Executor {
                 namespace,
                 relation,
                 limit,
+                shape,
             } => {
                 if !(1..=1000).contains(limit) {
                     return Err(OxynError::Config(
@@ -497,7 +581,26 @@ impl Executor {
                         "preview session belongs to another connection".into(),
                     ));
                 }
-                let request = slot.preview_request(&path, *limit, cancel).await?;
+                // Refusé ici plutôt que laissé au driver : la capacité est ce
+                // que **cette session** déclare, et une demande qu'elle ne sait
+                // pas honorer ne doit pas atteindre la composition du SQL, où
+                // la tentation serait de l'ignorer (ADR-0003, ADR-0020).
+                let capabilities = slot.capabilities();
+                if !shape.sort.is_empty()
+                    && !capabilities.contains(oxyn_core::Capabilities::PREVIEW_SORT)
+                {
+                    return Err(OxynError::NotSupported {
+                        capability: "preview sort".to_owned(),
+                    });
+                }
+                if !shape.filter.is_empty()
+                    && !capabilities.contains(oxyn_core::Capabilities::PREVIEW_FILTER)
+                {
+                    return Err(OxynError::NotSupported {
+                        capability: "preview filter".to_owned(),
+                    });
+                }
+                let request = slot.preview_request(&path, *limit, shape, cancel).await?;
                 let mut request = oxyn_query::reclassify(&request).qualify(request);
                 if request.is_mutating() {
                     return Err(OxynError::PolicyDenied {
@@ -506,10 +609,14 @@ impl Executor {
                 }
                 // Enforce the command contract even if a driver omitted its limits.
                 request.limits.read_only = true;
-                request.limits.max_rows = Some(usize::try_from(*limit).map_err(|_| {
+                let row_limit = usize::try_from(*limit).map_err(|_| {
                     OxynError::Config("preview limit exceeds platform capacity".into())
-                })?);
-                self.execute_statement(id, *connection, *session, request, cancel)
+                })?;
+                // The SQL is already bounded. One extra receive slot lets the
+                // cursor report its real end instead of a client-side truncation.
+                // The buffer still rejects every row beyond the requested limit.
+                request.limits.max_rows = Some(row_limit.saturating_add(1));
+                self.execute_statement(id, *connection, *session, request, cancel, Some(row_limit))
                     .await
             }
 
@@ -526,16 +633,233 @@ impl Executor {
                 self.refresh_catalog(id, *connection, scope, cancel).await
             }
 
+            Command::InspectResultValue {
+                connection,
+                result,
+                row,
+                column,
+                offset,
+            } => {
+                let buffer = self.result_on_connection(*connection, *result)?;
+                let (row, column, offset) = (*row, *column, *offset);
+                let cancel = cancel.clone();
+                let runtime = tokio::runtime::Handle::try_current().map_err(|_| {
+                    OxynError::Config("value inspection requires the application runtime".into())
+                })?;
+                let page = runtime
+                    .spawn_blocking(move || -> Result<_> {
+                        let (batch, row) = buffer.read_row(row, &cancel)?.ok_or_else(|| {
+                            OxynError::Config("selected row is no longer available".into())
+                        })?;
+                        oxyn_data::value_page::inspect_value(&batch, row, column, offset, &cancel)?
+                            .ok_or_else(|| {
+                                OxynError::Config("selected column is no longer available".into())
+                            })
+                    })
+                    .await
+                    .map_err(|_| OxynError::Internal("value inspection worker stopped".into()))??;
+                Ok(Outcome::ValueInspected { page })
+            }
+
+            Command::ReadResultPage {
+                connection,
+                result,
+                batch,
+            } => {
+                let buffer = self.result_on_connection(*connection, *result)?;
+                let cancel = cancel.clone();
+                let position = *batch;
+                let runtime = tokio::runtime::Handle::try_current().map_err(|_| {
+                    OxynError::Config("result page loading requires the application runtime".into())
+                })?;
+                let loaded = runtime
+                    .spawn_blocking(move || {
+                        buffer.load_page(oxyn_data::BatchIndex::new(position), &cancel)
+                    })
+                    .await
+                    .map_err(|_| OxynError::Internal("result page worker stopped".into()))??;
+                if !loaded {
+                    return Err(OxynError::Config(
+                        "result page is no longer available".into(),
+                    ));
+                }
+                Ok(Outcome::ResultPageRead {
+                    result: *result,
+                    batch: *batch,
+                })
+            }
+
             Command::Export {
+                connection,
                 result,
                 format,
                 destination,
                 ..
-            } => self.export_result(*result, *format, destination, cancel),
+            } => {
+                self.result_on_connection(*connection, *result)?;
+                self.export_result(*result, *format, destination, cancel)
+            }
 
-            Command::OpenDocument { document, .. } => self.open_document(*document),
+            Command::ReadWorkspacePreferences { workspace } => {
+                if *workspace != self.workspace {
+                    return Err(OxynError::Config(
+                        "workspace does not match this executor".into(),
+                    ));
+                }
+                let store = self.store.clone();
+                let workspace = *workspace;
+                let runtime = tokio::runtime::Handle::try_current().map_err(|_| {
+                    OxynError::Config("preference loading requires the application runtime".into())
+                })?;
+                let snapshot = runtime
+                    .spawn_blocking(move || store.preferences().load(workspace))
+                    .await
+                    .map_err(|_| OxynError::Internal("preference worker stopped".into()))??;
+                Ok(Outcome::WorkspacePreferences { snapshot })
+            }
+            Command::WriteWorkspacePreferences {
+                workspace,
+                snapshot,
+            } => {
+                if *workspace != self.workspace {
+                    return Err(OxynError::Config(
+                        "workspace does not match this executor".into(),
+                    ));
+                }
+                snapshot.validate()?;
+                let store = self.store.clone();
+                let workspace = *workspace;
+                let snapshot = (**snapshot).clone();
+                let runtime = tokio::runtime::Handle::try_current().map_err(|_| {
+                    OxynError::Config("preference saving requires the application runtime".into())
+                })?;
+                let snapshot = runtime
+                    .spawn_blocking(move || store.preferences().save(workspace, &snapshot))
+                    .await
+                    .map_err(|_| OxynError::Internal("preference worker stopped".into()))??;
+                Ok(Outcome::WorkspacePreferences { snapshot })
+            }
 
-            Command::WriteDocument { document, text, .. } => self.write_document(*document, text),
+            Command::ListQueryDocuments { workspace, filter } => {
+                self.check_workspace(*workspace)?;
+                filter.validate()?;
+                let store = self.store.clone();
+                let workspace = *workspace;
+                let filter = (**filter).clone();
+                let page = self
+                    .local_worker(cancel, move |cancel| {
+                        store.documents().page(workspace, &filter, &cancel)
+                    })
+                    .await?;
+                Ok(Outcome::QueryDocumentsListed { page })
+            }
+            Command::SaveQueryDocument { workspace, update } => {
+                self.check_workspace(*workspace)?;
+                update.validate()?;
+                let store = self.store.clone();
+                let workspace = *workspace;
+                let update = (**update).clone();
+                let document = self
+                    .local_worker(cancel, move |cancel| {
+                        store.documents().update_query(workspace, &update, &cancel)
+                    })
+                    .await?;
+                Ok(Outcome::DocumentOpened {
+                    document: Box::new(document),
+                })
+            }
+            Command::CloseQueryDocument {
+                expected_revision,
+                workspace,
+                document,
+                revision,
+                discard,
+            } => {
+                self.check_workspace(*workspace)?;
+                let store = self.store.clone();
+                let workspace = *workspace;
+                let target = *document;
+                let revision = *revision;
+                let discard = *discard;
+                let expected_revision = *expected_revision;
+                self.local_worker(cancel, move |cancel| {
+                    store.documents().close_query_checked(
+                        workspace,
+                        target,
+                        oxyn_store::documents::DocumentRevision {
+                            next: revision,
+                            expected: expected_revision,
+                        },
+                        discard,
+                        false,
+                        &cancel,
+                    )
+                })
+                .await?;
+                Ok(Outcome::DocumentClosed { document: target })
+            }
+            Command::DeleteQueryDocument {
+                workspace,
+                document,
+                revision,
+            } => {
+                self.check_workspace(*workspace)?;
+                let store = self.store.clone();
+                let workspace = *workspace;
+                let target = *document;
+                let revision = *revision;
+                self.local_worker(cancel, move |cancel| {
+                    store
+                        .documents()
+                        .close_query(workspace, target, revision, true, true, &cancel)
+                })
+                .await?;
+                Ok(Outcome::DocumentClosed { document: target })
+            }
+            Command::ReadHistory { filter } => {
+                filter.validate()?;
+                let store = self.store.clone();
+                let filter = (**filter).clone();
+                let page = self
+                    .local_worker(cancel, move |cancel| store.history().page(&filter, &cancel))
+                    .await?;
+                Ok(Outcome::HistoryListed { page })
+            }
+            Command::ReadHistoryEntry { entry } => {
+                let store = self.store.clone();
+                let target = *entry;
+                let entry = self
+                    .local_worker(cancel, move |cancel| store.history().get(target, &cancel))
+                    .await?
+                    .ok_or_else(|| {
+                        OxynError::Config("history entry is no longer available".into())
+                    })?;
+                Ok(Outcome::HistoryEntryRead {
+                    entry: Box::new(entry),
+                })
+            }
+            Command::OpenRetainedResult { connection, result } => {
+                Ok(Outcome::RetainedResultOpened {
+                    result: *result,
+                    buffer: self.result_on_connection(*connection, *result)?,
+                })
+            }
+            Command::OpenDocument {
+                workspace,
+                document,
+            } => {
+                self.check_workspace(*workspace)?;
+                self.open_document(*workspace, *document, cancel).await
+            }
+            Command::WriteDocument {
+                workspace,
+                document,
+                text,
+            } => {
+                self.check_workspace(*workspace)?;
+                self.write_document(*workspace, *document, text, cancel)
+                    .await
+            }
 
             Command::CreateConnection { config } | Command::UpdateConnection { config } => {
                 self.save_connection(config)
@@ -552,10 +876,20 @@ impl Executor {
         let credentials = self.credentials.resolve(&config)?;
         let session = driver.connect(&config, &credentials, cancel).await?;
         let slot = self.sessions.insert(SessionSlot::new(connection, session));
-        self.catalogs
+        let catalog = self
+            .catalogs
             .write()
             .entry(connection)
-            .or_insert_with(|| Arc::new(crate::catalog::ConnectionCatalog::new()));
+            .or_insert_with(|| Arc::new(crate::catalog::ConnectionCatalog::new()))
+            .clone();
+        let mut preferred = catalog.session.write();
+        if preferred
+            .and_then(|id| self.sessions.get(id))
+            .is_none_or(|session| !session.is_open())
+        {
+            *preferred = Some(slot.id());
+        }
+        drop(preferred);
         Ok(Outcome::Connected {
             connection,
             session: slot.id(),
@@ -583,6 +917,84 @@ impl Executor {
             closed += 1;
         }
         Ok(Outcome::Disconnected { connection, closed })
+    }
+
+    async fn close_session(&self, connection: ConnectionId, session: SessionId) -> Result<Outcome> {
+        let Some(slot) = self.sessions.get(session) else {
+            return Ok(Outcome::SessionClosed { session });
+        };
+        if slot.connection() != connection {
+            return Err(OxynError::PolicyDenied {
+                reason: "session does not belong to this connection".into(),
+            });
+        }
+        slot.begin_close();
+        for running in self.running.for_session(session) {
+            self.running.cancel(&self.sessions, running.statement).await;
+        }
+        self.sessions.remove(session);
+        slot.close().await?;
+        Ok(Outcome::SessionClosed { session })
+    }
+
+    /// Declares where one session resolves unqualified names.
+    ///
+    /// Refuses the session the catalog and previews read through: the explorer
+    /// shows a qualified tree, and moving it under the user because a console
+    /// changed schema would make the same click mean two things on two days
+    /// ([ADR-0019](../../../docs/adr/0019-contexte-de-session.md)).
+    async fn set_session_context(
+        &self,
+        connection: ConnectionId,
+        session: SessionId,
+        catalog: Option<&str>,
+        namespace: Option<&str>,
+        cancel: &CancelToken,
+    ) -> Result<Outcome> {
+        let Some(slot) = self.sessions.get(session) else {
+            return Err(OxynError::PolicyDenied {
+                reason: "unknown session".into(),
+            });
+        };
+        if slot.connection() != connection {
+            return Err(OxynError::PolicyDenied {
+                reason: "session does not belong to this connection".into(),
+            });
+        }
+        if !slot
+            .capabilities()
+            .contains(oxyn_core::Capabilities::SESSION_CONTEXT)
+        {
+            return Err(OxynError::NotSupported {
+                capability: "session context".to_owned(),
+            });
+        }
+        let reserved = self
+            .catalogs
+            .read()
+            .get(&connection)
+            .and_then(|state| *state.session.read());
+        if reserved == Some(session) {
+            return Err(OxynError::PolicyDenied {
+                reason: "this session serves the catalog and previews; \
+                         open a console to change context"
+                    .into(),
+            });
+        }
+        // Validation by the catalog path rather than here: a control character
+        // in a name must be refused before it reaches a driver about to quote it.
+        let path = oxyn_catalog::CatalogPath::from_levels(
+            catalog.map(ToOwned::to_owned),
+            namespace.map(ToOwned::to_owned),
+            None,
+        )
+        .map_err(|error| OxynError::Config(error.to_string()))?;
+        let context = oxyn_driver::SessionContext::from_path(&path);
+        slot.set_context(&context, cancel).await?;
+        Ok(Outcome::SessionContextSet {
+            session,
+            context: slot.context(cancel).await?,
+        })
     }
 
     /// Returns the connected source's in-memory cache without any I/O.
@@ -616,11 +1028,20 @@ impl Executor {
             _ = state.closed.cancelled() => return Err(OxynError::Cancelled),
             guard = state.refresh.lock() => guard,
         };
-        let slot = self
-            .sessions
-            .for_connection(connection)
-            .into_iter()
-            .next()
+        let preferred = *state.session.read();
+        let slot = preferred
+            .and_then(|session| self.sessions.get(session))
+            .or_else(|| {
+                if preferred.is_none() {
+                    self.sessions
+                        .for_connection(connection)
+                        .into_iter()
+                        .find(|slot| slot.is_open())
+                } else {
+                    None
+                }
+            })
+            .filter(|slot| slot.is_open())
             .ok_or_else(|| OxynError::Connection("no open catalog session".to_owned()))?;
         let operation = cancel.child();
         let read = slot.read_catalog(scope, &operation);
@@ -663,6 +1084,7 @@ impl Executor {
         session: SessionId,
         request: ExecRequest,
         cancel: &CancelToken,
+        preview_limit: Option<usize>,
     ) -> Result<Outcome> {
         // `ExecLimits` par défaut interdit l'écriture : une demande mutante qui
         // n'a pas explicitement levé cette borne est incohérente, et
@@ -692,75 +1114,90 @@ impl Executor {
         // l'a lancée, alors qu'annuler l'onglet l'annule bien.
         let ct = cancel.child();
 
-        let cursor = slot.execute(request, &ct).await?;
-        let statement = cursor.handle();
-        self.running.register(RunningStatement::new(
-            statement,
-            id,
-            connection,
-            session,
-            slot.capabilities(),
-            ct.clone(),
-        ));
+        let operation = async {
+            let cursor = slot.execute(request, &ct).await?;
+            let statement = cursor.handle();
+            self.running.register(RunningStatement::new(
+                statement,
+                id,
+                connection,
+                session,
+                slot.capabilities(),
+                ct.clone(),
+            ));
 
-        let result = ResultId::new();
-        let buffer = Arc::new(ResultBuffer::with_limits(
-            BatchSource::schema(&cursor),
-            BufferLimits::default()
-                .with_memory_budget(self.memory_budget)
-                .with_max_rows(limits.max_rows),
-        ));
-        self.results.write().insert(result, Arc::clone(&buffer));
-
-        // Le schéma est connu avant la première ligne : la grille dessine ses
-        // colonnes pendant que les données arrivent.
-        self.events
-            .publish(id, Some(connection), Event::SchemaReady { result });
-
-        let issue = self
-            .drain(
-                Coordinates {
-                    command: id,
+            let result = ResultId::new();
+            let buffer = Arc::new(ResultBuffer::with_limits(
+                BatchSource::schema(&cursor),
+                BufferLimits::default()
+                    .with_memory_budget(self.memory_budget)
+                    .with_max_rows(preview_limit.or(limits.max_rows)),
+            ));
+            self.results.write().insert(
+                result,
+                StoredResult {
                     connection,
-                    result,
+                    buffer: Arc::clone(&buffer),
                 },
-                &buffer,
-                cursor,
-                &ct,
-                limits.timeout,
-            )
-            .await;
+            );
 
-        // Un abandon — expiration ou annulation — doit atteindre le serveur.
-        let interrompue = matches!(issue, Ok(SinkOutcome::Cancelled))
-            || matches!(issue, Err(OxynError::Timeout { .. }));
-        if interrompue {
-            self.running.cancel(&self.sessions, statement).await;
-        }
-        self.running.finish(statement);
+            // Le schéma est connu avant la première ligne : la grille dessine ses
+            // colonnes pendant que les données arrivent.
+            self.events
+                .publish(id, Some(connection), Event::SchemaReady { result });
 
-        match issue {
-            Ok(sink) => {
-                let stats = buffer.stats();
-                let event = if sink == SinkOutcome::Cancelled {
-                    Event::Cancelled
-                } else {
-                    Event::Completed { result, stats }
-                };
-                self.events.publish(id, Some(connection), event);
-                Ok(Outcome::Executed {
-                    result,
-                    statement,
-                    buffer,
-                    stats,
-                    sink,
-                })
+            let issue = self
+                .drain(
+                    Coordinates {
+                        command: id,
+                        connection,
+                        result,
+                    },
+                    &buffer,
+                    cursor,
+                    &ct,
+                    limits.timeout,
+                    preview_limit.is_some(),
+                )
+                .await;
+
+            // Un abandon — expiration ou annulation — doit atteindre le serveur.
+            let interrompue = matches!(issue, Ok(SinkOutcome::Cancelled))
+                || matches!(issue, Err(OxynError::Timeout { .. }));
+            if interrompue {
+                self.running.cancel(&self.sessions, statement).await;
             }
-            Err(erreur) => {
-                self.events
-                    .publish(id, Some(connection), Event::failed(&erreur));
-                Err(erreur)
+            self.running.finish(statement);
+            self.prune_results();
+
+            match issue {
+                Ok(sink) => {
+                    let stats = buffer.stats();
+                    let event = if sink == SinkOutcome::Cancelled {
+                        Event::Cancelled
+                    } else {
+                        Event::Completed { result, stats }
+                    };
+                    self.events.publish(id, Some(connection), event);
+                    Ok(Outcome::Executed {
+                        result,
+                        statement,
+                        buffer,
+                        stats,
+                        sink,
+                    })
+                }
+                Err(erreur) => {
+                    self.events
+                        .publish(id, Some(connection), Event::failed(&erreur));
+                    Err(erreur)
+                }
             }
+        };
+        tokio::pin!(operation);
+        tokio::select! {
+            result = &mut operation => result,
+            _ = slot.closing_token().cancelled() => { ct.cancel(); operation.await }
         }
     }
 
@@ -776,8 +1213,14 @@ impl Executor {
         cursor: Box<dyn Cursor>,
         ct: &CancelToken,
         timeout: Option<Duration>,
+        confirm_preview_end: bool,
     ) -> Result<SinkOutcome> {
         let sink = BatchSink::new(Arc::clone(buffer));
+        let sink = if confirm_preview_end {
+            sink.with_end_confirmation()
+        } else {
+            sink
+        };
         let mut source = cursor;
         let events = &self.events;
 
@@ -854,32 +1297,101 @@ impl Executor {
         })
     }
 
-    /// Relit un document du workspace.
-    fn open_document(&self, document: DocumentId) -> Result<Outcome> {
-        match self.store.documents().get(document)? {
-            Some(doc) => Ok(Outcome::DocumentOpened {
-                document: Box::new(doc),
-            }),
-            None => Err(OxynError::Config(
-                "ce document n'existe pas dans le workspace".to_owned(),
-            )),
+    fn check_workspace(&self, workspace: WorkspaceId) -> Result<()> {
+        if workspace != self.workspace {
+            return Err(OxynError::Config(
+                "workspace does not match this executor".into(),
+            ));
         }
+        Ok(())
     }
 
-    /// Écrit un document du workspace.
-    ///
-    /// N'atteint aucune base : c'est un fichier local, et le `PolicyGate` le
-    /// traite comme tel.
-    fn write_document(&self, document: DocumentId, text: &str) -> Result<Outcome> {
-        let documents = self.store.documents();
-        let Some(mut doc) = documents.get(document)? else {
-            return Err(OxynError::Config(
-                "ce document n'existe pas dans le workspace".to_owned(),
-            ));
-        };
-        doc.content = text.to_owned();
-        documents.save(&doc)?;
-        Ok(Outcome::DocumentWritten { document })
+    async fn local_worker<T: Send + 'static>(
+        &self,
+        cancel: &CancelToken,
+        task: impl FnOnce(CancelToken) -> oxyn_store::Result<T> + Send + 'static,
+    ) -> Result<T> {
+        let runtime = tokio::runtime::Handle::try_current().map_err(|_| {
+            OxynError::Config("local library operations require the application runtime".into())
+        })?;
+        let cancel = cancel.clone();
+        runtime
+            .spawn_blocking(move || task(cancel))
+            .await
+            .map_err(|_| OxynError::Internal("local library worker stopped".into()))?
+            .map_err(Into::into)
+    }
+
+    async fn open_document(
+        &self,
+        workspace: WorkspaceId,
+        document: DocumentId,
+        cancel: &CancelToken,
+    ) -> Result<Outcome> {
+        let store = self.store.clone();
+        let doc = self
+            .local_worker(cancel, move |cancel| {
+                store.documents().get_cancellable(document, &cancel)
+            })
+            .await?
+            .filter(|doc| doc.workspace == workspace)
+            .ok_or_else(|| OxynError::Config("document does not exist in this workspace".into()))?;
+        Ok(Outcome::DocumentOpened {
+            document: Box::new(doc),
+        })
+    }
+
+    async fn write_document(
+        &self,
+        workspace: WorkspaceId,
+        document: DocumentId,
+        text: &str,
+        cancel: &CancelToken,
+    ) -> Result<Outcome> {
+        let store = self.store.clone();
+        let text = text.to_owned();
+        let doc = self
+            .local_worker(cancel, move |cancel| {
+                let doc = store
+                    .documents()
+                    .get_cancellable(document, &cancel)?
+                    .filter(|doc| doc.workspace == workspace)
+                    .ok_or_else(|| oxyn_store::StoreError::Corrupted {
+                        field: "documents",
+                        detail: "document is not in this workspace".into(),
+                    })?;
+                let revision = doc
+                    .revision
+                    .max(doc.saved_revision)
+                    .checked_add(1)
+                    .ok_or_else(|| oxyn_store::StoreError::Corrupted {
+                        field: "documents.revision",
+                        detail: "revision exhausted".into(),
+                    })?;
+                let update = oxyn_core::QueryDocumentUpdate {
+                    expected_revision: None,
+                    document,
+                    revision,
+                    title: doc.title,
+                    language: doc.language,
+                    text,
+                    connection: doc.connection,
+                    save_named: doc.is_saved,
+                    is_open: doc.is_open,
+                };
+                let saved = store
+                    .documents()
+                    .update_query(workspace, &update, &cancel)?;
+                if saved.content != update.text || saved.revision != update.revision {
+                    return Err(oxyn_store::StoreError::Corrupted {
+                        field: "documents.revision",
+                        detail: "document changed while writing".into(),
+                    });
+                }
+                Ok(saved)
+            })
+            .await?;
+        Ok(Outcome::DocumentWritten { document: doc.id })
     }
 
     /// Enregistre ou met à jour une connexion.
@@ -1004,7 +1516,7 @@ impl Executor {
         let Some((id, record)) = en_cours else {
             return;
         };
-        let record = match issue {
+        let mut record = match issue {
             // Un drainage interrompu rend `Ok` : la commande n'a pas échoué,
             // mais elle n'a pas rendu son résultat entier. La classer « réussie »
             // ferait lire un résultat tronqué comme un résultat complet.
@@ -1024,6 +1536,9 @@ impl Executor {
                 echouee
             }
         };
+        if let Ok(Outcome::Executed { result, .. }) = issue {
+            record.result = Some(*result);
+        }
         if let Err(erreur) = self.store.history().finish(id, &record) {
             tracing::error!(error = %erreur, "the outcome of a statement could not be written to the query history");
         }
@@ -1168,10 +1683,36 @@ impl Executor {
         self.workspace
     }
 
+    fn result_on_connection(
+        &self,
+        connection: ConnectionId,
+        result: ResultId,
+    ) -> Result<Arc<ResultBuffer>> {
+        let results = self.results.read();
+        let entry = results
+            .get(&result)
+            .ok_or_else(|| OxynError::Config("result is no longer available".into()))?;
+        if entry.connection != connection {
+            return Err(OxynError::PolicyDenied {
+                reason: "result does not belong to this connection".into(),
+            });
+        }
+        Ok(Arc::clone(&entry.buffer))
+    }
+
+    /// Enforces idle retention limits. Call off the UI thread: evictions can remove spill files.
+    pub fn prune_results(&self) {
+        let evicted = self.results.write().prune();
+        drop(evicted);
+    }
+
     /// Le tampon d'un résultat, tant qu'il est retenu.
     #[must_use]
     pub fn result(&self, result: ResultId) -> Option<Arc<ResultBuffer>> {
-        self.results.read().get(&result).map(Arc::clone)
+        self.results
+            .read()
+            .get(&result)
+            .map(|entry| Arc::clone(&entry.buffer))
     }
 
     /// Oublie un résultat : l'onglet a été fermé.
@@ -1179,7 +1720,10 @@ impl Executor {
     /// Le tampon n'est libéré que quand plus personne ne le tient — la grille
     /// peut être en train de le lire.
     pub fn forget_result(&self, result: ResultId) -> Option<Arc<ResultBuffer>> {
-        self.results.write().remove(&result)
+        self.results
+            .write()
+            .remove(&result)
+            .map(|entry| entry.buffer)
     }
 
     /// Annule tout et ferme toutes les sessions.
@@ -1344,7 +1888,7 @@ impl ExecutorBuilder {
             running: CancelRegistry::new(),
             approvals: self.approvals,
             events: self.events,
-            results: RwLock::new(HashMap::new()),
+            results: RwLock::new(crate::retained::RetainedResults::default()),
             catalogs: RwLock::new(HashMap::new()),
             connections: RwLock::new(HashMap::new()),
             workspace: self.workspace,
@@ -2036,3 +2580,19 @@ pub(crate) mod catalog_tests;
 #[cfg(test)]
 #[path = "preview_tests.rs"]
 mod preview_tests;
+
+#[cfg(test)]
+#[path = "result_page_tests.rs"]
+mod result_page_tests;
+
+#[cfg(test)]
+#[path = "preference_tests.rs"]
+mod preference_tests;
+
+#[cfg(test)]
+#[path = "library_tests.rs"]
+mod library_tests;
+
+#[cfg(test)]
+#[path = "session_close_tests.rs"]
+mod session_close_tests;

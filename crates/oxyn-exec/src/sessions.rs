@@ -103,6 +103,7 @@ pub struct SessionSlot {
     capabilities: Capabilities,
     opened_at: Instant,
     session: AsyncRwLock<Option<Box<dyn Session>>>,
+    closing: CancelToken,
 }
 
 impl SessionSlot {
@@ -120,6 +121,7 @@ impl SessionSlot {
             capabilities,
             opened_at: Instant::now(),
             session: AsyncRwLock::new(Some(session)),
+            closing: CancelToken::new(),
         }
     }
 
@@ -154,6 +156,9 @@ impl SessionSlot {
     /// pas se voir confier une exécution.
     #[must_use]
     pub fn is_open(&self) -> bool {
+        if self.closing.is_cancelled() {
+            return false;
+        }
         // `tokio::sync::RwLock::try_read` rend un `Result` : l'échec signifie
         // « un écrivain tient le verrou », c'est-à-dire une fermeture en cours.
         self.session.try_read().is_ok_and(|g| g.is_some())
@@ -169,7 +174,15 @@ impl SessionSlot {
         request: ExecRequest,
         cancel: &CancelToken,
     ) -> Result<Box<dyn Cursor>> {
-        let guard = self.session.read().await;
+        if self.closing.is_cancelled() {
+            return Err(session_closed());
+        }
+        let guard = tokio::select! {
+            biased;
+            _ = self.closing.cancelled() => return Err(session_closed()),
+            _ = cancel.cancelled() => return Err(OxynError::Cancelled),
+            guard = self.session.read() => guard,
+        };
         let Some(session) = guard.as_deref() else {
             return Err(session_closed());
         };
@@ -181,18 +194,67 @@ impl SessionSlot {
         &self,
         path: &oxyn_catalog::CatalogPath,
         limit: u32,
+        shape: &oxyn_core::PreviewShape,
         cancel: &CancelToken,
     ) -> Result<ExecRequest> {
+        let token = cancel.child();
         let guard = tokio::select! {
             biased;
+            _ = self.closing.cancelled() => return Err(session_closed()),
+            _ = token.cancelled() => return Err(OxynError::Cancelled),
+            guard = self.session.read() => guard,
+        };
+        let session = guard.as_deref().ok_or_else(session_closed)?;
+        let operation = session.preview_request(path, limit, shape, &token);
+        tokio::pin!(operation);
+        tokio::select! {
+            result = &mut operation => result,
+            _ = self.closing.cancelled() => { token.cancel(); operation.await }
+        }
+    }
+
+    /// Declares where this session resolves unqualified names.
+    ///
+    /// Waits for the server to confirm, like every other operation that crosses
+    /// the boundary: the interface shows what came back, never what was asked
+    /// ([ADR-0019](../../../docs/adr/0019-contexte-de-session.md)).
+    pub(crate) async fn set_context(
+        &self,
+        context: &oxyn_driver::SessionContext,
+        cancel: &CancelToken,
+    ) -> Result<()> {
+        let token = cancel.child();
+        let guard = tokio::select! {
+            biased;
+            _ = self.closing.cancelled() => return Err(session_closed()),
+            _ = token.cancelled() => return Err(OxynError::Cancelled),
+            guard = self.session.read() => guard,
+        };
+        let session = guard.as_deref().ok_or_else(session_closed)?;
+        let operation = session.set_context(context, &token);
+        tokio::pin!(operation);
+        tokio::select! {
+            result = &mut operation => result,
+            _ = self.closing.cancelled() => { token.cancel(); operation.await }
+        }
+    }
+
+    /// What the session reports as its context, if it reports one.
+    ///
+    /// Read under the lock and cloned: the caller must not hold a borrow into
+    /// the session while awaiting anything else.
+    pub(crate) async fn context(
+        &self,
+        cancel: &CancelToken,
+    ) -> Result<Option<oxyn_driver::SessionContext>> {
+        let guard = tokio::select! {
+            biased;
+            _ = self.closing.cancelled() => return Err(session_closed()),
             _ = cancel.cancelled() => return Err(OxynError::Cancelled),
             guard = self.session.read() => guard,
         };
-        guard
-            .as_deref()
-            .ok_or_else(session_closed)?
-            .preview_request(path, limit, cancel)
-            .await
+        let session = guard.as_deref().ok_or_else(session_closed)?;
+        Ok(session.context())
     }
 
     /// Keeps the provider borrowed until cancellation cleanup finishes.
@@ -201,13 +263,20 @@ impl SessionSlot {
         scope: &oxyn_core::CatalogRefreshScope,
         cancel: &CancelToken,
     ) -> Result<crate::catalog::CatalogPatch> {
+        let token = cancel.child();
         let guard = tokio::select! {
             biased;
-            _ = cancel.cancelled() => return Err(OxynError::Cancelled),
+            _ = self.closing.cancelled() => return Err(session_closed()),
+            _ = token.cancelled() => return Err(OxynError::Cancelled),
             guard = self.session.read() => guard,
         };
         let session = guard.as_deref().ok_or_else(session_closed)?;
-        crate::catalog::read(session.catalog(), self.capabilities, scope, cancel).await
+        let operation = crate::catalog::read(session.catalog(), self.capabilities, scope, &token);
+        tokio::pin!(operation);
+        tokio::select! {
+            result = &mut operation => result,
+            _ = self.closing.cancelled() => { token.cancel(); operation.await }
+        }
     }
 
     /// Demande au serveur d'interrompre une exécution.
@@ -244,6 +313,16 @@ impl SessionSlot {
         session.ping().await
     }
 
+    /// Marks the session as closing before waiting for its provider lock.
+    pub(crate) fn begin_close(&self) {
+        self.closing.cancel();
+    }
+
+    /// Includes preparation and cursor draining, before a statement handle exists.
+    pub(crate) fn closing_token(&self) -> &CancelToken {
+        &self.closing
+    }
+
     /// Ferme la session.
     ///
     /// Idempotent : fermer deux fois n'est pas une erreur. Les ressources
@@ -253,6 +332,7 @@ impl SessionSlot {
     /// # Erreurs
     /// Toute erreur de transport rencontrée à la fermeture.
     pub async fn close(&self) -> Result<()> {
+        self.begin_close();
         let session = { self.session.write().await.take() };
         match session {
             Some(session) => session.close().await,

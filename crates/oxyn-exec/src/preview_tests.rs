@@ -159,6 +159,12 @@ async fn preview_sqlite_is_bounded_preserves_hostile_table_and_correlates_events
         };
         assert_eq!(buffer.row_count(), 2);
         assert_eq!(stats.rows, 2);
+        assert!(
+            !stats.truncated,
+            "the limited preview SQL was fully received"
+        );
+        assert!(!buffer.stats().truncated);
+        assert!(buffer.is_complete());
         let mut schema = false;
         let mut batch = false;
         let mut completed = false;
@@ -510,7 +516,11 @@ async fn preview_enforces_read_only_and_row_limit_even_for_an_incorrect_driver()
     let requests = probe.executed.lock();
     let request = requests.first().expect("executed request");
     assert!(request.limits.read_only);
-    assert_eq!(request.limits.max_rows, Some(2));
+    assert_eq!(
+        request.limits.max_rows,
+        Some(3),
+        "one receive slot confirms the bounded SQL ended"
+    );
     assert!(!request.is_mutating());
     let prepared = probe.prepared.lock();
     assert_eq!(
