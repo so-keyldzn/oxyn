@@ -79,6 +79,9 @@ impl EntityInputHandler for QueryEditor {
         _: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
+        if self.read_only {
+            return;
+        }
         let range = range
             .or(self.marked.take())
             .unwrap_or_else(|| self.native_selection());
@@ -97,6 +100,9 @@ impl EntityInputHandler for QueryEditor {
         window: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
+        if self.read_only {
+            return;
+        }
         let range = range
             .or(self.marked.take())
             .unwrap_or_else(|| self.native_selection());

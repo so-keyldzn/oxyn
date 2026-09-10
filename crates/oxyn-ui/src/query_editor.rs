@@ -36,9 +36,9 @@
 //!
 //! # Ce que l'éditeur ne décide pas
 //!
-//! Il n'exécute rien. `Cmd+Entrée` émet [`EditorEvent::ExecuteRequested`] ;
-//! `oxyn-app` lit [`QueryEditor::statement_text`], construit une
-//! [`Command`](oxyn_core::Command) et la soumet au `PolicyGate`
+//! Execution shortcuts emit [`EditorEvent::ExecuteRequested`]. `oxyn-app`
+//! resolves the exact selection or the current statement using the dialect,
+//! then submits a [`Command`](oxyn_core::Command) through the `PolicyGate`
 //! ([I-01](../../../CLAUDE.md#i-01)).
 
 use gpui::{Bounds, MouseButton, Pixels, ShapedLine, TextRun, canvas};
@@ -444,6 +444,7 @@ pub struct QueryEditor {
     /// Vrai quand une exécution est en cours : l'éditeur reste modifiable, mais
     /// il le signale.
     running: bool,
+    read_only: bool,
     selecting: bool,
     marked: Option<Range<usize>>,
     line_layouts: BTreeMap<usize, (ShapedLine, Bounds<Pixels>)>,
@@ -477,10 +478,31 @@ impl QueryEditor {
             redo: Vec::new(),
             scroll: UniformListScrollHandle::new(),
             running: false,
+            read_only: false,
             selecting: false,
             marked: None,
             line_layouts: BTreeMap::new(),
         }
+    }
+
+    /// Byte position in `text()`, derived from the editor's Unicode cursor.
+    #[must_use]
+    pub fn cursor_byte_offset(&self) -> usize {
+        let cursor = self.buffer.clamp(self.cursor);
+        let before = self
+            .buffer
+            .lines
+            .iter()
+            .take(cursor.line)
+            .fold(0usize, |offset, line| {
+                offset.saturating_add(line.len()).saturating_add(1)
+            });
+        let current = self.buffer.line(cursor.line).unwrap_or("");
+        let within = current
+            .char_indices()
+            .nth(cursor.column)
+            .map_or(current.len(), |(offset, _)| offset);
+        before.saturating_add(within)
     }
 
     /// Le texte complet.
@@ -511,11 +533,9 @@ impl QueryEditor {
         Some(ordered(ancre, self.cursor))
     }
 
-    /// Le texte que `Cmd+Entrée` demande d'exécuter.
-    ///
-    /// La sélection l'emporte sur le tampon entier : c'est l'usage d'un client
-    /// SQL, et c'est aussi une protection — on exécute ce qu'on a montré du
-    /// doigt, pas les quatre instructions au-dessus.
+    /// Returns the exact selection, or the full buffer when none is selected.
+    /// The application resolves the current SQL statement using its dialect
+    /// and [`Self::cursor_byte_offset`] before submitting a command.
     #[must_use]
     pub fn statement_text(&self) -> String {
         match self.selection() {
@@ -537,6 +557,13 @@ impl QueryEditor {
     /// Signale qu'une exécution est en cours, ou terminée.
     pub fn set_running(&mut self, running: bool, cx: &mut Context<'_, Self>) {
         self.running = running;
+        cx.notify();
+    }
+
+    /// Keeps selection and copying available, but refuses edits and execution requests.
+    pub fn set_read_only(&mut self, read_only: bool, cx: &mut Context<'_, Self>) {
+        self.read_only = read_only;
+        self.marked = None;
         cx.notify();
     }
 
@@ -585,6 +612,9 @@ impl QueryEditor {
 
     /// Insère du texte à la place de la sélection.
     pub fn insert(&mut self, text: &str, cx: &mut Context<'_, Self>) {
+        if self.read_only {
+            return;
+        }
         self.snapshot();
         self.delete_selection();
         self.cursor = self.buffer.insert(self.cursor, text);
@@ -638,6 +668,16 @@ impl QueryEditor {
         // rendrait l'éditeur inutilisable sur Linux, cible de la phase 0.
         let commande = modificateurs.secondary();
 
+        if self.read_only
+            && ((commande && matches!(touche, "enter" | "x" | "v" | "z"))
+                || matches!(touche, "enter" | "backspace" | "delete"))
+        {
+            cx.stop_propagation();
+            return;
+        }
+        if self.read_only && touche == "tab" {
+            return;
+        }
         if commande {
             if matches!(touche, "enter" | "a" | "c" | "x" | "v" | "z") {
                 cx.stop_propagation();
@@ -778,6 +818,7 @@ impl Render for QueryEditor {
             )
             .key_context("QueryEditor")
             .track_focus(&self.focus)
+            .when(self.read_only, |el| el.tab_index(0))
             .id("oxyn-query-editor")
             .size_full()
             .flex()
@@ -991,8 +1032,8 @@ impl QueryEditor {
             self.cursor.column.saturating_add(1)
         ));
         let portee = match self.selection() {
-            Some(_) => "sélection",
-            None => "tampon entier",
+            Some(_) => "selection",
+            None => "current statement",
         };
         div()
             .flex()
@@ -1009,7 +1050,11 @@ impl QueryEditor {
             .text_size(theme.typography.small_size)
             .text_color(theme.colors.text_faint)
             .child(position)
-            .child(SharedString::from(format!("Cmd+Entrée exécute : {portee}")))
+            .child(SharedString::from(if self.read_only {
+                "Read only · select and copy".to_owned()
+            } else {
+                format!("⌘Enter executes: {portee}")
+            }))
             .when(self.running, |element| {
                 element.child(
                     div()
@@ -1241,5 +1286,86 @@ mod tests {
                 selected: true
             }]
         );
+    }
+}
+
+#[cfg(test)]
+mod read_only_tests {
+    use super::*;
+
+    #[gpui::test]
+    fn cursor_offsets_match_utf8_bytes_across_lines(cx: &mut gpui::TestAppContext) {
+        let editor = cx.new(|cx| QueryEditor::with_text("éα\n😀SELECT 1;", cx));
+        editor.update(cx, |editor, _| {
+            editor.cursor = TextPosition::new(1, 1);
+            assert_eq!(editor.cursor_byte_offset(), 9);
+            editor.cursor = TextPosition::new(0, 1);
+            assert_eq!(editor.cursor_byte_offset(), 2);
+            editor.cursor = TextPosition::new(usize::MAX, usize::MAX);
+            assert_eq!(editor.cursor_byte_offset(), editor.text().len());
+        });
+    }
+
+    #[gpui::test]
+    fn read_only_text_accepts_selection_and_copy_but_neither_edit_nor_execution(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let requests = std::rc::Rc::new(std::cell::Cell::new(0));
+        let observed = requests.clone();
+        let (view, cx) = cx.add_window_view(|window, cx| {
+            let mut view = QueryEditor::with_text("SELECT 'é🐾'", cx);
+            view.set_read_only(true, cx);
+            window.focus(&view.focus);
+            let entity = cx.entity();
+            cx.subscribe(&entity, move |_, _, event, _| {
+                if matches!(event, EditorEvent::ExecuteRequested | EditorEvent::Changed) {
+                    observed.set(observed.get() + 1);
+                }
+            })
+            .detach();
+            view
+        });
+        cx.run_until_parked();
+        cx.simulate_keystrokes("cmd-a");
+        cx.simulate_keystrokes("cmd-c");
+        cx.update(|_, cx| {
+            assert_eq!(
+                cx.read_from_clipboard()
+                    .and_then(|item| item.text())
+                    .as_deref(),
+                Some("SELECT 'é🐾'")
+            )
+        });
+        for keys in [
+            "cmd-x",
+            "cmd-v",
+            "backspace",
+            "delete",
+            "enter",
+            "cmd-enter",
+            "cmd-z",
+        ] {
+            cx.simulate_keystrokes(keys);
+        }
+        cx.simulate_input("DROP TABLE data");
+        cx.update(|window, cx| {
+            view.update(cx, |view, cx| {
+                gpui::EntityInputHandler::replace_and_mark_text_in_range(
+                    view,
+                    Some(0..6),
+                    "INSERT",
+                    None,
+                    window,
+                    cx,
+                );
+            })
+        });
+        assert_eq!(view.read_with(cx, |view, _| view.text()), "SELECT 'é🐾'");
+        assert_eq!(requests.get(), 0);
+        view.update(cx, |view, cx| {
+            view.set_read_only(false, cx);
+            view.insert("SELECT 2", cx);
+        });
+        assert_eq!(view.read_with(cx, |view, _| view.text()), "SELECT 2");
     }
 }

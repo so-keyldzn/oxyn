@@ -83,29 +83,7 @@ impl Render for ConnectionForm {
             .text_color(theme.colors.text)
             .font_family(theme.typography.ui_family.clone())
             .text_size(theme.typography.ui_size)
-            .child(
-                div()
-                    .h(px(56.))
-                    .flex_none()
-                    .flex()
-                    .items_center()
-                    .gap_3()
-                    .px_4()
-                    .child(logo(theme.mode))
-                    .child(icon(IconName::Logo).text_color(theme.colors.text))
-                    .child(
-                        div()
-                            .flex()
-                            .flex_col()
-                            .child(div().font_weight(FontWeight::SEMIBOLD).child("Oxyn"))
-                            .child(
-                                div()
-                                    .text_size(px(11.))
-                                    .text_color(theme.colors.text_muted)
-                                    .child("Personal workspace"),
-                            ),
-                    ),
-            )
+            .child(self.render_title_bar(&theme, cx))
             .child(
                 div()
                     .flex_1()
@@ -148,6 +126,72 @@ impl Render for ConnectionForm {
 }
 
 impl ConnectionForm {
+    /// The home title bar: the Oxyn mark on the left, window actions on the right.
+    ///
+    /// Both sides share one row and neither overlaps the other. The previous
+    /// layout drew these actions as an absolutely positioned overlay in
+    /// `oxyn-app`, which landed exactly on top of the mark and its two title
+    /// lines. Sizes come from Figma `191:1958`: a 32 px control inside a
+    /// fixed-height bar.
+    fn render_title_bar(&self, theme: &Theme, cx: &Context<'_, Self>) -> AnyElement {
+        let mut actions = div().flex_none().flex().items_center().gap_2();
+        if self.header_actions().return_to_workspace {
+            actions = actions.child(self.button(
+                "return-to-workspace",
+                "Return to workspace · Esc",
+                cx,
+                |_, cx| cx.emit(ConnectionFormEvent::ReturnRequested),
+            ));
+        }
+        if self.header_actions().saved_copies {
+            actions = actions.child(self.button(
+                "open-recovery",
+                "Saved working copies",
+                cx,
+                |_, cx| cx.emit(ConnectionFormEvent::RecoveryRequested),
+            ));
+        }
+        div()
+            .h(px(56.))
+            .flex_none()
+            .flex()
+            .items_center()
+            .justify_between()
+            .gap_3()
+            .px_4()
+            .child(
+                div()
+                    .id("home-brand")
+                    .debug_selector(|| "home-brand".into())
+                    .flex()
+                    .items_center()
+                    .gap_3()
+                    .min_w_0()
+                    .child(logo(theme.mode))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_col()
+                            .min_w_0()
+                            .child(
+                                div()
+                                    .font_weight(FontWeight::SEMIBOLD)
+                                    .truncate()
+                                    .child("Oxyn"),
+                            )
+                            .child(
+                                div()
+                                    .text_size(px(11.))
+                                    .text_color(theme.colors.text_muted)
+                                    .truncate()
+                                    .child("Personal workspace"),
+                            ),
+                    ),
+            )
+            .child(actions)
+            .into_any_element()
+    }
+
     pub(super) fn button(
         &self,
         id: &'static str,
@@ -156,8 +200,14 @@ impl ConnectionForm {
         action: impl Fn(&mut Self, &mut Context<'_, Self>) + 'static,
     ) -> AnyElement {
         let colors = Theme::of(cx).colors;
+        // GPUI gives no keyboard activation for free: a control reachable by Tab
+        // that only answers the mouse is unusable, and retrofitting that is a
+        // rewrite (ADR-0001). Enter and Space act, and the focus ring is visible.
+        let activate = std::rc::Rc::new(action);
+        let by_key = std::rc::Rc::clone(&activate);
         div()
             .id(id)
+            .debug_selector(move || id.into())
             .tab_index(0)
             .px_3()
             .py_2()
@@ -166,10 +216,18 @@ impl ConnectionForm {
             .border_color(colors.border)
             .cursor_pointer()
             .hover(move |style| style.bg(colors.hover))
+            .focus(move |style| style.border_color(colors.border_focus))
             .on_click(cx.listener(move |this, _, window, cx| {
                 window.focus(&this.focus);
-                action(this, cx);
+                activate(this, cx);
                 cx.notify();
+            }))
+            .on_key_down(cx.listener(move |this, event: &gpui::KeyDownEvent, _, cx| {
+                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+                    by_key(this, cx);
+                    cx.notify();
+                    cx.stop_propagation();
+                }
             }))
             .child(label)
             .into_any_element()

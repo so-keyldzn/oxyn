@@ -25,7 +25,7 @@
 use std::sync::OnceLock;
 
 use gpui::{App, Global, Hsla, Pixels, SharedString, px, rgb};
-use oxyn_core::Environment;
+use oxyn_core::{Environment, ReadingDensity};
 
 /// Variante d'apparence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
@@ -427,6 +427,8 @@ impl Default for Metrics {
 pub struct Theme {
     /// Variante active.
     pub mode: ThemeMode,
+    /// Reading preset, independent of palette and viewport width.
+    pub reading_density: ReadingDensity,
     /// Couleurs.
     pub colors: Palette,
     /// Caractères.
@@ -445,6 +447,7 @@ impl Theme {
     pub fn dark() -> Self {
         Self {
             mode: ThemeMode::Dark,
+            reading_density: ReadingDensity::Compact,
             colors: Palette::dark(),
             typography: Typography::default(),
             metrics: Metrics::default(),
@@ -458,6 +461,7 @@ impl Theme {
     pub fn light() -> Self {
         Self {
             mode: ThemeMode::Light,
+            reading_density: ReadingDensity::Compact,
             colors: Palette::light(),
             typography: Typography::default(),
             metrics: Metrics::default(),
@@ -481,7 +485,19 @@ impl Theme {
     /// plus tard, elle remplace le thème et les vues se redessinent au cycle
     /// suivant.
     pub fn init(mode: ThemeMode, cx: &mut App) {
-        cx.set_global(Self::of_mode(mode));
+        Self::init_with_density(mode, Self::of(cx).reading_density, cx);
+    }
+
+    /// Applies Figma's reading preset without changing query or result state.
+    pub fn init_with_density(mode: ThemeMode, density: ReadingDensity, cx: &mut App) {
+        let mut theme = Self::of_mode(mode);
+        theme.reading_density = density;
+        if density == ReadingDensity::Comfortable {
+            theme.typography.ui_size = px(14.);
+            theme.typography.small_size = px(12.);
+            theme.metrics.row_height = px(28.);
+        }
+        cx.set_global(theme);
     }
 
     /// Le thème courant.

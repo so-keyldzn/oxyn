@@ -38,8 +38,6 @@ pub enum IconName {
     Chevron,
     /// Hugeicons arrow-down-01.
     Down,
-    /// Legacy monochrome mark; use [`logo`] for the current two-color brand.
-    Logo,
 }
 
 impl IconName {
@@ -57,19 +55,18 @@ impl IconName {
             Self::Folder => "ui/folder.svg",
             Self::Chevron => "ui/chevron.svg",
             Self::Down => "ui/down.svg",
-            Self::Logo => "ui/logo.svg",
         }
     }
 }
 
-/// Builds a fixed 16 × 16 px glyph, or a 32 × 32 px official mark.
+/// Builds a fixed 16 × 16 px glyph.
 ///
 /// Performs no filesystem or network access. Install [`UiAssets`] before rendering,
 /// and supply the appropriate theme color through `Styled::text_color`.
+/// The brand mark is not one of these: it is two-color, and [`logo`] draws it.
 #[must_use]
 pub fn icon(name: IconName) -> Svg {
-    let side = if name == IconName::Logo { 32.0 } else { 16.0 };
-    svg().path(name.path()).w(px(side)).h(px(side)).flex_none()
+    svg().path(name.path()).w(px(16.0)).h(px(16.0)).flex_none()
 }
 
 /// Builds the current 32 × 32 px Oxyn mark with its permanent orange fragment.
@@ -111,6 +108,10 @@ impl UiAssets {
 }
 
 const SVG_ASSETS: &[(&str, &[u8])] = &[
+    (
+        "ui/check.svg",
+        include_bytes!("../../../assets/ui/check.svg"),
+    ),
     (
         "ui/logo-dark.svg",
         include_bytes!("../../../assets/ui/logo-dark.svg"),
@@ -158,7 +159,6 @@ const SVG_ASSETS: &[(&str, &[u8])] = &[
         include_bytes!("../../../assets/ui/chevron.svg"),
     ),
     ("ui/down.svg", include_bytes!("../../../assets/ui/down.svg")),
-    ("ui/logo.svg", include_bytes!("../../../assets/ui/logo.svg")),
 ];
 
 impl AssetSource for UiAssets {

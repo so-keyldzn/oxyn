@@ -165,6 +165,8 @@ pub fn actor_label(actor: &Actor) -> &'static str {
 #[derive(Debug)]
 pub struct ApprovalDialog {
     focus: FocusHandle,
+    cancel_focus: FocusHandle,
+    approve_focus: FocusHandle,
     request: Option<ApprovalRequest>,
     preview_scroll: ScrollHandle,
 }
@@ -182,6 +184,8 @@ impl ApprovalDialog {
     pub fn new(cx: &mut Context<'_, Self>) -> Self {
         Self {
             focus: cx.focus_handle(),
+            cancel_focus: cx.focus_handle(),
+            approve_focus: cx.focus_handle(),
             request: None,
             preview_scroll: ScrollHandle::new(),
         }
@@ -208,10 +212,8 @@ impl ApprovalDialog {
     ) {
         self.request = Some(request);
         self.preview_scroll.set_offset(point(px(0.), px(0.)));
-        // Le focus vient sur l'écran, pas sur le bouton d'approbation : la
-        // frappe en cours de l'utilisateur ne doit pas valider ce qu'il n'a pas
-        // encore lu.
-        window.focus(&self.focus);
+        // Cancel is the safe default; a continuing keystroke cannot approve.
+        window.focus(&self.cancel_focus);
         cx.notify();
     }
 
@@ -230,10 +232,24 @@ impl ApprovalDialog {
         cx.notify();
     }
 
-    fn on_key(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<'_, Self>) {
+    fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<'_, Self>) {
         let touche = event.keystroke.key.as_str();
         let commande = event.keystroke.modifiers.secondary();
         match touche {
+            "tab" => {
+                let next = if self.cancel_focus.is_focused(window) {
+                    &self.approve_focus
+                } else {
+                    &self.cancel_focus
+                };
+                window.focus(next);
+            }
+            "space" if self.cancel_focus.is_focused(window) => {
+                self.decide(ApprovalOutcome::Rejected, cx)
+            }
+            "space" if self.approve_focus.is_focused(window) => {
+                self.decide(ApprovalOutcome::Approved, cx)
+            }
             // Échap refuse : la sortie par réflexe est la sortie sûre.
             "escape" => self.decide(ApprovalOutcome::Rejected, cx),
             // Approuver demande un raccourci composé. `Entrée` seul ne fait
@@ -282,7 +298,7 @@ impl Render for ApprovalDialog {
             .bg(theme.colors.scrim)
             .font_family(theme.typography.ui_family.clone())
             .text_size(theme.typography.ui_size)
-            .on_key_down(cx.listener(Self::on_key))
+            .capture_key_down(cx.listener(Self::on_key))
             .child(
                 div()
                     .w(px(560.0))
@@ -437,7 +453,8 @@ impl ApprovalDialog {
                 )
                 .px(theme.spacing.medium)
                 .py(theme.spacing.tiny)
-                .child("Refuser (Échap)"),
+                .track_focus(&self.cancel_focus)
+                .child("Cancel"),
             )
             .child(
                 control(
@@ -458,13 +475,18 @@ impl ApprovalDialog {
                 )
                 // Second dans l'ordre de tabulation : le refus vient d'abord,
                 // et c'est lui que porte `Échap`.
+                .track_focus(&self.approve_focus)
                 .tab_index(1)
                 .px(theme.spacing.medium)
                 .py(theme.spacing.tiny)
                 .child(if production {
-                    "Exécuter en PRODUCTION (Cmd+Entrée)"
+                    self.request
+                        .as_ref()
+                        .and_then(|request| request.preview.as_ref())
+                        .map(|preview| format!("Execute on {}", preview.connection))
+                        .unwrap_or_else(|| "Execute in PRODUCTION".into())
                 } else {
-                    "Exécuter (Cmd+Entrée)"
+                    "Execute".into()
                 }),
             )
             .into_any_element()
@@ -479,6 +501,36 @@ mod tests {
 
     fn apercu() -> Preview {
         Preview::new("DELETE FROM commandes", "Base client")
+    }
+
+    #[gpui::test]
+    fn production_focus_stays_inside_review_and_enter_never_approves(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (dialog, cx) = cx.add_window_view(|window, cx| {
+            let mut dialog = ApprovalDialog::new(cx);
+            let request = ApprovalRequest::from_decision(
+                ApprovalId::new(1),
+                Actor::Human,
+                Environment::Production,
+                &Decision::approval("Production write", Some(apercu())),
+            )
+            .expect("production requires review");
+            dialog.present(request, window, cx);
+            dialog
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| assert!(dialog.read(cx).cancel_focus.is_focused(window)));
+        cx.simulate_keystrokes("enter");
+        assert!(dialog.read_with(cx, |dialog, _| dialog.is_open()));
+        cx.simulate_keystrokes("tab");
+        cx.update(|window, cx| assert!(dialog.read(cx).approve_focus.is_focused(window)));
+        cx.simulate_keystrokes("enter");
+        assert!(dialog.read_with(cx, |dialog, _| dialog.is_open()));
+        cx.simulate_keystrokes("tab");
+        cx.update(|window, cx| assert!(dialog.read(cx).cancel_focus.is_focused(window)));
+        cx.simulate_keystrokes("escape");
+        assert!(!dialog.read_with(cx, |dialog, _| dialog.is_open()));
     }
 
     #[gpui::test]

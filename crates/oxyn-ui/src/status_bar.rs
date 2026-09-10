@@ -222,6 +222,16 @@ impl StatusBar {
         self.notice = notice.map(Into::into);
         cx.notify();
     }
+
+    /// The one-line message currently shown, if any.
+    ///
+    /// Reading it is how a test asserts what the user was told — including that
+    /// a message never repeats a value the user typed
+    /// ([I-03](../../../CLAUDE.md#i-03)).
+    #[must_use]
+    pub fn notice(&self) -> Option<&str> {
+        self.notice.as_ref().map(SharedString::as_ref)
+    }
 }
 
 /// Le libellé du badge d'environnement.

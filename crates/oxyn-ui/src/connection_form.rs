@@ -162,6 +162,32 @@ pub enum ConnectionFormEvent {
     SavedChosen(usize),
     /// L'utilisateur renonce à la connexion en cours d'ouverture.
     CancelRequested,
+    /// L'utilisateur veut consulter les copies de travail sauvegardées.
+    RecoveryRequested,
+    /// L'utilisateur revient au workspace resté ouvert derrière cet écran.
+    ReturnRequested,
+}
+
+/// Ce que la barre de titre de l'accueil propose, à droite de la marque.
+///
+/// Ces actions dépendent de l'état de la fenêtre — un workspace déjà ouvert,
+/// des copies locales à reprendre — que seule `oxyn-app` connaît. Elles vivent
+/// dans la barre plutôt qu'en superposition : un calque flottant posé sur
+/// l'écran recouvrait la marque et ses deux lignes de titre.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct HeaderActions {
+    /// Des copies de travail locales sont consultables.
+    pub saved_copies: bool,
+    /// Un workspace connecté attend derrière cet écran.
+    pub return_to_workspace: bool,
+}
+
+impl HeaderActions {
+    /// Aucune action à dessiner : la barre garde alors la seule marque.
+    #[must_use]
+    pub const fn is_empty(self) -> bool {
+        !self.saved_copies && !self.return_to_workspace
+    }
 }
 
 /// Une connexion déjà enregistrée, telle que l'écran la présente.
@@ -258,6 +284,7 @@ pub struct ConnectionForm {
     inputs: BTreeMap<usize, Entity<TextField>>,
     pending_focus: bool,
     last_driver: Option<usize>,
+    header: HeaderActions,
 }
 
 impl fmt::Debug for ConnectionForm {
@@ -283,6 +310,7 @@ impl ConnectionForm {
             inputs: BTreeMap::new(),
             pending_focus: true,
             last_driver: None,
+            header: HeaderActions::default(),
         }
     }
 
@@ -290,6 +318,24 @@ impl ConnectionForm {
     #[must_use]
     pub const fn model(&self) -> &FormModel {
         &self.model
+    }
+
+    /// Déclare les actions que la barre de titre doit proposer.
+    ///
+    /// Redessine seulement quand elles changent : cet écran est reconstruit à
+    /// chaque retour de connexion, et notifier sans changement ferait battre
+    /// la vue pour rien.
+    pub fn set_header_actions(&mut self, actions: HeaderActions, cx: &mut Context<'_, Self>) {
+        if self.header != actions {
+            self.header = actions;
+            cx.notify();
+        }
+    }
+
+    /// Les actions actuellement dessinées dans la barre de titre.
+    #[must_use]
+    pub const fn header_actions(&self) -> HeaderActions {
+        self.header
     }
 
     /// Adds a successfully opened connection without reading persistent storage.
@@ -678,7 +724,7 @@ impl ConnectionForm {
             }
         }
         for (index, value, secret) in fields {
-            let input = cx.new(|cx| TextField::new(value, secret, cx));
+            let input = cx.new(|cx| TextField::new(value, secret, cx).with_managed_tab_order());
             cx.subscribe(&input, move |this, input, event, cx| {
                 match event {
                     FieldEvent::Changed => {
@@ -689,6 +735,7 @@ impl ConnectionForm {
                             this.model.values.insert(key, text);
                         }
                     }
+                    FieldEvent::LimitReached => {}
                     FieldEvent::Focused => this.model.focused = index,
                     FieldEvent::Next(backwards) => {
                         this.model.focused = index;
@@ -738,11 +785,14 @@ impl ConnectionForm {
 
     fn on_key(&mut self, event: &KeyDownEvent, window: &mut Window, cx: &mut Context<'_, Self>) {
         // Unhandled printable keys must reach the platform text-input handler.
-        // The form only owns keys while its own focus handle is active.
-        if self
-            .inputs
-            .values()
-            .any(|input| input.read(cx).focus_handle(cx).is_focused(window))
+        // The form only owns keys while its own focus handle is active: a text
+        // field or a title-bar action holding focus keeps its own keys, and Tab
+        // must move between them instead of walking the driver list.
+        if !self.focus.is_focused(window)
+            || self
+                .inputs
+                .values()
+                .any(|input| input.read(cx).focus_handle(cx).is_focused(window))
         {
             return;
         }

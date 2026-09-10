@@ -77,6 +77,7 @@ pub mod data_grid;
 pub mod format_settings;
 pub mod icons;
 pub mod query_editor;
+pub mod query_parameters;
 pub mod result_export;
 pub mod session_capabilities;
 pub mod status_bar;
@@ -105,6 +106,9 @@ pub use query_editor::{
     EditorEvent, LinePiece, QueryEditor, TAB_WIDTH, TextBuffer, TextPosition, UNDO_DEPTH,
     line_pieces,
 };
+pub use query_parameters::{
+    ParameterEditor, ParameterEditorEvent, ParameterError, ParameterErrorKind, ParameterType,
+};
 pub use result_export::{
     ExportEvent, ExportPhase, KNOWN_FORMATS, NotExportable, ResultExport, format_label,
 };
@@ -125,7 +129,7 @@ mod tests {
     /// `include_str!` et non une lecture de fichier : le chemin est résolu à la
     /// compilation, donc le test ne dépend pas du répertoire courant et ne peut
     /// pas rater un fichier déplacé — il ne compilerait plus.
-    const COMPOSANTS: [(&str, &str); 14] = [
+    const COMPOSANTS: [(&str, &str); 16] = [
         ("approval.rs", include_str!("approval.rs")),
         ("catalog_tree.rs", include_str!("catalog_tree.rs")),
         ("connection_form.rs", include_str!("connection_form.rs")),
@@ -142,6 +146,7 @@ mod tests {
         ("format_settings.rs", include_str!("format_settings.rs")),
         ("icons.rs", include_str!("icons.rs")),
         ("query_editor.rs", include_str!("query_editor.rs")),
+        ("query_parameters.rs", include_str!("query_parameters.rs")),
         ("result_export.rs", include_str!("result_export.rs")),
         (
             "session_capabilities.rs",
@@ -149,6 +154,7 @@ mod tests {
         ),
         ("status_bar.rs", include_str!("status_bar.rs")),
         ("text_field.rs", include_str!("text_field.rs")),
+        ("select_field.rs", include_str!("select_field.rs")),
     ];
 
     #[test]
@@ -203,3 +209,10 @@ pub mod prelude {
     pub use crate::status_bar::{ActiveConnection, ExecutionStatus, StatusBar, StatusBarEvent};
     pub use crate::theme::{Theme, ThemeMode};
 }
+
+/// Native single-line inputs and their interaction events.
+pub use text_field::{FieldEvent, TextField};
+
+mod select_field;
+/// Choice input with keyboard navigation.
+pub use select_field::{SelectEvent, SelectField};

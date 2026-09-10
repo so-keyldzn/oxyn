@@ -10,8 +10,11 @@ use gpui::{
 use std::ops::Range;
 
 #[derive(Clone, Debug)]
-pub(crate) enum FieldEvent {
+#[non_exhaustive]
+pub enum FieldEvent {
     Changed,
+    /// The replacement exceeded the field's configured UTF-8 byte limit.
+    LimitReached,
     Focused,
     Next(bool),
     Submit,
@@ -19,13 +22,17 @@ pub(crate) enum FieldEvent {
     Browse(bool),
 }
 
-pub(crate) struct TextField {
+pub struct TextField {
     focus: FocusHandle,
     text: String,
     cursor: usize,
     anchor: usize,
     marked: Option<Range<usize>>,
     secret: bool,
+    clipboard_export_allowed: bool,
+    read_only: bool,
+    byte_limit: Option<usize>,
+    managed_tab_order: bool,
     selecting: bool,
     layout: Option<(ShapedLine, Bounds<Pixels>, Pixels)>,
 }
@@ -68,7 +75,7 @@ fn to_utf16(text: &str, offset: usize) -> usize {
 }
 
 impl TextField {
-    pub(crate) fn new(text: String, secret: bool, cx: &mut Context<'_, Self>) -> Self {
+    pub fn new(text: String, secret: bool, cx: &mut Context<'_, Self>) -> Self {
         let end = text.chars().count();
         Self {
             focus: cx.focus_handle(),
@@ -77,14 +84,52 @@ impl TextField {
             anchor: end,
             marked: None,
             secret,
+            clipboard_export_allowed: true,
+            read_only: false,
+            byte_limit: None,
+            managed_tab_order: false,
             selecting: false,
             layout: None,
         }
     }
-    pub(crate) fn text(&self) -> &str {
+    /// Prevents copying/cutting the field or exposing its value through native
+    /// text extraction, while keeping normal display, editing and paste available.
+    pub fn set_clipboard_export_allowed(&mut self, allowed: bool) {
+        self.clipboard_export_allowed = allowed;
+    }
+
+    /// Lets a composite form route Tab through its own field model.
+    pub fn with_managed_tab_order(mut self) -> Self {
+        self.managed_tab_order = true;
+        self
+    }
+
+    /// Refuses oversized replacements without cutting the user's input into a different value.
+    pub fn with_byte_limit(mut self, limit: usize) -> Self {
+        self.byte_limit = Some(limit);
+        self
+    }
+
+    /// Keeps selection and copy available while refusing native and keyboard edits.
+    pub fn set_read_only(&mut self, read_only: bool, cx: &mut Context<'_, Self>) {
+        self.read_only = read_only;
+        self.marked = None;
+        cx.notify();
+    }
+
+    /// Whether the field currently refuses edits.
+    ///
+    /// Readable so that an owner can assert what it made read-only, instead of
+    /// tracking the same flag a second time on its side.
+    #[must_use]
+    pub const fn is_read_only(&self) -> bool {
+        self.read_only
+    }
+
+    pub fn text(&self) -> &str {
         &self.text
     }
-    pub(crate) fn set_text(&mut self, text: String, cx: &mut Context<'_, Self>) {
+    pub fn set_text(&mut self, text: String, cx: &mut Context<'_, Self>) {
         self.text = text;
         self.cursor = self.text.chars().count();
         self.anchor = self.cursor;
@@ -102,16 +147,31 @@ impl TextField {
         let b = from_utf16(&self.text, range.end);
         a.min(b)..a.max(b)
     }
-    fn replace(&mut self, range: Range<usize>, text: &str, cx: &mut Context<'_, Self>) {
+    fn replace(&mut self, range: Range<usize>, text: &str, cx: &mut Context<'_, Self>) -> bool {
+        if self.read_only {
+            return false;
+        }
+        if self.byte_limit.is_some_and(|limit| text.len() > limit) {
+            cx.emit(FieldEvent::LimitReached);
+            return false;
+        }
         let text: String = text.chars().filter(|ch| !ch.is_control()).collect();
         let start = byte_at(&self.text, range.start);
         let end = byte_at(&self.text, range.end);
+        if self
+            .byte_limit
+            .is_some_and(|limit| self.text.len() - (end - start) + text.len() > limit)
+        {
+            cx.emit(FieldEvent::LimitReached);
+            return false;
+        }
         self.text.replace_range(start..end, &text);
         self.cursor = range.start + text.chars().count();
         self.anchor = self.cursor;
         self.marked = None;
         cx.emit(FieldEvent::Changed);
         cx.notify();
+        true
     }
     fn index_at(&self, position: Point<Pixels>) -> usize {
         let Some((line, bounds, offset)) = &self.layout else {
@@ -136,7 +196,7 @@ impl TextField {
                 self.cursor = length;
             }
             "c" | "x" if command => {
-                if !self.secret {
+                if !self.secret && self.clipboard_export_allowed {
                     let range = self.selection();
                     let text = self
                         .text
@@ -184,6 +244,7 @@ impl TextField {
                 }
                 self.replace(range, "", cx);
             }
+            "tab" if !self.managed_tab_order => return,
             "tab" => cx.emit(FieldEvent::Next(modifiers.shift)),
             "enter" => cx.emit(FieldEvent::Submit),
             "escape" => cx.emit(FieldEvent::Escape),
@@ -204,7 +265,7 @@ impl EntityInputHandler for TextField {
     ) -> Option<String> {
         let range = self.character_range(range);
         *actual = Some(self.utf16_range(range.clone()));
-        if self.secret {
+        if self.secret || !self.clipboard_export_allowed {
             return Some("•".repeat(
                 to_utf16(&self.text, range.end).saturating_sub(to_utf16(&self.text, range.start)),
             ));
@@ -237,6 +298,9 @@ impl EntityInputHandler for TextField {
         _: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
+        if self.read_only {
+            return;
+        }
         let range = range
             .map(|r| self.character_range(r))
             .or(self.marked.clone())
@@ -251,12 +315,17 @@ impl EntityInputHandler for TextField {
         _: &mut Window,
         cx: &mut Context<'_, Self>,
     ) {
+        if self.read_only {
+            return;
+        }
         let range = range
             .map(|r| self.character_range(r))
             .or(self.marked.clone())
             .unwrap_or_else(|| self.selection());
         let start = range.start;
-        self.replace(range, text, cx);
+        if !self.replace(range, text, cx) {
+            return;
+        }
         let end = self.cursor;
         self.marked = (end > start).then_some(start..end);
         if let Some(selection) = selection {
@@ -447,5 +516,84 @@ mod tests {
         assert_eq!(from_utf16(text, 3), 2);
         assert_eq!(byte_at(text, usize::MAX), text.len());
         assert_eq!(from_utf16(text, usize::MAX), 3);
+    }
+}
+
+#[cfg(test)]
+mod limit_tests {
+    use super::*;
+    #[gpui::test]
+    fn protected_visible_fields_never_export_their_value(cx: &mut gpui::TestAppContext) {
+        let (field, cx) = cx.add_window_view(|_, cx| {
+            let mut field = TextField::new("private-value".into(), false, cx);
+            field.set_clipboard_export_allowed(false);
+            field
+        });
+        cx.update(|window, cx| {
+            window.focus(&field.read(cx).focus_handle(cx));
+            cx.write_to_clipboard(ClipboardItem::new_string("clipboard-marker".into()));
+        });
+        cx.simulate_keystrokes("cmd-a cmd-c cmd-x");
+        assert_eq!(
+            cx.read_from_clipboard()
+                .and_then(|item| item.text())
+                .as_deref(),
+            Some("clipboard-marker")
+        );
+        field.read_with(cx, |field, _| {
+            assert_eq!(field.text, "private-value");
+            assert!(
+                !field.secret,
+                "display remains unmasked for deliberate parameter editing"
+            );
+        });
+        cx.update(|window, cx| {
+            field.update(cx, |field, cx| {
+                let mut actual = None;
+                let exported =
+                    EntityInputHandler::text_for_range(field, 0..13, &mut actual, window, cx)
+                        .expect("native range");
+                assert!(!exported.contains("private-value"));
+                assert_eq!(exported.chars().count(), 13);
+            })
+        });
+        cx.simulate_keystrokes("cmd-v");
+        assert_eq!(
+            field.read_with(cx, |field, _| field.text.clone()),
+            "clipboard-marker"
+        );
+    }
+
+    #[gpui::test]
+    fn rejected_composition_keeps_the_previous_text_and_read_only_blocks_edits(
+        cx: &mut gpui::TestAppContext,
+    ) {
+        let (field, cx) = cx.add_window_view(|window, cx| {
+            let field = TextField::new("ok".into(), false, cx).with_byte_limit(4);
+            window.focus(&field.focus);
+            field
+        });
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            field.update(cx, |field, cx| {
+                EntityInputHandler::replace_and_mark_text_in_range(
+                    field,
+                    Some(0..2),
+                    "ééé",
+                    None,
+                    window,
+                    cx,
+                );
+                assert_eq!(field.text, "ok");
+                assert!(field.marked.is_none());
+            })
+        });
+        cx.simulate_keystrokes("cmd-a");
+        cx.simulate_input("éé");
+        assert_eq!(field.read_with(cx, |field, _| field.text.clone()), "éé");
+        field.update(cx, |field, cx| field.set_read_only(true, cx));
+        cx.simulate_keystrokes("backspace");
+        cx.simulate_input("x");
+        assert_eq!(field.read_with(cx, |field, _| field.text.clone()), "éé");
     }
 }

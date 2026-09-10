@@ -92,6 +92,8 @@ pub struct ColumnLayout {
     pub type_name: SharedString,
     /// Largeur courante.
     pub width: Pixels,
+    /// Whether the column participates in the viewport; its Arrow index is unchanged.
+    pub visible: bool,
     /// La colonne accepte-t-elle l'absence de valeur ?
     pub nullable: bool,
     /// Le type a-t-il été déduit par échantillonnage plutôt que déclaré ?
@@ -101,12 +103,16 @@ pub struct ColumnLayout {
 impl ColumnLayout {
     /// Largeur d'en-tête suffisante pour le nom et le type.
     fn header_width(&self, metrics: &Metrics) -> Pixels {
-        let caracteres = self
-            .name
-            .chars()
-            .count()
-            .max(self.type_name.chars().count());
+        let caracteres = self.header_label().chars().count();
         text_width(caracteres, metrics) + metrics.cell_padding * 2.0
+    }
+    fn header_label(&self) -> String {
+        format!(
+            "{} · {}{}",
+            self.name,
+            self.type_name,
+            if self.inferred { " (inferred)" } else { "" }
+        )
     }
 }
 
@@ -183,6 +189,9 @@ impl GridState {
     }
 }
 
+mod pages;
+use pages::PageState;
+
 /// Ce que la grille demande, sans jamais le faire elle-même.
 ///
 /// Une vue ne parle pas à un driver : elle émet, et `oxyn-app` traduit en
@@ -192,8 +201,14 @@ impl GridState {
 pub enum GridEvent {
     /// L'utilisateur a sélectionné une ligne.
     RowSelected(usize),
+    /// Local column visibility changed, without changing the result or its export.
+    ColumnsChanged,
     /// L'utilisateur demande l'annulation de l'exécution en cours.
     CancelRequested,
+    /// An existing result page must be loaded off the UI thread.
+    PageRequested { generation: u64, batch: usize },
+    /// Cancel only the local page read, not the database statement.
+    CancelPageRequested { generation: u64 },
 }
 
 /// Un redimensionnement de colonne en cours.
@@ -207,6 +222,7 @@ struct ColumnDrag {
 /// La grille de résultats.
 #[derive(Debug)]
 pub struct DataGrid {
+    pages: PageState,
     focus: FocusHandle,
     state: GridState,
     columns: Vec<ColumnLayout>,
@@ -240,11 +256,12 @@ impl DataGrid {
     /// Une grille vide, à l'état initial.
     pub fn new(cx: &mut Context<'_, Self>) -> Self {
         Self {
+            pages: PageState::default(),
             focus: cx.focus_handle(),
             state: GridState::Idle,
             columns: Vec::new(),
             widths_measured: false,
-            format: FormatOptions::default(),
+            format: FormatOptions::default().with_null_text("∅ NULL"),
             scroll: UniformListScrollHandle::new(),
             h_offset: Pixels::ZERO,
             viewport: Rc::new(Cell::new(px(0.0))),
@@ -306,6 +323,7 @@ impl DataGrid {
     /// pendant que la suivante tourne est le mensonge le plus facile à commettre
     /// et le plus difficile à repérer.
     pub fn start(&mut self, cx: &mut Context<'_, Self>) {
+        self.invalidate_pages(cx);
         self.state = GridState::Starting;
         self.columns.clear();
         self.widths_measured = false;
@@ -316,6 +334,7 @@ impl DataGrid {
 
     /// Shows cancellation without presenting it as a permanent server failure.
     pub fn cancelled(&mut self, cx: &mut Context<'_, Self>) {
+        self.invalidate_pages(cx);
         self.state = GridState::Cancelled;
         cx.notify();
     }
@@ -335,6 +354,7 @@ impl DataGrid {
             cx.notify();
             return;
         }
+        self.invalidate_pages(cx);
         let metrics = Theme::of(cx).metrics;
         self.columns = column_layouts(buffer.schema(), &metrics);
         // Le nombre de colonnes, jamais leurs noms : un nom de colonne peut
@@ -378,6 +398,7 @@ impl DataGrid {
         retryable: bool,
         cx: &mut Context<'_, Self>,
     ) {
+        self.invalidate_pages(cx);
         self.state = GridState::Failed {
             message: message.into(),
             retryable,
@@ -387,12 +408,43 @@ impl DataGrid {
 
     /// Remet la grille à l'état initial.
     pub fn reset(&mut self, cx: &mut Context<'_, Self>) {
+        self.invalidate_pages(cx);
         self.state = GridState::Idle;
         self.columns.clear();
         self.widths_measured = false;
         self.selected_row = None;
         self.h_offset = Pixels::ZERO;
         cx.notify();
+    }
+
+    /// Changes local visibility while retaining the original Arrow column index.
+    pub fn set_column_visible(&mut self, column: usize, visible: bool, cx: &mut Context<'_, Self>) {
+        if let Some(column) = self.columns.get_mut(column) {
+            column.visible = visible;
+            self.h_offset = Pixels::ZERO;
+            cx.emit(GridEvent::ColumnsChanged);
+            cx.notify();
+        }
+    }
+
+    /// Restores all columns without querying the source.
+    pub fn show_all_columns(&mut self, cx: &mut Context<'_, Self>) {
+        for column in &mut self.columns {
+            column.visible = true;
+        }
+        self.h_offset = Pixels::ZERO;
+        cx.emit(GridEvent::ColumnsChanged);
+        cx.notify();
+    }
+
+    /// Requests a missing page for an inspected row without moving the grid viewport.
+    pub fn request_row_page(&mut self, row: usize, cx: &mut Context<'_, Self>) {
+        if let Some(buffer) = self.state.buffer()
+            && let Some((batch, _)) = buffer.locate(row)
+            && buffer.cached_batch(batch).is_none()
+        {
+            self.request_page(batch, cx);
+        }
     }
 
     /// Impose la largeur d'une colonne, bornée par [`Metrics::min_column_width`].
@@ -433,6 +485,7 @@ impl DataGrid {
         let total: f32 = self
             .columns
             .iter()
+            .filter(|column| column.visible)
             .map(|colonne| f32::from(colonne.width))
             .sum();
         let maximum = (total - f32::from(self.content_viewport(metrics))).max(0.0);
@@ -442,6 +495,19 @@ impl DataGrid {
         }
         self.h_offset = px(vise);
         true
+    }
+
+    /// Selects an existing row and reveals it without executing a query.
+    pub fn select_row(&mut self, row: usize, cx: &mut Context<'_, Self>) {
+        let count = self.row_count();
+        if count == 0 {
+            return;
+        }
+        let row = row.min(count.saturating_sub(1));
+        self.selected_row = Some(row);
+        self.scroll.scroll_to_item(row, ScrollStrategy::Center);
+        cx.emit(GridEvent::RowSelected(row));
+        cx.notify();
     }
 
     /// Déplace la sélection de `delta` lignes et fait défiler jusqu'à elle.
@@ -456,10 +522,7 @@ impl DataGrid {
         let dernier = isize::try_from(lignes.saturating_sub(1)).unwrap_or(isize::MAX);
         let visee = courante.saturating_add(delta).clamp(0, dernier);
         let visee = usize::try_from(visee).unwrap_or(0);
-        self.selected_row = Some(visee);
-        self.scroll.scroll_to_item(visee, ScrollStrategy::Center);
-        cx.emit(GridEvent::RowSelected(visee));
-        cx.notify();
+        self.select_row(visee, cx);
     }
 
     fn on_key(&mut self, event: &KeyDownEvent, _window: &mut Window, cx: &mut Context<'_, Self>) {
@@ -486,6 +549,7 @@ impl DataGrid {
             // Échap n'annule que pendant une exécution : sur une grille au
             // repos, il ne doit rien faire du tout.
             "escape" if self.state.is_running() => cx.emit(GridEvent::CancelRequested),
+            "escape" if self.pages.pending.is_some() => self.cancel_page_load(cx),
             _ => {}
         }
     }
@@ -558,6 +622,7 @@ pub fn column_layouts(schema: &SchemaRef, metrics: &Metrics) -> Vec<ColumnLayout
                 name: SharedString::from(champ.name().clone()),
                 type_name: SharedString::from(short_type_name(champ.data_type())),
                 width: metrics.default_column_width,
+                visible: true,
                 nullable: champ.is_nullable(),
                 inferred: champ.metadata().contains_key(INFERRED_FIELD_KEY),
             };
@@ -644,6 +709,9 @@ pub fn visible_columns(
     let mut avant = 0.0f32;
 
     for (index, colonne) in columns.iter().enumerate() {
+        if !colonne.visible {
+            continue;
+        }
         let debut = cumul;
         let fin = cumul + f32::from(colonne.width);
         cumul = fin;
@@ -676,40 +744,18 @@ pub fn visible_columns(
     }
 }
 
-/// Le lot contenant `row`, **seulement s'il est en mémoire**.
+/// Returns a resident or already-cached row batch, without disk I/O.
 ///
-/// Rend `None` pour un lot débordé sur disque : le relire bloquerait le thread
-/// d'interface le temps d'une lecture de page, ce qu'[I-05] interdit. La grille
-/// dessine alors une ligne en attente.
-///
-/// TODO(phase 1) : demander la réhydratation en tâche de fond au lieu de laisser
-/// la ligne en attente jusqu'à ce que l'utilisateur repasse dessus. Débloqué par
-/// l'ordonnanceur d'`oxyn-exec`, qui est le seul à pouvoir tenir la poignée de
-/// la tâche.
-///
-/// [I-05]: ../../../CLAUDE.md#i-05
+/// Missing pages are requested separately by the grid and loaded through the bus.
 #[must_use]
 pub fn row_batch(buffer: &ResultBuffer, row: usize) -> Option<(RecordBatch, usize)> {
     let (position, decalage) = buffer.locate(row)?;
-    if !buffer.is_resident(position) {
-        return None;
-    }
-    // `batch` peut encore échouer (relecture, schéma) ; un échec de lecture
-    // n'est pas une raison de paniquer pendant un rendu.
-    buffer
-        .batch(position)
-        .ok()
-        .flatten()
-        .map(|lot| (lot, decalage))
+    buffer.cached_batch(position).map(|batch| (batch, decalage))
 }
 
 /// Le premier lot encore en mémoire, pour l'échantillon de mesure.
 fn first_resident_batch(buffer: &ResultBuffer) -> Option<RecordBatch> {
-    let position = BatchIndex::new(0);
-    if !buffer.is_resident(position) {
-        return None;
-    }
-    buffer.batch(position).ok().flatten()
+    buffer.cached_batch(BatchIndex::new(0))
 }
 
 /// Largeur estimée de `caracteres` caractères à chasse fixe.
@@ -796,8 +842,8 @@ impl Render for DataGrid {
             .flex_col()
             .bg(theme.colors.background)
             .text_color(theme.colors.text)
-            .font_family(theme.typography.mono_family.clone())
-            .text_size(theme.typography.mono_size)
+            .font_family(theme.typography.ui_family.clone())
+            .text_size(theme.typography.ui_size)
             .on_key_down(cx.listener(Self::on_key))
             .on_scroll_wheel(cx.listener(Self::on_wheel))
             .on_mouse_move(cx.listener(Self::on_drag_move))
@@ -852,6 +898,7 @@ impl Render for DataGrid {
                 racine
                     .child(self.render_header(cx))
                     .child(self.render_rows(lignes, cx))
+                    .child(self.render_page_status(cx))
                     .child(self.render_footer(&tampon, cx))
             }
         }
@@ -969,7 +1016,7 @@ impl DataGrid {
             .h(metrics.header_height);
 
         for index in visibles.range.clone() {
-            let Some(colonne) = self.columns.get(index) else {
+            let Some(colonne) = self.columns.get(index).filter(|column| column.visible) else {
                 continue;
             };
             piste = piste.child(self.render_header_cell(index, colonne, cx));
@@ -1021,34 +1068,15 @@ impl DataGrid {
                     .flex_1()
                     .overflow_hidden()
                     .px(metrics.cell_padding)
-                    .flex()
-                    .flex_col()
-                    .justify_center()
-                    .child(
-                        div()
-                            .whitespace_nowrap()
-                            .text_ellipsis()
-                            .text_color(theme.colors.text)
-                            .child(colonne.name.clone()),
-                    )
-                    .child(
-                        div()
-                            .whitespace_nowrap()
-                            .text_ellipsis()
-                            .text_size(theme.typography.small_size)
-                            .text_color(if colonne.inferred {
-                                theme.colors.warning
-                            } else {
-                                theme.colors.text_faint
-                            })
-                            .child(if colonne.inferred {
-                                // ADR-0002 : un schéma déduit ne se présente
-                                // jamais comme une vérité du serveur.
-                                SharedString::from(format!("{} (déduit)", colonne.type_name))
-                            } else {
-                                colonne.type_name.clone()
-                            }),
-                    ),
+                    .whitespace_nowrap()
+                    .text_ellipsis()
+                    .text_size(theme.typography.ui_size)
+                    .text_color(if colonne.inferred {
+                        theme.colors.warning
+                    } else {
+                        theme.colors.text_muted
+                    })
+                    .child(colonne.header_label()),
             )
             .child(
                 div()
@@ -1135,7 +1163,10 @@ impl DataGrid {
                                 dernier = Some((position, lot.clone()));
                                 Some(lot)
                             }
-                            None => None,
+                            None => {
+                                self.request_page(position, cx);
+                                None
+                            }
                         },
                     };
                     lot.map(|lot| (lot, decalage))
@@ -1166,7 +1197,7 @@ impl DataGrid {
             .h_full();
 
         for index in visibles.range.clone() {
-            let Some(colonne) = self.columns.get(index) else {
+            let Some(colonne) = self.columns.get(index).filter(|column| column.visible) else {
                 continue;
             };
             piste = piste.child(match &contenu {
@@ -1192,6 +1223,9 @@ impl DataGrid {
 
         div()
             .id(ElementId::named_usize("oxyn-grid-row", ligne))
+            .when(ligne == 0, |el| {
+                el.debug_selector(|| "grid-first-row".into())
+            })
             .h(metrics.row_height)
             .w_full()
             .flex()
@@ -1391,6 +1425,7 @@ mod tests {
                 name: SharedString::from(format!("c{index}")),
                 type_name: SharedString::new_static("text"),
                 width: px(*largeur),
+                visible: true,
                 nullable: true,
                 inferred: false,
             })
@@ -1682,5 +1717,59 @@ mod scroll_tests {
         cx.simulate_resize(gpui::size(px(800.), px(600.)));
         cx.run_until_parked();
         assert!(handle.is_scrollable(), "resizing must preserve scrolling");
+    }
+}
+
+#[cfg(test)]
+mod visibility_tests {
+    use super::*;
+
+    #[gpui::test]
+    fn hidden_columns_preserve_arrow_positions_widths_and_values(cx: &mut gpui::TestAppContext) {
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            arrow::datatypes::Field::new("first", DataType::Int64, false),
+            arrow::datatypes::Field::new("second", DataType::Int64, false),
+            arrow::datatypes::Field::new("third", DataType::Int64, false),
+        ]));
+        let buffer = Arc::new(ResultBuffer::new(schema.clone(), 1024 * 1024));
+        buffer
+            .push(
+                RecordBatch::try_new(
+                    schema,
+                    vec![
+                        Arc::new(arrow::array::Int64Array::from(vec![11])),
+                        Arc::new(arrow::array::Int64Array::from(vec![22])),
+                        Arc::new(arrow::array::Int64Array::from(vec![33])),
+                    ],
+                )
+                .expect("batch"),
+            )
+            .expect("push");
+        let (grid, cx) = cx.add_window_view(|_, cx| DataGrid::new(cx));
+        grid.update(cx, |grid, cx| {
+            grid.set_buffer(buffer.clone(), cx);
+            for column in 0..3 {
+                grid.set_column_width(column, px(100.), cx);
+            }
+            grid.set_column_visible(0, false, cx);
+            grid.set_column_visible(2, false, cx);
+            let visible = visible_columns(grid.columns(), px(0.), px(500.));
+            assert_eq!(visible.range, 1..2);
+            assert_eq!(visible.total, px(100.));
+            assert_eq!(grid.columns().len(), 3);
+            let (batch, offset) = row_batch(&buffer, 0).expect("row");
+            assert_eq!(
+                format_cell(&batch, offset, 1, grid.format_options()).text(),
+                Some("22")
+            );
+            grid.set_column_visible(usize::MAX, false, cx);
+            grid.show_all_columns(cx);
+            assert_eq!(
+                visible_columns(grid.columns(), px(0.), px(500.)).total,
+                px(300.)
+            );
+            assert!(grid.columns().iter().all(|column| column.visible));
+            assert_eq!(buffer.schema().fields().len(), 3);
+        });
     }
 }

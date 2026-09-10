@@ -811,7 +811,7 @@ mod tests {
                 NamespaceRef::new(catalogue.clone(), "public").expect("nom valide"),
                 NamespaceRef::new(catalogue, "pg_catalog")
                     .expect("nom valide")
-                    .as_system(),
+                    .with_system(),
             ],
         );
         let public = CatalogPath::for_namespace(Some("app"), "public").expect("chemin valide");

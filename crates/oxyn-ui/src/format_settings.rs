@@ -24,12 +24,11 @@
 //! ([ADR-0002](../../../docs/adr/0002-arrow-result-model.md)). Ils ne supposent
 //! ni table, ni schéma, ni SQL.
 //!
-//! # Ce qui n'est pas fait
+//! # Persistence
 //!
-//! **Rien n'est enregistré.** Les réglages vivent le temps de la session. Les
-//! persister demande un format ouvert et documenté
-//! ([I-11](../../../CLAUDE.md#i-11)) et une écriture de workspace, donc une
-//! commande du bus : c'est un autre lot.
+//! This component emits changes. The workspace applies them to both result
+//! grids, saves a versioned preference snapshot through the bus, and presents
+//! save failures separately from local display changes (ADR-0013).
 
 use gpui::prelude::*;
 use gpui::{
@@ -158,6 +157,15 @@ impl FormatSettings {
             null_text,
             read_only: false,
         }
+    }
+
+    /// Reflects a shared preference change without emitting another user edit.
+    pub fn set_options(&mut self, options: FormatOptions, cx: &mut Context<'_, Self>) {
+        self.null_text.update(cx, |field, cx| {
+            field.set_text(options.null_text.to_string(), cx)
+        });
+        self.options = options;
+        cx.notify();
     }
 
     /// Les réglages courants.

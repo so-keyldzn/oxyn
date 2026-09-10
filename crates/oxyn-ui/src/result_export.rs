@@ -180,6 +180,7 @@ pub struct ResultExport {
     blocked: Option<NotExportable>,
     /// True while the format list is unfolded.
     picking: bool,
+    preview_rows: Option<usize>,
 }
 
 impl EventEmitter<ExportEvent> for ResultExport {}
@@ -198,6 +199,7 @@ impl ResultExport {
             phase: ExportPhase::Idle,
             blocked: Some(NotExportable::NoResult),
             picking: false,
+            preview_rows: None,
         }
     }
 
@@ -205,6 +207,12 @@ impl ResultExport {
     #[must_use]
     pub fn phase(&self) -> &ExportPhase {
         &self.phase
+    }
+
+    /// Labels an export as a bounded table preview, never as the entire table.
+    pub fn set_preview_rows(&mut self, rows: usize, cx: &mut Context<'_, Self>) {
+        self.preview_rows = Some(rows);
+        cx.notify();
     }
 
     /// Is a whole result available to export?
@@ -228,7 +236,9 @@ impl ResultExport {
             self.blocked = blocked;
             if blocked.is_some() {
                 self.picking = false;
-                self.phase = ExportPhase::Idle;
+                if self.phase != ExportPhase::Running {
+                    self.phase = ExportPhase::Idle;
+                }
             }
             cx.notify();
         }
@@ -279,11 +289,22 @@ impl ResultExport {
         cx.notify();
     }
 
-    /// Returns to the initial state, forgetting the previous export.
+    /// Forgets a finished export. An in-flight export keeps its cancellation control.
     pub fn reset(&mut self, cx: &mut Context<'_, Self>) {
+        if self.phase == ExportPhase::Running {
+            return;
+        }
         self.phase = ExportPhase::Idle;
         self.picking = false;
         cx.notify();
+    }
+
+    /// Opens the format choices from a workspace toolbar without submitting an export.
+    pub fn show_formats(&mut self, cx: &mut Context<'_, Self>) {
+        if self.is_result_ready() && self.phase != ExportPhase::Running {
+            self.picking = true;
+            cx.notify();
+        }
     }
 
     fn toggle_picker(&mut self, cx: &mut Context<'_, Self>) {
@@ -448,17 +469,24 @@ impl Render for ResultExport {
             return bar.child(self.hint(blocked, cx)).into_any_element();
         }
 
-        bar = bar.child(self.button(
-            "oxyn-export-open",
-            if self.picking {
-                "Export ▴"
-            } else {
-                "Export ▾"
-            },
-            true,
-            |this, cx| this.toggle_picker(cx),
-            cx,
-        ));
+        if let Some(rows) = self.preview_rows {
+            bar = bar.child(format!(
+                "{rows} preview rows included · Not the entire table"
+            ));
+        }
+        if self.preview_rows.is_none() {
+            bar = bar.child(self.button(
+                "oxyn-export-open",
+                if self.picking {
+                    "Export ▴"
+                } else {
+                    "Export ▾"
+                },
+                true,
+                |this, cx| this.toggle_picker(cx),
+                cx,
+            ));
+        }
 
         if self.picking {
             for format in KNOWN_FORMATS {
