@@ -27,6 +27,7 @@ use arrow::datatypes::SchemaRef;
 use arrow::ipc::reader::StreamReader;
 use arrow::ipc::writer::StreamWriter;
 use arrow::record_batch::RecordBatch;
+use oxyn_core::CancelToken;
 use parking_lot::Mutex;
 use tempfile::{Builder, NamedTempFile};
 
@@ -41,9 +42,14 @@ pub(crate) struct SpillRef {
     len: u64,
     /// Lignes attendues à la relecture. Sert de contrôle de cohérence.
     rows: usize,
+    retained_bytes: usize,
 }
 
 impl SpillRef {
+    pub(crate) const fn retained_bytes(self) -> usize {
+        self.retained_bytes
+    }
+
     /// Octets occupés dans le fichier de débordement.
     pub(crate) const fn byte_len(self) -> u64 {
         self.len
@@ -114,6 +120,7 @@ impl SpillFile {
             offset,
             len: end.saturating_sub(offset),
             rows: batch.num_rows(),
+            retained_bytes: retained_size(batch),
         })
     }
 
@@ -125,16 +132,36 @@ impl SpillFile {
     /// Alloue un tampon de la taille du lot : `memmap2` l'éviterait, mais son
     /// API est `unsafe` et le lint `unsafe_code = "deny"` du workspace
     /// l'interdit. Voir la note en tête de [`crate`].
+    #[cfg(test)]
     pub(crate) fn read(&self, reference: SpillRef) -> Result<RecordBatch> {
+        self.read_cancellable(reference, &CancelToken::new())
+    }
+
+    pub(crate) fn read_cancellable(
+        &self,
+        reference: SpillRef,
+        cancel: &CancelToken,
+    ) -> Result<RecordBatch> {
+        if cancel.is_cancelled() {
+            return Err(DataError::Cancelled);
+        }
         let taille = usize::try_from(reference.len).map_err(|_| DataError::Spill(oversized()))?;
         let mut octets = vec![0_u8; taille];
         {
             let mut file = self.read.lock();
             file.seek(SeekFrom::Start(reference.offset))
                 .map_err(DataError::Spill)?;
-            file.read_exact(&mut octets).map_err(DataError::Spill)?;
+            for chunk in octets.chunks_mut(64 * 1024) {
+                if cancel.is_cancelled() {
+                    return Err(DataError::Cancelled);
+                }
+                file.read_exact(chunk).map_err(DataError::Spill)?;
+            }
         }
 
+        if cancel.is_cancelled() {
+            return Err(DataError::Cancelled);
+        }
         let mut lecteur = StreamReader::try_new(octets.as_slice(), None)?;
         let lot = lecteur
             .next()
@@ -150,6 +177,9 @@ impl SpillFile {
                 reference.rows,
                 lot.num_rows(),
             )));
+        }
+        if cancel.is_cancelled() {
+            return Err(DataError::Cancelled);
         }
         Ok(lot)
     }
@@ -172,21 +202,34 @@ fn inconsistent(attendu: usize, trouve: usize) -> std::io::Error {
 /// Petit cache de lots réhydratés, pour que faire défiler une page d'écran ne
 /// relise pas le même lot une fois par cellule.
 ///
-/// Ordre d'usage, pas horodatage : la file est parcourue à chaque accès, ce qui
-/// est le moins cher pour une poignée d'entrées et évite un compteur global.
+/// Entries follow usage order. The byte charge includes allocated queue capacity,
+/// so evicting small pages cannot leave an unaccounted backing allocation behind.
 #[derive(Debug)]
 pub(crate) struct SpillCache {
     entries: VecDeque<(usize, RecordBatch)>,
-    capacity: usize,
+    capacity_bytes: usize,
+    retained_bytes: usize,
 }
 
 impl SpillCache {
-    /// Cache d'au plus `capacity` lots. Une capacité nulle désactive le cache.
-    pub(crate) fn new(capacity: usize) -> Self {
+    /// Byte-bounded cache, including the retained entry and column handles.
+    pub(crate) fn new(capacity_bytes: usize) -> Self {
         Self {
-            entries: VecDeque::with_capacity(capacity),
-            capacity,
+            entries: VecDeque::new(),
+            capacity_bytes,
+            retained_bytes: 0,
         }
+    }
+
+    pub(crate) fn retained_bytes(&self) -> usize {
+        self.retained_bytes.saturating_add(
+            self.entries
+                .capacity()
+                .saturating_mul(std::mem::size_of::<(usize, RecordBatch)>()),
+        )
+    }
+    pub(crate) const fn capacity_bytes(&self) -> usize {
+        self.capacity_bytes
     }
 
     /// Rend le lot `index` s'il est déjà réhydraté, en le marquant comme le
@@ -201,17 +244,40 @@ impl SpillCache {
 
     /// Enregistre un lot réhydraté, en évinçant le plus ancien si besoin.
     pub(crate) fn insert(&mut self, index: usize, batch: RecordBatch) {
-        if self.capacity == 0 {
+        let entry_bytes = std::mem::size_of::<(usize, RecordBatch)>();
+        let bytes = retained_size(&batch).saturating_sub(entry_bytes);
+        if bytes.saturating_add(entry_bytes) > self.capacity_bytes {
             return;
         }
         if self.entries.iter().any(|(i, _)| *i == index) {
             return;
         }
-        while self.entries.len() >= self.capacity {
-            self.entries.pop_front();
+        self.entries.reserve_exact(1);
+        while self.retained_bytes().saturating_add(bytes) > self.capacity_bytes {
+            let Some((_, oldest)) = self.entries.pop_front() else {
+                return;
+            };
+            self.retained_bytes = self
+                .retained_bytes
+                .saturating_sub(retained_size(&oldest).saturating_sub(entry_bytes));
+            self.entries.shrink_to_fit();
+            self.entries.reserve_exact(1);
         }
+        self.retained_bytes = self.retained_bytes.saturating_add(bytes);
         self.entries.push_back((index, batch));
     }
+}
+
+/// Conservative charge: Arrow buffers plus the cache entry and column handles.
+pub(crate) fn retained_size(batch: &RecordBatch) -> usize {
+    batch
+        .get_array_memory_size()
+        .saturating_add(std::mem::size_of::<(usize, RecordBatch)>())
+        .saturating_add(
+            batch
+                .num_columns()
+                .saturating_mul(std::mem::size_of::<arrow::array::ArrayRef>()),
+        )
 }
 
 #[cfg(test)]
@@ -301,7 +367,7 @@ mod tests {
 
     #[test]
     fn le_cache_evince_le_plus_ancien() {
-        let mut cache = SpillCache::new(2);
+        let mut cache = SpillCache::new(retained_size(&lot(0, 1)) * 2);
         cache.insert(0, lot(0, 1));
         cache.insert(1, lot(1, 1));
         cache.insert(2, lot(2, 1));
@@ -315,7 +381,7 @@ mod tests {
     /// lots frontaliers évince en boucle celui dont il a besoin.
     #[test]
     fn un_acces_protege_de_l_eviction() {
-        let mut cache = SpillCache::new(2);
+        let mut cache = SpillCache::new(retained_size(&lot(0, 1)) * 2);
         cache.insert(0, lot(0, 1));
         cache.insert(1, lot(1, 1));
         assert!(cache.get(0).is_some());

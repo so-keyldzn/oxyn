@@ -134,6 +134,7 @@ pub struct BatchSink {
     ///
     /// Reprendre après cela lirait un flux désynchronisé : le puits refuse.
     aborted: AtomicBool,
+    confirm_end_at_limit: bool,
 }
 
 impl BatchSink {
@@ -143,7 +144,18 @@ impl BatchSink {
         Self {
             buffer,
             aborted: AtomicBool::new(false),
+            confirm_end_at_limit: false,
         }
+    }
+
+    /// Probes for end-of-stream at the row limit of an already bounded preview.
+    ///
+    /// At most one nonempty batch is read and discarded beyond the buffer limit.
+    /// Cancellation and the caller's timeout still apply; no extra rows are stored.
+    #[must_use]
+    pub fn with_end_confirmation(mut self) -> Self {
+        self.confirm_end_at_limit = true;
+        self
     }
 
     /// Le tampon alimenté. Partageable en lecture pendant le drainage.
@@ -204,8 +216,13 @@ impl BatchSink {
 
             // Contre-pression : la question au serveur n'est posée que si la
             // réponse a où aller.
-            match self.buffer.pressure() {
-                Pressure::Ready => {}
+            let confirming_end = match self.buffer.pressure() {
+                Pressure::Ready => false,
+                Pressure::RowLimit
+                    if self.confirm_end_at_limit && !self.buffer.stats().truncated =>
+                {
+                    true
+                }
                 Pressure::RowLimit => {
                     self.seal(source, true);
                     return Ok(SinkOutcome::RowLimit);
@@ -215,7 +232,7 @@ impl BatchSink {
                     return Ok(SinkOutcome::Saturated);
                 }
                 Pressure::Complete => return Ok(SinkOutcome::Exhausted),
-            }
+            };
 
             // Le bloc borne l'emprunt mutable de `source` par le futur de
             // lecture : sans lui, plus rien ne pourrait toucher à la source
@@ -254,6 +271,14 @@ impl BatchSink {
                     return Err(erreur);
                 }
             };
+
+            if confirming_end {
+                if lot.num_rows() == 0 {
+                    continue;
+                }
+                self.seal(source, true);
+                return Ok(SinkOutcome::RowLimit);
+            }
 
             match self.buffer.push(lot) {
                 // Lot vide : la source a le droit d'en produire, il n'y a rien
@@ -384,6 +409,43 @@ mod tests {
         assert_eq!(tampon.row_count(), 25);
         assert!(tampon.is_complete());
         assert!(!tampon.stats().truncated);
+    }
+
+    #[test]
+    fn bounded_preview_confirms_end_without_accepting_extra_rows() {
+        for (batches, expected, calls) in [
+            (vec![lot(2)], SinkOutcome::Exhausted, 2),
+            (vec![lot(2), lot(1), lot(10)], SinkOutcome::RowLimit, 2),
+            (vec![lot(3), lot(10)], SinkOutcome::RowLimit, 1),
+        ] {
+            let buffer = Arc::new(ResultBuffer::with_limits(
+                schema(),
+                BufferLimits::default().with_max_rows(2_usize),
+            ));
+            let sink = BatchSink::new(buffer.clone()).with_end_confirmation();
+            let mut source = SourceScriptee::new(batches);
+            let outcome = block_on(sink.drain(&mut source, &CancelToken::new())).expect("drain");
+            assert_eq!(outcome, expected);
+            assert_eq!(source.appels, calls);
+            assert_eq!(buffer.row_count(), 2);
+            assert_eq!(buffer.stats().truncated, expected == SinkOutcome::RowLimit);
+        }
+    }
+
+    #[test]
+    fn cancelling_at_preview_limit_does_not_probe_or_claim_completion() {
+        let buffer = Arc::new(ResultBuffer::with_limits(
+            schema(),
+            BufferLimits::default().with_max_rows(2_usize),
+        ));
+        let sink = BatchSink::new(buffer.clone()).with_end_confirmation();
+        let mut source = SourceScriptee::new(vec![lot(2)]);
+        let cancel = CancelToken::new();
+        let outcome =
+            block_on(sink.drain_with(&mut source, &cancel, |_| cancel.cancel())).expect("drain");
+        assert_eq!(outcome, SinkOutcome::Cancelled);
+        assert_eq!(source.appels, 1);
+        assert!(buffer.stats().truncated);
     }
 
     #[test]

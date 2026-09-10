@@ -42,21 +42,15 @@
 //! # }
 //! ```
 //!
-//! # Une divergence assumée avec [ADR-0002]
+//! # Local page storage
 //!
-//! L'ADR décrit le fichier de débordement comme « mappé en mémoire », et
-//! `memmap2` figure au contrat de dépendances de la crate. **Il n'est pas
-//! utilisé** : la seule API de `memmap2` pour établir une projection est
-//! `unsafe`, et le lint `unsafe_code = "deny"` du workspace l'interdit.
+//! [ADR-0012] specifies positioned reads of autonomous Arrow IPC streams,
+//! off the UI thread. `cached_batch` never performs I/O or waits for a lock;
+//! `load_page` populates the byte-bounded cache with cooperative cancellation.
+//! Initial batches and decoded pages share one retention budget. Decoder
+//! temporaries and clones held by readers are separate from cache retention.
 //!
-//! Le débordement repose donc sur des lectures positionnées dans un fichier
-//! temporaire (module interne `spill`). La promesse de l'ADR est tenue — « faire défiler la
-//! ligne 40 000 000 lit une page disque ; cela ne relance jamais la requête et
-//! ne sature jamais la RAM » — au prix d'une copie du lot relu, que `mmap`
-//! éviterait. Trancher entre les deux (autoriser un `unsafe` encadré dans cette
-//! crate, ou retirer `memmap2` du manifeste et amender l'ADR) demande une
-//! mesure et une décision ; ni l'une ni l'autre n'appartiennent à ce fichier.
-//!
+//! [ADR-0012]: ../../../docs/adr/0012-lecture-pages-resultats.md
 //! [ADR-0002]: ../../../docs/adr/0002-arrow-result-model.md
 
 pub mod buffer;
@@ -65,6 +59,7 @@ pub mod error;
 pub mod export;
 pub mod sink;
 mod spill;
+pub mod value_page;
 
 pub use buffer::{BatchIndex, BufferLimits, DEFAULT_MEMORY_BUDGET, Pressure, ResultBuffer};
 pub use cell::{

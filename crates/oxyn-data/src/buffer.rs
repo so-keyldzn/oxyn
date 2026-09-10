@@ -36,18 +36,12 @@ use serde::{Deserialize, Serialize};
 
 use crate::error::{DataError, Result};
 use crate::spill::{SpillCache, SpillFile, SpillRef};
+use oxyn_core::CancelToken;
 
 /// Budget mémoire par défaut d'un résultat, en octets.
 ///
 /// 256 Mo, décidé par [ADR-0002](../../../docs/adr/0002-arrow-result-model.md).
 pub const DEFAULT_MEMORY_BUDGET: usize = 256 * 1024 * 1024;
-
-/// Nombre de lots débordés gardés réhydratés.
-///
-/// Une page d'écran couvre un lot, parfois deux à cheval sur une frontière ;
-/// quatre laisse de la marge pour un défilement qui va et vient sans faire
-/// grossir la mémoire de manière notable.
-const SPILL_CACHE_BATCHES: usize = 4;
 
 /// Position d'un lot dans un [`ResultBuffer`].
 ///
@@ -84,7 +78,7 @@ impl std::fmt::Display for BatchIndex {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct BufferLimits {
-    /// Octets de lots gardés en mémoire avant débordement.
+    /// Retention budget shared between initial batches and rehydrated pages.
     pub memory_budget: usize,
     /// Lignes au-delà desquelles le résultat est tronqué, et déclaré tel.
     ///
@@ -115,6 +109,17 @@ impl Default for BufferLimits {
 }
 
 impl BufferLimits {
+    fn cache_budget(&self) -> usize {
+        if self.allow_spill {
+            self.memory_budget / 4
+        } else {
+            0
+        }
+    }
+    fn resident_budget(&self) -> usize {
+        self.memory_budget.saturating_sub(self.cache_budget())
+    }
+
     /// Bornes par défaut avec un budget mémoire choisi.
     #[must_use]
     pub fn with_memory_budget(mut self, octets: usize) -> Self {
@@ -327,7 +332,7 @@ impl ResultBuffer {
             limits,
             index: RwLock::new(BufferIndex::new()),
             spill: Mutex::new(None),
-            cache: Mutex::new(SpillCache::new(SPILL_CACHE_BATCHES)),
+            cache: Mutex::new(SpillCache::new(limits.cache_budget())),
         }
     }
 
@@ -419,7 +424,7 @@ impl ResultBuffer {
         {
             return Pressure::RowLimit;
         }
-        if index.resident_bytes >= self.limits.memory_budget {
+        if index.resident_bytes >= self.limits.resident_budget() {
             if !self.limits.allow_spill {
                 return Pressure::Saturated;
             }
@@ -478,7 +483,10 @@ impl ResultBuffer {
         let plan = {
             let index = self.index.read();
             index.plan(
-                &self.limits,
+                &BufferLimits {
+                    memory_budget: self.limits.resident_budget(),
+                    ..self.limits
+                },
                 batch.num_rows(),
                 batch.get_array_memory_size(),
             )?
@@ -596,6 +604,17 @@ impl ResultBuffer {
     ///
     /// [`DataError::Spill`] ou [`DataError::Arrow`] si la relecture échoue.
     pub fn batch(&self, position: BatchIndex) -> Result<Option<RecordBatch>> {
+        self.batch_cancellable(position, &CancelToken::new())
+    }
+
+    fn batch_cancellable(
+        &self,
+        position: BatchIndex,
+        cancel: &CancelToken,
+    ) -> Result<Option<RecordBatch>> {
+        if cancel.is_cancelled() {
+            return Err(DataError::Cancelled);
+        }
         let reference = {
             let index = self.index.read();
             match index.slots.get(position.get()) {
@@ -618,9 +637,71 @@ impl ResultBuffer {
             )));
         };
 
-        let lot = fichier.read(reference)?;
-        self.cache.lock().insert(position.get(), lot.clone());
+        let lot = fichier.read_cancellable(reference, cancel)?;
+        self.check_schema(&lot)?;
+        let mut cache = self.cache.lock();
+        if cancel.is_cancelled() {
+            return Err(DataError::Cancelled);
+        }
+        cache.insert(position.get(), lot.clone());
         Ok(Some(lot))
+    }
+
+    /// Returns an already resident or cached batch without I/O or waiting for a lock.
+    #[must_use]
+    pub fn cached_batch(&self, position: BatchIndex) -> Option<RecordBatch> {
+        {
+            let index = self.index.try_read()?;
+            match index.slots.get(position.get())? {
+                Slot::Resident(batch) => return Some(batch.clone()),
+                Slot::Spilled(_) => {}
+            }
+        }
+        self.cache.try_lock()?.get(position.get())
+    }
+
+    /// Loads a page into the bounded cache. Blocking; never call on the UI thread.
+    ///
+    /// Returns false for an absent page. Oversized pages fail before decoding when
+    /// their recorded size already exceeds the cache budget. Cancellation is checked
+    /// between disk chunks and before publication; it never contacts a server.
+    pub fn load_page(&self, position: BatchIndex, cancel: &CancelToken) -> Result<bool> {
+        if cancel.is_cancelled() {
+            return Err(DataError::Cancelled);
+        }
+        {
+            let index = self.index.read();
+            match index.slots.get(position.get()) {
+                None => return Ok(false),
+                Some(Slot::Resident(_)) => return Ok(true),
+                Some(Slot::Spilled(reference))
+                    if reference.retained_bytes() > self.limits.cache_budget() =>
+                {
+                    return Err(DataError::Full {
+                        reason: "result page exceeds the display cache budget; exporting remains available",
+                    });
+                }
+                Some(Slot::Spilled(_)) => {}
+            }
+        }
+        let Some(batch) = self.batch_cancellable(position, cancel)? else {
+            return Ok(false);
+        };
+        if cancel.is_cancelled() {
+            return Err(DataError::Cancelled);
+        }
+        if crate::spill::retained_size(&batch) > self.cache.lock().capacity_bytes() {
+            return Err(DataError::Full {
+                reason: "decoded result page exceeds the display cache budget; exporting remains available",
+            });
+        }
+        Ok(true)
+    }
+
+    /// Bytes retained by the decoded-page cache; excludes transient reader clones.
+    #[must_use]
+    pub fn cached_bytes(&self) -> usize {
+        self.cache.lock().retained_bytes()
     }
 
     /// Lignes du lot à cette position, sans le charger.
@@ -668,10 +749,21 @@ impl ResultBuffer {
     ///
     /// Celles de [`batch`](Self::batch).
     pub fn row(&self, row: usize) -> Result<Option<(RecordBatch, usize)>> {
+        self.read_row(row, &CancelToken::new())
+    }
+
+    /// Reads one existing row's batch with cooperative disk cancellation. May block.
+    pub fn read_row(
+        &self,
+        row: usize,
+        cancel: &CancelToken,
+    ) -> Result<Option<(RecordBatch, usize)>> {
         let Some((position, decalage)) = self.locate(row) else {
             return Ok(None);
         };
-        Ok(self.batch(position)?.map(|lot| (lot, decalage)))
+        Ok(self
+            .batch_cancellable(position, cancel)?
+            .map(|lot| (lot, decalage)))
     }
 
     /// Refuse un lot dont le schéma n'est pas celui du tampon.
@@ -859,8 +951,8 @@ mod tests {
     fn les_premiers_lots_restent_residents() {
         let echantillon = lot(0, 64);
         let taille = echantillon.get_array_memory_size();
-        // De la place pour deux lots, pas trois.
-        let tampon = ResultBuffer::new(schema(), taille * 2 + taille / 2);
+        // Three quarters remain resident: enough for two batches, not three.
+        let tampon = ResultBuffer::new(schema(), taille * 3);
 
         for depart in [0, 100, 200, 300] {
             tampon.push(lot(depart, 64)).expect("lot accepté");
@@ -1009,5 +1101,74 @@ mod tests {
 
         producteur.join().expect("le producteur ne panique pas");
         assert_eq!(tampon.row_count(), 640);
+    }
+}
+
+#[cfg(test)]
+mod page_tests {
+    use super::*;
+    use arrow::array::Int64Array;
+    use arrow::datatypes::{DataType, Field, Schema};
+
+    fn batch() -> RecordBatch {
+        RecordBatch::try_new(
+            Arc::new(Schema::new(vec![Field::new("n", DataType::Int64, false)])),
+            vec![Arc::new(Int64Array::from_iter_values(0..512))],
+        )
+        .expect("batch")
+    }
+
+    #[test]
+    fn page_cache_shares_the_budget_and_loading_does_not_change_the_result() {
+        let sample = batch();
+        let buffer = ResultBuffer::new(sample.schema(), 64 * 1024);
+        for _ in 0..64 {
+            buffer.push(sample.clone()).expect("push");
+        }
+        buffer.mark_complete(ExecStats::default());
+        for index in (0..64).rev() {
+            let position = BatchIndex::new(index);
+            assert!(
+                buffer
+                    .load_page(position, &CancelToken::new())
+                    .expect("page load")
+            );
+            assert_eq!(buffer.cached_batch(position).expect("loaded page"), sample);
+            assert!(
+                buffer.resident_bytes() + buffer.cached_bytes() <= buffer.limits().memory_budget
+            );
+        }
+        assert_eq!(buffer.row_count(), 64 * 512);
+        assert!(!buffer.stats().truncated);
+        assert!(
+            buffer.cached_batch(BatchIndex::new(63)).is_none(),
+            "older decoded pages are evicted"
+        );
+    }
+
+    #[test]
+    fn oversized_and_cancelled_pages_do_not_populate_the_cache() {
+        let sample = batch();
+        let buffer = ResultBuffer::new(sample.schema(), 1);
+        buffer.push(sample.clone()).expect("spill");
+        assert!(matches!(
+            buffer.load_page(BatchIndex::new(0), &CancelToken::new()),
+            Err(DataError::Full { .. })
+        ));
+        assert_eq!(buffer.cached_bytes(), 0);
+        assert_eq!(
+            buffer
+                .batch(BatchIndex::new(0))
+                .expect("export can still read"),
+            Some(sample)
+        );
+        assert_eq!(buffer.cached_bytes(), 0);
+        let cancel = CancelToken::new();
+        cancel.cancel();
+        assert!(matches!(
+            buffer.load_page(BatchIndex::new(0), &cancel),
+            Err(DataError::Cancelled)
+        ));
+        assert!(buffer.cached_batch(BatchIndex::new(0)).is_none());
     }
 }
