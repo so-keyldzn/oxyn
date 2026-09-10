@@ -6,6 +6,12 @@
 
 use super::*;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub(super) enum ResultSource {
+    Query,
+    Preview,
+}
+
 /// Whether a finished execution may be exported, and why not when it may not.
 ///
 /// A free function, and tested as one: this is the decision that turns a
@@ -54,6 +60,20 @@ pub(crate) fn export_command(
 }
 
 impl Workspace {
+    fn export_result(&self, source: ResultSource, cx: &gpui::App) -> Option<ResultId> {
+        match source {
+            ResultSource::Query => self.console.read(cx).last_result,
+            ResultSource::Preview => self.preview_result,
+        }
+    }
+
+    fn export_view(&self, source: ResultSource) -> Entity<ResultExport> {
+        match source {
+            ResultSource::Query => self.export.clone(),
+            ResultSource::Preview => self.preview_export.clone(),
+        }
+    }
+
     /// Asks the platform where to write, then submits the export.
     ///
     /// The dialog is modal to the system but **not** blocking here: the window
@@ -61,17 +81,29 @@ impl Workspace {
     /// is the same shape `connection_form` uses to pick a database file.
     pub(super) fn choose_export_destination(
         &mut self,
+        source: ResultSource,
         format: ExportFormat,
         cx: &mut Context<'_, Self>,
     ) {
-        let Some(result) = self.last_result else {
+        if source == ResultSource::Query {
+            self.console.update(cx, |console, cx| {
+                console.choose_export_destination(format, cx)
+            });
+            return;
+        }
+        let Some(result) = self.export_result(source, cx) else {
             return;
         };
         if self.export_active.is_some() {
             return;
         }
         let depart = std::env::home_dir().unwrap_or_else(|| PathBuf::from("."));
-        let propose = format!("result.{}", format.extension());
+        let stem = if source == ResultSource::Preview {
+            "preview"
+        } else {
+            "result"
+        };
+        let propose = format!("{stem}.{}", format.extension());
         let attente = cx.prompt_for_new_path(&depart, Some(&propose));
         cx.spawn(async move |this, cx| {
             // Cancelled dialog, failed dialog, empty choice: in all three the
@@ -80,7 +112,7 @@ impl Workspace {
                 return;
             };
             let _ = this.update(cx, |this, cx| {
-                this.start_export(result, format, destination, cx);
+                this.start_export(source, result, format, destination, cx);
             });
         })
         .detach();
@@ -89,24 +121,32 @@ impl Workspace {
     /// Submits the export to the bus and follows its outcome.
     pub(super) fn start_export(
         &mut self,
+        source: ResultSource,
         result: ResultId,
         format: ExportFormat,
         destination: PathBuf,
         cx: &mut Context<'_, Self>,
     ) {
+        if source == ResultSource::Query {
+            self.console.update(cx, |console, cx| {
+                console.start_export(result, format, destination, cx)
+            });
+            return;
+        }
         // The file dialog is not modal to Oxyn: a new execution may have run
         // while it was open, and the result on screen is no longer this one.
         // Writing it anyway would produce a file whose name says one query and
         // whose rows come from another.
-        if self.export_active.is_some() || self.last_result != Some(result) {
+        if self.export_active.is_some() || self.export_result(source, cx) != Some(result) {
             return;
         }
         let shown = destination.to_string_lossy().into_owned();
         let command = export_command(self.connection, result, format, destination);
         let id = CommandId::new();
         let cancel = CancelToken::new();
-        self.export_active = Some((id, cancel.clone()));
-        self.export.update(cx, |export, cx| export.running(cx));
+        self.export_active = Some((id, cancel.clone(), source));
+        self.export_view(source)
+            .update(cx, |export, cx| export.running(cx));
         let response = self.backend.dispatch(id, command, cancel);
         cx.spawn(async move |this, cx| {
             let result = response.await.unwrap_or_else(|_| {
@@ -117,21 +157,22 @@ impl Workspace {
                     return;
                 }
                 this.export_active = None;
-                this.export.update(cx, |export, cx| match result {
-                    Ok(Outcome::Exported { rows, bytes, .. }) => {
-                        export.written(rows, bytes, shown, cx);
-                    }
-                    Ok(Outcome::Denied { reason, .. }) => export.failed(reason, false, cx),
-                    // The bytes already written stay on disk. Returning to the
-                    // neutral state would leave a truncated file with nothing
-                    // saying where it stops.
-                    Err(OxynError::Cancelled) => export.cancelled(shown, cx),
-                    Err(error) => {
-                        let retryable = error.is_retryable();
-                        export.failed(error.to_string(), retryable, cx);
-                    }
-                    Ok(_) => export.failed("Unexpected export response", false, cx),
-                });
+                this.export_view(source)
+                    .update(cx, |export, cx| match result {
+                        Ok(Outcome::Exported { rows, bytes, .. }) => {
+                            export.written(rows, bytes, shown, cx);
+                        }
+                        Ok(Outcome::Denied { reason, .. }) => export.failed(reason, false, cx),
+                        // The bytes already written stay on disk. Returning to the
+                        // neutral state would leave a truncated file with nothing
+                        // saying where it stops.
+                        Err(OxynError::Cancelled) => export.cancelled(shown, cx),
+                        Err(error) => {
+                            let retryable = error.is_retryable();
+                            export.failed(error.to_string(), retryable, cx);
+                        }
+                        Ok(_) => export.failed("Unexpected export response", false, cx),
+                    });
                 cx.notify();
             });
         })
@@ -142,7 +183,7 @@ impl Workspace {
     /// Stops the export under way. The file already begun is left as it is:
     /// truncating it here would delete something the user may want to inspect.
     pub(super) fn cancel_export(&mut self, cx: &mut Context<'_, Self>) {
-        if let Some((_, cancel)) = &self.export_active {
+        if let Some((_, cancel, _)) = &self.export_active {
             cancel.cancel();
             cx.notify();
         }

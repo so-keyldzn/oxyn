@@ -68,6 +68,9 @@ impl ConnectionDisplay {
 /// A connection that is open, with a session ready.
 #[derive(Debug, Clone)]
 pub struct OpenConnection {
+    /// A workspace reserves its own query session beside the catalog/preview session.
+    /// Console-only opens leave this empty.
+    pub initial_console: Option<Box<OpenConnection>>,
     /// The session actually opened by the executor.
     pub session: SessionId,
     /// The connection the workspace will run against.
@@ -101,11 +104,13 @@ pub enum ConnectionResponse {
 
 /// The assembled backend, shared by every view.
 ///
-/// Cloneable by `Arc`: the views hold it, the runtime holds it, and neither owns
-/// it. Dropping the last handle shuts the runtime down.
+/// Views and application lifecycle callbacks retain the runtime. Worker tasks
+/// retain only Inner, so the runtime cannot be dropped on its own worker thread.
 #[derive(Clone)]
 pub struct Backend {
     inner: Arc<Inner>,
+    // Tasks retain Inner, never their own runtime; its final drop must stay on the owner.
+    runtime: Arc<Runtime>,
 }
 
 struct Inner {
@@ -118,11 +123,25 @@ struct Inner {
     policy: Arc<DefaultPolicy>,
     /// The one place that reads or writes the keyring.
     credentials: Arc<KeyringCredentials>,
-    /// Kept alive for as long as the backend: dropping it would abort every
-    /// in-flight statement, and a dropped future does not cancel a server-side
-    /// query ([I-13](../../../CLAUDE.md#i-13)).
-    runtime: Runtime,
     saved: Vec<(ConnectionId, SavedConnection)>,
+    preferences: oxyn_core::PreferencesSnapshot,
+    pending_local_writes: Arc<PendingLocalWrites>,
+}
+
+#[derive(Default)]
+struct PendingLocalWrites {
+    count: std::sync::atomic::AtomicUsize,
+    changed: tokio::sync::Notify,
+}
+
+struct LocalWriteGuard(Arc<PendingLocalWrites>);
+impl Drop for LocalWriteGuard {
+    fn drop(&mut self) {
+        self.0
+            .count
+            .fetch_sub(1, std::sync::atomic::Ordering::SeqCst);
+        self.0.changed.notify_waiters();
+    }
 }
 
 // `Debug` is derived nowhere here on purpose: `Executor` and `Store` reach
@@ -148,6 +167,7 @@ impl Backend {
         Self::assemble(
             Arc::new(Store::open_default().context("opening the local workspace state")?),
             Arc::new(KeyringSecretStore::new()),
+            oxyn_data::DEFAULT_MEMORY_BUDGET,
         )
     }
 
@@ -157,10 +177,24 @@ impl Backend {
         Self::assemble(
             Arc::new(Store::open_in_memory().context("opening temporary workspace state")?),
             Arc::new(oxyn_secrets::MemorySecretStore::new()),
+            oxyn_data::DEFAULT_MEMORY_BUDGET,
         )
     }
 
-    fn assemble(store: Arc<Store>, secrets: Arc<dyn SecretStore>) -> Result<Self> {
+    #[cfg(test)]
+    pub(crate) fn temporary_with_memory_budget(bytes: usize) -> Result<Self> {
+        Self::assemble(
+            Arc::new(Store::open_in_memory()?),
+            Arc::new(oxyn_secrets::MemorySecretStore::new()),
+            bytes,
+        )
+    }
+
+    fn assemble(
+        store: Arc<Store>,
+        secrets: Arc<dyn SecretStore>,
+        memory_budget: usize,
+    ) -> Result<Self> {
         let runtime = tokio::runtime::Builder::new_multi_thread()
             .enable_all()
             .thread_name("oxyn-exec")
@@ -188,11 +222,16 @@ impl Backend {
         // exists nowhere on disk: saving would appear to work and nothing would
         // ever come back.
         let atelier = atelier_courant(&store)?;
+        let preferences = store
+            .preferences()
+            .load(atelier)
+            .context("loading workspace preferences")?;
 
         let executor = Executor::builder(Arc::clone(&store), gate)
             .with_drivers(Arc::clone(&drivers))
             .with_credentials(Arc::clone(&credentials) as Arc<_>)
             .with_workspace(atelier)
+            .with_memory_budget(memory_budget)
             .build();
 
         // Connections saved in a previous session are unknown to the policy
@@ -215,16 +254,58 @@ impl Backend {
         }
         tracing::info!(connections = known, "saved connections registered");
 
-        Ok(Self {
+        let backend = Self {
             inner: Arc::new(Inner {
                 executor,
                 drivers,
                 policy,
                 credentials,
-                runtime,
                 saved,
+                preferences,
+                pending_local_writes: Arc::new(PendingLocalWrites::default()),
             }),
-        })
+            runtime: Arc::new(runtime),
+        };
+        let weak = Arc::downgrade(&backend.inner);
+        backend.runtime.spawn(async move {
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+            loop {
+                interval.tick().await;
+                let Some(inner) = weak.upgrade() else {
+                    break;
+                };
+                let _ = tokio::task::spawn_blocking(move || inner.executor.prune_results()).await;
+            }
+        });
+        Ok(backend)
+    }
+
+    /// Snapshot read at startup, before the UI exists; no I/O is performed here.
+    pub fn initial_preferences(&self) -> oxyn_core::PreferencesSnapshot {
+        self.inner.preferences.clone()
+    }
+
+    /// Workspace owning local documents and preferences.
+    pub fn workspace_id(&self) -> oxyn_core::WorkspaceId {
+        self.inner.executor.workspace()
+    }
+
+    /// Waits for already submitted preference and document writes, even after their views close.
+    pub async fn wait_for_local_writes(&self) {
+        loop {
+            let mut notified = std::pin::pin!(self.inner.pending_local_writes.changed.notified());
+            notified.as_mut().enable();
+            if self
+                .inner
+                .pending_local_writes
+                .count
+                .load(std::sync::atomic::Ordering::SeqCst)
+                == 0
+            {
+                return;
+            }
+            notified.await;
+        }
     }
 
     /// The database types the connection screen may offer.
@@ -266,12 +347,14 @@ impl Backend {
         let (envoi, reception) = oneshot::channel();
         let inner = Arc::clone(&self.inner);
 
-        self.inner.runtime.spawn(async move {
+        self.runtime.spawn(async move {
             let issue = ouvrir(&inner, draft, &cancel).await;
             // The receiver is gone when the window closed mid-connect. Nothing
             // to report to, and nothing broken: the session is closed with the
             // backend.
-            let _ = envoi.send(issue);
+            if let Err(Ok(response)) = envoi.send(issue) {
+                release_connection_response(&inner, response).await;
+            }
         });
 
         reception
@@ -290,14 +373,36 @@ impl Backend {
         let (envoi, reception) = oneshot::channel();
         let inner = Arc::clone(&self.inner);
 
-        self.inner.runtime.spawn(async move {
-            let issue = rouvrir(&inner, connection, &cancel)
+        self.runtime.spawn(async move {
+            let issue = rouvrir(&inner, connection, &cancel, true)
                 .await
                 .map(ConnectionResponse::Open);
-            let _ = envoi.send(issue);
+            if let Err(Ok(response)) = envoi.send(issue) {
+                release_connection_response(&inner, response).await;
+            }
         });
 
         reception
+    }
+
+    /// Opens only the independent session owned by a new console.
+    #[must_use]
+    pub fn reconnect_console(
+        &self,
+        connection: ConnectionId,
+        cancel: CancelToken,
+    ) -> oneshot::Receiver<Result<ConnectionResponse>> {
+        let (sender, receiver) = oneshot::channel();
+        let inner = self.inner.clone();
+        self.runtime.spawn(async move {
+            let outcome = rouvrir(&inner, connection, &cancel, false)
+                .await
+                .map(ConnectionResponse::Open);
+            if let Err(Ok(response)) = sender.send(outcome) {
+                release_connection_response(&inner, response).await;
+            }
+        });
+        receiver
     }
 
     /// Completes an explicitly approved connection setup, without bypassing the gate.
@@ -309,7 +414,7 @@ impl Backend {
     ) -> oneshot::Receiver<Result<ConnectionResponse>> {
         let (sender, receiver) = oneshot::channel();
         let inner = Arc::clone(&self.inner);
-        self.inner.runtime.spawn(async move {
+        self.runtime.spawn(async move {
             let result = async {
                 match inner.executor.approve("human", command, &cancel).await? {
                     Outcome::ConnectionSaved { .. } => {}
@@ -322,9 +427,33 @@ impl Backend {
                     .map(ConnectionResponse::Open)
             }
             .await;
-            let _ = sender.send(result);
+            if let Err(Ok(response)) = sender.send(result) {
+                release_connection_response(&inner, response).await;
+            }
         });
         receiver
+    }
+
+    /// Releases an opening that its requesting view no longer needs.
+    pub fn release_open_connection(&self, open: OpenConnection) {
+        if let Some(console) = open.initial_console {
+            drop(self.dispatch(
+                CommandId::new(),
+                Command::CloseSession {
+                    connection: console.connection,
+                    session: console.session,
+                },
+                CancelToken::new(),
+            ));
+        }
+        drop(self.dispatch(
+            CommandId::new(),
+            Command::CloseSession {
+                connection: open.connection,
+                session: open.session,
+            },
+            CancelToken::new(),
+        ));
     }
 
     /// The buffer behind a result id, shared with the grid **without a copy**.
@@ -355,13 +484,33 @@ impl Backend {
         command: Command,
         cancel: CancelToken,
     ) -> oneshot::Receiver<Result<Outcome, OxynError>> {
+        let pending = if matches!(
+            command,
+            Command::WriteWorkspacePreferences { .. }
+                | Command::SaveQueryDocument { .. }
+                | Command::CloseQueryDocument {
+                    expected_revision: None,
+                    ..
+                }
+                | Command::DeleteQueryDocument { .. }
+                | Command::WriteDocument { .. }
+        ) {
+            self.inner
+                .pending_local_writes
+                .count
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            Some(LocalWriteGuard(self.inner.pending_local_writes.clone()))
+        } else {
+            None
+        };
         let (sender, receiver) = oneshot::channel();
         let inner = Arc::clone(&self.inner);
-        self.inner.runtime.spawn(async move {
+        self.runtime.spawn(async move {
             let outcome = inner
                 .executor
                 .dispatch_as(id, Actor::Human, command, &cancel)
                 .await;
+            drop(pending);
             let _ = sender.send(outcome);
         });
         receiver
@@ -376,7 +525,7 @@ impl Backend {
     ) -> oneshot::Receiver<Result<Outcome, OxynError>> {
         let (sender, receiver) = oneshot::channel();
         let inner = Arc::clone(&self.inner);
-        self.inner.runtime.spawn(async move {
+        self.runtime.spawn(async move {
             let outcome = if approved {
                 inner.executor.approve("human", id, &cancel).await
             } else {
@@ -389,6 +538,37 @@ impl Backend {
             let _ = sender.send(outcome);
         });
         receiver
+    }
+}
+
+/// Releases an opening or approval that could not be delivered to its UI receiver.
+async fn release_connection_response(inner: &Inner, response: ConnectionResponse) {
+    match response {
+        ConnectionResponse::Open(open) => {
+            let mut sessions = vec![(open.connection, open.session)];
+            if let Some(console) = open.initial_console {
+                sessions.push((console.connection, console.session));
+            }
+            for (connection, session) in sessions {
+                if let Err(error) = inner
+                    .executor
+                    .dispatch(
+                        Actor::Human,
+                        Command::CloseSession {
+                            connection,
+                            session,
+                        },
+                        &CancelToken::new(),
+                    )
+                    .await
+                {
+                    tracing::warn!(error = %error, "unused session could not be closed cleanly");
+                }
+            }
+        }
+        ConnectionResponse::Approval { command, .. } => {
+            inner.executor.reject(command);
+        }
     }
 }
 
@@ -483,6 +663,7 @@ async fn rouvrir(
     inner: &Inner,
     connection: ConnectionId,
     cancel: &CancelToken,
+    workspace: bool,
 ) -> Result<OpenConnection> {
     let config = inner
         .executor
@@ -493,11 +674,44 @@ async fn rouvrir(
         .context("this connection is no longer in the workspace")?;
 
     inner.policy.register(&config);
-    ouvrir_la_session(inner, config, cancel).await
+    if workspace {
+        ouvrir_la_session(inner, config, cancel).await
+    } else {
+        ouvrir_une_session(inner, config, cancel).await
+    }
+}
+
+/// Keep catalog/preview work out of the first console's transaction as well.
+async fn ouvrir_la_session(
+    inner: &Inner,
+    config: ConnectionConfig,
+    cancel: &CancelToken,
+) -> Result<OpenConnection> {
+    let mut workspace = ouvrir_une_session(inner, config.clone(), cancel).await?;
+    match ouvrir_une_session(inner, config, cancel).await {
+        Ok(console) => {
+            workspace.initial_console = Some(Box::new(console));
+            Ok(workspace)
+        }
+        Err(error) => {
+            let _ = inner
+                .executor
+                .dispatch(
+                    Actor::Human,
+                    Command::CloseSession {
+                        connection: workspace.connection,
+                        session: workspace.session,
+                    },
+                    &CancelToken::new(),
+                )
+                .await;
+            Err(error)
+        }
+    }
 }
 
 /// The half both paths share: `Command::Connect`, then what may be displayed.
-async fn ouvrir_la_session(
+async fn ouvrir_une_session(
     inner: &Inner,
     config: ConnectionConfig,
     cancel: &CancelToken,
@@ -537,13 +751,16 @@ async fn ouvrir_la_session(
         .executor
         .catalog(config.id)
         .context("The opened connection has no catalog cache")?;
+    let mut display = ConnectionDisplay::of(&config);
+    display.read_only |= capabilities.contains(Capabilities::READ_ONLY_SESSION);
     Ok(OpenConnection {
+        initial_console: None,
         catalog,
         capabilities,
         dialect: oxyn_query::dialect_for(&config.driver),
         session,
         connection: config.id,
-        display: ConnectionDisplay::of(&config),
+        display,
     })
 }
 
@@ -576,12 +793,16 @@ mod tests {
                 drivers,
                 policy,
                 credentials,
-                runtime: tokio::runtime::Builder::new_multi_thread()
+                saved: Vec::new(),
+                preferences: oxyn_core::PreferencesSnapshot::default(),
+                pending_local_writes: Arc::new(PendingLocalWrites::default()),
+            }),
+            runtime: Arc::new(
+                tokio::runtime::Builder::new_multi_thread()
                     .enable_all()
                     .build()
                     .expect("runtime"),
-                saved: Vec::new(),
-            }),
+            ),
         }
     }
 
@@ -594,7 +815,6 @@ mod tests {
             secrets: Default::default(),
         };
         match backend
-            .inner
             .runtime
             .block_on(backend.connect(draft, CancelToken::new()))
             .expect("response")
@@ -605,7 +825,6 @@ mod tests {
                 command, config, ..
             } => {
                 let result = backend
-                    .inner
                     .runtime
                     .block_on(backend.approve_connection(command, *config, CancelToken::new()))
                     .expect("response")
@@ -625,9 +844,9 @@ mod tests {
             false,
             open.dialect,
             text.to_owned(),
+            Vec::new(),
         );
         backend
-            .inner
             .runtime
             .block_on(backend.dispatch(CommandId::new(), command, CancelToken::new()))
             .expect("response")
@@ -667,7 +886,6 @@ mod tests {
         assert_eq!(preview.expect("preview").connection, "UI regression");
         assert!(run(&backend, &open, "SELECT * FROM approved").is_err());
         let outcome = backend
-            .inner
             .runtime
             .block_on(backend.decide(command, true, CancelToken::new()))
             .expect("response")
@@ -680,7 +898,6 @@ mod tests {
             panic!("approval required")
         };
         let rejected = backend
-            .inner
             .runtime
             .block_on(backend.decide(command, false, CancelToken::new()))
             .expect("response")
@@ -697,9 +914,9 @@ mod tests {
         let mut events = backend.subscribe();
         let id = CommandId::new();
         let command = crate::workspace::execution_command(open.connection, open.session, false, open.dialect,
-            "WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<1000000000) SELECT x FROM n".into());
+            "WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<1000000000) SELECT x FROM n".into(), Vec::new());
         let receiver = backend.dispatch(id, command, cancel.clone());
-        backend.inner.runtime.block_on(async {
+        backend.runtime.block_on(async {
             tokio::time::timeout(std::time::Duration::from_secs(10), async {
                 loop {
                     let event = events.recv().await.expect("event");
@@ -765,3 +982,59 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod preference_lifecycle_tests {
+    use super::*;
+    use oxyn_core::{PreferencesSnapshot, ReadingDensity};
+
+    #[test]
+    fn discarded_view_receivers_do_not_lose_the_latest_preference_write() {
+        let backend = Backend::open_temporary().expect("backend");
+        for revision in 1..=30 {
+            let mut snapshot = PreferencesSnapshot {
+                revision,
+                ..Default::default()
+            };
+            snapshot.preferences.reading_density = if revision == 30 {
+                ReadingDensity::Comfortable
+            } else {
+                ReadingDensity::Compact
+            };
+            drop(backend.dispatch(
+                CommandId::new(),
+                Command::WriteWorkspacePreferences {
+                    workspace: backend.workspace_id(),
+                    snapshot: Box::new(snapshot),
+                },
+                CancelToken::new(),
+            ));
+        }
+        backend.runtime.block_on(backend.wait_for_local_writes());
+        let outcome = backend
+            .runtime
+            .block_on(backend.dispatch(
+                CommandId::new(),
+                Command::ReadWorkspacePreferences {
+                    workspace: backend.workspace_id(),
+                },
+                CancelToken::new(),
+            ))
+            .expect("response")
+            .expect("read");
+        let Outcome::WorkspacePreferences { snapshot } = outcome else {
+            panic!("snapshot")
+        };
+        assert_eq!(snapshot.revision, 30);
+        assert_eq!(
+            snapshot.preferences.reading_density,
+            ReadingDensity::Comfortable
+        );
+    }
+}
+
+#[cfg(test)]
+mod console_tests;
+
+mod documents;
+pub(crate) use documents::DocumentWriter;

@@ -8,6 +8,7 @@
 mod backend;
 mod credentials;
 mod picker;
+mod recovery;
 mod root;
 mod workspace;
 
@@ -16,11 +17,16 @@ use anyhow::{Context as _, Result};
 // de la vue racine ne compile pas, et l'erreur ne nomme pas le trait manquant.
 use gpui::prelude::*;
 use gpui::{Application, Bounds, TitlebarOptions, WindowBounds, WindowOptions, px, size};
-use oxyn_ui::{Theme, ThemeMode, UiAssets};
+use oxyn_ui::UiAssets;
 use tracing_subscriber::EnvFilter;
 
 use crate::backend::Backend;
 use crate::root::Root;
+
+/// Prevents shutdown callbacks from scheduling another shutdown.
+#[derive(Default)]
+struct ShutdownStarted;
+impl gpui::Global for ShutdownStarted {}
 
 /// The window Oxyn opens on first run.
 const LARGEUR: f32 = 1280.0;
@@ -55,10 +61,24 @@ fn main() -> Result<()> {
         if let Err(erreur) = cx.text_system().add_fonts(UiAssets::fonts()) {
             tracing::error!(%erreur, "Geist non enregistrée : repli de plateforme");
         }
-        Theme::init(ThemeMode::Dark, cx);
-        cx.on_window_closed(|cx| {
-            if cx.windows().is_empty() {
-                cx.quit();
+        let quitting_backend = backend.clone();
+        cx.on_app_quit(move |cx| {
+            cx.set_global(ShutdownStarted);
+            let backend = quitting_backend.clone();
+            async move {
+                backend.wait_for_local_writes().await;
+            }
+        })
+        .detach();
+        let closing_backend = backend.clone();
+        cx.on_window_closed(move |cx| {
+            if cx.windows().is_empty() && cx.try_global::<ShutdownStarted>().is_none() {
+                let backend = closing_backend.clone();
+                cx.spawn(async move |cx| {
+                    backend.wait_for_local_writes().await;
+                    let _ = cx.update(|cx| cx.quit());
+                })
+                .detach();
             }
         })
         .detach();

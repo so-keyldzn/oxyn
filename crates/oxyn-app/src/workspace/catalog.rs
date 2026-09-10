@@ -9,6 +9,7 @@ pub(super) enum CatalogState {
     Loading,
     Ready,
     Empty,
+    Cancelled,
     Error(String),
 }
 
@@ -22,6 +23,10 @@ impl CatalogState {
             Self::Loading => (
                 "Loading catalog…",
                 "Cancel to stop the catalog request.".into(),
+            ),
+            Self::Cancelled => (
+                "Catalog load cancelled",
+                "Previously loaded metadata is preserved. Refresh explicitly to load again.".into(),
             ),
             Self::Ready => ("Catalog", String::new()),
             Self::Empty => (
@@ -55,6 +60,21 @@ fn catalog_command(
                 namespace: path.namespace().map(str::to_owned),
             }
         }
+        CatalogScope::Definition(path) => CatalogRefreshScope::Definition {
+            catalog: path.catalog().map(str::to_owned),
+            namespace: path.namespace().map(str::to_owned),
+            relation: path.relation().unwrap_or_default().to_owned(),
+        },
+        CatalogScope::IncomingForeignKeys(path) => CatalogRefreshScope::IncomingForeignKeys {
+            catalog: path.catalog().map(str::to_owned),
+            namespace: path.namespace().map(str::to_owned),
+            relation: path.relation().unwrap_or_default().to_owned(),
+        },
+        CatalogScope::Constraints(path) => CatalogRefreshScope::Constraints {
+            catalog: path.catalog().map(str::to_owned),
+            namespace: path.namespace().map(str::to_owned),
+            relation: path.relation().unwrap_or_default().to_owned(),
+        },
         CatalogScope::Relation(path) => CatalogRefreshScope::Relation {
             catalog: path.catalog().map(str::to_owned),
             namespace: path.namespace().map(str::to_owned),
@@ -75,7 +95,13 @@ impl Workspace {
     }
 
     pub(super) fn refresh_catalog(&mut self, scope: CatalogScope, cx: &mut Context<'_, Self>) {
-        if !self.catalog_supported() || self.catalog_active.is_some() {
+        if !self.catalog_supported() {
+            return;
+        }
+        if self.catalog_active.is_some() {
+            if self.catalog_scope != scope {
+                self.catalog_pending = Some(scope);
+            }
             return;
         }
         let id = CommandId::new();
@@ -115,11 +141,25 @@ impl Workspace {
                             CatalogState::Ready
                         }
                     }
-                    Err(OxynError::Cancelled) => CatalogState::Initial,
+                    Err(OxynError::Cancelled) => CatalogState::Cancelled,
                     Err(error) => CatalogState::Error(error.to_string()),
                     Ok(Outcome::Denied { reason, .. }) => CatalogState::Error(reason),
                     _ => CatalogState::Error("Unexpected catalog response".into()),
                 };
+                // A refresh is the only moment the schemas on offer can change.
+                // Re-reading the cache per frame would put the frame budget at
+                // the mercy of a lock ([I-05](../../../CLAUDE.md#i-05)).
+                this.sync_context_choices(cx);
+                if this.catalog_state == CatalogState::Ready
+                    && this.panel == WorkspacePanel::Object
+                    && this.object_tab == ObjectTab::Data
+                    && this.preview_path.is_none()
+                {
+                    this.load_preview(cx);
+                }
+                if let Some(scope) = this.catalog_pending.take() {
+                    this.refresh_catalog(scope, cx);
+                }
                 cx.notify();
             });
         })
@@ -128,6 +168,7 @@ impl Workspace {
     }
 
     pub(super) fn cancel_catalog(&mut self, cx: &mut Context<'_, Self>) {
+        self.catalog_pending = None;
         if let Some((_, cancel)) = &self.catalog_active {
             cancel.cancel();
             cx.notify();

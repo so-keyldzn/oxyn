@@ -7,9 +7,8 @@ use oxyn_ui::icons::{IconName, icon, logo};
 use oxyn_ui::{Theme, environment_label};
 
 impl Workspace {
-    pub(super) fn sidebar(&self, cx: &Context<'_, Self>) -> AnyElement {
+    pub(super) fn sidebar(&self, compact: bool, cx: &Context<'_, Self>) -> AnyElement {
         let theme = Theme::of(cx);
-        let compact = self.sidebar_collapsed;
         div()
             .w(px(if compact { 64. } else { 280. }))
             .h_full()
@@ -37,7 +36,7 @@ impl Workspace {
                                 .child(div().font_weight(FontWeight::MEDIUM).child("Oxyn"))
                                 .child(
                                     div()
-                                        .text_size(px(11.))
+                                        .text_size(theme.typography.small_size)
                                         .text_color(theme.colors.text_muted)
                                         .child("Personal workspace"),
                                 ),
@@ -59,21 +58,19 @@ impl Workspace {
                         ))
                     })
                     .child(self.control(
+                        "nav-library",
+                        "History & queries · ⌘⇧H",
+                        Control::Library,
+                        compact,
+                        cx,
+                    ))
+                    .child(self.control(
                         "nav-catalog",
                         "Connections · ⌘1",
                         Control::Catalog,
                         compact,
                         cx,
-                    ))
-                    .when(!compact, |el| {
-                        el.child(
-                            div()
-                                .mt_2()
-                                .text_size(px(11.))
-                                .text_color(theme.colors.text_muted)
-                                .child("History and saved queries are not available yet."),
-                        )
-                    }),
+                    )),
             )
             .when(!compact, |el| {
                 el.child(
@@ -90,7 +87,7 @@ impl Workspace {
                                 .justify_between()
                                 .child(
                                     div()
-                                        .text_size(px(11.))
+                                        .text_size(theme.typography.small_size)
                                         .text_color(theme.colors.text_muted)
                                         .child("CONNECTIONS"),
                                 )
@@ -123,7 +120,7 @@ impl Workspace {
                                 )
                                 .child(
                                     div()
-                                        .text_size(px(11.))
+                                        .text_size(theme.typography.small_size)
                                         .text_color(theme.colors.environment(self.environment))
                                         .child(environment_label(self.environment)),
                                 ),
@@ -155,15 +152,15 @@ impl Workspace {
                     ))
                     .child(self.control(
                         "workspace-theme",
-                        "Switch appearance · ⌘⇧L",
-                        Control::Theme,
+                        "Settings · ⌘,",
+                        Control::Preferences,
                         compact,
                         cx,
                     ))
                     .when(!compact, |el| {
                         el.child(
                             div()
-                                .text_size(px(11.))
+                                .text_size(theme.typography.small_size)
                                 .text_color(theme.colors.text_muted)
                                 .child("Connected · Current session"),
                         )
@@ -176,7 +173,7 @@ impl Workspace {
         let theme = Theme::of(cx);
         if !self.catalog_supported() {
             return div()
-                .text_size(px(11.))
+                .text_size(theme.typography.small_size)
                 .text_color(theme.colors.text_muted)
                 .child("This session does not expose a catalog.")
                 .into_any_element();
@@ -195,7 +192,7 @@ impl Workspace {
                     .justify_between()
                     .child(
                         div()
-                            .text_size(px(11.))
+                            .text_size(theme.typography.small_size)
                             .text_color(theme.colors.text_muted)
                             .child(title),
                     )
@@ -215,7 +212,7 @@ impl Workspace {
                 el.child(
                     div()
                         .px_2()
-                        .text_size(px(11.))
+                        .text_size(theme.typography.small_size)
                         .text_color(if matches!(self.catalog_state, CatalogState::Error(_)) {
                             theme.colors.danger
                         } else {
@@ -228,7 +225,10 @@ impl Workspace {
                 self.catalog.clone().filter(|_| {
                     matches!(
                         self.catalog_state,
-                        CatalogState::Ready | CatalogState::Empty | CatalogState::Error(_)
+                        CatalogState::Ready
+                            | CatalogState::Empty
+                            | CatalogState::Cancelled
+                            | CatalogState::Error(_)
                     )
                 }),
                 |el, tree| el.child(div().flex_1().min_h_0().child(tree)),

@@ -6,8 +6,11 @@ use crate::backend::ConnectionResponse;
 use gpui::{TestAppContext, point, px};
 use oxyn_ui::{ConnectionDraft, Theme, ThemeMode};
 
-fn connected_workspace() -> (Backend, OpenConnection) {
-    let backend = Backend::open_temporary().expect("temporary backend");
+pub(super) fn connected_workspace() -> (Backend, OpenConnection) {
+    connect_test_backend(Backend::open_temporary().expect("temporary backend"))
+}
+
+pub(super) fn connect_test_backend(backend: Backend) -> (Backend, OpenConnection) {
     let draft = ConnectionDraft {
         driver: "sqlite".into(),
         name: "Workspace interaction test".into(),
@@ -48,7 +51,7 @@ fn connected_workspace() -> (Backend, OpenConnection) {
 /// up with "parked with nothing left to run". Polling the response with a
 /// bounded budget is the shape that works from a test thread, and it opens no
 /// door in the product: no view calls this.
-fn submit(backend: &Backend, command: oxyn_core::Command) -> Result<Outcome, OxynError> {
+pub(super) fn submit(backend: &Backend, command: oxyn_core::Command) -> Result<Outcome, OxynError> {
     // `blocking_recv` plutot qu'une attente active : le sondage en boucle
     // appelle `thread::sleep`, que le clippy.toml du depot interdit au titre
     // de I-05. Le canal rend la reponse des qu'elle existe.
@@ -74,9 +77,9 @@ fn an_unsupported_capability_stops_the_submission_and_says_which(cx: &mut TestAp
     cx.simulate_input("EXPLAIN ANALYZE SELECT 1");
     cx.simulate_keystrokes("cmd-enter");
     cx.run_until_parked();
-    workspace.read_with(cx, |view, _| {
+    workspace.read_with(cx, |view, cx| {
         assert!(
-            view.active.is_none(),
+            view.console.read(cx).active.is_none(),
             "rien ne doit partir sur le bus : la session ne sait pas le faire"
         );
     });
@@ -104,19 +107,21 @@ fn a_new_execution_withdraws_the_previous_result_from_export(cx: &mut TestAppCon
         // État initial : aucun résultat, donc aucune offre — et la barre le dit
         // au lieu de disparaître.
         assert!(!view.export.read(cx).is_result_ready());
-        assert!(view.last_result.is_none());
+        assert!(view.console.read(cx).last_result.is_none());
     });
 
     cx.simulate_input("select 1;");
     workspace.update(cx, |view, cx| {
-        view.last_result = Some(oxyn_core::ResultId::new());
+        view.console.update(cx, |console, _| {
+            console.last_result = Some(oxyn_core::ResultId::new())
+        });
         view.export
             .update(cx, |export, cx| export.set_result_ready(None, cx));
         view.execute(cx);
     });
     workspace.read_with(cx, |view, cx| {
         assert!(
-            view.last_result.is_none(),
+            view.console.read(cx).last_result.is_none(),
             "exporter le résultat précédent sous l'en-tête de la requête suivante serait faux"
         );
         assert!(!view.export.read(cx).is_result_ready());
@@ -134,8 +139,11 @@ fn an_export_chosen_before_a_new_execution_is_dropped_not_written(cx: &mut TestA
     let destination = std::env::temp_dir().join("oxyn-export-jamais-ecrit.csv");
     let _ = std::fs::remove_file(&destination);
     workspace.update(cx, |view, cx| {
-        view.last_result = Some(oxyn_core::ResultId::new());
+        view.console.update(cx, |console, _| {
+            console.last_result = Some(oxyn_core::ResultId::new())
+        });
         view.start_export(
+            ResultSource::Query,
             perime,
             oxyn_core::ExportFormat::Csv,
             destination.clone(),
@@ -143,7 +151,9 @@ fn an_export_chosen_before_a_new_execution_is_dropped_not_written(cx: &mut TestA
         );
     });
     cx.run_until_parked();
-    workspace.read_with(cx, |view, _| assert!(view.export_active.is_none()));
+    workspace.read_with(cx, |view, cx| {
+        assert!(view.console.read(cx).export_active.is_none())
+    });
     assert!(
         !destination.exists(),
         "aucun fichier ne doit être écrit pour un résultat qui n'est plus affiché"
@@ -163,6 +173,7 @@ fn the_exported_file_is_written_from_the_result_the_view_designates() {
             false,
             open.dialect,
             "SELECT 1 AS n, 'deux' AS mot".to_owned(),
+            Vec::new(),
         ),
     )
     .expect("statement runs");
@@ -250,7 +261,9 @@ fn catalog_cancellation_signals_its_own_token_and_preserves_the_query(cx: &mut T
     let catalog_token = CancelToken::new();
     let query_token = CancelToken::new();
     workspace.update(cx, |view, cx| {
-        view.active = Some((CommandId::new(), query_token.clone()));
+        view.console.update(cx, |console, _| {
+            console.active = Some((CommandId::new(), query_token.clone()))
+        });
         view.catalog_active = Some((CommandId::new(), catalog_token.clone()));
         view.catalog_state = CatalogState::Loading;
         view.cancel_catalog(cx);
@@ -283,7 +296,7 @@ fn catalog_selection_changes_context_without_executing_or_replacing_the_draft(
     workspace.read_with(cx, |view, cx| {
         assert_eq!(view.selected_path.as_ref(), Some(&path));
         assert_eq!(view.panel, WorkspacePanel::Object);
-        assert!(view.active.is_none());
+        assert!(view.console.read(cx).active.is_none());
         assert_eq!(view.draft_text(cx), "select 7;");
     });
     cx.simulate_keystrokes("cmd-j");
@@ -308,6 +321,7 @@ fn preview_fixture() -> (Backend, OpenConnection) {
                     false,
                     open.dialect,
                     sql.into(),
+                    Vec::new(),
                 ),
                 CancelToken::new(),
             )
@@ -380,7 +394,7 @@ fn selecting_a_table_loads_bounded_rows_without_replacing_sql(cx: &mut TestAppCo
             view.grid.read(cx).state().buffer().is_none(),
             "SQL results stay separate"
         );
-        assert!(view.active.is_none());
+        assert!(view.console.read(cx).active.is_none());
     });
     let empty = CatalogPath::for_relation(None, Some("main"), "preview_empty").expect("table path");
     tree.update(cx, |tree, cx| tree.select(empty, cx));
@@ -423,4 +437,833 @@ fn changing_table_cancels_old_preview_and_rejects_its_late_error(cx: &mut TestAp
     assert!(view.read_with(cx, |view, cx| {
         view.preview_grid.read(cx).state().buffer().is_some()
     }));
+}
+
+#[gpui::test]
+fn compact_layout_preserves_wide_preference_and_never_executes(cx: &mut TestAppContext) {
+    let (backend, open) = connected_workspace();
+    let (view, cx) = cx.add_window_view(|_, cx| Workspace::new(backend, open, cx));
+    cx.simulate_resize(gpui::size(px(1600.), px(1060.)));
+    cx.simulate_input("SELECT 'draft';");
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| {
+        assert!(!view.compact_layout);
+        assert!(!view.sidebar_collapsed);
+    });
+    cx.simulate_resize(gpui::size(px(1024.), px(768.)));
+    cx.run_until_parked();
+    view.read_with(cx, |view, cx| {
+        assert!(view.compact_layout);
+        assert!(!view.sidebar_collapsed, "wide preference is preserved");
+        assert!(view.console.read(cx).active.is_none());
+        assert!(view.preview_active.is_none());
+    });
+    cx.simulate_keystrokes("cmd-b");
+    assert!(view.read_with(cx, |view, _| view.catalog_overlay));
+    cx.simulate_keystrokes("escape");
+    assert!(!view.read_with(cx, |view, _| view.catalog_overlay));
+    cx.simulate_resize(gpui::size(px(1200.), px(900.)));
+    cx.run_until_parked();
+    view.read_with(cx, |view, cx| {
+        assert!(!view.compact_layout);
+        assert!(!view.sidebar_collapsed);
+        assert_eq!(view.draft_text(cx), "SELECT 'draft';");
+        assert!(view.console.read(cx).active.is_none());
+        assert!(view.preview_active.is_none());
+    });
+}
+
+#[gpui::test]
+fn preview_export_tracks_only_the_current_complete_preview(cx: &mut TestAppContext) {
+    let (backend, open) = preview_fixture();
+    let (view, cx) = cx.add_window_view(|_, cx| Workspace::new(backend, open, cx));
+    let path = CatalogPath::for_relation(None, Some("main"), "preview_rows").expect("path");
+    view.update(cx, |view, cx| view.select_object(path, cx));
+    wait_for_preview(&view, cx);
+    let preview_result = view.read_with(cx, |view, cx| {
+        assert!(view.preview_export.read(cx).is_result_ready());
+        assert!(!view.export.read(cx).is_result_ready());
+        view.preview_result.expect("complete preview is exportable")
+    });
+    let empty = CatalogPath::for_relation(None, Some("main"), "preview_empty").expect("path");
+    view.update(cx, |view, cx| {
+        view.select_object(empty, cx);
+        assert!(view.preview_result.is_none());
+        assert!(!view.preview_export.read(cx).is_result_ready());
+        view.start_export(
+            ResultSource::Preview,
+            preview_result,
+            ExportFormat::Csv,
+            PathBuf::from("obsolete-preview-must-not-be-written.csv"),
+            cx,
+        );
+        assert!(
+            view.export_active.is_none(),
+            "stale file dialog cannot export the previous table"
+        );
+    });
+    wait_for_preview(&view, cx);
+    view.read_with(cx, |view, cx| {
+        assert!(
+            view.preview_export.read(cx).is_result_ready(),
+            "empty success can export its header"
+        );
+        assert_ne!(view.preview_result, Some(preview_result));
+        assert!(view.console.read(cx).last_result.is_none());
+    });
+}
+
+#[gpui::test]
+fn changing_result_keeps_an_in_flight_export_cancellable(cx: &mut TestAppContext) {
+    let (backend, open) = connected_workspace();
+    let (view, cx) = cx.add_window_view(|_, cx| Workspace::new(backend, open, cx));
+    let token = CancelToken::new();
+    view.update(cx, |view, cx| {
+        view.export_active = Some((CommandId::new(), token.clone(), ResultSource::Preview));
+        view.preview_export.update(cx, |export, cx| {
+            export.set_result_ready(None, cx);
+            export.running(cx);
+        });
+        let path = CatalogPath::for_relation(None, Some("main"), "unloaded").expect("path");
+        view.select_object(path, cx);
+        assert!(view.preview_export_open);
+        assert_eq!(
+            view.preview_export.read(cx).phase(),
+            &oxyn_ui::ExportPhase::Running
+        );
+        view.cancel_export(cx);
+    });
+    assert!(token.is_cancelled());
+}
+
+#[test]
+fn exporting_a_complete_preview_writes_only_its_bounded_rows() {
+    let (backend, open) = preview_fixture();
+    let outcome = submit(
+        &backend,
+        Command::PreviewRelation {
+            connection: open.connection,
+            session: open.session,
+            catalog: None,
+            namespace: Some("main".into()),
+            relation: "preview_rows".into(),
+            limit: preview::PREVIEW_ROWS,
+        },
+    )
+    .expect("preview");
+    let Outcome::Executed { result, buffer, .. } = outcome else {
+        panic!("preview result")
+    };
+    assert_eq!(buffer.row_count(), 200);
+    assert!(!buffer.stats().truncated);
+    let destination = std::env::temp_dir().join(format!("oxyn-preview-{}.csv", result));
+    let exported = submit(
+        &backend,
+        export_command(
+            open.connection,
+            result,
+            ExportFormat::Csv,
+            destination.clone(),
+        ),
+    )
+    .expect("preview export");
+    assert!(matches!(exported, Outcome::Exported { rows: 200, .. }));
+    let csv = std::fs::read_to_string(&destination).expect("written CSV");
+    assert_eq!(
+        csv.lines().count(),
+        201,
+        "header plus 200 rows, not the 1000-row table"
+    );
+    std::fs::remove_file(destination).expect("fixture cleanup");
+}
+
+#[expect(
+    clippy::disallowed_methods,
+    reason = "test harness waits for the separate Tokio executor"
+)]
+fn wait_for_metadata(view: &Entity<Workspace>, cx: &mut gpui::VisualTestContext) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        cx.run_until_parked();
+        if view.read_with(cx, |view, _| {
+            view.catalog_active.is_none() && view.catalog_pending.is_none()
+        }) {
+            break;
+        }
+        assert!(std::time::Instant::now() < deadline, "metadata must finish");
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
+#[gpui::test]
+fn metadata_tabs_load_real_indexes_and_keys_without_running_the_draft(cx: &mut TestAppContext) {
+    let (backend, open) = connected_workspace();
+    for sql in [
+        "CREATE TABLE parents (id INTEGER PRIMARY KEY)",
+        "CREATE TABLE children (id INTEGER, parent_id INTEGER REFERENCES parents(id) ON DELETE CASCADE)",
+        "CREATE INDEX child_parent_lookup ON children(parent_id)",
+        "CREATE INDEX child_id_lookup ON children(id)",
+    ] {
+        submit(
+            &backend,
+            execution_command(
+                open.connection,
+                open.session,
+                false,
+                open.dialect,
+                sql.into(),
+                Vec::new(),
+            ),
+        )
+        .expect("fixture DDL");
+    }
+    let (view, cx) = cx.add_window_view(|_, cx| Workspace::new(backend, open, cx));
+    cx.simulate_input("SELECT 'unsaved';");
+    let path = CatalogPath::for_relation(None, Some("main"), "children").expect("path");
+    view.update(cx, |view, cx| {
+        view.selected_path = Some(path.clone());
+        view.panel = WorkspacePanel::Object;
+        view.select_metadata_tab(ObjectTab::Indexes, cx);
+    });
+    wait_for_metadata(&view, cx);
+    cx.update(|window, cx| window.focus(&view.read(cx).metadata_focus));
+    cx.simulate_keystrokes("end");
+    assert_eq!(view.read_with(cx, |view, _| view.metadata_selected), 1);
+    cx.simulate_keystrokes("home");
+    assert_eq!(view.read_with(cx, |view, _| view.metadata_selected), 0);
+    view.update(cx, |view, cx| {
+        {
+            let cache = view.catalog_cache.read();
+            assert!(
+                cache
+                    .indexes(&path)
+                    .expect("indexes read")
+                    .iter()
+                    .any(|index| index.name == "child_parent_lookup")
+            );
+            let keys = cache.foreign_keys(&path).expect("keys read");
+            assert_eq!(keys.len(), 1);
+            assert_eq!(
+                keys.first().expect("key").references.relation.relation(),
+                Some("parents")
+            );
+        }
+        view.select_metadata_tab(ObjectTab::Relations, cx);
+        assert!(
+            view.catalog_active.is_none(),
+            "cached tab does not repeat introspection"
+        );
+        assert!(view.console.read(cx).active.is_none());
+        assert!(view.preview_active.is_none());
+        assert_eq!(view.draft_text(cx), "SELECT 'unsaved';");
+        assert!(view.catalog_cache.read().constraints(&path).is_none());
+        view.select_metadata_tab(ObjectTab::Constraints, cx);
+        assert!(
+            view.catalog_active.is_some(),
+            "constraints are loaded only on demand"
+        );
+    });
+    wait_for_metadata(&view, cx);
+    view.update(cx, |view, cx| {
+        let cache = view.catalog_cache.read();
+        let constraints = cache
+            .constraints(&path)
+            .expect("constraints read through the bus");
+        assert_eq!(constraints.len(), 1);
+        let key = constraints.first().expect("foreign key");
+        assert!(
+            key.name.is_empty(),
+            "SQLite does not invent a declaration name"
+        );
+        assert_eq!(key.fields, ["parent_id"]);
+        assert_eq!(
+            key.expression.as_deref(),
+            Some("REFERENCES parents(id) ON DELETE CASCADE")
+        );
+        assert_eq!(view.draft_text(cx), "SELECT 'unsaved';");
+        assert!(view.console.read(cx).active.is_none());
+        assert!(view.preview_active.is_none());
+    });
+}
+
+#[gpui::test]
+fn constraints_are_read_only_and_the_selected_definition_can_be_copied(cx: &mut TestAppContext) {
+    use oxyn_catalog::{Constraint, ConstraintKind, Relation, RelationKind};
+    let (backend, open) = connected_workspace();
+    let (view, cx) = cx.add_window_view(|_, cx| Workspace::new(backend, open, cx));
+    cx.simulate_input("SELECT 'unsaved';");
+    let path = CatalogPath::for_relation(None, Some("main"), "items").expect("path");
+    view.update(cx, |view, cx| {
+        view.capabilities.insert(Capabilities::CONSTRAINTS);
+        view.selected_path = Some(path.clone());
+        view.panel = WorkspacePanel::Object;
+        {
+            let mut cache = view.catalog_cache.write();
+            cache
+                .set_relation(&path, Relation::new("items", RelationKind::Table))
+                .expect("relation");
+            cache
+                .set_constraints(
+                    &path,
+                    vec![
+                        Constraint::new("first", ConstraintKind::Check, vec![])
+                            .with_expression("CHECK (id > 0)"),
+                        Constraint::new("second", ConstraintKind::Unique, vec!["name".into()])
+                            .with_expression("UNIQUE (name)"),
+                    ],
+                )
+                .expect("constraints");
+        }
+        view.select_metadata_tab(ObjectTab::Constraints, cx);
+        assert!(view.catalog_active.is_none());
+    });
+    cx.update(|window, cx| window.focus(&view.read(cx).metadata_focus));
+    cx.simulate_keystrokes("end cmd-c");
+    assert_eq!(view.read_with(cx, |view, _| view.metadata_selected), 1);
+    assert_eq!(
+        cx.read_from_clipboard().and_then(|item| item.text()),
+        Some("UNIQUE (name)".into())
+    );
+    view.update(cx, |view, cx| {
+        assert_eq!(view.draft_text(cx), "SELECT 'unsaved';");
+        assert!(view.console.read(cx).active.is_none());
+        assert!(view.preview_active.is_none());
+        view.capabilities.remove(Capabilities::CONSTRAINTS);
+        view.select_metadata_tab(ObjectTab::Constraints, cx);
+        assert!(view.catalog_active.is_none());
+    });
+}
+
+#[gpui::test]
+fn incoming_relationships_open_the_source_without_running_or_replacing_the_draft(
+    cx: &mut TestAppContext,
+) {
+    let (backend, open) = connected_workspace();
+    for sql in [
+        "CREATE TABLE incoming_parent(id INTEGER PRIMARY KEY)",
+        "CREATE TABLE incoming_child(id INTEGER PRIMARY KEY, parent_id INTEGER REFERENCES incoming_parent(id))",
+    ] {
+        submit(
+            &backend,
+            execution_command(
+                open.connection,
+                open.session,
+                false,
+                open.dialect,
+                sql.into(),
+                Vec::new(),
+            ),
+        )
+        .expect("fixture DDL");
+    }
+    let (view, cx) = cx.add_window_view(|_, cx| Workspace::new(backend, open, cx));
+    cx.simulate_input("SELECT 'untouched';");
+    let parent = CatalogPath::for_relation(None, Some("main"), "incoming_parent").expect("path");
+    view.update(cx, |view, cx| {
+        view.selected_path = Some(parent.clone());
+        view.panel = WorkspacePanel::Object;
+        view.select_metadata_tab(ObjectTab::IncomingRelations, cx);
+    });
+    wait_for_metadata(&view, cx);
+    view.update(cx, |view, cx| {
+        assert_eq!(
+            view.catalog_cache
+                .read()
+                .incoming_foreign_keys(&parent)
+                .expect("bus read")
+                .len(),
+            1
+        );
+        assert!(view.preview_active.is_none());
+        assert_eq!(view.draft_text(cx), "SELECT 'untouched';");
+    });
+    cx.update(|window, cx| window.focus(&view.read(cx).metadata_focus));
+    cx.simulate_keystrokes("enter");
+    wait_for_metadata(&view, cx);
+    wait_for_preview(&view, cx);
+    view.update(cx, |view, cx| {
+        assert_eq!(
+            view.selected_path.as_ref().and_then(CatalogPath::relation),
+            Some("incoming_child")
+        );
+        assert_eq!(view.object_tab, ObjectTab::Data);
+        assert!(
+            view.catalog_cache
+                .read()
+                .relation_summary(view.selected_path.as_ref().expect("source"))
+                .is_some(),
+            "source is discovered even without prior tree expansion"
+        );
+        assert!(
+            view.preview_path.is_some(),
+            "normal table preview is requested after discovery"
+        );
+        assert!(
+            view.preview_result.is_some(),
+            "the source preview is actually loaded"
+        );
+        assert!(view.console.read(cx).active.is_none());
+        assert_eq!(view.draft_text(cx), "SELECT 'untouched';");
+    });
+}
+
+#[gpui::test]
+fn unavailable_metadata_never_dispatches_and_catalog_cancel_clears_queued_work(
+    cx: &mut TestAppContext,
+) {
+    let (backend, open) = connected_workspace();
+    let (view, cx) = cx.add_window_view(|_, cx| Workspace::new(backend, open, cx));
+    view.update(cx, |view, cx| {
+        view.capabilities.remove(Capabilities::INDEXES);
+        view.selected_path =
+            Some(CatalogPath::for_relation(None, Some("main"), "items").expect("path"));
+        view.select_metadata_tab(ObjectTab::Indexes, cx);
+        assert!(view.catalog_active.is_none());
+        let token = CancelToken::new();
+        view.catalog_active = Some((CommandId::new(), token.clone()));
+        view.catalog_scope = CatalogScope::Server;
+        let requested = CatalogScope::Relation(view.selected_path.clone().expect("selection"));
+        view.refresh_catalog(requested.clone(), cx);
+        assert_eq!(view.catalog_pending, Some(requested));
+        view.cancel_catalog(cx);
+        assert!(view.catalog_pending.is_none());
+        assert!(token.is_cancelled());
+    });
+}
+
+#[expect(
+    clippy::disallowed_methods,
+    reason = "test harness waits for the independent executor"
+)]
+fn wait_for_result_pages(view: &Entity<Workspace>, cx: &mut gpui::VisualTestContext) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    loop {
+        cx.run_until_parked();
+        if view.read_with(cx, |view, cx| {
+            view.console.read(cx).active.is_none()
+                && view.console.read(cx).page_active.is_none()
+                && view.page_reads.is_empty()
+        }) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "query and local pages must complete"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
+#[gpui::test]
+fn scrolling_to_spilled_rows_loads_local_pages_without_reexecuting_sql(cx: &mut TestAppContext) {
+    let backend = Backend::temporary_with_memory_budget(512 * 1024).expect("bounded backend");
+    let (backend, open) = connect_test_backend(backend);
+    let mut events = backend.subscribe();
+    let sql = "WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<100000) SELECT x FROM n";
+    let mut command = execution_command(
+        open.connection,
+        open.session,
+        false,
+        open.dialect,
+        sql.into(),
+        Vec::new(),
+    );
+    if let Command::Execute { request, .. } = &mut command {
+        request.limits.max_rows = Some(100_000);
+    }
+    let Outcome::Executed { result, buffer, .. } =
+        submit(&backend, command).expect("large bounded result")
+    else {
+        panic!("result required")
+    };
+    let (view, cx) = cx.add_window_view(|_, cx| Workspace::new(backend, open, cx));
+    view.update(cx, |view, cx| {
+        view.set_draft_text(sql, cx);
+        view.console
+            .update(cx, |console, _| console.displayed_result = Some(result));
+        view.grid
+            .update(cx, |grid, cx| grid.set_buffer(buffer.clone(), cx));
+    });
+    wait_for_result_pages(&view, cx);
+    let target = (0..buffer.batch_count())
+        .map(oxyn_data::BatchIndex::new)
+        .find(|index| !buffer.is_resident(*index))
+        .expect("fixture contains spilled pages");
+    let row = buffer.batch_start(target).expect("page start");
+    assert!(buffer.cached_batch(target).is_none());
+    let grid = view.read_with(cx, |view, _| view.grid.clone());
+    grid.update(cx, |grid, cx| grid.select_row(row, cx));
+    wait_for_result_pages(&view, cx);
+    let batch = buffer
+        .cached_batch(target)
+        .expect("visible spilled page was loaded");
+    let value = oxyn_data::format_cell(&batch, 0, 0, &oxyn_data::FormatOptions::default());
+    assert_eq!(value.text(), Some((row + 1).to_string().as_str()));
+    assert!(buffer.resident_bytes() + buffer.cached_bytes() <= buffer.limits().memory_budget);
+    let mut schema_events = 0;
+    while let Ok(event) = events.try_recv() {
+        if matches!(event.event, Event::SchemaReady { .. }) {
+            schema_events += 1;
+        }
+    }
+    assert_eq!(
+        schema_events, 1,
+        "scrolling must not start another SQL execution"
+    );
+}
+
+#[expect(
+    clippy::disallowed_methods,
+    reason = "test harness waits for the independent value worker"
+)]
+fn wait_for_value(view: &Entity<Workspace>, cx: &mut gpui::VisualTestContext) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        cx.run_until_parked();
+        if view.read_with(cx, |view, _| {
+            view.value_inspection
+                .as_ref()
+                .is_none_or(|value| value.active.is_none())
+        }) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "value inspection must complete"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
+#[gpui::test]
+fn full_value_inspection_pages_real_data_with_keyboard_and_cancels_on_replacement(
+    cx: &mut TestAppContext,
+) {
+    let (backend, open) = connected_workspace();
+    let mut events = backend.subscribe();
+    let Outcome::Executed { result, buffer, .. } = submit(
+        &backend,
+        execution_command(
+            open.connection,
+            open.session,
+            false,
+            open.dialect,
+            "SELECT printf('%030000d',1) AS document, NULL AS absent, 'NULL' AS literal".into(),
+            Vec::new(),
+        ),
+    )
+    .expect("query") else {
+        panic!("result")
+    };
+    let (view, cx) = cx.add_window_view(|_, cx| Workspace::new(backend, open, cx));
+    view.update(cx, |view, cx| {
+        view.console
+            .update(cx, |console, _| console.displayed_result = Some(result));
+        view.grid.update(cx, |grid, cx| {
+            grid.set_buffer(buffer, cx);
+            grid.select_row(0, cx);
+        });
+        view.inspect_selected_value(cx);
+    });
+    wait_for_value(&view, cx);
+    let first = view.read_with(cx, |view, _| {
+        view.value_inspection
+            .as_ref()
+            .expect("inspection")
+            .page
+            .as_ref()
+            .expect("page")
+            .clone()
+    });
+    assert_eq!(first.text.len(), 16 * 1024);
+    assert_eq!(first.total_bytes, 30_000);
+    cx.update(|window, cx| window.focus(view.read(cx).value_buttons.get(1).expect("next button")));
+    cx.simulate_keystrokes("enter");
+    wait_for_value(&view, cx);
+    view.read_with(cx, |view, cx| {
+        let page = view
+            .value_inspection
+            .as_ref()
+            .expect("inspection")
+            .page
+            .as_ref()
+            .expect("second page");
+        assert_eq!(page.offset, 16 * 1024);
+        assert!(page.next_offset.is_none());
+        assert!(page.text.ends_with('1'));
+        assert!(
+            view.console.read(cx).active.is_none(),
+            "inspection does not execute SQL"
+        );
+    });
+    cx.simulate_keystrokes("escape");
+    assert!(view.read_with(cx, |view, _| view.value_inspection.is_none()));
+    view.update(cx, |view, cx| {
+        view.inspected_column = 2;
+        view.inspect_selected_value(cx);
+        let cancel = view
+            .value_inspection
+            .as_ref()
+            .expect("inspection")
+            .active
+            .as_ref()
+            .expect("request")
+            .1
+            .clone();
+        view.set_draft_text("SELECT 42", cx);
+        view.execute(cx);
+        assert!(view.value_inspection.is_none());
+        assert!(cancel.is_cancelled());
+    });
+    wait_for_result_pages(&view, cx);
+    assert!(view.read_with(cx, |view, _| view.value_inspection.is_none()));
+    let mut executions = 0;
+    while let Ok(event) = events.try_recv() {
+        if matches!(event.event, Event::SchemaReady { .. }) {
+            executions += 1;
+        }
+    }
+    assert_eq!(
+        executions, 2,
+        "only the initial query and the explicit replacement execute"
+    );
+}
+
+#[gpui::test]
+fn inspector_width_changes_restore_wide_preference_without_reading_again(cx: &mut TestAppContext) {
+    let (backend, open) = connected_workspace();
+    let (view, cx) = cx.add_window_view(|_, cx| Workspace::new(backend, open, cx));
+    cx.simulate_resize(gpui::size(px(1600.), px(1060.)));
+    cx.run_until_parked();
+    assert!(view.read_with(cx, |view, _| view.inspector_open && !view.compact_layout));
+    cx.simulate_resize(gpui::size(px(1024.), px(768.)));
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| {
+        assert!(view.inspector_open, "wide preference is retained");
+        assert!(!view.inspector_overlay, "compact inspector starts closed");
+        assert!(view.page_reads.is_empty());
+    });
+    view.update(cx, |view, cx| {
+        view.inspector_overlay = true;
+        cx.notify();
+    });
+    cx.simulate_resize(gpui::size(px(1600.), px(1060.)));
+    cx.run_until_parked();
+    view.read_with(cx, |view, cx| {
+        assert!(view.inspector_open);
+        assert!(!view.inspector_overlay);
+        assert!(view.console.read(cx).active.is_none());
+        assert!(view.preview_active.is_none());
+        assert!(view.page_reads.is_empty());
+    });
+}
+
+#[expect(
+    clippy::disallowed_methods,
+    reason = "test harness waits for the independent preference worker"
+)]
+fn wait_for_preferences(view: &Entity<Workspace>, cx: &mut gpui::VisualTestContext) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        cx.run_until_parked();
+        if view.read_with(cx, |view, _| {
+            !matches!(
+                view.preference_state,
+                preferences::PreferenceSaveState::Saving
+            )
+        }) {
+            break;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "preferences must finish saving"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+    view.read_with(cx, |view, _| {
+        assert!(
+            matches!(
+                view.preference_state,
+                preferences::PreferenceSaveState::Saved
+            ),
+            "{:?}",
+            view.preference_state
+        )
+    });
+}
+
+#[gpui::test]
+fn reading_density_changes_geometry_and_persists_without_querying_again(cx: &mut TestAppContext) {
+    let (backend, open) = connected_workspace();
+    let saved_backend = backend.clone();
+    let mut events = backend.subscribe();
+    let Outcome::Executed { result, buffer, .. } = submit(
+        &backend,
+        execution_command(
+            open.connection,
+            open.session,
+            false,
+            open.dialect,
+            "SELECT 7 AS n".into(),
+            Vec::new(),
+        ),
+    )
+    .expect("query") else {
+        panic!("result")
+    };
+    let (view, cx) = cx.add_window_view(|_, cx| Workspace::new(backend, open, cx));
+    cx.simulate_resize(gpui::size(px(1600.), px(1060.)));
+    view.update(cx, |view, cx| {
+        view.console
+            .update(cx, |console, _| console.displayed_result = Some(result));
+        view.grid
+            .update(cx, |grid, cx| grid.set_buffer(buffer.clone(), cx));
+        view.set_draft_text("SELECT 'keep draft'", cx);
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        cx.debug_bounds("grid-first-row")
+            .expect("row geometry")
+            .size
+            .height,
+        px(24.)
+    );
+    view.update(cx, |view, cx| {
+        view.set_reading_density(oxyn_core::ReadingDensity::Comfortable, cx);
+        view.set_reading_density(oxyn_core::ReadingDensity::Compact, cx);
+        view.set_reading_density(oxyn_core::ReadingDensity::Comfortable, cx);
+    });
+    wait_for_preferences(&view, cx);
+    assert_eq!(
+        cx.debug_bounds("grid-first-row")
+            .expect("comfortable row")
+            .size
+            .height,
+        px(28.)
+    );
+    cx.simulate_keystrokes("cmd-shift-l");
+    wait_for_preferences(&view, cx);
+    let revision = view.read_with(cx, |view, _| view.preference_revision);
+    cx.simulate_resize(gpui::size(px(1024.), px(768.)));
+    cx.run_until_parked();
+    view.read_with(cx, |view, cx| {
+        assert_eq!(
+            view.preference_revision, revision,
+            "viewport does not persist a layout override"
+        );
+        assert_eq!(
+            Theme::of(cx).reading_density,
+            oxyn_core::ReadingDensity::Comfortable
+        );
+        assert_eq!(Theme::of(cx).mode, ThemeMode::Light);
+        assert_eq!(view.draft_text(cx), "SELECT 'keep draft'");
+        assert!(std::sync::Arc::ptr_eq(
+            view.grid.read(cx).state().buffer().expect("same buffer"),
+            &buffer
+        ));
+        assert!(view.console.read(cx).active.is_none());
+    });
+    let loaded = submit(
+        &saved_backend,
+        Command::ReadWorkspacePreferences {
+            workspace: saved_backend.workspace_id(),
+        },
+    )
+    .expect("read saved preferences");
+    let Outcome::WorkspacePreferences { snapshot } = loaded else {
+        panic!("snapshot")
+    };
+    assert_eq!(
+        snapshot.preferences.reading_density,
+        oxyn_core::ReadingDensity::Comfortable
+    );
+    assert_eq!(
+        snapshot.preferences.appearance,
+        oxyn_core::Appearance::Light
+    );
+    let mut queries = 0;
+    while let Ok(event) = events.try_recv() {
+        if matches!(event.event, Event::SchemaReady { .. }) {
+            queries += 1;
+        }
+    }
+    assert_eq!(queries, 1, "preference changes never execute SQL");
+}
+
+#[gpui::test]
+fn inspector_drag_is_delivered_and_saves_only_when_released(cx: &mut TestAppContext) {
+    let (backend, open) = connected_workspace();
+    let saved_backend = backend.clone();
+    let (view, cx) = cx.add_window_view(|_, cx| Workspace::new(backend, open, cx));
+    cx.simulate_resize(gpui::size(px(1600.), px(1060.)));
+    cx.run_until_parked();
+    let bounds = cx.debug_bounds("inspector-resize").expect("resize handle");
+    assert_eq!(bounds.size.width, px(8.));
+    let origin = bounds.center();
+    let target = point(origin.x - px(60.), origin.y);
+    let revision = view.read_with(cx, |view, _| view.preference_revision);
+    cx.simulate_mouse_down(origin, gpui::MouseButton::Left, Default::default());
+    assert!(view.read_with(cx, |view, _| view.inspector_drag.is_some()));
+    cx.simulate_mouse_move(target, gpui::MouseButton::Left, Default::default());
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.inspector_width, 340);
+        assert_eq!(
+            view.preference_revision, revision,
+            "drag frames do not write preferences"
+        );
+    });
+    cx.simulate_mouse_up(target, gpui::MouseButton::Left, Default::default());
+    wait_for_preferences(&view, cx);
+    cx.simulate_keystrokes("left");
+    wait_for_preferences(&view, cx);
+    assert_eq!(view.read_with(cx, |view, _| view.inspector_width), 350);
+    cx.simulate_keystrokes("home");
+    wait_for_preferences(&view, cx);
+    let loaded = submit(
+        &saved_backend,
+        Command::ReadWorkspacePreferences {
+            workspace: saved_backend.workspace_id(),
+        },
+    )
+    .expect("saved width");
+    assert!(
+        matches!(loaded, Outcome::WorkspacePreferences { snapshot } if snapshot.preferences.inspector_width == 280)
+    );
+    assert!(
+        view.read_with(cx, |view, cx| view.console.read(cx).active.is_none()
+            && view.preview_active.is_none())
+    );
+}
+
+#[gpui::test]
+fn collapsing_sidebar_keeps_table_context_and_settings_take_keyboard_focus(
+    cx: &mut TestAppContext,
+) {
+    let (backend, open) = preview_fixture();
+    let (view, cx) = cx.add_window_view(|_, cx| Workspace::new(backend, open, cx));
+    cx.simulate_resize(gpui::size(px(1600.), px(1060.)));
+    view.update(cx, |view, cx| {
+        view.select_object(
+            CatalogPath::for_relation(None, Some("main"), "preview_rows").expect("table"),
+            cx,
+        )
+    });
+    wait_for_preview(&view, cx);
+    cx.update(|window, cx| window.focus(&view.read(cx).preview_grid.read(cx).focus_handle(cx)));
+    let before = view.read_with(cx, |view, _| view.preview_result);
+    cx.simulate_keystrokes("cmd-b");
+    wait_for_preferences(&view, cx);
+    view.read_with(cx, |view, cx| {
+        assert!(view.sidebar_collapsed);
+        assert_eq!(view.panel, WorkspacePanel::Object);
+        assert_eq!(view.preview_result, before);
+        assert!(view.console.read(cx).active.is_none());
+        assert!(view.preview_active.is_none());
+    });
+    cx.simulate_keystrokes("cmd-,");
+    cx.run_until_parked();
+    cx.update(|window, cx| {
+        assert_eq!(view.read(cx).panel, WorkspacePanel::Preferences);
+        assert!(view.read(cx).preferences_focus.is_focused(window));
+    });
 }

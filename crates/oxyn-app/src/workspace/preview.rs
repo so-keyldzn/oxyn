@@ -8,6 +8,11 @@ pub(super) const PREVIEW_ROWS: u32 = 200;
 pub(super) enum ObjectTab {
     Data,
     Structure,
+    Indexes,
+    Constraints,
+    Relations,
+    IncomingRelations,
+    Ddl,
 }
 
 impl Workspace {
@@ -23,15 +28,30 @@ impl Workspace {
     }
 
     pub(super) fn select_object(&mut self, path: CatalogPath, cx: &mut Context<'_, Self>) {
+        self.catalog_overlay = false;
         let changed = self.selected_path.as_ref() != Some(&path);
         self.selected_path = Some(path);
         self.panel = WorkspacePanel::Object;
         self.object_tab = ObjectTab::Data;
+        self.cancel_definition(cx);
         if changed {
+            self.reset_definition(cx);
+            self.close_value(cx);
+            self.inspected_column = 0;
             if let Some((_, cancel)) = self.preview_active.take() {
                 cancel.cancel();
             }
             self.preview_path = None;
+            self.preview_result = None;
+            self.displayed_results.remove(&ResultSource::Preview);
+            self.preview_export_open = self
+                .export_active
+                .as_ref()
+                .is_some_and(|run| run.2 == ResultSource::Preview);
+            self.preview_export.update(cx, |export, cx| {
+                export.reset(cx);
+                export.set_result_ready(Some(NotExportable::NoResult), cx);
+            });
             self.preview_notice.clear();
             self.preview_grid.update(cx, DataGrid::reset);
         }
@@ -63,7 +83,13 @@ impl Workspace {
         let cancel = CancelToken::new();
         self.preview_path = Some(path);
         self.preview_active = Some((id, cancel.clone()));
+        self.close_value(cx);
         self.preview_notice = "Loading rows…".into();
+        self.preview_result = None;
+        self.displayed_results.remove(&ResultSource::Preview);
+        self.preview_export.update(cx, |export, cx| {
+            export.set_result_ready(Some(NotExportable::NoResult), cx);
+        });
         self.preview_grid.update(cx, DataGrid::start);
         let response = self.backend.dispatch(id, command, cancel);
         cx.spawn(async move |this, cx| {
@@ -92,12 +118,25 @@ impl Workspace {
         self.preview_active = None;
         match result {
             Ok(Outcome::Executed {
+                result,
                 buffer,
                 stats,
                 sink,
                 ..
             }) => {
+                self.displayed_results.insert(ResultSource::Preview, result);
                 let cancelled = matches!(sink, oxyn_data::SinkOutcome::Cancelled);
+                let blocked = export::exportability(
+                    cancelled,
+                    buffer.is_complete(),
+                    buffer.stats().truncated,
+                );
+                self.preview_result = blocked.is_none().then_some(result);
+                self.preview_export.update(cx, |export, cx| {
+                    export.reset(cx);
+                    export.set_preview_rows(buffer.row_count(), cx);
+                    export.set_result_ready(blocked, cx);
+                });
                 self.preview_notice = if cancelled {
                     "Preview cancelled".into()
                 } else {

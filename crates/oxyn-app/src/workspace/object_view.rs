@@ -2,47 +2,47 @@
 
 use super::layout::Control;
 use super::*;
-use gpui::{AnyElement, FontWeight, div, px, uniform_list};
+use gpui::{AnyElement, div, px, uniform_list};
 use oxyn_ui::Theme;
 
 impl Workspace {
     pub(super) fn object_details(&self, cx: &Context<'_, Self>) -> AnyElement {
         let theme = Theme::of(cx);
         let path = self.selected_path.as_ref();
-        let title = path
-            .and_then(|p| p.relation().or(p.namespace()).or(p.catalog()))
-            .unwrap_or("Catalog");
         let is_relation = path.is_some_and(|p| p.relation().is_some());
-        let metadata = path.and_then(|path| {
-            let cache = self.catalog_cache.try_read()?;
-            let summary = cache.relation_summary(path)?;
-            let mut detail = format!("{} · {}", summary.kind.as_str(), self.display.driver);
-            if let Some(relation) = cache.relation(path) {
-                detail.push_str(&format!(" · {} columns", relation.fields.len()));
-            }
-            Some(detail)
-        });
-        div().flex_1().min_h_0().flex().flex_col().gap_4().p_6()
-            .child(div().flex().items_center().justify_between().gap_4().flex_none()
-                .child(div().flex_1().min_w_0().flex().flex_col().gap_1()
-                    .child(div().text_size(px(24.)).font_weight(FontWeight::SEMIBOLD).truncate().child(title.to_owned()))
-                    .child(div().text_color(theme.colors.text_muted).truncate().child(path.map(|p|p.to_string()).unwrap_or_default()))
-                    .when_some(metadata, |el, detail| el.child(div().text_color(theme.colors.text_muted).child(detail))))
-                .when(self.capabilities.contains(Capabilities::SQL), |el| el.child(self.control("object-sql", "SQL editor · ⌘J", Control::Sql, false, cx))))
-            .when(is_relation, |el| el.child(div().flex().gap_4().flex_none()
-                .child(self.control("object-data", "Data", Control::Data, false, cx))
-                .child(self.control("object-structure", "Structure", Control::Describe, false, cx))))
+        div().flex_1().min_h_0().flex().flex_col().gap_2().p_3()
+            .when(is_relation, |el| el.child(self.object_tabs(cx)))
             .child(if !is_relation {
                 div().p_4().text_color(theme.colors.text_muted).child("Select a table in the sidebar to see its data.").into_any_element()
+            } else if self.object_tab == ObjectTab::Ddl {
+                self.definition_panel(cx)
             } else if self.object_tab == ObjectTab::Structure {
-                self.object_structure(cx)
+                self.with_definition_panel(self.object_structure(cx), cx)
+            } else if matches!(self.object_tab, ObjectTab::Indexes | ObjectTab::Relations | ObjectTab::IncomingRelations | ObjectTab::Constraints) {
+                self.with_definition_panel(self.object_metadata(cx), cx)
             } else if self.preview_available() {
-                div().flex_1().min_h_0().flex().flex_col().gap_3()
-                    .child(div().flex().items_center().justify_between().gap_3().flex_none()
-                        .child(div().text_size(px(11.)).text_color(theme.colors.text_muted).child(self.preview_notice.clone()))
-                        .child(self.control("refresh-preview", if self.preview_active.is_some() { "Cancel · Esc" } else { "Refresh data" }, Control::Preview, false, cx)))
-                    .child(div().flex_1().min_h_0().border_1().border_color(theme.colors.border).rounded(px(8.)).overflow_hidden().child(self.preview_grid.clone()))
-                    .child(div().text_size(px(11.)).text_color(theme.colors.text_muted).child("First 200 rows · Read only · No guaranteed order · ⌘2 to focus the grid"))
+                div().flex_1().min_h_0().flex().flex_col().gap_2()
+                    .child(div().flex().items_center().gap_2().flex_none()
+                        .child(self.control("refresh-preview", if self.preview_active.is_some() { "Cancel · Esc" } else { "Refresh data" }, Control::Preview, false, cx))
+                        .when(!self.compact_layout, |el| el
+                            .child(self.control("preview-columns", self.columns_label(ResultSource::Preview, cx), Control::Columns, false, cx))
+                            .child(self.control("preview-export-toggle", "Export preview…", Control::PreviewExport, false, cx)))
+                        .when(self.compact_layout, |el| el.child(self.control("preview-actions", "Actions", Control::ResultActions, false, cx)))
+                        .when(self.compact_layout || !self.inspector_open, |el| el.child(self.control("preview-inspect-row", "Inspect row", Control::Inspector, false, cx)))
+                        .child(div().flex_1().whitespace_nowrap().text_size(theme.typography.small_size).text_color(theme.colors.text_muted).child("Read-only preview"))
+                        .child(div().h(px(32.)).px_3().flex().items_center().border_1().border_color(theme.colors.border).rounded(theme.radii.control).opacity(0.5).child("Edit rows…"))
+                        .child(self.control("preview-edit-help", "Why unavailable?", Control::ObjectHelp, false, cx)))
+                    .when(self.compact_layout && self.result_actions_open, |el| el.child(div().flex().gap_2().flex_none()
+                        .child(self.control("preview-columns-menu", self.columns_label(ResultSource::Preview, cx), Control::Columns, false, cx))
+                        .child(self.control("preview-export-menu", "Export preview…", Control::PreviewExport, false, cx))))
+                    .when(self.columns_open, |el| el.child(self.column_manager(ResultSource::Preview, cx)))
+                    .when(self.object_help_open, |el| el.child(div().p_3().border_1().border_color(theme.colors.border).rounded(theme.radii.control).child("Editing requires an editable view, a writable session and appropriate driver capabilities. This preview is read only. Production writes require a review naming the connection and showing the exact SQL.")))
+                    .when(self.preview_export_open, |el| el.child(self.preview_export.clone()))
+                    .child(self.result_area(ResultSource::Preview, cx))
+                    .child(div().flex().items_center().justify_between().text_size(theme.typography.small_size).text_color(theme.colors.text_muted)
+                        .child(self.preview_notice.clone())
+                        .child(self.control("preview-text-size", self.reading_label(cx), Control::ToggleReading, false, cx)))
+                    .child(div().text_size(theme.typography.small_size).text_color(theme.colors.text_muted).child("Preview is limited to 200 rows. Refresh data starts a new read. Export includes only these preview rows."))
                     .into_any_element()
             } else {
                 div().p_4().text_color(theme.colors.text_muted).child("This object does not support a SQL data preview. Its metadata is available in Structure.").into_any_element()
@@ -67,7 +67,13 @@ impl Workspace {
             .child(div().w(px(180.)).child("Type"))
             .child(div().w(px(100.)).child("Nullable"))
             .child(div().w(px(100.)).child("Key"));
-        let mut body = div().flex_1().min_h_0().flex().flex_col().gap_3();
+        let mut body = div()
+            .flex_1()
+            .min_h_0()
+            .flex()
+            .flex_col()
+            .gap_3()
+            .child(self.structure_toolbar("refresh-structure", cx));
         if self.catalog_active.is_some() {
             body = body.child(self.control(
                 "cancel-structure",
@@ -87,6 +93,11 @@ impl Workspace {
             Some(count) => body
                 .child(
                     div()
+                        .id("object-structure-list")
+                        .track_focus(&self.metadata_focus)
+                        .tab_index(0)
+                        .on_key_down(cx.listener(Self::on_metadata_key))
+                        .focus(|style| style.border_color(theme.colors.border_focus))
                         .flex_1()
                         .min_h_0()
                         .flex()
@@ -153,6 +164,7 @@ impl Workspace {
                                     },
                                 ),
                             )
+                            .track_scroll(self.metadata_scroll.clone())
                             .flex_1(),
                         ),
                 )

@@ -7,15 +7,26 @@ use oxyn_core::Capabilities;
 
 mod capabilities;
 mod catalog;
+pub(crate) mod console;
+mod consoles;
 mod content;
+mod definition;
 mod export;
+mod inspector;
+mod inspector_resize;
 mod layout;
+mod library;
+mod metadata;
 mod object_view;
+mod preferences;
 mod preview;
+mod result_pages;
 mod sidebar;
 #[cfg(test)]
 mod tests;
+mod value_inspector;
 use catalog::CatalogState;
+use export::ResultSource;
 use layout::WorkspacePanel;
 use oxyn_core::{
     Actor, CancelToken, Command, CommandId, Decision, Environment, Event, ExecRequest,
@@ -25,8 +36,8 @@ use oxyn_exec::Outcome;
 use oxyn_ui::{
     ActiveConnection, ApprovalDialog, ApprovalEvent, ApprovalId, ApprovalOutcome, ApprovalRequest,
     CatalogTree, CatalogTreeEvent, DataGrid, EditorEvent, ExecutionStatus, ExportEvent,
-    FormatSettings, FormatSettingsEvent, GridEvent, NotExportable, QueryEditor, ResultExport,
-    StatusBar, StatusBarEvent,
+    FormatSettings, FormatSettingsEvent, GridEvent, NotExportable, ParameterEditor,
+    ParameterEditorEvent, QueryEditor, ResultExport, StatusBar, StatusBarEvent,
 };
 use preview::ObjectTab;
 use std::path::PathBuf;
@@ -47,14 +58,19 @@ impl EventEmitter<WorkspaceEvent> for Workspace {}
 /// The dialect travels with the request rather than defaulting to `Ansi`: it is
 /// what lets the gate classify `EXPLAIN (ANALYZE) DELETE …` for the server that
 /// will actually run it.
+///
+/// `params` are bound by the driver, never spliced into `text`: an identifier or
+/// a value concatenated here would execute whatever a table name happens to
+/// contain ([I-10](../../CLAUDE.md#i-10)).
 pub(crate) fn execution_command(
     connection: oxyn_core::ConnectionId,
     session: SessionId,
     read_only: bool,
     dialect: SqlDialect,
     text: String,
+    params: Vec<oxyn_core::ScalarValue>,
 ) -> Command {
-    let mut request = ExecRequest::new(QueryLanguage::Sql(dialect), text);
+    let mut request = ExecRequest::new(QueryLanguage::Sql(dialect), text).with_params(params);
     request.limits.read_only = read_only;
     Command::Execute {
         connection,
@@ -63,7 +79,33 @@ pub(crate) fn execution_command(
     }
 }
 
-/// One connected workspace. Only one statement runs in this editor at a time.
+/// Builds the single statement submitted by the Explain control.
+///
+/// This deliberately rejects an existing `EXPLAIN` and batches: appending an
+/// explain prefix must never turn one click into analysis of several statements.
+pub fn explain_sql(text: &str, dialect: SqlDialect) -> Result<String, &'static str> {
+    let statements = oxyn_query::split(text, dialect);
+    if statements.len() != 1 {
+        return Err("Explain requires exactly one SQL statement.");
+    }
+    let Some(statement) = statements.first() else {
+        return Err("Explain requires a SQL statement.");
+    };
+    if oxyn_query::words(statement.text, dialect)
+        .first()
+        .is_some_and(|word| word.text.eq_ignore_ascii_case("explain"))
+    {
+        return Err("This statement already starts with EXPLAIN.");
+    }
+    let prefix = match dialect {
+        SqlDialect::Postgres | SqlDialect::Redshift => "EXPLAIN ",
+        SqlDialect::Sqlite => "EXPLAIN QUERY PLAN ",
+        _ => return Err("Explain is unavailable for this SQL dialect."),
+    };
+    Ok(format!("{prefix}{}", statement.text))
+}
+
+/// A connection workspace with independent consoles and a shared catalog.
 pub struct Workspace {
     backend: Backend,
     connection: oxyn_core::ConnectionId,
@@ -72,6 +114,16 @@ pub struct Workspace {
     read_only: bool,
     /// The SQL dialect of the connected driver, resolved once at connection.
     dialect: SqlDialect,
+    library: Entity<library::QueryLibrary>,
+    console: Entity<console::QueryConsole>,
+    consoles: Vec<Entity<console::QueryConsole>>,
+    console_attempt: Option<(CommandId, CancelToken)>,
+    pending_library_query: Option<library::OpenQuery>,
+    console_sequence: u32,
+    console_to_focus: Option<Entity<console::QueryConsole>>,
+    console_notice: Option<String>,
+    console_tabs_scroll: gpui::ScrollHandle,
+    console_close: Option<consoles::CloseConsole>,
     editor: Entity<QueryEditor>,
     grid: Entity<DataGrid>,
     status: Entity<StatusBar>,
@@ -79,20 +131,41 @@ pub struct Workspace {
     settings: Entity<FormatSettings>,
     /// Vrai quand le panneau de réglages d'affichage est déplié.
     settings_open: bool,
+    columns_open: bool,
+    result_actions_open: bool,
+    inspector_open: bool,
+    inspector_width: u16,
+    inspector_drag: Option<(gpui::Pixels, u16)>,
+    inspector_resize_focus: FocusHandle,
+    preference_revision: u64,
+    preferences_focus: FocusHandle,
+    preference_state: preferences::PreferenceSaveState,
+    inspector_overlay: bool,
+    inspected_column: usize,
+    record_focus: FocusHandle,
+    record_scroll: gpui::UniformListScrollHandle,
+    value_inspection: Option<value_inspector::ValueInspection>,
+    value_focus: FocusHandle,
+    value_buttons: [FocusHandle; 3],
+    value_scroll: gpui::ScrollHandle,
     export: Entity<ResultExport>,
-    /// The last result the executor produced, and still holds. Dropped as soon
-    /// as a new execution starts: exporting the previous result under the new
-    /// one's heading is the mistake this field exists to avoid.
-    last_result: Option<ResultId>,
+    /// Result identities owned by workspace views; consoles own their own identities.
+    displayed_results: std::collections::HashMap<ResultSource, ResultId>,
+    page_reads: std::collections::HashMap<ResultSource, (CommandId, CancelToken, u64)>,
     /// The export under way, if any, with the token that stops it.
-    export_active: Option<(CommandId, CancelToken)>,
-    /// Whether the statement being run can modify anything. Read once at
-    /// submission from the text the user wrote, so that the row count shown
-    /// afterwards can carry the `AFFECTED_ROWS` caveat when it needs one.
-    last_mutating: bool,
-    pending: Option<ApprovalRequest>,
-    active: Option<(CommandId, CancelToken)>,
-    awaiting_approval: bool,
+    export_active: Option<(CommandId, CancelToken, ResultSource)>,
+    preview_export: Entity<ResultExport>,
+    preview_result: Option<ResultId>,
+    preview_export_open: bool,
+    compact_layout: bool,
+    catalog_overlay: bool,
+    object_help_open: bool,
+    metadata_menu_open: bool,
+    metadata_focus: FocusHandle,
+    metadata_scroll: gpui::UniformListScrollHandle,
+    metadata_selected: usize,
+    definition: definition::DefinitionPreview,
+    catalog_pending: Option<CatalogScope>,
     initial_focus: bool,
     shell_focus: FocusHandle,
     display: ConnectionDisplay,
@@ -116,7 +189,7 @@ pub struct Workspace {
 impl std::fmt::Debug for Workspace {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Workspace")
-            .field("running", &self.active.is_some())
+            .field("consoles", &self.consoles.len())
             .finish_non_exhaustive()
     }
 }
@@ -124,10 +197,64 @@ impl std::fmt::Debug for Workspace {
 impl Workspace {
     /// Uses the session returned by Connect, never a fresh, unregistered id.
     pub fn new(backend: Backend, open: OpenConnection, cx: &mut Context<'_, Self>) -> Self {
-        let editor = cx.new(QueryEditor::new);
-        let grid = cx.new(DataGrid::new);
+        Self::with_recovered_console(backend, open, None, cx)
+    }
+
+    pub(crate) fn with_recovered_console(
+        backend: Backend,
+        open: OpenConnection,
+        recovered: Option<Entity<console::QueryConsole>>,
+        cx: &mut Context<'_, Self>,
+    ) -> Self {
+        let preferences = Self::preferences_for_backend(&backend, cx);
+        let library = cx.new(|cx| {
+            library::QueryLibrary::new(
+                backend.clone(),
+                open.capabilities
+                    .contains(Capabilities::SQL)
+                    .then(|| (open.connection, open.display.name.to_string())),
+                cx,
+            )
+        });
+        cx.subscribe(&library, |this, _, query: &library::OpenQuery, cx| {
+            this.open_library_query(query.clone(), cx)
+        })
+        .detach();
+        let console_open = open
+            .initial_console
+            .as_deref()
+            .cloned()
+            .unwrap_or_else(|| open.clone());
+        let console = recovered.unwrap_or_else(|| {
+            cx.new(|cx| {
+                console::QueryConsole::new(
+                    backend.clone(),
+                    console_open,
+                    "console_1.sql".into(),
+                    open.initial_console.is_some(),
+                    cx,
+                )
+            })
+        });
+        let editor = console.read(cx).editor.clone();
+        let grid = console.read(cx).grid.clone();
+        let status = console.read(cx).status.clone();
+        let approval = console.read(cx).approval.clone();
+        let export = console.read(cx).export.clone();
+        Self::observe_console(&console, cx);
         let preview_grid = cx.new(DataGrid::new);
+        let format = oxyn_data::FormatOptions::default()
+            .with_null_text(preferences.preferences.null_text.clone())
+            .with_number_grouping(if preferences.preferences.group_thousands {
+                oxyn_data::NumberGrouping::Thousands
+            } else {
+                oxyn_data::NumberGrouping::None
+            });
+        grid.update(cx, |grid, cx| grid.set_format_options(format.clone(), cx));
+        preview_grid.update(cx, |grid, cx| grid.set_format_options(format, cx));
         cx.subscribe(&preview_grid, |this, _, event, cx| {
+            this.on_page_event(ResultSource::Preview, event, cx);
+            this.on_result_ui_event(ResultSource::Preview, event, cx);
             if matches!(event, GridEvent::CancelRequested) {
                 this.cancel_preview(cx);
             }
@@ -136,10 +263,14 @@ impl Workspace {
         grid.update(cx, |grid, cx| {
             grid.set_capabilities(open.capabilities, cx);
         });
-        let approval = cx.new(ApprovalDialog::new);
-        let export = cx.new(ResultExport::new);
-        cx.subscribe(&export, |this, _, event, cx| match event {
-            ExportEvent::Requested(format) => this.choose_export_destination(*format, cx),
+        preview_grid.update(cx, |grid, cx| {
+            grid.set_capabilities(open.capabilities, cx);
+        });
+        let preview_export = cx.new(ResultExport::new);
+        cx.subscribe(&preview_export, |this, _, event, cx| match event {
+            ExportEvent::Requested(format) => {
+                this.choose_export_destination(ResultSource::Preview, *format, cx)
+            }
             ExportEvent::CancelRequested => this.cancel_export(cx),
             _ => {}
         })
@@ -155,64 +286,31 @@ impl Workspace {
         })
         .detach();
         let display = &open.display;
-        let mut connection = ActiveConnection::new(
-            display.name.clone(),
-            display.driver.clone(),
-            display.environment,
-        );
-        if display.read_only {
-            connection = connection.read_only();
-        }
-        let status = cx.new(|_| StatusBar::new());
-        status.update(cx, |bar, cx| {
-            bar.set_connection(Some(connection), cx);
-            bar.set_capabilities(open.capabilities, cx);
-        });
-        cx.subscribe(&editor, |this, _, event, cx| match event {
-            EditorEvent::ExecuteRequested => this.execute(cx),
-            EditorEvent::CancelRequested => this.cancel(cx),
-            _ => {}
-        })
-        .detach();
-        cx.subscribe(&grid, |this, _, event, cx| {
-            if matches!(event, GridEvent::CancelRequested) {
-                this.cancel(cx);
-            }
-        })
-        .detach();
-        cx.subscribe(&status, |this, _, event, cx| {
-            if matches!(event, StatusBarEvent::CancelRequested) {
-                this.cancel(cx);
-            }
-        })
-        .detach();
         let settings = cx.new(|cx| FormatSettings::new(grid.read(cx).format_options().clone(), cx));
         // Le réglage part de la vue vers la grille, jamais l'inverse : la vue
         // de réglages ne connaît pas la grille, elle annonce (I-01).
         cx.subscribe(&settings, {
-            let grid = grid.clone();
-            move |_workspace, _, event, cx| {
+            move |workspace, _, event, cx| {
                 // `FormatSettingsEvent` est `#[non_exhaustive]` : le filtrage
                 // reste ouvert, et un réglage ajouté plus tard n'atteindra pas
                 // la grille tant que personne ne l'aura traité ici.
                 if let FormatSettingsEvent::Changed(options) = event {
                     let options = options.clone();
-                    grid.update(cx, |grille, cx| grille.set_format_options(options, cx));
+                    workspace
+                        .grid
+                        .update(cx, |grid, cx| grid.set_format_options(options.clone(), cx));
+                    for console in &workspace.consoles {
+                        console
+                            .read(cx)
+                            .grid
+                            .clone()
+                            .update(cx, |grid, cx| grid.set_format_options(options.clone(), cx));
+                    }
+                    workspace
+                        .preview_grid
+                        .update(cx, |grid, cx| grid.set_format_options(options, cx));
+                    workspace.persist_preferences(cx);
                 }
-            }
-        })
-        .detach();
-        cx.subscribe(&approval, |this, _, event, cx| {
-            let ApprovalEvent::Decided { outcome, .. } = event else {
-                return;
-            };
-            if let Some((id, cancel)) = this.active.clone() {
-                this.awaiting_approval = false;
-                let response =
-                    this.backend
-                        .decide(id, *outcome == ApprovalOutcome::Approved, cancel);
-                this.wait(id, response, cx);
-                this.initial_focus = true;
             }
         })
         .detach();
@@ -242,24 +340,60 @@ impl Workspace {
             environment: display.environment,
             read_only: display.read_only,
             dialect: open.dialect,
+            library,
+            console: console.clone(),
+            consoles: vec![console],
+            console_attempt: None,
+            pending_library_query: None,
+            console_sequence: 1,
+            console_to_focus: None,
+            console_notice: None,
+            console_tabs_scroll: gpui::ScrollHandle::new(),
+            console_close: None,
             editor,
             grid,
             status,
             approval,
             settings,
             settings_open: false,
+            columns_open: false,
+            result_actions_open: false,
+            inspector_open: preferences.preferences.inspector_open,
+            inspector_width: preferences.preferences.inspector_width,
+            inspector_drag: None,
+            inspector_resize_focus: cx.focus_handle(),
+            preference_revision: preferences.revision,
+            preferences_focus: cx.focus_handle(),
+            preference_state: preferences::PreferenceSaveState::Saved,
+            inspector_overlay: false,
+            inspected_column: 0,
+            record_focus: cx.focus_handle(),
+            record_scroll: gpui::UniformListScrollHandle::new(),
+            value_inspection: None,
+            value_focus: cx.focus_handle(),
+            value_buttons: [cx.focus_handle(), cx.focus_handle(), cx.focus_handle()],
+            value_scroll: gpui::ScrollHandle::new(),
             export,
-            last_result: None,
+            displayed_results: std::collections::HashMap::new(),
+            page_reads: std::collections::HashMap::new(),
             export_active: None,
-            last_mutating: false,
-            pending: None,
-            active: None,
-            awaiting_approval: false,
+            preview_export,
+            preview_result: None,
+            preview_export_open: false,
+            compact_layout: false,
+            catalog_overlay: false,
+            object_help_open: false,
+            metadata_menu_open: false,
+            metadata_focus: cx.focus_handle(),
+            metadata_scroll: gpui::UniformListScrollHandle::new(),
+            metadata_selected: 0,
+            definition: definition::DefinitionPreview::new(cx),
+            catalog_pending: None,
             initial_focus: true,
             shell_focus: cx.focus_handle(),
             display: open.display.clone(),
             capabilities: open.capabilities,
-            sidebar_collapsed: false,
+            sidebar_collapsed: preferences.preferences.sidebar_collapsed,
             panel: WorkspacePanel::Sql,
             catalog: Some(catalog),
             catalog_cache: open.catalog.clone(),
@@ -278,7 +412,11 @@ impl Workspace {
 
     /// Returns the unsaved editor draft for root-owned connection navigation.
     pub fn draft_text(&self, cx: &gpui::App) -> String {
-        self.editor.read(cx).text()
+        if self.consoles.is_empty() {
+            String::new()
+        } else {
+            self.editor.read(cx).text()
+        }
     }
 
     /// Transfers an existing draft without executing it.
@@ -287,205 +425,50 @@ impl Workspace {
             .update(cx, |editor, cx| editor.set_text(text, cx));
     }
 
+    /// Display label for returning to a retained connection workspace.
+    pub fn display_name(&self) -> &str {
+        &self.display.name
+    }
+
+    /// Makes the copy explicit while the original workspace remains retained by Root.
+    pub fn copy_draft_from(&mut self, text: &str, source: &str, cx: &mut Context<'_, Self>) {
+        self.set_draft_text(text, cx);
+        self.console_notice = Some(format!(
+            "Unexecuted SQL copied from {source}. The original console remains open on its connection."
+        ));
+    }
+
     fn execute(&mut self, cx: &mut Context<'_, Self>) {
-        if self.active.is_some() || !self.capabilities.contains(Capabilities::SQL) {
+        if self.consoles.is_empty() {
             return;
         }
-        let text = self.editor.read(cx).statement_text();
-        if text.trim().is_empty() {
-            self.status.update(cx, |bar, cx| {
-                bar.set_notice(Some("Écrivez une requête avant de l’exécuter."), cx)
-            });
-            return;
+        let idle = self.console.read(cx).active.is_none();
+        self.console.update(cx, |console, cx| console.execute(cx));
+        if idle && self.console.read(cx).active.is_some() {
+            self.close_value(cx);
+            self.inspected_column = 0;
         }
-        // Announced here rather than left to the server: a session that has no
-        // EXPLAIN ANALYZE answers with a syntax error naming a keyword, and
-        // nothing in that message says which capability is missing.
-        if let Some(manque) = capabilities::missing_for(&text, self.dialect, self.capabilities) {
-            self.status
-                .update(cx, |bar, cx| bar.set_notice(Some(manque.message), cx));
-            return;
-        }
-        // Read once, at submission and not per frame: `classify` parses, and the
-        // 8 ms frame budget has no room for a parser.
-        self.last_mutating = oxyn_query::classify(&text, self.dialect).is_mutating();
-        let command = execution_command(
-            self.connection,
-            self.session,
-            self.read_only,
-            self.dialect,
-            text,
-        );
-        let id = CommandId::new();
-        let cancel = CancelToken::new();
-        self.active = Some((id, cancel.clone()));
-        // The previous result is no longer what the screen shows; keeping it
-        // exportable would write the old rows under the new query's heading.
-        self.last_result = None;
-        self.export.update(cx, |export, cx| {
-            export.set_result_ready(Some(NotExportable::NoResult), cx);
-        });
-        self.editor
-            .update(cx, |editor, cx| editor.set_running(true, cx));
-        self.grid.update(cx, |grid, cx| grid.start(cx));
-        self.status.update(cx, |bar, cx| {
-            bar.set_notice(None::<String>, cx);
-            bar.set_status(ExecutionStatus::Running { rows: 0 }, cx);
-        });
-        let response = self.backend.dispatch(id, command, cancel);
-        self.wait(id, response, cx);
-        cx.notify();
     }
-
-    fn wait(
-        &mut self,
-        id: CommandId,
-        response: oneshot::Receiver<Result<Outcome, OxynError>>,
-        cx: &mut Context<'_, Self>,
-    ) {
-        cx.spawn(async move |this, cx| {
-            let result = response.await.unwrap_or_else(|_| {
-                Err(OxynError::Internal("The executor stopped answering".into()))
-            });
-            let _ = this.update(cx, |this, cx| {
-                if this.active.as_ref().map(|run| run.0) != Some(id) {
-                    return;
-                }
-                match result {
-                    Ok(Outcome::NeedsApproval {
-                        reason, preview, ..
-                    }) => {
-                        this.awaiting_approval = true;
-                        this.pending = ApprovalRequest::from_decision(
-                            ApprovalId::new(0),
-                            Actor::Human,
-                            this.environment,
-                            &Decision::RequireApproval { reason, preview },
-                        );
-                        this.status.update(cx, |bar, cx| {
-                            bar.set_notice(Some("Confirmation requise avant exécution."), cx)
-                        });
-                    }
-                    Ok(Outcome::Executed {
-                        result,
-                        buffer,
-                        stats,
-                        sink,
-                        ..
-                    }) => {
-                        let cancelled = matches!(sink, oxyn_data::SinkOutcome::Cancelled);
-                        // Read before `buffer` moves into the grid, and after
-                        // the sink sealed it, so neither value can still change.
-                        let blocked = export::exportability(
-                            cancelled,
-                            buffer.is_complete(),
-                            buffer.stats().truncated,
-                        );
-                        this.grid.update(cx, |grid, cx| {
-                            if cancelled && buffer.row_count() == 0 {
-                                grid.cancelled(cx);
-                            } else {
-                                grid.set_buffer(buffer, cx);
-                                grid.on_batch(cx);
-                            }
-                        });
-                        this.last_result = blocked.is_none().then_some(result);
-                        this.export.update(cx, |export, cx| {
-                            export.reset(cx);
-                            export.set_result_ready(blocked, cx);
-                        });
-                        this.status.update(cx, |bar, cx| {
-                            bar.set_status(
-                                if cancelled {
-                                    ExecutionStatus::Cancelled
-                                } else {
-                                    ExecutionStatus::Completed(stats)
-                                },
-                                cx,
-                            )
-                        });
-                        this.finish(cx);
-                        // After `finish`, which clears the notice: the caveat is
-                        // about the number just displayed, so it must outlive
-                        // the reset rather than be wiped by it.
-                        if let Some(reserve) = capabilities::affected_rows_caveat(
-                            this.last_mutating,
-                            this.capabilities,
-                        ) {
-                            this.status
-                                .update(cx, |bar, cx| bar.set_notice(Some(reserve), cx));
-                        }
-                    }
-                    Ok(Outcome::Denied { reason, .. }) => {
-                        this.fail(reason, false, cx);
-                    }
-                    Err(OxynError::Cancelled) => {
-                        this.grid.update(cx, DataGrid::cancelled);
-                        this.status
-                            .update(cx, |bar, cx| bar.set_status(ExecutionStatus::Cancelled, cx));
-                        this.finish(cx);
-                    }
-                    Err(error) => {
-                        let retryable = error.is_retryable();
-                        this.fail(error.to_string(), retryable, cx);
-                    }
-                    Ok(_) => {
-                        this.fail("Unexpected execution response".into(), false, cx);
-                    }
-                }
-                cx.notify();
-            });
-        })
-        .detach();
-    }
-
-    fn finish(&mut self, cx: &mut Context<'_, Self>) {
-        self.active = None;
-        self.awaiting_approval = false;
-        self.editor
-            .update(cx, |editor, cx| editor.set_running(false, cx));
-        self.status
-            .update(cx, |bar, cx| bar.set_notice(None::<String>, cx));
-    }
-
-    fn fail(&mut self, message: String, retryable: bool, cx: &mut Context<'_, Self>) {
-        self.grid
-            .update(cx, |grid, cx| grid.fail(message.clone(), retryable, cx));
-        self.status.update(cx, |bar, cx| {
-            bar.set_status(
-                ExecutionStatus::Failed {
-                    message: message.into(),
-                    retryable,
-                },
-                cx,
-            )
-        });
-        self.finish(cx);
-    }
-
     fn cancel(&mut self, cx: &mut Context<'_, Self>) {
-        let Some((id, cancel)) = self.active.clone() else {
-            return;
-        };
-        if self.awaiting_approval {
-            self.pending = None;
-            let response = self.backend.decide(id, false, cancel);
-            self.wait(id, response, cx);
-        } else {
-            // Executor propagates this token to the cursor and server-side cancellation.
-            cancel.cancel();
-            self.status.update(cx, |bar, cx| {
-                bar.set_status(ExecutionStatus::Cancelling, cx)
-            });
+        self.console.update(cx, |console, cx| console.cancel(cx));
+    }
+    fn is_executing(&self, cx: &gpui::App) -> bool {
+        self.console.read(cx).active.is_some()
+    }
+    fn displayed_result(&self, source: ResultSource, cx: &gpui::App) -> Option<ResultId> {
+        match source {
+            ResultSource::Query => self.console.read(cx).displayed_result,
+            ResultSource::Preview => self.displayed_results.get(&source).copied(),
         }
     }
-
     fn on_exec_event(&mut self, event: &oxyn_exec::ExecEvent, cx: &mut Context<'_, Self>) {
         if self.preview_active.as_ref().map(|run| run.0) == Some(event.command)
             && event.connection == Some(self.connection)
         {
             match &event.event {
                 Event::SchemaReady { result } => {
+                    self.displayed_results
+                        .insert(ResultSource::Preview, *result);
                     if let Some(buffer) = self.backend.result(*result) {
                         self.preview_grid
                             .update(cx, |grid, cx| grid.set_buffer(buffer, cx));
@@ -494,55 +477,80 @@ impl Workspace {
                 Event::BatchReady { .. } => self.preview_grid.update(cx, DataGrid::on_batch),
                 _ => {}
             }
-            return;
-        }
-        if self.active.as_ref().map(|run| run.0) != Some(event.command)
-            || event.connection != Some(self.connection)
-        {
-            return;
-        }
-        match &event.event {
-            Event::SchemaReady { result } => {
-                if let Some(buffer) = self.backend.result(*result) {
-                    self.grid.update(cx, |grid, cx| grid.set_buffer(buffer, cx));
-                }
-            }
-            Event::BatchReady { .. } => self.grid.update(cx, DataGrid::on_batch),
-            Event::Progress { rows }
-                if !self.active.as_ref().is_some_and(|run| run.1.is_cancelled()) =>
-            {
-                let rows = *rows;
-                self.status.update(cx, |bar, cx| {
-                    bar.set_status(ExecutionStatus::Running { rows }, cx)
-                });
-            }
-            // Terminal outcomes come through the reliable response channel, including
-            // errors occurring before the executor can publish a schema.
-            _ => {}
         }
     }
 }
 
 impl Drop for Workspace {
     fn drop(&mut self) {
+        if let Some((_, cancel)) = &self.definition.active {
+            cancel.cancel();
+        }
+        if let Some(value) = &self.value_inspection {
+            value.cancel();
+        }
+        for (_, cancel, _) in self.page_reads.values() {
+            cancel.cancel();
+        }
+        if let Some((_, cancel, _)) = &self.export_active {
+            cancel.cancel();
+        }
         if let Some((_, cancel)) = &self.preview_active {
             cancel.cancel();
         }
         if let Some((_, cancel)) = &self.catalog_active {
             cancel.cancel();
         }
-        if let Some((_, cancel)) = &self.active {
+        if let Some((_, cancel)) = &self.console_attempt {
             cancel.cancel();
         }
+        drop(self.backend.dispatch(
+            CommandId::new(),
+            Command::CloseSession {
+                connection: self.connection,
+                session: self.session,
+            },
+            CancelToken::new(),
+        ));
     }
 }
 
 impl Focusable for Workspace {
     fn focus_handle(&self, cx: &gpui::App) -> FocusHandle {
-        if self.capabilities.contains(Capabilities::SQL) {
-            self.editor.read(cx).focus_handle(cx)
-        } else {
-            self.shell_focus.clone()
+        match self.panel {
+            WorkspacePanel::Sql if !self.consoles.is_empty() => {
+                self.editor.read(cx).focus_handle(cx)
+            }
+            WorkspacePanel::Object
+                if self.object_tab == ObjectTab::Data && self.preview_available() =>
+            {
+                self.preview_grid.read(cx).focus_handle(cx)
+            }
+            WorkspacePanel::Library => self.library.read(cx).focus_handle(cx),
+            WorkspacePanel::Preferences => self.preferences_focus.clone(),
+            _ => self.shell_focus.clone(),
         }
+    }
+}
+
+#[cfg(test)]
+mod explain_tests {
+    use super::*;
+
+    #[test]
+    fn explain_ne_mesure_jamais_une_ecriture() {
+        let sql = explain_sql("DELETE FROM orders", SqlDialect::Postgres).expect("statement");
+        assert_eq!(sql, "EXPLAIN DELETE FROM orders");
+        assert!(!sql.contains("ANALYZE"));
+    }
+
+    #[test]
+    fn explain_refuse_un_lot_et_un_prefixe_existant() {
+        assert!(explain_sql("SELECT 1; DELETE FROM orders", SqlDialect::Postgres).is_err());
+        assert!(explain_sql("EXPLAIN SELECT 1", SqlDialect::Postgres).is_err());
+        assert_eq!(
+            explain_sql("SELECT 1", SqlDialect::Sqlite).expect("sqlite"),
+            "EXPLAIN QUERY PLAN SELECT 1"
+        );
     }
 }
