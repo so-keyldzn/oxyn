@@ -45,6 +45,7 @@ use oxyn_core::{
 };
 use oxyn_data::BatchSource;
 
+use crate::context::SessionContext;
 use crate::credentials::Credentials;
 use crate::metadata::DriverMetadata;
 
@@ -160,6 +161,41 @@ pub trait Session: Send + Sync {
         Err(OxynError::NotSupported {
             capability: "relation preview".to_owned(),
         })
+    }
+
+    /// Déclare où cette session résout les noms qu'une instruction ne qualifie
+    /// pas, et attend la confirmation du serveur.
+    ///
+    /// N'est appelée que si [`Capabilities::SESSION_CONTEXT`] est déclaré. Le
+    /// driver **cite lui-même** chaque segment : un nom de schéma est une
+    /// donnée venue du catalogue, et le concaténer exécuterait ce qu'il
+    /// contient ([I-10](../../../CLAUDE.md#i-10)).
+    ///
+    /// L'implémentation ne touche à rien d'autre. Un changement de contexte qui
+    /// viderait au passage un `search_path` composé par l'utilisateur, ou qui
+    /// ouvrirait une transaction, ferait plus que ce que son nom annonce — et
+    /// c'est précisément l'état de session invisible que le contrat refuse.
+    ///
+    /// # Erreurs
+    /// [`OxynError::NotSupported`] si le moteur n'a pas de contexte de session,
+    /// [`OxynError::Cancelled`] si `cancel` se déclenche, et l'erreur du
+    /// serveur si l'emplacement demandé n'existe pas.
+    async fn set_context(&self, _context: &SessionContext, _cancel: &CancelToken) -> Result<()> {
+        Err(OxynError::NotSupported {
+            capability: "session context".to_owned(),
+        })
+    }
+
+    /// Ce que le serveur a **confirmé**, jamais ce qui a été demandé.
+    ///
+    /// `None` tant qu'aucun contexte n'a été déclaré : l'interface montre alors
+    /// que la session travaille dans ce que le serveur a choisi à l'ouverture,
+    /// ce qui n'est pas la même chose qu'un emplacement choisi.
+    ///
+    /// Rend une valeur et non une référence : une implémentation garde son
+    /// contexte derrière un verrou, parce que `set_context` prend `&self`.
+    fn context(&self) -> Option<SessionContext> {
+        None
     }
 
     /// Demande au **serveur** d'interrompre une exécution.

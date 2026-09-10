@@ -78,12 +78,14 @@
 //! # }
 //! ```
 
+pub mod context;
 pub mod credentials;
 pub mod dsn;
 pub mod metadata;
 pub mod registry;
 pub mod traits;
 
+pub use context::SessionContext;
 pub use credentials::Credentials;
 pub use dsn::{Dsn, DsnBuilder, DsnError, DsnParts, ParsedDsn};
 pub use metadata::{ConnectionField, DriverFamily, DriverMetadata, FieldKind, looks_like_secret};
