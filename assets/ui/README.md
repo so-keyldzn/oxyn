@@ -18,8 +18,8 @@ dimensions et sommes SHA-256 sont consignés dans [provenance.json](provenance.j
 | history.svg | Hugeicons transaction-history | 16 × 16 px |
 | folder.svg | Hugeicons folder-01 | 16 × 16 px |
 | chevron.svg | Hugeicons arrow-right-01 | 16 × 16 px |
+| check.svg | Indicateur de case cochée, Recovery `232:9100` (2026-09-10) | 16 × 16 px |
 | down.svg | Hugeicons arrow-down-01 | 16 × 16 px |
-| logo.svg | Ancien logo monochrome, compatibilité | 32 × 32 px |
 | logo-dark.svg | Brand / Oxyn mark, sombre bicolore | 32 × 32 px |
 | logo-light.svg | Brand / Oxyn mark, clair bicolore | 32 × 32 px |
 

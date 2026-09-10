@@ -84,18 +84,19 @@
       "size": 16
     },
     {
-      "file": "logo.svg",
-      "source_node": "13:181",
-      "sha256": "27b6e4b989f1624dfac09efb8de821e3f6be99e8c453aa416e6f070c939cd081",
-      "bytes": 1207,
-      "size": 32
-    },
-    {
       "file": "down.svg",
       "source_node": "12:143",
       "sha256": "02e0d548066f9db0940818ee311bea361880c2ba0548789fa017334d54ace77f",
       "bytes": 378,
       "size": 16
+    },
+    {
+      "file": "check.svg",
+      "source_node": "232:9100",
+      "sha256": "7aae4fd4c765a003c41aacb884b7c5373d76b8f5f488302ed85d6ac616a318e7",
+      "bytes": 498,
+      "size": 16,
+      "verified_on": "2026-09-10"
     }
   ],
   "palette_refresh": {
