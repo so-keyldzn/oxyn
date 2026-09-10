@@ -72,7 +72,7 @@ pub use classify::{
 pub use dialect::{dialect_for, dialect_for_language, parser_dialect};
 pub use error::QueryError;
 pub use format::{FormatReport, format, format_report};
-pub use split::{Fragment, SplitProfile, Word, contains_comment, split, words};
+pub use split::{Fragment, SplitProfile, Word, contains_comment, current_statement, split, words};
 
 #[cfg(test)]
 mod tests {

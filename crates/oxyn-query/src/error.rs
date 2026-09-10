@@ -13,6 +13,15 @@ use oxyn_core::{OxynError, QueryLanguage};
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum QueryError {
+    /// Le curseur ne désigne pas une instruction entière exécutable.
+    #[error("sélection d'instruction impossible à l'octet {cursor}: {message}")]
+    Selection {
+        /// Position du curseur dans le texte UTF-8.
+        cursor: usize,
+        /// Raison du refus.
+        message: String,
+    },
+
     /// Le texte ne se lit pas dans le dialecte demandé.
     ///
     /// Le message provient de `sqlparser` et peut reprendre un fragment du SQL

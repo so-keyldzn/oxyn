@@ -27,6 +27,8 @@ use std::ops::Range;
 
 use oxyn_core::SqlDialect;
 
+use crate::{QueryError, validate};
+
 /// Une instruction isolée dans un lot.
 ///
 /// Le texte est **emprunté** au lot d'origine et rogné de ses espaces : c'est
@@ -216,6 +218,249 @@ impl Default for SplitProfile {
 #[must_use]
 pub fn split(sql: &str, dialect: SqlDialect) -> Vec<Fragment<'_>> {
     split_with(sql, SplitProfile::for_dialect(dialect))
+}
+
+/// Retourne l'instruction complète sous le curseur, ou rien dans un séparateur.
+///
+/// Le curseur est un indice d'octet UTF-8. Une position au milieu d'un caractère,
+/// dans un séparateur ou dans un espace hors instruction ne sélectionne rien. Le
+/// fragment est validé avant d'être rendu : un texte incomplet ne peut pas être
+/// exécuté comme « instruction courante ».
+pub fn current_statement(
+    sql: &str,
+    dialect: SqlDialect,
+    cursor_byte: usize,
+) -> Result<Option<Fragment<'_>>, QueryError> {
+    if cursor_byte > sql.len() || !sql.is_char_boundary(cursor_byte) {
+        return Err(QueryError::Selection {
+            cursor: cursor_byte,
+            message: "cursor is not on a UTF-8 boundary".into(),
+        });
+    }
+    let fragments = if dialect == SqlDialect::Sqlite {
+        sqlite_statements(sql, cursor_byte)?
+    } else {
+        split(sql, dialect)
+    };
+    let fragment = fragments
+        .iter()
+        .find(|fragment| {
+            (fragment.span.start <= cursor_byte && cursor_byte < fragment.span.end)
+                || (fragment.span.end == sql.len() && cursor_byte == sql.len())
+        })
+        .filter(|fragment| {
+            cursor_byte != fragment.span.start || !starts_with_comment(fragment.text, dialect)
+        })
+        .or_else(|| {
+            fragments.iter().rev().find(|fragment| {
+                fragment.terminated
+                    && terminator_after(sql, fragment.span.end).is_some_and(|separator| {
+                        cursor_byte == separator || cursor_byte == separator + 1
+                    })
+            })
+        });
+    let Some(fragment) = fragment else {
+        return Ok(None);
+    };
+    if dialect == SqlDialect::Sqlite && is_sqlite_trigger(fragment.text) {
+        if sqlite_trigger_is_ambiguous(fragment.text) {
+            return Err(QueryError::Selection {
+                cursor: cursor_byte,
+                message: "SQLite trigger contains an ambiguous unquoted keyword".into(),
+            });
+        }
+        if !words(fragment.text, SqlDialect::Sqlite)
+            .last()
+            .is_some_and(|word| word.text.eq_ignore_ascii_case("end"))
+        {
+            return Err(QueryError::Selection {
+                cursor: cursor_byte,
+                message: "SQLite trigger body is incomplete".into(),
+            });
+        }
+    } else {
+        validate(fragment.text, dialect).map_err(|error| match error {
+            QueryError::Syntax { message, span } => QueryError::Syntax {
+                message,
+                span: fragment.span.start.saturating_add(span.start)
+                    ..fragment.span.start.saturating_add(span.end),
+            },
+            other => other,
+        })?;
+    }
+    Ok(Some(fragment.clone()))
+}
+
+fn starts_with_comment(sql: &str, dialect: SqlDialect) -> bool {
+    sql.starts_with("--")
+        || sql.starts_with("/*")
+        || (dialect == SqlDialect::MySql && sql.starts_with('#'))
+}
+
+fn terminator_after(sql: &str, from: usize) -> Option<usize> {
+    let tail = sql.get(from..)?;
+    let whitespace = tail.len() - tail.trim_start().len();
+    let position = from.checked_add(whitespace)?;
+    (sql.as_bytes().get(position) == Some(&b';')).then_some(position)
+}
+
+fn is_sqlite_trigger(sql: &str) -> bool {
+    let words = words(sql, SqlDialect::Sqlite);
+    let Some(first) = words.first() else {
+        return false;
+    };
+    if !first.text.eq_ignore_ascii_case("create") {
+        return false;
+    }
+    let second = words.get(1).map(|word| word.text);
+    let trigger = match second {
+        Some(word)
+            if word.eq_ignore_ascii_case("temp") || word.eq_ignore_ascii_case("temporary") =>
+        {
+            words.get(2).map(|word| word.text)
+        }
+        word => word,
+    };
+    trigger.is_some_and(|word| word.eq_ignore_ascii_case("trigger"))
+}
+
+fn sqlite_trigger_is_ambiguous(sql: &str) -> bool {
+    let words = words(sql, SqlDialect::Sqlite);
+    let Some(trigger) = words
+        .iter()
+        .position(|word| word.text.eq_ignore_ascii_case("trigger"))
+    else {
+        return false;
+    };
+    if words
+        .get(trigger + 1)
+        .is_some_and(|word| word.text.eq_ignore_ascii_case("begin"))
+    {
+        return true;
+    }
+    words
+        .iter()
+        .filter(|word| word.text.eq_ignore_ascii_case("case"))
+        .any(|word| {
+            sql.get(word.span.end..)
+                .is_some_and(|tail| tail.trim_start().starts_with('='))
+        })
+}
+
+fn sqlite_statements(sql: &str, cursor: usize) -> Result<Vec<Fragment<'_>>, QueryError> {
+    let mut fragments = Vec::new();
+    let mut start = 0usize;
+    let mut has_comment = false;
+    let mut has_code = false;
+    let mut prefix = 0u8;
+    let mut trigger = false;
+    let mut seen_on = false;
+    let mut relation_seen = false;
+    let mut body = false;
+    let mut body_statement_start = false;
+    let mut ended = false;
+    scan(
+        sql,
+        SplitProfile::for_dialect(SqlDialect::Sqlite),
+        &mut |token, span| match token {
+            Tok::Comment => has_comment = true,
+            Tok::Word => {
+                let word = sql.get(span.clone()).unwrap_or_default();
+                let mut began_body = false;
+                if !has_code {
+                    prefix = u8::from(word.eq_ignore_ascii_case("create"));
+                } else if prefix == 1 {
+                    if word.eq_ignore_ascii_case("temp") || word.eq_ignore_ascii_case("temporary") {
+                        prefix = 2;
+                    } else if word.eq_ignore_ascii_case("trigger") {
+                        prefix = 3;
+                        trigger = true;
+                    } else {
+                        prefix = 0;
+                    }
+                } else if prefix == 2 {
+                    if word.eq_ignore_ascii_case("trigger") {
+                        prefix = 3;
+                        trigger = true;
+                    } else {
+                        prefix = 0;
+                    }
+                }
+                if trigger && word.eq_ignore_ascii_case("on") {
+                    seen_on = true;
+                } else if seen_on && !relation_seen {
+                    relation_seen = true;
+                } else if trigger && relation_seen && word.eq_ignore_ascii_case("begin") {
+                    body = true;
+                    body_statement_start = true;
+                    began_body = true;
+                } else if body
+                    && !ended
+                    && word.eq_ignore_ascii_case("end")
+                    && body_statement_start
+                    && end_closes_trigger(sql, span.end)
+                {
+                    ended = true;
+                }
+                if body && !ended && !began_body {
+                    body_statement_start = false;
+                }
+                has_code = true;
+            }
+            Tok::Semicolon if !(body && !ended) => {
+                if has_code {
+                    push_fragment(sql, start, span.start, has_comment, true, &mut fragments);
+                }
+                start = span.end;
+                has_comment = false;
+                has_code = false;
+                prefix = 0;
+                trigger = false;
+                seen_on = false;
+                relation_seen = false;
+                body = false;
+                body_statement_start = false;
+                ended = false;
+            }
+            Tok::Quoted | Tok::Symbol => {
+                has_code = true;
+                if body && !ended {
+                    body_statement_start = false;
+                }
+            }
+            Tok::Semicolon => body_statement_start = true,
+        },
+    );
+    if trigger && !body {
+        return Err(QueryError::Selection {
+            cursor,
+            message: "SQLite trigger body cannot be established".into(),
+        });
+    }
+    if has_code {
+        push_fragment(sql, start, sql.len(), has_comment, false, &mut fragments);
+    }
+    Ok(fragments)
+}
+
+fn end_closes_trigger(sql: &str, from: usize) -> bool {
+    let mut tail = sql.get(from..).unwrap_or_default().trim_start();
+    loop {
+        if let Some(rest) = tail.strip_prefix("--") {
+            tail = rest
+                .split_once('\n')
+                .map_or("", |(_, after)| after)
+                .trim_start();
+        } else if let Some(rest) = tail.strip_prefix("/*") {
+            let Some((_, after)) = rest.split_once("*/") else {
+                return false;
+            };
+            tail = after.trim_start();
+        } else {
+            break;
+        }
+    }
+    tail.is_empty() || tail.starts_with(';')
 }
 
 /// Découpe un lot avec un profil lexical explicite.
@@ -596,6 +841,148 @@ mod tests {
             .into_iter()
             .map(|f| f.text.to_owned())
             .collect()
+    }
+
+    #[test]
+    fn current_statement_syntax_errors_keep_document_offsets() {
+        let sql = "SELECT 1; SELECT";
+        let error = current_statement(sql, SqlDialect::Postgres, sql.len())
+            .expect_err("incomplete second statement");
+        let QueryError::Syntax { span, .. } = error else {
+            panic!("syntax error");
+        };
+        assert_eq!(span.start, sql.rfind("SELECT").expect("second SELECT"));
+        assert_eq!(span.end, sql.len());
+    }
+
+    #[test]
+    fn instruction_courante_garde_le_corps_du_trigger_sqlite() {
+        let sql = "CREATE TRIGGER t AFTER INSERT ON x BEGIN INSERT INTO log VALUES(CASE WHEN NEW.id > 0 THEN 1 ELSE 0 END); UPDATE x SET seen = 1; END; SELECT 2";
+        let cursor = sql.find("UPDATE x").expect("trigger body");
+        let fragment = current_statement(sql, SqlDialect::Sqlite, cursor)
+            .expect("valid trigger")
+            .expect("trigger selection");
+        assert!(fragment.text.starts_with("CREATE TRIGGER"));
+        assert!(fragment.text.contains("UPDATE x SET seen"));
+        assert!(!fragment.text.contains("SELECT 2"));
+    }
+
+    #[test]
+    fn instruction_courante_refuse_les_positions_et_textes_ambigus() {
+        let sql = "SELECT 'é';  SELECT 2";
+        assert!(current_statement(sql, SqlDialect::Postgres, 9).is_err());
+        assert_eq!(
+            current_statement(sql, SqlDialect::Postgres, 13).expect("second space"),
+            None
+        );
+        assert!(current_statement("SELECT 'unfinished", SqlDialect::Postgres, 4).is_err());
+    }
+
+    #[test]
+    fn instruction_courante_associe_le_separateur_a_l_instruction_precedente() {
+        let first = "SELECT 1";
+        let trailing = "SELECT 1;";
+        assert_eq!(
+            current_statement(trailing, SqlDialect::Postgres, trailing.len())
+                .expect("trailing separator")
+                .expect("statement")
+                .text,
+            first
+        );
+        let adjacent = "SELECT 1;SELECT 2";
+        assert_eq!(
+            current_statement(adjacent, SqlDialect::Postgres, first.len())
+                .expect("separator")
+                .expect("previous")
+                .text,
+            first
+        );
+        assert_eq!(
+            current_statement(adjacent, SqlDialect::Postgres, first.len() + 1)
+                .expect("next statement")
+                .expect("next")
+                .text,
+            "SELECT 2"
+        );
+        assert_eq!(
+            current_statement("SELECT 1;  SELECT 2", SqlDialect::Postgres, 9)
+                .expect("first space")
+                .expect("previous")
+                .text,
+            first
+        );
+        assert!(
+            current_statement("SELECT 1;  SELECT 2", SqlDialect::Postgres, 10)
+                .expect("second space")
+                .is_none()
+        );
+        let dollar = "SELECT $$;$$;";
+        assert_eq!(
+            current_statement(dollar, SqlDialect::Postgres, dollar.len())
+                .expect("dollar quote")
+                .expect("statement")
+                .text,
+            "SELECT $$;$$"
+        );
+    }
+
+    #[test]
+    fn instruction_courante_ne_saute_pas_au_dela_d_un_commentaire_introductif() {
+        for sql in [
+            "SELECT 1; -- commentaire\nDELETE FROM t;",
+            "SELECT 1;-- commentaire\nDELETE FROM t;",
+        ] {
+            let cursor = sql.find(';').expect("separator") + 1;
+            assert_eq!(
+                current_statement(sql, SqlDialect::Postgres, cursor)
+                    .expect("selection")
+                    .expect("previous statement")
+                    .text,
+                "SELECT 1"
+            );
+        }
+    }
+
+    #[test]
+    fn instruction_courante_refuse_les_mots_ambigus_dans_un_trigger_sqlite() {
+        for sql in [
+            "CREATE TRIGGER BEGIN AFTER INSERT ON x BEGIN UPDATE x SET id = 1; END;",
+            "CREATE TRIGGER t AFTER INSERT ON x BEGIN UPDATE x SET CASE = 1; END;",
+        ] {
+            assert!(
+                current_statement(sql, SqlDialect::Sqlite, 8).is_err(),
+                "{sql}"
+            );
+        }
+    }
+
+    #[test]
+    fn instruction_courante_ne_isole_jamais_un_corps_de_trigger_sqlite() {
+        let trigger = "CREATE TEMP TRIGGER t AFTER INSERT ON source BEGIN SELECT end FROM source; UPDATE other SET id = CASE WHEN NEW.id > 0 THEN 999 ELSE 1 END; END;";
+        for needle in ["SELECT end", "UPDATE other", "CASE WHEN", "END;"] {
+            let cursor = trigger.find(needle).expect("body token");
+            let result = current_statement(trigger, SqlDialect::Sqlite, cursor);
+            assert!(
+                result.is_err()
+                    || result
+                        .expect("selection")
+                        .is_some_and(|fragment| fragment.text.starts_with("CREATE TEMP TRIGGER")),
+                "{needle}"
+            );
+        }
+    }
+
+    #[test]
+    fn create_table_avec_des_identifiants_reserves_n_est_pas_un_trigger() {
+        let sql = "CREATE TABLE things (trigger text, begin integer, end integer); UPDATE things SET end = 1;";
+        let cursor = sql.find("UPDATE").expect("update");
+        assert_eq!(
+            current_statement(sql, SqlDialect::Sqlite, cursor)
+                .expect("table statements")
+                .expect("update")
+                .text,
+            "UPDATE things SET end = 1"
+        );
     }
 
     #[test]
