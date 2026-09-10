@@ -174,6 +174,12 @@ impl Store {
         Journal::new(self)
     }
 
+    /// Display preferences stored as versioned JSON. Never call on the UI thread.
+    #[must_use]
+    pub fn preferences(&self) -> crate::preferences::Preferences<'_> {
+        crate::preferences::Preferences::new(self)
+    }
+
     /// Les documents du workspace.
     #[must_use]
     pub fn documents(&self) -> Documents<'_> {
@@ -209,17 +215,39 @@ impl Store {
         Ok(())
     }
 
-    /// Exécute une lecture ou une écriture sous le verrou.
-    ///
-    /// Toutes les opérations de la crate tiennent en **une** instruction SQL :
-    /// les cascades du schéma font le reste, et une seule instruction est
-    /// atomique pour SQLite. Il n'y a donc pas d'assistant de transaction ici.
-    /// Le jour où une opération en demandera plusieurs — l'import d'un fichier
-    /// de workspace, par exemple — il faudra en écrire un, et non enchaîner les
-    /// appels à cette méthode : le verrou est relâché entre deux.
+    /// Runs one operation under the lock. Multi-statement writes use a transaction
+    /// inside this closure so the connection cannot change between statements.
     pub(crate) fn with_connection<T>(&self, f: impl FnOnce(&Connection) -> Result<T>) -> Result<T> {
         let guard = self.conn.lock();
         f(&guard)
+    }
+
+    /// Installs cancellation only while this operation owns the connection.
+    pub(crate) fn with_connection_cancellable<T>(
+        &self,
+        cancel: &oxyn_core::CancelToken,
+        f: impl FnOnce(&Connection) -> Result<T>,
+    ) -> Result<T> {
+        let connection = self.conn.lock();
+        if cancel.is_cancelled() {
+            return Err(StoreError::Cancelled);
+        }
+        struct ResetProgress<'a>(&'a Connection);
+        impl Drop for ResetProgress<'_> {
+            fn drop(&mut self) {
+                self.0.progress_handler(0, None::<fn() -> bool>);
+            }
+        }
+        let token = cancel.clone();
+        connection.progress_handler(1000, Some(move || token.is_cancelled()));
+        let _reset = ResetProgress(&connection);
+        let result = f(&connection);
+        // A successful commit remains successful even if cancellation arrives later.
+        if result.is_err() && cancel.is_cancelled() {
+            Err(StoreError::Cancelled)
+        } else {
+            result
+        }
     }
 }
 
@@ -366,5 +394,73 @@ mod tests {
             "migrer crée le schéma, pas des données"
         );
         assert_eq!(store.journal().count().expect("comptage"), 0);
+    }
+}
+
+#[cfg(test)]
+mod cancellation_tests {
+    use super::*;
+    use oxyn_core::CancelToken;
+
+    #[test]
+    fn sqlite_scan_is_interrupted_and_the_next_operation_has_no_stale_handler() {
+        let store = Store::open_in_memory().expect("store");
+        let cancel = CancelToken::new();
+        let result = store.with_connection_cancellable(&cancel, |connection| {
+            cancel.cancel();
+            let _: i64 = connection.query_row(
+                "WITH RECURSIVE numbers(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM numbers WHERE n<10000000) SELECT sum(n) FROM numbers",
+                [], |row| row.get(0),
+            )?;
+            Ok(())
+        });
+        assert!(matches!(result, Err(StoreError::Cancelled)));
+        let sum = store.with_connection(|connection| {
+            Ok(connection.query_row("WITH RECURSIVE numbers(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM numbers WHERE n<2000) SELECT sum(n) FROM numbers", [], |row| row.get::<_, i64>(0))?)
+        }).expect("next scan");
+        assert_eq!(sum, 2_001_000);
+    }
+
+    #[test]
+    fn cancelled_write_rolls_back_but_a_completed_commit_is_not_relabelled() {
+        let store = Store::open_in_memory().expect("store");
+        store
+            .with_connection(|connection| {
+                connection.execute_batch("CREATE TABLE cancellation_probe(n INTEGER)")?;
+                Ok(())
+            })
+            .expect("fixture");
+        let cancel = CancelToken::new();
+        let result = store.with_connection_cancellable(&cancel, |connection| {
+            let transaction = connection.unchecked_transaction()?;
+            transaction.execute("INSERT INTO cancellation_probe VALUES(0)", [])?;
+            cancel.cancel();
+            transaction.execute("WITH RECURSIVE numbers(n) AS (VALUES(1) UNION ALL SELECT n+1 FROM numbers WHERE n<10000000) INSERT INTO cancellation_probe SELECT n FROM numbers", [])?;
+            transaction.commit()?;
+            Ok(())
+        });
+        assert!(matches!(result, Err(StoreError::Cancelled)));
+        let count = store
+            .with_connection(|connection| {
+                Ok(
+                    connection.query_row("SELECT count(*) FROM cancellation_probe", [], |row| {
+                        row.get::<_, i64>(0)
+                    })?,
+                )
+            })
+            .expect("rolled back");
+        assert_eq!(count, 0);
+        let cancel = CancelToken::new();
+        store
+            .with_connection_cancellable(&cancel, |connection| {
+                connection.execute("INSERT INTO cancellation_probe VALUES(1)", [])?;
+                cancel.cancel();
+                Ok(())
+            })
+            .expect("committed before cancellation");
+        let cancelled = store.with_connection_cancellable(&cancel, |_| -> Result<()> {
+            panic!("pre-cancelled operation must not start");
+        });
+        assert!(matches!(cancelled, Err(StoreError::Cancelled)));
     }
 }

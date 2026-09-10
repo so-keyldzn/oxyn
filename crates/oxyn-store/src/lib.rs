@@ -98,6 +98,7 @@ pub mod store;
 pub mod workspaces;
 
 mod encoding;
+pub mod preferences;
 mod schema;
 
 pub use catalog::{CatalogCache, CatalogSnapshot};
@@ -212,6 +213,7 @@ mod tests {
                 "documents",
                 "query_history",
                 "schema_version",
+                "workspace_preferences",
                 "workspaces",
             ]
         );

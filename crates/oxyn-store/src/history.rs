@@ -23,6 +23,9 @@
 //! dénormalisé à l'écriture : supprimer une connexion n'efface pas l'historique,
 //! et une ligne dont la connexion n'existe plus reste lisible.
 
+mod listing;
+pub use listing::{HistoryPage, HistorySummary};
+
 use chrono::{DateTime, Utc};
 use oxyn_core::{
     Actor, AgentId, Command, ConnectionId, ErrorClass, OxynError, QueryLanguage, StatementIntent,
@@ -148,9 +151,21 @@ pub struct HistoryRecord {
     /// que la ligne n'est pas rejouable. Un comptage d'échecs serveur se filtre
     /// donc sur `status`, pas sur cette colonne seule.
     pub error_class: Option<ErrorClass>,
+    /// A result identity from this application run; it may have expired.
+    pub result: Option<oxyn_core::ResultId>,
 }
 
 impl HistoryRecord {
+    /// Whether replay controls must be withheld until the server state is reconciled.
+    pub fn requires_reconciliation(&self) -> bool {
+        self.error_class == Some(ErrorClass::Ambiguous)
+            || (self.intent.is_mutating()
+                && (matches!(
+                    self.status,
+                    HistoryStatus::Running | HistoryStatus::Cancelled
+                ) || self.status == HistoryStatus::Failed && self.error_class.is_none()))
+    }
+
     /// Construit une entrée d'historique pour une exécution qui démarre.
     #[must_use]
     pub fn new(actor: &Actor, language: QueryLanguage, statement: impl Into<String>) -> Self {
@@ -171,6 +186,7 @@ impl HistoryRecord {
             status: HistoryStatus::Running,
             error: None,
             error_class: None,
+            result: None,
         }
     }
 
@@ -318,8 +334,8 @@ impl<'a> History<'a> {
             conn.execute(
                 "INSERT INTO query_history
                      (ts, connection_id, connection_name, actor_kind, actor_id, language,
-                      statement, intent, duration_ms, row_count, status, error, error_class)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
+                      statement, intent, duration_ms, row_count, status, error, error_class, result_id)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
                 params![
                     record.ts,
                     record.connection.map(|id| id.to_string()),
@@ -334,6 +350,7 @@ impl<'a> History<'a> {
                     record.status.as_str(),
                     record.error,
                     record.error_class.map(|class| class.as_str()),
+                    record.result.map(|result| result.to_string()),
                 ],
             )?;
             Ok(conn.last_insert_rowid())
@@ -359,7 +376,7 @@ impl<'a> History<'a> {
             let touchees = conn.execute(
                 "UPDATE query_history
                     SET status = ?2, duration_ms = ?3, row_count = ?4, error = ?5,
-                        error_class = ?6
+                        error_class = ?6, result_id = ?7
                   WHERE id = ?1",
                 params![
                     id,
@@ -368,6 +385,7 @@ impl<'a> History<'a> {
                     record.rows.map(count_to_i64),
                     record.error,
                     record.error_class.map(|class| class.as_str()),
+                    record.result.map(|result| result.to_string()),
                 ],
             )?;
             Ok(touchees > 0)
@@ -472,7 +490,7 @@ impl<'a> History<'a> {
 
 /// La liste de colonnes, partagée par toutes les lectures.
 const SELECT_COLONNES: &str = "SELECT id, ts, connection_id, connection_name, actor_kind, \
-     actor_id, language, statement, intent, duration_ms, row_count, status, error, error_class \
+     actor_id, language, statement, intent, duration_ms, row_count, status, error, error_class, result_id \
      FROM query_history";
 
 /// Reconstruit une [`HistoryEntry`] à partir d'une ligne.
@@ -501,6 +519,7 @@ fn depuis_ligne(row: &Row<'_>) -> Result<HistoryEntry> {
             status: HistoryStatus::from_text(&status),
             error: row.get("error")?,
             error_class: error_class.as_deref().map(error_class_from_text),
+            result: parse_id_opt(row.get("result_id")?, "query_history.result_id")?,
         },
     })
 }
@@ -863,3 +882,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod library_tests;

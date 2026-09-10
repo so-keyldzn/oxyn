@@ -22,6 +22,9 @@ pub type Result<T> = std::result::Result<T, StoreError>;
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum StoreError {
+    /// The local operation stopped before completion at the caller's request.
+    #[error("local operation cancelled")]
+    Cancelled,
     /// Le système n'expose pas de répertoire de données utilisateur exploitable.
     #[error("répertoire de données du système introuvable")]
     DataDirUnavailable,
@@ -104,6 +107,7 @@ impl From<StoreError> for OxynError {
     fn from(err: StoreError) -> Self {
         let message = err.to_string();
         match err {
+            StoreError::Cancelled => Self::Cancelled,
             StoreError::Io(io) => Self::Io(io),
             StoreError::DataDirUnavailable
             | StoreError::SchemaTooRecent { .. }

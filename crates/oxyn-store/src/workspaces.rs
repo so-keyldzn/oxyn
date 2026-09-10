@@ -1,9 +1,7 @@
 //! La table `workspaces` : l'unité de persistance de l'état utilisateur.
 //!
-//! Un workspace groupe des connexions et des documents. Le supprimer emporte
-//! les deux, **et rien d'autre** : le journal d'audit ne référence aucun
-//! workspace, précisément pour qu'effacer le sien n'efface pas la trace de ce
-//! qu'on y a fait ([`crate::journal`]).
+//! Deleting a workspace removes its connections, documents and preferences.
+//! The append-only audit remains independent and is never deleted with it.
 
 use chrono::{DateTime, Utc};
 use oxyn_core::WorkspaceId;

@@ -20,6 +20,7 @@
 //! | `audit_journal` | la piste d'audit — **append-only** | **non** |
 //! | `catalog_cache` | l'introspection mise en cache, par connexion | oui |
 //! | `documents` | onglets et requêtes sauvegardés | oui |
+//! | `workspace_preferences` | versioned display preferences | yes |
 //!
 //! # Pourquoi `STRICT`
 //!
@@ -197,6 +198,26 @@ ALTER TABLE query_history ADD COLUMN error_class TEXT;";
 const M0003_JOURNAL_ERROR_CLASS: &str = "\
 ALTER TABLE audit_journal ADD COLUMN error_class TEXT;";
 
+const M0004_WORKSPACE_PREFERENCES: &str = "CREATE TABLE workspace_preferences (
+    workspace_id TEXT PRIMARY KEY NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    revision INTEGER NOT NULL CHECK(revision > 0),
+    payload TEXT NOT NULL CHECK(length(CAST(payload AS BLOB)) <= 4096),
+    updated_at TEXT NOT NULL
+) STRICT;";
+
+const M0005_QUERY_LIBRARY: &str = "
+ALTER TABLE documents ADD COLUMN revision INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE documents ADD COLUMN saved_revision INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE documents ADD COLUMN is_saved INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE documents ADD COLUMN is_open INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE documents ADD COLUMN is_deleted INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE documents ADD COLUMN saved_content TEXT;
+ALTER TABLE documents ADD COLUMN saved_title TEXT;
+UPDATE documents SET saved_content=content, saved_title=title;
+ALTER TABLE query_history ADD COLUMN result_id TEXT;
+CREATE INDEX documents_by_open ON documents(workspace_id, is_open, id);
+";
+
 /// Toutes les migrations, dans l'ordre d'application.
 pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -213,6 +234,16 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 3,
         name: "journal_error_class",
         sql: M0003_JOURNAL_ERROR_CLASS,
+    },
+    Migration {
+        version: 4,
+        name: "workspace_preferences",
+        sql: M0004_WORKSPACE_PREFERENCES,
+    },
+    Migration {
+        version: 5,
+        name: "query_library",
+        sql: M0005_QUERY_LIBRARY,
     },
 ];
 
@@ -418,6 +449,36 @@ mod tests {
     }
 
     #[test]
+    fn query_library_migration_preserves_legacy_named_copies() {
+        let mut connection = Connection::open_in_memory().expect("connection");
+        connection
+            .execute_batch(SCHEMA_VERSION_TABLE)
+            .expect("versions");
+        for migration in MIGRATIONS.iter().filter(|migration| migration.version < 5) {
+            connection
+                .execute_batch(migration.sql)
+                .expect("legacy schema");
+            connection
+                .execute(
+                    "INSERT INTO schema_version(version,name,applied_at) VALUES(?1,?2,?3)",
+                    rusqlite::params![migration.version, migration.name, chrono::Utc::now()],
+                )
+                .expect("version");
+        }
+        connection.execute_batch("INSERT INTO workspaces VALUES('workspace','Legacy','2026-09-10','2026-09-10');
+            INSERT INTO documents VALUES('document','workspace','Report','\"sql\"','SELECT 1',NULL,'2026-09-10','2026-09-10');").expect("legacy document");
+        migrate(&mut connection).expect("migration");
+        let state: (String, String, bool, bool, i64, i64) = connection.query_row(
+            "SELECT saved_content,saved_title,is_saved,is_open,revision,saved_revision FROM documents",
+            [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+        ).expect("preserved baseline");
+        assert_eq!(
+            state,
+            ("SELECT 1".into(), "Report".into(), true, false, 0, 0)
+        );
+    }
+
+    #[test]
     fn un_schema_venu_du_futur_est_refuse() {
         let mut conn = base_migree();
         conn.execute(
@@ -443,6 +504,7 @@ mod tests {
             "audit_journal",
             "catalog_cache",
             "documents",
+            "workspace_preferences",
             "schema_version",
         ] {
             let presente: i64 = conn

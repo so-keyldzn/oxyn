@@ -15,7 +15,7 @@ oxyn-core.workspace = true
 chrono.workspace = true
 directories.workspace = true
 parking_lot.workspace = true
-rusqlite.workspace = true
+rusqlite = { workspace = true, features = ["hooks"] }
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
