@@ -66,15 +66,18 @@
 //! ```
 
 pub mod cache;
+pub mod definition;
 pub mod model;
 pub mod path;
 pub mod provider;
 pub mod search;
 
 pub use cache::{CacheError, CatalogCache, CatalogScope, Freshness, SharedCatalog};
+pub use definition::{DefinitionSource, RelationDefinition};
 pub use model::{
-    CatalogRef, Constraint, ConstraintKind, Field, ForeignKey, ForeignKeyTarget, Index,
-    LogicalType, NamespaceRef, ReferentialAction, Relation, RelationKind, RelationRef, ServerInfo,
+    CatalogRef, Constraint, ConstraintKind, Field, ForeignKey, ForeignKeyTarget,
+    IncomingForeignKey, Index, LogicalType, NamespaceRef, ReferentialAction, Relation,
+    RelationKind, RelationRef, ServerInfo,
 };
 pub use path::{CatalogLevel, CatalogPath, CatalogPathError, QuoteStyle, quote_identifier};
 pub use provider::CatalogProvider;

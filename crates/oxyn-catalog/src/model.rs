@@ -133,7 +133,7 @@ impl CatalogRef {
 
     /// Marque ce catalogue comme celui de la session.
     #[must_use]
-    pub fn as_default(mut self) -> Self {
+    pub fn with_default(mut self) -> Self {
         self.is_default = true;
         self
     }
@@ -218,7 +218,7 @@ impl NamespaceRef {
 
     /// Marque cet espace de noms comme appartenant au système.
     #[must_use]
-    pub fn as_system(mut self) -> Self {
+    pub fn with_system(mut self) -> Self {
         self.is_system = true;
         self
     }
@@ -617,7 +617,7 @@ impl Field {
 
     /// Marque le champ comme déduit par échantillonnage.
     #[must_use]
-    pub fn as_inferred(mut self) -> Self {
+    pub fn with_inferred(mut self) -> Self {
         self.inferred = true;
         self
     }
@@ -837,7 +837,7 @@ pub struct ForeignKeyTarget {
 /// Une clé étrangère.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ForeignKey {
-    /// Nom de la contrainte.
+    /// Declared name; empty when the engine exposes no constraint name.
     pub name: String,
     /// Champs porteurs, dans l'ordre.
     pub fields: Vec<String>,
@@ -869,6 +869,18 @@ impl ForeignKey {
     }
 }
 
+/// A foreign key together with the relation declaring it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct IncomingForeignKey {
+    /// Source relation; the target remains in `key.references`.
+    pub source: CatalogPath,
+    /// The declared key, with both column lists in matching order.
+    pub key: ForeignKey,
+    /// Whether a valid, unconditional unique key on the source limits each
+    /// referenced value to one source row. `None` means unreported.
+    pub source_unique: Option<bool>,
+}
+
 /// Nature d'une contrainte.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -884,6 +896,8 @@ pub enum ConstraintKind {
     ForeignKey,
     /// Exclusion (PostgreSQL).
     Exclusion,
+    /// A user-defined constraint trigger.
+    Trigger,
     /// Non-nullité exprimée comme une contrainte nommée.
     NotNull,
 }
@@ -898,6 +912,7 @@ impl ConstraintKind {
             Self::Check => "check",
             Self::ForeignKey => "foreign_key",
             Self::Exclusion => "exclusion",
+            Self::Trigger => "trigger",
             Self::NotNull => "not_null",
         }
     }
@@ -911,23 +926,21 @@ impl fmt::Display for ConstraintKind {
 
 /// Une contrainte portée par une relation.
 ///
-// TODO(phase 2) : aucune méthode de `CatalogProvider` ne rend encore de
-// `Constraint`, et le cache n'a pas de case pour en ranger. Débloqué par le
-// premier usage réel — le diff de schéma et la génération de DDL. Ajouter alors
-// un `list_constraints` par symétrie avec `list_indexes`, plutôt qu'un champ
-// dans `Relation` : les contraintes se lisent rarement, et les charger avec la
-// description ferait payer une requête de plus à chaque clic sur une table.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Constraint {
-    /// Nom de la contrainte.
+    /// Declared name; empty when the engine exposes no constraint name.
     pub name: String,
     /// Nature de la contrainte.
     pub kind: ConstraintKind,
     /// Champs concernés, quand la contrainte en nomme.
     pub fields: Vec<String>,
-    /// Expression, pour une vérification ou une exclusion. Reprise telle
-    /// quelle : la réécrire changerait ce que l'utilisateur a écrit.
+    /// Definition returned by the engine, which may be a normalized rendering
+    /// rather than the original source text. Never execute it implicitly.
     pub expression: Option<String>,
+    /// Whether existing rows have been validated, when the engine reports it.
+    /// This does not assert that enforcement is currently enabled.
+    #[serde(default)]
+    pub validated: Option<bool>,
 }
 
 impl Constraint {
@@ -939,6 +952,7 @@ impl Constraint {
             kind,
             fields,
             expression: None,
+            validated: None,
         }
     }
 
@@ -999,7 +1013,7 @@ mod tests {
     fn un_schema_infere_se_declare() {
         let mongo = Relation::new("commandes", RelationKind::Collection).with_fields(vec![
             Field::new("_id", 0, LogicalType::Uuid, "objectId").primary_key(),
-            Field::new("montant", 1, LogicalType::FLOAT64, "double").as_inferred(),
+            Field::new("montant", 1, LogicalType::FLOAT64, "double").with_inferred(),
         ]);
         assert!(
             mongo.has_inferred_schema(),

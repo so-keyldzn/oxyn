@@ -39,8 +39,10 @@ use indexmap::IndexMap;
 use parking_lot::RwLock;
 use serde::{Deserialize, Serialize};
 
+use crate::RelationDefinition;
 use crate::model::{
-    CatalogRef, ForeignKey, Index, NamespaceRef, Relation, RelationKind, RelationRef, ServerInfo,
+    CatalogRef, Constraint, ForeignKey, IncomingForeignKey, Index, NamespaceRef, Relation,
+    RelationKind, RelationRef, ServerInfo,
 };
 use crate::path::{CatalogLevel, CatalogPath};
 
@@ -52,9 +54,21 @@ use crate::path::{CatalogLevel, CatalogPath};
 /// réellement nommée d'occuper le même arbre sans se marcher dessus.
 const PALIER_ABSENT: &str = "";
 
+const MAX_DEFINITIONS: usize = 16;
+const MAX_DEFINITION_BYTES: usize = 16 * 1024 * 1024;
+
 /// La clé de nœud correspondant à un nom de palier éventuel.
 fn cle(nom: Option<&str>) -> &str {
     nom.unwrap_or(PALIER_ABSENT)
+}
+
+fn definition_bytes(definition: &RelationDefinition) -> usize {
+    definition
+        .notes
+        .iter()
+        .fold(definition.sql.len(), |total, note| {
+            total.saturating_add(note.len())
+        })
 }
 
 /// Le nom de palier correspondant à une clé de nœud.
@@ -218,6 +232,12 @@ struct RelationNode {
     detail: Cached<Option<Relation>>,
     indexes: Cached<Option<Vec<Index>>>,
     foreign_keys: Cached<Option<Vec<ForeignKey>>>,
+    #[serde(default)]
+    constraints: Cached<Option<Vec<Constraint>>>,
+    #[serde(default)]
+    incoming_keys: Cached<Option<Vec<IncomingForeignKey>>>,
+    #[serde(default)]
+    definition: Cached<Option<RelationDefinition>>,
 }
 
 impl RelationNode {
@@ -227,6 +247,9 @@ impl RelationNode {
             detail: Cached::default(),
             indexes: Cached::default(),
             foreign_keys: Cached::default(),
+            constraints: Cached::default(),
+            incoming_keys: Cached::default(),
+            definition: Cached::default(),
         }
     }
 
@@ -234,6 +257,9 @@ impl RelationNode {
         self.detail.freshness.invalidate();
         self.indexes.freshness.invalidate();
         self.foreign_keys.freshness.invalidate();
+        self.constraints.freshness.invalidate();
+        self.incoming_keys.freshness.invalidate();
+        self.definition.freshness.invalidate();
     }
 
     fn is_stale_at(&self, now: DateTime<Utc>, ttl: Duration) -> bool {
@@ -259,6 +285,12 @@ pub enum CatalogScope {
     Namespace(CatalogPath),
     /// Une relation : sa description, ses index, ses clés étrangères.
     Relation(CatalogPath),
+    /// Only the constraints of a relation.
+    Constraints(CatalogPath),
+    /// Only the keys referencing this relation.
+    IncomingForeignKeys(CatalogPath),
+    /// Only the creation statements of a relation.
+    Definition(CatalogPath),
 }
 
 impl CatalogScope {
@@ -281,7 +313,12 @@ impl CatalogScope {
     pub const fn path(&self) -> Option<&CatalogPath> {
         match self {
             Self::Server => None,
-            Self::Catalog(p) | Self::Namespace(p) | Self::Relation(p) => Some(p),
+            Self::Catalog(p)
+            | Self::Namespace(p)
+            | Self::Relation(p)
+            | Self::Constraints(p)
+            | Self::IncomingForeignKeys(p)
+            | Self::Definition(p) => Some(p),
         }
     }
 
@@ -292,7 +329,10 @@ impl CatalogScope {
             Self::Server => CatalogLevel::Server,
             Self::Catalog(_) => CatalogLevel::Catalog,
             Self::Namespace(_) => CatalogLevel::Namespace,
-            Self::Relation(_) => CatalogLevel::Relation,
+            Self::Relation(_)
+            | Self::Constraints(_)
+            | Self::IncomingForeignKeys(_)
+            | Self::Definition(_) => CatalogLevel::Relation,
         }
     }
 
@@ -302,6 +342,12 @@ impl CatalogScope {
     /// déjà chacune de ses relations. Un scope se couvre lui-même.
     #[must_use]
     pub fn contains(&self, other: &Self) -> bool {
+        if matches!(
+            self,
+            Self::Constraints(_) | Self::IncomingForeignKeys(_) | Self::Definition(_)
+        ) {
+            return self == other;
+        }
         let Some(prefixe) = self.path() else {
             return true;
         };
@@ -497,6 +543,107 @@ impl CatalogCache {
         Ok(())
     }
 
+    /// Publishes a successful constraint read, preserving unread versus empty.
+    /// Returns the same path errors as [`Self::set_indexes`].
+    pub fn set_constraints(
+        &mut self,
+        path: &CatalogPath,
+        constraints: Vec<Constraint>,
+    ) -> Result<(), CacheError> {
+        self.relation_node_existing_mut(path)?
+            .constraints
+            .set(Some(constraints));
+        Ok(())
+    }
+
+    /// Constraints previously read for this relation; `None` means unread.
+    #[must_use]
+    pub fn constraints(&self, path: &CatalogPath) -> Option<&[Constraint]> {
+        self.relation_node(path)?.constraints.value.as_deref()
+    }
+
+    /// Publishes all keys referencing a known relation. Path errors match
+    /// [`Self::set_indexes`]; absence and a successful empty read stay distinct.
+    pub fn set_incoming_foreign_keys(
+        &mut self,
+        path: &CatalogPath,
+        keys: Vec<IncomingForeignKey>,
+    ) -> Result<(), CacheError> {
+        self.relation_node_existing_mut(path)?
+            .incoming_keys
+            .set(Some(keys));
+        Ok(())
+    }
+
+    /// Previously read incoming keys; `None` means unreported or unread.
+    #[must_use]
+    pub fn incoming_foreign_keys(&self, path: &CatalogPath) -> Option<&[IncomingForeignKey]> {
+        self.relation_node(path)?.incoming_keys.value.as_deref()
+    }
+
+    /// Stores a definition for a known relation. Path errors match
+    /// [`Self::set_indexes`]; the bus validates payload bounds before publication.
+    pub fn set_definition(
+        &mut self,
+        path: &CatalogPath,
+        definition: RelationDefinition,
+    ) -> Result<(), CacheError> {
+        self.relation_node_existing_mut(path)?
+            .definition
+            .set(Some(definition));
+        self.evict_definitions(path);
+        Ok(())
+    }
+
+    /// Last successful definition read, or `None` when unread.
+    #[must_use]
+    pub fn definition(&self, path: &CatalogPath) -> Option<&RelationDefinition> {
+        self.relation_node(path)?.definition.value.as_ref()
+    }
+
+    /// Evicts the oldest definitions until the bounded DDL cache is within its
+    /// construction limits. The just-published definition is always retained.
+    fn evict_definitions(&mut self, protected: &CatalogPath) {
+        loop {
+            let mut candidates = Vec::new();
+            let mut count = 0;
+            let mut bytes: usize = 0;
+            for catalog in self.catalogs.value.values() {
+                for namespace in catalog.namespaces.value.values() {
+                    for relation in namespace.relations.value.values() {
+                        let Some(definition) = relation.definition.value.as_ref() else {
+                            continue;
+                        };
+                        count += 1;
+                        bytes = bytes.saturating_add(definition_bytes(definition));
+                        candidates.push((
+                            relation
+                                .summary
+                                .parent()
+                                .with_validated_relation(relation.summary.name()),
+                            relation.definition.freshness.fetched_at(),
+                        ));
+                    }
+                }
+            }
+            if count <= MAX_DEFINITIONS && bytes <= MAX_DEFINITION_BYTES {
+                return;
+            }
+            let Some((oldest, _)) = candidates
+                .into_iter()
+                .filter(|(path, _)| path != protected)
+                .min_by_key(|(_, fetched_at)| *fetched_at)
+            else {
+                return;
+            };
+            if let Some(relation) = self.relation_node_mut_opt(&oldest) {
+                relation.definition = Cached::default();
+            } else {
+                return;
+            }
+        }
+    }
+
     // ── Lecture ─────────────────────────────────────────────────────────────
 
     /// L'identité du serveur, si elle a été lue.
@@ -614,6 +761,15 @@ impl CatalogCache {
             CatalogScope::Relation(chemin) => self
                 .relation_node(chemin)
                 .map_or(Freshness::Never, |noeud| noeud.detail.freshness),
+            CatalogScope::Constraints(path) => self
+                .relation_node(path)
+                .map_or(Freshness::Never, |node| node.constraints.freshness),
+            CatalogScope::IncomingForeignKeys(path) => self
+                .relation_node(path)
+                .map_or(Freshness::Never, |node| node.incoming_keys.freshness),
+            CatalogScope::Definition(path) => self
+                .relation_node(path)
+                .map_or(Freshness::Never, |node| node.definition.freshness),
         }
     }
 
@@ -662,6 +818,17 @@ impl CatalogCache {
                 for relation in espace.relations.value.values() {
                     if relation.is_stale_at(now, ttl) {
                         perimes.push(CatalogScope::Relation(relation.summary.path()));
+                    } else {
+                        if relation.constraints.freshness.is_stale_at(now, ttl) {
+                            perimes.push(CatalogScope::Constraints(relation.summary.path()));
+                        }
+                        if relation.incoming_keys.freshness.is_stale_at(now, ttl) {
+                            perimes
+                                .push(CatalogScope::IncomingForeignKeys(relation.summary.path()));
+                        }
+                        if relation.definition.freshness.is_stale_at(now, ttl) {
+                            perimes.push(CatalogScope::Definition(relation.summary.path()));
+                        }
                     }
                 }
             }
@@ -698,6 +865,21 @@ impl CatalogCache {
                     Self::invalidate_namespace(espace);
                 }
             }
+            CatalogScope::Constraints(path) => {
+                if let Some(node) = self.relation_node_mut_opt(path) {
+                    node.constraints.freshness.invalidate();
+                }
+            }
+            CatalogScope::IncomingForeignKeys(path) => {
+                if let Some(node) = self.relation_node_mut_opt(path) {
+                    node.incoming_keys.freshness.invalidate();
+                }
+            }
+            CatalogScope::Definition(path) => {
+                if let Some(node) = self.relation_node_mut_opt(path) {
+                    node.definition.freshness.invalidate();
+                }
+            }
             CatalogScope::Relation(chemin) => {
                 if let Some(relation) = self.relation_node_mut_opt(chemin) {
                     relation.invalidate();
@@ -732,6 +914,21 @@ impl CatalogCache {
                         .value
                         .shift_remove(cle(chemin.namespace()));
                     catalogue.namespaces.freshness.invalidate();
+                }
+            }
+            CatalogScope::Constraints(path) => {
+                if let Some(node) = self.relation_node_mut_opt(path) {
+                    node.constraints = Cached::default();
+                }
+            }
+            CatalogScope::IncomingForeignKeys(path) => {
+                if let Some(node) = self.relation_node_mut_opt(path) {
+                    node.incoming_keys = Cached::default();
+                }
+            }
+            CatalogScope::Definition(path) => {
+                if let Some(node) = self.relation_node_mut_opt(path) {
+                    node.definition = Cached::default();
                 }
             }
             CatalogScope::Relation(chemin) => {
@@ -870,7 +1067,8 @@ mod tests {
     use oxyn_core::Capabilities;
 
     use super::*;
-    use crate::model::{Field, LogicalType};
+    use crate::DefinitionSource;
+    use crate::model::{ConstraintKind, Field, LogicalType};
 
     const HEURE: Duration = Duration::from_secs(3600);
 
@@ -913,6 +1111,76 @@ mod tests {
             )
             .expect("un espace de noms est bien un espace de noms");
         cache
+    }
+
+    #[test]
+    fn incoming_key_cache_is_independent_from_outgoing_keys_and_constraints() {
+        let path = CatalogPath::for_relation(None, Some("main"), "parent").expect("path");
+        let mut cache = CatalogCache::new();
+        assert!(cache.set_incoming_foreign_keys(&path, vec![]).is_err());
+        cache
+            .set_relation(&path, Relation::new("parent", RelationKind::Table))
+            .expect("relation");
+        cache.set_foreign_keys(&path, vec![]).expect("outgoing");
+        cache.set_constraints(&path, vec![]).expect("constraints");
+        assert!(cache.incoming_foreign_keys(&path).is_none());
+        cache
+            .set_incoming_foreign_keys(&path, vec![])
+            .expect("empty incoming");
+        let scope = CatalogScope::IncomingForeignKeys(path.clone());
+        cache.invalidate(&scope);
+        assert_eq!(cache.freshness(&scope), Freshness::Invalidated);
+        assert!(matches!(
+            cache.freshness(&CatalogScope::Constraints(path.clone())),
+            Freshness::Fetched(_)
+        ));
+        assert!(!scope.contains(&CatalogScope::Constraints(path.clone())));
+        assert!(CatalogScope::Relation(path.clone()).contains(&scope));
+        cache.forget(&scope);
+        assert!(cache.incoming_foreign_keys(&path).is_none());
+        assert!(cache.foreign_keys(&path).is_some());
+    }
+
+    #[test]
+    fn legacy_constraint_json_does_not_invent_a_validation_status() {
+        let constraint: Constraint = serde_json::from_str(r#"{"name":"key","kind":"primary_key","fields":["id"],"expression":"PRIMARY KEY (id)"}"#).expect("legacy constraint");
+        assert_eq!(constraint.validated, None);
+    }
+
+    #[test]
+    fn constraints_preserve_unknown_empty_and_invalidated_states() {
+        let path = CatalogPath::for_relation(None, Some("main"), "odd\"; table").expect("path");
+        let mut cache = CatalogCache::new();
+        assert!(cache.set_constraints(&path, vec![]).is_err());
+        cache
+            .set_relation(&path, Relation::new("odd\"; table", RelationKind::Table))
+            .expect("relation");
+        assert_eq!(cache.constraints(&path), None);
+        let legacy = serde_json::to_string(&cache).expect("serialize");
+        let mut json: serde_json::Value = serde_json::from_str(&legacy).expect("json");
+        fn remove_constraints(value: &mut serde_json::Value) {
+            if let Some(object) = value.as_object_mut() {
+                object.remove("constraints");
+                for value in object.values_mut() {
+                    remove_constraints(value);
+                }
+            }
+        }
+        remove_constraints(&mut json);
+        let restored: CatalogCache =
+            serde_json::from_value(json).expect("old caches remain readable");
+        assert_eq!(restored.constraints(&path), None);
+        cache.set_constraints(&path, vec![]).expect("empty");
+        assert_eq!(cache.constraints(&path), Some([].as_slice()));
+        let scope = CatalogScope::Constraints(path.clone());
+        cache.invalidate(&scope);
+        assert_eq!(cache.freshness(&scope), Freshness::Invalidated);
+        assert_eq!(cache.constraints(&path), Some([].as_slice()));
+        assert!(CatalogScope::Relation(path.clone()).contains(&scope));
+        assert!(!scope.contains(&CatalogScope::Relation(path.clone())));
+        cache.forget(&scope);
+        assert!(cache.relation(&path).is_some());
+        assert_eq!(cache.constraints(&path), None);
     }
 
     #[test]
@@ -1293,5 +1561,158 @@ mod tests {
         let scope = CatalogScope::Relation(chemin(Some("caisse"), Some("public"), "clients"));
         assert_eq!(scope.to_string(), "relation caisse.public.clients");
         assert_eq!(CatalogScope::Server.to_string(), "serveur");
+    }
+
+    fn definition_fixture(sql_len: usize, notes: Vec<String>) -> RelationDefinition {
+        RelationDefinition {
+            sql: "x".repeat(sql_len),
+            source: DefinitionSource::Stored,
+            notes,
+        }
+    }
+
+    #[test]
+    fn bounded_definition_eviction_preserves_relation_details() {
+        let mut cache = CatalogCache::new();
+        let paths: Vec<_> = (0..17)
+            .map(|index| chemin(None, Some("main"), &format!("relation_{index}")))
+            .collect();
+        for path in &paths[..16] {
+            cache
+                .set_relation(
+                    path,
+                    Relation::new(path.relation().unwrap_or_default(), RelationKind::Table),
+                )
+                .expect("relation");
+            cache
+                .set_definition(path, definition_fixture(1, vec![]))
+                .expect("definition");
+        }
+
+        cache
+            .set_definition(&paths[0], definition_fixture(2, vec!["refreshed".into()]))
+            .expect("refresh");
+        cache
+            .set_relation(
+                &paths[16],
+                Relation::new(
+                    paths[16].relation().unwrap_or_default(),
+                    RelationKind::Table,
+                ),
+            )
+            .expect("relation");
+        cache
+            .set_definition(&paths[16], definition_fixture(1, vec![]))
+            .expect("definition");
+
+        assert!(cache.definition(&paths[0]).is_some());
+        assert!(cache.definition(&paths[1]).is_none());
+        assert!(cache.definition(paths.last().expect("last")).is_some());
+        assert_eq!(
+            paths
+                .iter()
+                .filter(|path| cache.definition(path).is_some())
+                .count(),
+            MAX_DEFINITIONS
+        );
+
+        let retained = paths.last().expect("last").clone();
+        cache
+            .set_indexes(&retained, vec![Index::new("idx", vec!["id".into()])])
+            .expect("index");
+        cache
+            .set_constraints(
+                &retained,
+                vec![Constraint::new(
+                    "pk",
+                    ConstraintKind::PrimaryKey,
+                    vec!["id".into()],
+                )],
+            )
+            .expect("constraint");
+        assert_eq!(cache.definition(&paths[0]).expect("refreshed").sql.len(), 2);
+        assert_eq!(cache.indexes(&retained).expect("index").len(), 1);
+        assert_eq!(cache.constraints(&retained).expect("constraint").len(), 1);
+    }
+
+    #[test]
+    fn definition_size_limit_counts_sql_and_notes() {
+        let mut cache = CatalogCache::new();
+        let paths: Vec<_> = (0..16)
+            .map(|index| chemin(None, Some("main"), &format!("large_{index}")))
+            .collect();
+        for path in &paths {
+            cache
+                .set_relation(
+                    path,
+                    Relation::new(path.relation().unwrap_or_default(), RelationKind::Table),
+                )
+                .expect("relation");
+            cache
+                .set_definition(path, definition_fixture(1_048_576, vec![]))
+                .expect("definition");
+        }
+        let extra = chemin(None, Some("main"), "with_notes");
+        cache
+            .set_relation(&extra, Relation::new("with_notes", RelationKind::Table))
+            .expect("relation");
+        cache
+            .set_definition(&extra, definition_fixture(1, vec!["n".repeat(65_536)]))
+            .expect("definition");
+
+        assert!(cache.definition(&paths[0]).is_none());
+        assert!(cache.definition(&extra).is_some());
+        assert_eq!(
+            paths
+                .iter()
+                .filter(|path| cache.definition(path).is_some())
+                .count(),
+            MAX_DEFINITIONS - 1
+        );
+    }
+
+    #[test]
+    fn invalidated_definitions_remain_evictable_and_bounded() {
+        let mut cache = CatalogCache::new();
+        let paths: Vec<_> = (0..16)
+            .map(|index| chemin(None, Some("main"), &format!("invalidated_{index}")))
+            .collect();
+        for path in &paths {
+            cache
+                .set_relation(
+                    path,
+                    Relation::new(path.relation().unwrap_or_default(), RelationKind::Table),
+                )
+                .expect("relation");
+            cache
+                .set_definition(path, definition_fixture(1_048_576, vec![]))
+                .expect("definition");
+            cache.invalidate(&CatalogScope::Definition(path.clone()));
+        }
+        let extra = chemin(None, Some("main"), "after_invalidation");
+        cache
+            .set_relation(
+                &extra,
+                Relation::new("after_invalidation", RelationKind::Table),
+            )
+            .expect("relation");
+        cache
+            .set_definition(&extra, definition_fixture(1, vec!["n".repeat(65_536)]))
+            .expect("definition");
+
+        let definitions: Vec<_> = paths
+            .iter()
+            .chain(std::iter::once(&extra))
+            .filter_map(|path| cache.definition(path))
+            .collect();
+        assert!(definitions.len() <= MAX_DEFINITIONS);
+        assert!(
+            definitions
+                .iter()
+                .map(|definition| definition_bytes(definition))
+                .sum::<usize>()
+                <= MAX_DEFINITION_BYTES
+        );
+        assert!(cache.definition(&extra).is_some());
     }
 }

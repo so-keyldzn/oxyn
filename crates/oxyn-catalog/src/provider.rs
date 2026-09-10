@@ -43,8 +43,10 @@
 use async_trait::async_trait;
 use oxyn_core::{CancelToken, OxynError, Result};
 
+use crate::RelationDefinition;
 use crate::model::{
-    CatalogRef, ForeignKey, Index, NamespaceRef, Relation, RelationRef, ServerInfo,
+    CatalogRef, Constraint, ForeignKey, IncomingForeignKey, Index, NamespaceRef, Relation,
+    RelationRef, ServerInfo,
 };
 use crate::path::CatalogPath;
 
@@ -147,6 +149,45 @@ pub trait CatalogProvider: Send + Sync {
         let _ = (relation, cancel);
         Err(OxynError::NotSupported {
             capability: "INDEXES".to_owned(),
+        })
+    }
+
+    /// Reads creation statements without executing them. Unsupported object kinds
+    /// return an error rather than an invented or silently partial definition.
+    async fn relation_definition(
+        &self,
+        relation: &CatalogPath,
+        cancel: &CancelToken,
+    ) -> Result<RelationDefinition> {
+        let _ = (relation, cancel);
+        Err(OxynError::NotSupported {
+            capability: "OBJECT_DEFINITION".into(),
+        })
+    }
+
+    /// Finds foreign keys whose target is this relation. Unsupported discovery
+    /// is an error, never a statement that the relation has no incoming keys.
+    async fn list_incoming_foreign_keys(
+        &self,
+        relation: &CatalogPath,
+        cancel: &CancelToken,
+    ) -> Result<Vec<IncomingForeignKey>> {
+        let _ = (relation, cancel);
+        Err(OxynError::NotSupported {
+            capability: "INCOMING_FOREIGN_KEYS".to_owned(),
+        })
+    }
+
+    /// Constraints declared on one relation, read only on explicit request.
+    /// An empty list means no constraints; unsupported introspection is an error.
+    async fn list_constraints(
+        &self,
+        relation: &CatalogPath,
+        cancel: &CancelToken,
+    ) -> Result<Vec<Constraint>> {
+        let _ = (relation, cancel);
+        Err(OxynError::NotSupported {
+            capability: "CONSTRAINTS".to_owned(),
         })
     }
 
@@ -259,6 +300,10 @@ mod tests {
         assert!(matches!(err, OxynError::NotSupported { .. }));
         assert!(err.to_string().contains("INDEXES"));
         assert!(err.is_user_error(), "ce n'est pas un incident");
+
+        let err =
+            resoudre(pin!(source.list_constraints(&chemin, &jeton))).expect_err("unsupported");
+        assert!(matches!(err, OxynError::NotSupported { .. }));
 
         let err = resoudre(pin!(source.list_foreign_keys(&chemin, &jeton)))
             .expect_err("la source ne sait pas introspecter les clés étrangères");
