@@ -34,14 +34,13 @@
 //!   `None` — jamais `Some(0)`, qui affirmerait une table vide. Lancer un
 //!   `COUNT(*)` scannerait la table à chaque rafraîchissement d'arborescence.
 //! * **Aucun nom de contrainte de clé étrangère.** `PRAGMA foreign_key_list`
-//!   n'en rend pas ; le nom construit (`fk_<n>`) est celui de l'ordre de
-//!   déclaration, et rien d'autre.
+//!   exposes no declared name; foreign-key records keep an empty name.
 //! * **Les tables internes `sqlite_*` sont listées** comme les autres. Les
 //!   cacher demanderait de décider à la place de l'utilisateur ce qui existe.
 
 use async_trait::async_trait;
 use oxyn_catalog::model::{
-    CatalogRef, Field, ForeignKey, ForeignKeyTarget, Index, LogicalType, NamespaceRef,
+    CatalogRef, Constraint, Field, ForeignKey, ForeignKeyTarget, Index, LogicalType, NamespaceRef,
     ReferentialAction, Relation, RelationKind, RelationRef, ServerInfo,
 };
 use oxyn_catalog::path::{CatalogPath, QuoteStyle, quote_identifier};
@@ -137,7 +136,7 @@ impl CatalogProvider for SqliteCatalog {
                 let is_system = name == "temp";
                 let reference = NamespaceRef::new(CatalogPath::empty(), name)?;
                 Ok(if is_system {
-                    reference.as_system()
+                    reference.with_system()
                 } else {
                     reference
                 })
@@ -241,6 +240,70 @@ impl CatalogProvider for SqliteCatalog {
         Ok(raw.into_iter().map(RawIndex::into_index).collect())
     }
 
+    async fn relation_definition(
+        &self,
+        relation: &CatalogPath,
+        cancel: &CancelToken,
+    ) -> Result<oxyn_catalog::RelationDefinition> {
+        self.capabilities.require(Capabilities::OBJECT_DEFINITION)?;
+        if relation.catalog().is_some() {
+            return Err(OxynError::CatalogUnavailable(
+                "SQLite has no catalog level".into(),
+            ));
+        }
+        let database = Self::database_of(relation).to_owned();
+        let name = Self::relation_of(relation)?.to_owned();
+        let token = cancel.clone();
+        self.worker
+            .call(cancel, move |connection| {
+                crate::definition::read(connection, &database, &name, &token)
+            })
+            .await
+    }
+
+    async fn list_incoming_foreign_keys(
+        &self,
+        relation: &CatalogPath,
+        cancel: &CancelToken,
+    ) -> Result<Vec<oxyn_catalog::IncomingForeignKey>> {
+        self.capabilities
+            .require(Capabilities::INCOMING_FOREIGN_KEYS)?;
+        if relation.catalog().is_some() {
+            return Err(OxynError::CatalogUnavailable(
+                "SQLite has no catalog level".into(),
+            ));
+        }
+        let database = Self::database_of(relation).to_owned();
+        let target = Self::relation_of(relation)?.to_owned();
+        let token = cancel.clone();
+        self.worker
+            .call(cancel, move |connection| {
+                crate::incoming_keys::read(connection, &database, &target, &token)
+            })
+            .await
+    }
+
+    async fn list_constraints(
+        &self,
+        relation: &CatalogPath,
+        cancel: &CancelToken,
+    ) -> Result<Vec<Constraint>> {
+        self.capabilities.require(Capabilities::CONSTRAINTS)?;
+        if relation.catalog().is_some() {
+            return Err(OxynError::CatalogUnavailable(
+                "SQLite has no catalog level".into(),
+            ));
+        }
+        let database = Self::database_of(relation).to_owned();
+        let name = Self::relation_of(relation)?.to_owned();
+        let token = cancel.clone();
+        self.worker
+            .call(cancel, move |connection| {
+                crate::constraints::read(connection, &database, &name, &token)
+            })
+            .await
+    }
+
     async fn list_foreign_keys(
         &self,
         relation: &CatalogPath,
@@ -331,10 +394,8 @@ impl RawForeignKey {
             relation: CatalogPath::for_relation(None, Some(namespace), self.table)?,
             fields: self.to,
         };
-        // `PRAGMA foreign_key_list` ne rend pas le nom de la contrainte : SQLite
-        // ne le conserve pas de façon interrogeable. Le rang de déclaration est
-        // ce qui reste, et il est stable pour une table donnée.
-        let mut key = ForeignKey::new(format!("fk_{}", self.id), self.from, target);
+        // The PRAGMA has an internal ordinal, not a declared constraint name.
+        let mut key = ForeignKey::new("", self.from, target);
         key.on_delete = referential_action(&self.on_delete);
         Ok(key)
     }
@@ -494,7 +555,9 @@ fn foreign_key_list(
             )?,
         };
         let Some(target_field) = target_field else {
-            continue;
+            return Err(OxynError::CatalogUnavailable(
+                "referenced primary key column is not reported".into(),
+            ));
         };
         match keys.iter_mut().find(|key| key.id == entry.id) {
             Some(key) => {

@@ -131,8 +131,15 @@ impl Session for SqliteSession {
     /// [`OxynError::PolicyDenied`] si la demande se déclare en lecture seule et
     /// qu'une instruction écrit, [`OxynError::Cancelled`] si le jeton se
     /// déclenche, ou l'erreur du moteur.
-    async fn execute(&self, request: ExecRequest, cancel: &CancelToken) -> Result<Box<dyn Cursor>> {
+    async fn execute(
+        &self,
+        mut request: ExecRequest,
+        cancel: &CancelToken,
+    ) -> Result<Box<dyn Cursor>> {
         self.capabilities.require_language(request.language)?;
+        if self.capabilities.contains(Capabilities::READ_ONLY_SESSION) {
+            request.limits.read_only = true;
+        }
 
         let handle = StatementHandle::new();
         let started = Instant::now();

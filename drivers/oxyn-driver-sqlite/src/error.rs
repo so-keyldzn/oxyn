@@ -26,8 +26,15 @@
 //! la raison d'être de [`SqliteError::Path`], qui remplace
 //! `rusqlite::Error::InvalidPath` — la seule variante de `rusqlite` dont le
 //! `Display` contient le chemin.
+//!
+//! Le message du moteur, lui, **cite ce qu'on vient de lier** : un déclencheur
+//! `RAISE(ABORT, 'solde : ' || NEW.montant)` ou une contrainte `CHECK` violée
+//! reprennent la valeur passée à `sqlite3_bind_*`. Ce message est affiché,
+//! journalisé et persisté par l'historique. Il n'est donc propagé que si
+//! l'instruction ne portait **aucune** valeur liée par l'appelant : sinon, le
+//! code de résultat étendu remplace le texte du moteur.
 
-use oxyn_core::{DriverId, ErrorClass, OxynError};
+use oxyn_core::{DriverId, ErrorClass, OxynError, ScalarValue};
 use rusqlite::ErrorCode;
 
 /// Ce que l'instruction concernée pouvait faire à la base.
@@ -43,6 +50,51 @@ pub(crate) enum Effect {
     Mutating,
 }
 
+/// D'où viennent les valeurs liées à l'instruction concernée.
+///
+/// Le message du moteur peut citer une valeur liée ; il n'est donc propagé que
+/// lorsque rien de ce qu'il peut citer ne vient de l'appelant
+/// ([I-03](../../../CLAUDE.md#i-03)).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Bound {
+    /// Aucune valeur venue d'une [`ExecRequest`](oxyn_core::ExecRequest). Une
+    /// requête d'introspection lie bien des identifiants — un nom de schéma, un
+    /// nom de table —, mais ceux-là viennent du catalogue déjà affiché, pas de
+    /// ce que l'utilisateur a saisi. La propriété tenue est donc « rien de ce
+    /// que le moteur peut citer ne vient de l'appelant », pas « rien n'était
+    /// lié » : l'écrire autrement rendrait l'audit faux au premier lecteur qui
+    /// ouvrirait `catalog.rs`.
+    Internal,
+    /// Au moins une valeur de l'[`ExecRequest`](oxyn_core::ExecRequest) de
+    /// l'appelant était liée.
+    Caller,
+}
+
+impl Bound {
+    /// Ce que les paramètres d'une demande impliquent pour le message du moteur.
+    pub(crate) const fn of(params: &[ScalarValue]) -> Self {
+        if params.is_empty() {
+            Self::Internal
+        } else {
+            Self::Caller
+        }
+    }
+}
+
+/// Le code de résultat d'un échec, seule part d'un message du moteur qui ne
+/// puisse pas citer une valeur.
+///
+/// `ffi::Error` rend « Error code 19: constraint failed » : le libellé est
+/// dérivé du **nombre**, pas du texte que SQLite a composé.
+fn code_of(code: &Option<rusqlite::ffi::Error>) -> String {
+    match code {
+        Some(failure) => failure.to_string(),
+        // Les variantes de `rusqlite` qui ne viennent pas du moteur (index de
+        // colonne, conversion refusée) n'ont pas de code de résultat.
+        None => "SQLite driver error".to_owned(),
+    }
+}
+
 /// Une erreur propre au driver SQLite.
 ///
 /// Elle circule comme `source` d'[`OxynError::Driver`], qui porte la famille.
@@ -53,8 +105,40 @@ pub(crate) enum Effect {
 #[non_exhaustive]
 pub enum SqliteError {
     /// Erreur rendue par le moteur SQLite lui-même.
+    ///
+    /// Le message étendu de SQLite y figure : il n'est produit que pour une
+    /// instruction sans valeur liée par l'appelant, où il ne peut citer que le
+    /// SQL soumis. Sinon, c'est [`Withheld`](Self::Withheld).
+    /// **Pas de `#[from]`** : un `?` sur un `rusqlite::Error` construirait cette
+    /// variante non rédigée sans jamais consulter l'origine des valeurs. Le
+    /// premier `?` ajouté dans `params.rs` — la fonction qui lie les valeurs —
+    /// sauterait ainsi la rédaction sans qu'aucun relecteur ne le voie. La
+    /// construction passe donc par les deux fonctions de traduction du module,
+    /// où le choix se pose à l'écriture.
     #[error("{0}")]
-    Engine(#[from] rusqlite::Error),
+    Engine(rusqlite::Error),
+
+    /// Le moteur a refusé une instruction qui portait des valeurs liées par
+    /// l'appelant : son message est retenu.
+    ///
+    /// Retenu et non filtré : SQLite peut citer une valeur liée tronquée,
+    /// échappée ou transformée — un déclencheur `RAISE(ABORT, …)` la concatène,
+    /// une contrainte `CHECK` la reprend —, et chercher le texte de la valeur
+    /// dans le message aurait l'apparence d'une protection sans en être une
+    /// ([I-03](../../../CLAUDE.md#i-03)). L'erreur d'origine n'est pas non plus
+    /// conservée dans la variante : `#[derive(Debug)]` la ré-exposerait au
+    /// premier `tracing::debug!` venu.
+    ///
+    /// Ne survit que le code de résultat, qui est un nombre.
+    #[error(
+        "{}: the SQLite message is withheld because the statement carried \
+         bound values",
+        code_of(.code)
+    )]
+    Withheld {
+        /// Le code de résultat étendu, quand l'échec vient du moteur.
+        code: Option<rusqlite::ffi::Error>,
+    },
 
     /// Le chemin du fichier de base est inutilisable.
     ///
@@ -147,19 +231,35 @@ pub fn classify(error: &rusqlite::Error) -> ErrorClass {
     }
 }
 
+/// Traduit une erreur du moteur pour une instruction **composée par le driver**.
+///
+/// Le message du moteur est propagé tel quel : une telle instruction ne lie que
+/// des littéraux que le driver a écrits, donc rien de ce que le moteur peut
+/// citer ne vient de l'appelant. Pour l'exécution d'une
+/// [`ExecRequest`](oxyn_core::ExecRequest), c'est [`engine_bound`] qu'il faut
+/// appeler : là, le moteur cite des valeurs liées
+/// ([I-03](../../../CLAUDE.md#i-03)).
+pub(crate) fn engine(error: rusqlite::Error, effect: Effect) -> OxynError {
+    engine_bound(error, effect, Bound::Internal)
+}
+
 /// Traduit une erreur du moteur dans le vocabulaire du domaine.
 ///
 /// `effect` dit ce que l'instruction pouvait faire ; il ne sert qu'au cas de
-/// l'interruption, voir la documentation du module.
-pub(crate) fn engine(error: rusqlite::Error, effect: Effect) -> OxynError {
-    let interrupted = matches!(
-        &error,
-        rusqlite::Error::SqliteFailure(inner, _) if inner.code == ErrorCode::OperationInterrupted
-    );
-    if interrupted {
+/// l'interruption, voir la documentation du module. `bound` décide du sort du
+/// message : retenu dès qu'une valeur de l'appelant était liée.
+///
+/// La famille de l'erreur, elle, ne dépend **pas** de `bound` : elle se lit sur
+/// le code de résultat, relevé avant que l'erreur d'origine soit abandonnée.
+pub(crate) fn engine_bound(error: rusqlite::Error, effect: Effect, bound: Bound) -> OxynError {
+    let code = match &error {
+        rusqlite::Error::SqliteFailure(inner, _) => Some(*inner),
+        _ => None,
+    };
+    if code.is_some_and(|inner| inner.code == ErrorCode::OperationInterrupted) {
         return match effect {
             Effect::ReadOnly => OxynError::Cancelled,
-            Effect::Mutating => driver(SqliteError::Engine(error), ErrorClass::Ambiguous),
+            Effect::Mutating => driver(hide(error, code, bound), ErrorClass::Ambiguous),
         };
     }
     if matches!(error, rusqlite::Error::InvalidPath(_)) {
@@ -167,7 +267,29 @@ pub(crate) fn engine(error: rusqlite::Error, effect: Effect) -> OxynError {
         return driver(SqliteError::Path, ErrorClass::Permanent);
     }
     let class = classify(&error);
-    driver(SqliteError::Engine(error), class)
+    driver(hide(error, code, bound), class)
+}
+
+/// L'erreur que le driver rend : celle du moteur, ou son code seul quand le
+/// message pourrait citer une valeur de l'appelant.
+///
+/// Seul le texte venu de `sqlite3_errmsg` peut reprendre ce qui vient d'être
+/// lié — c'est lui que porte `SqliteFailure(_, Some(_))`. Les autres variantes
+/// de `rusqlite` sont composées par la bibliothèque à partir d'indices et de
+/// noms de types : les retenir ferait disparaître le diagnostic d'un **bug du
+/// driver** sans rien protéger, et personne ne saurait le reproduire. Le driver
+/// PostgreSQL fait la même distinction pour la même raison.
+pub(crate) fn hide(
+    error: rusqlite::Error,
+    code: Option<rusqlite::ffi::Error>,
+    bound: Bound,
+) -> SqliteError {
+    match bound {
+        Bound::Caller if matches!(error, rusqlite::Error::SqliteFailure(_, Some(_))) => {
+            SqliteError::Withheld { code }
+        }
+        Bound::Internal | Bound::Caller => SqliteError::Engine(error),
+    }
 }
 
 /// Emballe une erreur du driver, en nommant sa famille.
@@ -218,6 +340,19 @@ mod tests {
                 extended_code: 0,
             },
             Some("message du moteur".to_owned()),
+        )
+    }
+
+    /// Un échec du moteur dont le message cite une valeur liée, comme le fait
+    /// `RAISE(ABORT, 'solde : ' || NEW.montant)`.
+    fn echec_bavard() -> rusqlite::Error {
+        rusqlite::Error::SqliteFailure(
+            ffi::Error {
+                code: ErrorCode::ConstraintViolation,
+                // `SQLITE_CONSTRAINT_TRIGGER`.
+                extended_code: 1_811,
+            },
+            Some("solde : S3NT1NELLE-42".to_owned()),
         )
     }
 
@@ -302,9 +437,104 @@ mod tests {
     }
 
     #[test]
+    fn le_message_du_moteur_est_retenu_des_qu_une_valeur_etait_liee() {
+        // I-03 : ce message est affiché, journalisé et persisté par
+        // l'historique. SQLite y recopie ce qu'on vient de lier.
+        let err = engine_bound(echec_bavard(), Effect::Mutating, Bound::Caller);
+        for rendu in [format!("{err}"), format!("{err:?}")] {
+            assert!(!rendu.contains("S3NT1NELLE-42"), "valeur liée : {rendu}");
+            assert!(!rendu.contains("solde"), "message du moteur : {rendu}");
+        }
+        // Le retrait se dit, plutôt que de laisser croire à une erreur muette.
+        assert!(err.to_string().contains("withheld"), "{err}");
+        // Le code de résultat étendu survit : c'est un nombre, il ne cite rien.
+        assert!(err.to_string().contains("1811"), "{err}");
+    }
+
+    #[test]
+    fn sans_valeur_liee_le_message_du_moteur_passe_inchange() {
+        // Le public d'Oxyn lit les messages de son moteur ; une paraphrase
+        // rassurante serait un défaut.
+        let err = engine_bound(echec_bavard(), Effect::Mutating, Bound::Internal);
+        assert!(err.to_string().contains("solde : S3NT1NELLE-42"), "{err}");
+        assert_eq!(
+            err.to_string(),
+            engine(echec_bavard(), Effect::Mutating).to_string(),
+            "`engine` est le cas sans valeur liée"
+        );
+    }
+
+    #[test]
+    fn le_retrait_du_message_ne_change_ni_la_famille_ni_l_annulation() {
+        // La classe se lit sur le code de résultat, relevé avant d'abandonner
+        // l'erreur d'origine : la retenir ne doit rien déplacer.
+        for (code, attendue) in [
+            (ErrorCode::DatabaseBusy, ErrorClass::Transient),
+            (ErrorCode::ConstraintViolation, ErrorClass::Permanent),
+        ] {
+            let err = engine_bound(echec(code), Effect::Mutating, Bound::Caller);
+            assert_eq!(err.class(), attendue, "{err:?}");
+        }
+
+        let lecture = engine_bound(
+            echec(ErrorCode::OperationInterrupted),
+            Effect::ReadOnly,
+            Bound::Caller,
+        );
+        assert!(lecture.is_cancelled(), "{lecture:?}");
+
+        // I-13 : une écriture interrompue reste ambiguë, donc non rejouable.
+        let ecriture = engine_bound(
+            echec(ErrorCode::OperationInterrupted),
+            Effect::Mutating,
+            Bound::Caller,
+        );
+        assert_eq!(ecriture.class(), ErrorClass::Ambiguous, "{ecriture:?}");
+        assert!(!ecriture.is_retryable());
+        assert!(!format!("{ecriture:?}").contains("message du moteur"));
+    }
+
+    #[test]
+    fn une_demande_sans_parametre_ne_retient_rien() {
+        assert_eq!(Bound::of(&[]), Bound::Internal);
+        assert_eq!(
+            Bound::of(&[ScalarValue::Text("S3NT1NELLE-42".to_owned())]),
+            Bound::Caller
+        );
+    }
+
+    #[test]
     fn une_session_fermee_est_une_erreur_permanente() {
         let err = closed();
         assert_eq!(err.class(), ErrorClass::Permanent);
         assert!(!err.is_retryable());
+    }
+
+    /// Retenir le message d'un défaut du driver ne protège rien et efface le
+    /// diagnostic : `InvalidColumnIndex` est composé par `rusqlite` à partir
+    /// d'un index, il ne peut citer aucune valeur liée.
+    #[test]
+    fn seul_le_texte_du_moteur_est_retenu_quand_des_valeurs_sont_liees() {
+        let usage = hide(rusqlite::Error::InvalidColumnIndex(3), None, Bound::Caller);
+        assert!(
+            matches!(usage, SqliteError::Engine(_)),
+            "une erreur d'usage garde son message : {usage}"
+        );
+        assert!(usage.to_string().contains('3'));
+
+        let moteur = hide(
+            rusqlite::Error::SqliteFailure(
+                rusqlite::ffi::Error::new(19),
+                Some("CHECK constraint failed: S3NT1NELLE-42".to_owned()),
+            ),
+            Some(rusqlite::ffi::Error::new(19)),
+            Bound::Caller,
+        );
+        let rendu = format!("{moteur} {moteur:?}");
+        assert!(
+            !rendu.contains("S3NT1NELLE"),
+            "le texte du moteur ne sort pas : {rendu}"
+        );
+        assert!(rendu.contains("19"), "le code de résultat survit : {rendu}");
     }
 }

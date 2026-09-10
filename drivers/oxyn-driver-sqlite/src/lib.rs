@@ -71,13 +71,17 @@
 //! ```
 
 pub mod catalog;
+mod constraints;
 pub mod convert;
 pub mod cursor;
+mod definition;
 pub mod driver;
 pub mod error;
+mod incoming_keys;
 pub mod options;
 pub mod params;
 mod preview;
+mod schema_sql;
 pub mod session;
 pub mod stream;
 pub mod worker;
@@ -100,12 +104,52 @@ mod tests {
     use oxyn_catalog::model::{LogicalType, RelationKind};
     use oxyn_catalog::path::CatalogPath;
     use oxyn_core::{
-        CancelToken, Capabilities, ConnectionConfig, DriverId, Environment, ExecLimits,
+        CancelToken, Capabilities, ConnectionConfig, DriverId, Environment, ErrorClass, ExecLimits,
         ExecRequest, OxynError, QueryLanguage, ScalarValue,
     };
     use oxyn_driver::{Credentials, Cursor, Driver, Session};
 
     use super::*;
+
+    #[tokio::test]
+    async fn constraint_introspection_crosses_the_worker_and_honors_session_capabilities() {
+        let session = atelier().await;
+        assert!(session.capabilities().contains(Capabilities::CONSTRAINTS));
+        executer(&*session, "CREATE TABLE constraints_fixture (id INTEGER PRIMARY KEY, value TEXT CONSTRAINT value_present NOT NULL CHECK(length(value) > 0))").await;
+        let path =
+            CatalogPath::for_relation(None, Some("main"), "constraints_fixture").expect("path");
+        let constraints = session
+            .catalog()
+            .list_constraints(&path, &CancelToken::new())
+            .await
+            .expect("worker metadata");
+        assert_eq!(constraints.len(), 3);
+        assert!(
+            constraints
+                .iter()
+                .any(|constraint| constraint.name == "value_present")
+        );
+        let cancel = CancelToken::new();
+        cancel.cancel();
+        assert!(matches!(
+            session.catalog().list_constraints(&path, &cancel).await,
+            Err(OxynError::Cancelled)
+        ));
+        let wrong_catalog = CatalogPath::for_relation(
+            Some("not_a_sqlite_level"),
+            Some("main"),
+            "constraints_fixture",
+        )
+        .expect("structured path");
+        assert!(matches!(
+            session
+                .catalog()
+                .list_constraints(&wrong_catalog, &CancelToken::new())
+                .await,
+            Err(OxynError::CatalogUnavailable(_))
+        ));
+        session.close().await.expect("close fixture");
+    }
 
     /// Une session sur une base en mémoire, privée au test.
     async fn session(limits: BatchLimits) -> Box<dyn Session> {
@@ -380,6 +424,139 @@ mod tests {
             1,
             "la table d'audit a été supprimée"
         );
+    }
+
+    /// Une valeur improbable, pour qu'un test qui la cherche ne la trouve que
+    /// si elle a réellement traversé.
+    const SENTINELLE: &str = "S3NT1NELLE-42";
+
+    /// Une table dont le déclencheur recopie la valeur insérée dans son
+    /// message : c'est la fuite que la correction ferme.
+    async fn atelier_bavard() -> Box<dyn Session> {
+        let session = atelier().await;
+        executer(session.as_ref(), "CREATE TABLE comptes(note TEXT)").await;
+        executer(
+            session.as_ref(),
+            "CREATE TRIGGER refuser BEFORE INSERT ON comptes \
+             BEGIN SELECT RAISE(ABORT, 'solde : ' || NEW.note); END",
+        )
+        .await;
+        session
+    }
+
+    #[tokio::test]
+    async fn une_valeur_liee_ne_ressort_ni_a_l_ecran_ni_dans_l_historique() {
+        // I-03 : le message du moteur est affiché par la console, persisté par
+        // `HistoryRecord::failed` et `JournalRecord::failed` — qui appellent
+        // tous deux `error.to_string()` —, et un `tracing::debug!` le rendrait
+        // par `Debug`. Les trois rendus comptent.
+        let session = atelier_bavard().await;
+        let demande = ecriture("INSERT INTO comptes(note) VALUES (?1)")
+            .with_params(vec![ScalarValue::Text(SENTINELLE.to_owned())]);
+        let err = refus(
+            session.execute(demande, &CancelToken::new()).await,
+            "le déclencheur doit refuser l'insertion",
+        );
+
+        let affiche = format!("{err}");
+        let persiste = err.to_string();
+        let debogue = format!("{err:?}");
+        for rendu in [&affiche, &persiste, &debogue] {
+            assert!(!rendu.contains(SENTINELLE), "valeur liée rendue : {rendu}");
+            assert!(
+                !rendu.contains("solde"),
+                "message du moteur rendu : {rendu}"
+            );
+        }
+        assert!(
+            affiche.contains("withheld"),
+            "le retrait doit se dire, sinon l'utilisateur cherche un bug : {affiche}"
+        );
+        // Le code de résultat étendu reste lisible : `SQLITE_CONSTRAINT_TRIGGER`.
+        assert!(affiche.contains("1811"), "{affiche}");
+        assert_eq!(err.class(), ErrorClass::Permanent, "{err:?}");
+    }
+
+    #[tokio::test]
+    async fn sans_valeur_liee_le_message_du_moteur_arrive_entier() {
+        // La protection ne doit pas s'appliquer à tort : le public d'Oxyn lit
+        // les messages de son moteur.
+        let session = atelier_bavard().await;
+        let demande = ecriture(&format!(
+            "INSERT INTO comptes(note) VALUES ('{SENTINELLE}')"
+        ));
+        let err = refus(
+            session.execute(demande, &CancelToken::new()).await,
+            "le déclencheur doit refuser l'insertion",
+        );
+        assert!(
+            err.to_string().contains(&format!("solde : {SENTINELLE}")),
+            "le message du moteur doit passer inchangé : {err}"
+        );
+    }
+
+    #[tokio::test]
+    async fn une_lecture_qui_echoue_sur_une_valeur_liee_retient_aussi_son_message() {
+        // Le chemin de lecture échoue dans `sqlite3_step`, loin de la demande :
+        // c'est là que l'information « il y avait des valeurs liées » doit être
+        // passée, pas devinée.
+        let session = atelier().await;
+        let demande = lecture("SELECT abs(?1)").with_params(vec![ScalarValue::Int64(i64::MIN)]);
+        let err = refus(
+            session.execute(demande, &CancelToken::new()).await,
+            "`abs` déborde sur le plus petit entier",
+        );
+        assert!(
+            !err.to_string().contains("integer overflow"),
+            "message du moteur rendu : {err}"
+        );
+        assert!(err.to_string().contains("withheld"), "{err}");
+
+        // Le même débordement écrit en clair garde son message.
+        let sans_liaison = refus(
+            session
+                .execute(
+                    lecture("SELECT abs(-9223372036854775808)"),
+                    &CancelToken::new(),
+                )
+                .await,
+            "`abs` déborde sur le plus petit entier",
+        );
+        assert!(
+            sans_liaison.to_string().contains("integer overflow"),
+            "{sans_liaison}"
+        );
+    }
+
+    #[tokio::test]
+    async fn l_annulation_coupe_aussi_une_lecture_a_valeurs_liees() {
+        // Retenir un message ne doit pas transformer une annulation en panne.
+        let session = session(BatchLimits::new().with_max_rows(10)).await;
+        let jeton = CancelToken::new();
+        let demande = ExecRequest::new(
+            QueryLanguage::SQL,
+            "WITH RECURSIVE suite(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM suite WHERE n < ?1) \
+             SELECT n FROM suite",
+        )
+        .with_limits(ExecLimits::unbounded())
+        .with_params(vec![ScalarValue::Int64(50_000)]);
+
+        let mut curseur = session.execute(demande, &jeton).await.expect("exécution");
+        assert!(
+            curseur
+                .next_batch()
+                .await
+                .expect("premier lot")
+                .is_some_and(|lot| lot.num_rows() == 10)
+        );
+
+        jeton.cancel();
+        let err = refus(curseur.next_batch().await, "l'annulation doit couper");
+        assert!(err.is_cancelled(), "{err:?}");
+        assert!(curseur.stats().truncated);
+
+        drop(curseur);
+        session.ping().await.expect("la session reste utilisable");
     }
 
     #[tokio::test]
@@ -853,6 +1030,94 @@ mod tests {
                 .value(0),
             1,
             "la table d'audit a été supprimée par un aperçu"
+        );
+    }
+    #[tokio::test]
+    async fn shared_memory_sessions_keep_profile_isolation_and_enforce_read_only_requests() {
+        let driver = SqliteDriver::new();
+        let mut config = ConnectionConfig::new("memory profile", DriverId::sqlite())
+            .with_param(SqliteDriver::PATH, SqliteDriver::MEMORY);
+        let cancel = CancelToken::new();
+        let writer = driver
+            .connect(&config, &Credentials::new(), &cancel)
+            .await
+            .expect("writer");
+        for text in [
+            "CREATE TABLE shared_probe(n INTEGER)",
+            "INSERT INTO shared_probe VALUES (1)",
+        ] {
+            let mut cursor = writer
+                .execute(ecriture(text), &cancel)
+                .await
+                .expect("write");
+            while cursor.next_batch().await.expect("drain").is_some() {}
+        }
+        config.read_only = true;
+        let reader = driver
+            .connect(&config, &Credentials::new(), &cancel)
+            .await
+            .expect("read-only sibling");
+        assert!(
+            reader
+                .capabilities()
+                .contains(Capabilities::READ_ONLY_SESSION)
+        );
+        let mut cursor = reader
+            .execute(
+                ExecRequest::new(QueryLanguage::SQL, "SELECT n FROM shared_probe"),
+                &cancel,
+            )
+            .await
+            .expect("shared table");
+        assert_eq!(
+            cursor
+                .next_batch()
+                .await
+                .expect("rows")
+                .expect("batch")
+                .num_rows(),
+            1
+        );
+        drop(cursor);
+        assert!(
+            reader
+                .execute(ecriture("INSERT INTO shared_probe VALUES (2)"), &cancel)
+                .await
+                .is_err(),
+            "writable caller limits cannot lift a session restriction"
+        );
+        reader.close().await.expect("close reader");
+        let mut cursor = writer
+            .execute(
+                ExecRequest::new(QueryLanguage::SQL, "SELECT n FROM shared_probe"),
+                &cancel,
+            )
+            .await
+            .expect("writer survives sibling close");
+        assert_eq!(
+            cursor
+                .next_batch()
+                .await
+                .expect("rows")
+                .expect("batch")
+                .num_rows(),
+            1
+        );
+        drop(cursor);
+        writer.close().await.expect("last session closes");
+        config.read_only = false;
+        let empty = driver
+            .connect(&config, &Credentials::new(), &cancel)
+            .await
+            .expect("fresh memory lifetime");
+        assert!(
+            empty
+                .execute(
+                    ExecRequest::new(QueryLanguage::SQL, "SELECT * FROM shared_probe"),
+                    &cancel
+                )
+                .await
+                .is_err()
         );
     }
 }

@@ -38,7 +38,7 @@ use oxyn_core::ScalarValue;
 use rusqlite::Statement;
 use rusqlite::types::Value;
 
-use crate::error::SqliteError;
+use crate::error::{Bound, SqliteError};
 
 /// Lie les paramètres positionnels d'une instruction préparée.
 ///
@@ -64,7 +64,18 @@ pub(crate) fn bind(
         // Le compte est vérifié ci-dessus, et `enumerate` ne déborde pas :
         // `position + 1` tient dans un `usize` puisque `position < len`.
         let index = position.saturating_add(1);
-        statement.raw_bind_parameter(index, to_storage(value, index)?)?;
+        // Le choix se pose ici plutôt que d'être avalé par un `?` : c'est la
+        // fonction qui lie les valeurs de l'appelant, donc le seul endroit du
+        // driver où le moteur pourrait en citer une (I-03).
+        statement
+            .raw_bind_parameter(index, to_storage(value, index)?)
+            .map_err(|error| {
+                let code = match &error {
+                    rusqlite::Error::SqliteFailure(inner, _) => Some(*inner),
+                    _ => None,
+                };
+                crate::error::hide(error, code, Bound::Caller)
+            })?;
     }
     Ok(())
 }

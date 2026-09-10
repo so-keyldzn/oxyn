@@ -89,8 +89,8 @@ impl std::fmt::Debug for OpenSpec {
 /// La base visée par une ouverture.
 #[derive(Clone)]
 pub(crate) enum OpenTarget {
-    /// Une base en mémoire, privée à la connexion et perdue à sa fermeture.
-    Memory,
+    /// One named in-memory database per configured connection, shared by its sessions.
+    Memory(oxyn_core::ConnectionId),
     /// Un fichier. Son chemin ne sort jamais dans un rendu de diagnostic.
     File(PathBuf),
 }
@@ -98,7 +98,7 @@ pub(crate) enum OpenTarget {
 impl std::fmt::Debug for OpenTarget {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Memory => f.write_str("Memory"),
+            Self::Memory(_) => f.write_str("Memory"),
             Self::File(_) => f.write_str("File(<chemin masqué>)"),
         }
     }
@@ -288,15 +288,19 @@ fn open(spec: &OpenSpec) -> Result<Connection> {
         OpenFlags::default()
     };
     let connection = match &spec.target {
-        OpenTarget::Memory => Connection::open_in_memory_with_flags(
-            // Une base en mémoire n'existe pas avant d'être créée : la rouvrir
-            // en lecture seule donnerait une base vide, ce qui n'est pas ce que
-            // l'utilisateur demande.
+        OpenTarget::Memory(connection) => Connection::open_with_flags(
+            format!("file:oxyn-memory-{connection}?mode=memory&cache=shared"),
             OpenFlags::default(),
         ),
         OpenTarget::File(path) => Connection::open_with_flags(path, flags),
     };
-    connection.map_err(error::open)
+    let connection = connection.map_err(error::open)?;
+    if spec.read_only {
+        connection
+            .pragma_update(None, "query_only", true)
+            .map_err(error::open)?;
+    }
+    Ok(connection)
 }
 
 /// La boucle du thread porteur.
@@ -338,7 +342,7 @@ mod tests {
 
     fn memoire() -> OpenSpec {
         OpenSpec {
-            target: OpenTarget::Memory,
+            target: OpenTarget::Memory(oxyn_core::ConnectionId::new()),
             read_only: false,
         }
     }

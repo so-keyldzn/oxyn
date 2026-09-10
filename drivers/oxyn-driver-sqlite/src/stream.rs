@@ -44,7 +44,7 @@ use rusqlite::{Batch, Connection, Row, Rows, Statement};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::convert::{ColumnBuilder, ColumnPlan, Observed, ProbeValue, schema_of, value_bytes};
-use crate::error::{self, Effect, SqliteError};
+use crate::error::{self, Bound, Effect, SqliteError};
 use crate::options::BatchLimits;
 use crate::params;
 
@@ -97,6 +97,11 @@ pub(crate) fn run(connection: &Connection, job: StreamJob) {
         mut pulls,
     } = job;
 
+    // Relevé une fois pour toute l'exécution : à partir de `params::bind`, le
+    // moteur peut citer une de ces valeurs dans son message, et il faut le
+    // savoir au moment de classer l'erreur plutôt que d'essayer de le deviner
+    // sur son texte (I-03).
+    let bound = Bound::of(&request.params);
     let mut affected = 0_u64;
     let mut batch = Batch::new(connection, &request.text);
     let last = match select_last(connection, &mut batch, &request, &mut affected) {
@@ -130,7 +135,7 @@ pub(crate) fn run(connection: &Connection, job: StreamJob) {
         // l'utilisateur attend, c'est le compte de lignes affectées.
         let before = connection.total_changes();
         if let Err(err) = statement.raw_execute() {
-            let _ = start.send(Err(error::engine(err, effect)));
+            let _ = start.send(Err(error::engine_bound(err, effect, bound)));
             return;
         }
         affected = affected.saturating_add(changes_since(connection, before));
@@ -138,7 +143,9 @@ pub(crate) fn run(connection: &Connection, job: StreamJob) {
         return;
     }
 
-    stream_rows(statement, &request, limits, effect, start, &mut pulls);
+    stream_rows(
+        statement, &request, limits, effect, bound, start, &mut pulls,
+    );
 }
 
 /// Le résultat d'une exécution qui ne produit aucune colonne.
@@ -168,7 +175,9 @@ fn select_last<'conn>(
         // Sans paramètres liés, une instruction sans colonnes s'exécute avant
         // que la suivante soit préparée. C'est ce qui fait marcher
         // `CREATE TABLE t; SELECT * FROM t;` : la seconde ne se prépare qu'une
-        // fois la table créée.
+        // fois la table créée. Rien n'étant lié ici, le message du moteur ne
+        // peut citer que le SQL soumis : `error::engine` suffit dans cette
+        // fonction.
         if request.params.is_empty() && statement.column_count() == 0 {
             guard_read_only(&statement, request)?;
             let effect = effect_of(&statement);
@@ -211,6 +220,9 @@ fn next_statement<'conn>(batch: &mut Batch<'conn, '_>) -> Result<Option<Statemen
 }
 
 /// Exécute une instruction et jette ses lignes.
+///
+/// Appelée seulement depuis [`select_last`], qui a refusé les paramètres liés
+/// avant d'y arriver : d'où [`Bound::Internal`].
 fn discard(
     statement: &mut Statement<'_>,
     connection: &Connection,
@@ -219,18 +231,23 @@ fn discard(
     let effect = effect_of(statement);
     let before = connection.total_changes();
     let mut rows = statement.raw_query();
-    while step(&mut rows, effect)?.is_some() {}
+    while step(&mut rows, effect, Bound::Internal)?.is_some() {}
     drop(rows);
     *affected = affected.saturating_add(changes_since(connection, before));
     Ok(())
 }
 
 /// Diffuse les lignes d'une instruction.
+///
+/// `bound` accompagne `effect` jusqu'aux fonctions de lecture : elles n'ont pas
+/// la demande sous la main, et le deviner à leur niveau serait une supposition
+/// de plus.
 fn stream_rows(
     mut statement: Statement<'_>,
     request: &ExecRequest,
     limits: BatchLimits,
     effect: Effect,
+    bound: Bound,
     start: oneshot::Sender<Result<StreamStart>>,
     pulls: &mut mpsc::UnboundedReceiver<Pull>,
 ) {
@@ -250,7 +267,7 @@ fn stream_rows(
     let mut remaining = request.limits.max_rows;
     let mut rows = statement.raw_query();
 
-    let sonde = match probe(&mut rows, width, limits, &mut remaining, effect) {
+    let sonde = match probe(&mut rows, width, limits, &mut remaining, effect, bound) {
         Ok(sonde) => sonde,
         Err(err) => {
             let _ = start.send(Err(err));
@@ -325,7 +342,14 @@ fn stream_rows(
             // signalée comme une erreur.
             return;
         }
-        let filled = match fill(&mut rows, &mut builders, limits, &mut remaining, effect) {
+        let filled = match fill(
+            &mut rows,
+            &mut builders,
+            limits,
+            &mut remaining,
+            effect,
+            bound,
+        ) {
             Ok(filled) => filled,
             Err(err) => {
                 let _ = reply.send(Err(err));
@@ -378,6 +402,7 @@ fn probe(
     limits: BatchLimits,
     remaining: &mut Option<usize>,
     effect: Effect,
+    bound: Bound,
 ) -> Result<Probe> {
     let mut values = Vec::new();
     let mut observed = vec![Observed::default(); width];
@@ -388,18 +413,18 @@ fn probe(
 
     loop {
         if *remaining == Some(0) {
-            truncated = step(rows, effect)?.is_some();
+            truncated = step(rows, effect, bound)?.is_some();
             finished = true;
             break;
         }
-        let Some(row) = step(rows, effect)? else {
+        let Some(row) = step(rows, effect, bound)? else {
             finished = true;
             break;
         };
         for (index, seen) in observed.iter_mut().enumerate() {
             let value = row
                 .get_ref(index)
-                .map_err(|err| error::engine(err, effect))?;
+                .map_err(|err| error::engine_bound(err, effect, bound))?;
             seen.observe(value);
             bytes = bytes.saturating_add(value_bytes(value));
             values.push(ProbeValue::capture(value));
@@ -437,6 +462,7 @@ fn fill(
     limits: BatchLimits,
     remaining: &mut Option<usize>,
     effect: Effect,
+    bound: Bound,
 ) -> Result<Filled> {
     let mut count = 0_usize;
     let mut bytes = 0_usize;
@@ -445,18 +471,18 @@ fn fill(
 
     loop {
         if *remaining == Some(0) {
-            truncated = step(rows, effect)?.is_some();
+            truncated = step(rows, effect, bound)?.is_some();
             finished = true;
             break;
         }
-        let Some(row) = step(rows, effect)? else {
+        let Some(row) = step(rows, effect, bound)? else {
             finished = true;
             break;
         };
         for (index, builder) in builders.iter_mut().enumerate() {
             let value = row
                 .get_ref(index)
-                .map_err(|err| error::engine(err, effect))?;
+                .map_err(|err| error::engine_bound(err, effect, bound))?;
             bytes = bytes.saturating_add(value_bytes(value));
             builder
                 .append(value)
@@ -477,8 +503,13 @@ fn fill(
 }
 
 /// Avance d'une ligne.
-fn step<'a, 'stmt>(rows: &'a mut Rows<'stmt>, effect: Effect) -> Result<Option<&'a Row<'stmt>>> {
-    rows.next().map_err(|err| error::engine(err, effect))
+fn step<'a, 'stmt>(
+    rows: &'a mut Rows<'stmt>,
+    effect: Effect,
+    bound: Bound,
+) -> Result<Option<&'a Row<'stmt>>> {
+    rows.next()
+        .map_err(|err| error::engine_bound(err, effect, bound))
 }
 
 /// Décompte une ligne de la borne `ExecLimits::max_rows`, quand il y en a une.

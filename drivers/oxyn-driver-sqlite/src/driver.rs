@@ -31,16 +31,15 @@
 //! | `PERMISSIONS`, `GRANT_REVOKE` | SQLite n'a pas de modèle de droits |
 //! | `ROW_COUNT_ESTIMATE` | aucune estimation sans `COUNT(*)`, qui scanne |
 //! | `ROUTINES`, `SEQUENCES`, `USER_TYPES`, `MATERIALIZED_VIEWS` | SQLite n'en a pas |
-//! | `TRIGGERS`, `CONSTRAINTS` | SQLite les a, mais `CatalogProvider` n'a pas encore de méthode pour les rendre : déclarer une capacité sans surface serait promettre |
+//! | `TRIGGERS` | SQLite les a, mais `CatalogProvider` n'a pas encore de méthode pour les rendre : déclarer une capacité sans surface serait promettre |
 //! | `SAVEPOINTS` | SQLite les a, mais aucun trait ne les expose encore |
 //! | `EXPLAIN_ANALYZE` | SQLite a `EXPLAIN QUERY PLAN`, qui n'exécute pas |
 //! | `BULK_LOAD` | pas de `COPY` |
 //! | `FULL_TEXT_SEARCH` | FTS5 dépend des options de compilation du moteur lié ; le déclarer sans le vérifier serait le simuler |
 //!
-//! `TRIGGERS`, `CONSTRAINTS`, `SAVEPOINTS` et `FULL_TEXT_SEARCH` sont des
+//! `TRIGGERS`, `SAVEPOINTS` et `FULL_TEXT_SEARCH` sont des
 //! absences de **surface**, pas de moteur.
-//! <!-- TODO(phase 1) : débloqué par `list_constraints` côté `oxyn-catalog` et
-//! par la détection de FTS5 via `PRAGMA compile_options`. -->
+//! <!-- TODO(2026-09-10): expose triggers/savepoints and detect FTS5 via compile_options. -->
 
 use std::path::PathBuf;
 
@@ -102,7 +101,10 @@ impl SqliteDriver {
             | Capabilities::TABLES
             | Capabilities::VIEWS
             | Capabilities::INDEXES
+            | Capabilities::CONSTRAINTS
             | Capabilities::FOREIGN_KEYS
+            | Capabilities::INCOMING_FOREIGN_KEYS
+            | Capabilities::OBJECT_DEFINITION
             // Exécution.
             | Capabilities::TRANSACTIONS
             | Capabilities::PREPARED_STATEMENTS
@@ -115,11 +117,8 @@ impl SqliteDriver {
             | Capabilities::READ_ONLY_SESSION
     }
 
-    /// Les capacités d'une session, une fois la base ouverte.
-    ///
-    /// `read_only` vient du moteur (`sqlite3_db_readonly`), pas d'une préférence
-    /// déclarée : un fichier posé sur un support en lecture seule donne le même
-    /// résultat qu'une connexion marquée telle par l'utilisateur.
+    /// Reads both file flags and the engine's query-only state after opening.
+    /// Every request retains this restriction even if the caller asks for writable limits.
     #[must_use]
     fn session_capabilities(read_only: bool) -> Capabilities {
         let mut capabilities = Self::ceiling().difference(Capabilities::READ_ONLY_SESSION);
@@ -146,7 +145,7 @@ fn metadata() -> DriverMetadata {
                 .required()
                 .with_help(
                     "Chemin du fichier SQLite. La valeur `:memory:` ouvre une base \
-                     en mémoire, privée à la connexion et perdue à sa fermeture.",
+                     en mémoire, partagée entre les sessions de cette connexion et perdue à la fermeture de la dernière session.",
                 ),
         )
 }
@@ -200,7 +199,7 @@ impl Driver for SqliteDriver {
             })?;
 
         let target = if path == Self::MEMORY {
-            OpenTarget::Memory
+            OpenTarget::Memory(config.id)
         } else {
             OpenTarget::File(PathBuf::from(path))
         };
@@ -219,9 +218,13 @@ impl Driver for SqliteDriver {
         // de la configuration (ADR-0003).
         let read_only = worker
             .call(cancel, |connection: &Connection| {
-                connection
+                let file_read_only = connection
                     .is_readonly(crate::catalog::MAIN)
-                    .map_err(|err| error::engine(err, Effect::ReadOnly))
+                    .map_err(|err| error::engine(err, Effect::ReadOnly))?;
+                let query_only: bool = connection
+                    .pragma_query_value(None, "query_only", |row| row.get(0))
+                    .map_err(|err| error::engine(err, Effect::ReadOnly))?;
+                Ok(file_read_only || query_only)
             })
             .await?;
 
@@ -305,7 +308,6 @@ mod tests {
             Capabilities::BULK_LOAD,
             Capabilities::FULL_TEXT_SEARCH,
             Capabilities::TRIGGERS,
-            Capabilities::CONSTRAINTS,
             Capabilities::SAVEPOINTS,
         ] {
             assert!(
