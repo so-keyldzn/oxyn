@@ -166,6 +166,14 @@ la session ; SQLite conserve la convention du catalogue pour ses bases
 attachées. La grille de l'aperçu et son annulation sont distinctes de celles de
 l'éditeur SQL.
 
+La borne de réception de l'aperçu réserve une ligne supplémentaire pour
+confirmer l'épuisement du curseur de la requête déjà limitée. Le `ResultBuffer`
+conserve strictement la limite demandée : un lot supplémentaire non vide est
+jeté et laisse le résultat tronqué ; seule une fin réelle du flux permet
+l'export de l'aperçu. Cette confirmation reste annulable et sous le délai de
+l'exécution. Le drainage d'une requête SQL ordinaire conserve son arrêt
+conservateur dès que sa limite de réception est atteinte.
+
 La préparation PostgreSQL examine les types des colonnes, y compris les bases
 de domaines et les éléments de tableaux. Les types sans sortie binaire, les
 types internes et les références symboliques du catalogue sont explicitement
@@ -178,6 +186,17 @@ processus comme un accessoire — ni Dock, ni activation propre, ni identifiant
 que l'outillage puisse désigner. `make app` assemble
 `target/<profil>/Oxyn.app` à partir de `crates/oxyn-app/Oxyn.app.plist` et de
 `assets/brand/Oxyn.icns`.
+
+Les préférences de lecture vivent dans `workspace_preferences`, ajoutée par
+la migration SQLite 4. Le payload est un JSON versionné de `WorkspacePreferences`
+(`oxyn-core`), sans type GPUI. Les deux commandes de lecture/écriture passent
+par le bus et le pool bloquant. L'écriture est réservée à l'humain par la
+politique par défaut. La validation et la comparaison des révisions ont lieu
+dans la transaction locale ; un état illisible n'est jamais remplacé en silence.
+La fermeture de la dernière fenêtre attend les écritures déjà soumises avant
+de demander l'arrêt. Les tâches retiennent les services du backend, pas leur
+propre runtime. Le contrat et les limites figurent dans
+[ADR-0013](adr/0013-preferences-workspace.md).
 
 Une crate porte **un** sujet. Pas de `oxyn-utils`, pas de `oxyn-common` : un nom
 fourre-tout est le symptôme d'un découpage qu'on n'a pas su faire, et il devient le point
@@ -368,10 +387,33 @@ des phases 0 à 3 n'en a besoin. Voir [ADR-0007](adr/0007-driver-sidecar.md).
 * **Frontière de processus** — Arrow IPC, cf. §4.4.
 
 **Débordement sur disque.** `ResultBuffer` conserve les batches en mémoire dans un budget
-configurable (défaut 256 Mo) et écrit le reste dans un fichier Arrow IPC temporaire mappé
-en mémoire. Faire défiler la ligne 40 000 000 lit une page disque ; cela ne relance jamais
+configurable (défaut 256 Mio) et écrit le reste en flux Arrow IPC autonomes dans
+un fichier temporaire ([ADR-0012](adr/0012-lecture-pages-resultats.md)). Faire défiler la ligne 40 000 000 lit une page disque ; cela ne relance jamais
 la requête et ne sature jamais la RAM. `locate(row)` est en O(log n) par recherche binaire
 sur les offsets cumulés — c'est le chemin chaud du produit.
+
+Le budget de rétention est partagé : trois quarts pour les lots initiaux, un
+quart pour le cache de relecture en cas de débordement autorisé. Le cache
+compte les octets Arrow, les références de colonnes et sa capacité allouée
+pour les entrées ; il évince par usage. Une page trop grosse pour ce cache
+produit une erreur explicite et reste lisible par l'export en flux. Les copies
+de décodage, l'index des lots et les références transitoires des lecteurs ne
+sont pas une mesure de RSS ; la campagne de performance les mesure séparément.
+
+`ReadResultPage { connection, result, batch }` relit une page existante sur le
+pool bloquant du runtime de l'application. La vue n'utilise que `cached_batch`,
+sans disque ni décodage. Elle corrèle le retour au résultat et à la génération
+de grille, et n'effectue aucune reprise automatique après erreur. L'exécuteur
+vérifie l'appartenance du résultat à la connexion pour la relecture et l'export.
+Le journal ne contient que l'identité de la commande, jamais les cellules.
+
+`InspectResultValue` applique la même vérification d'appartenance. Un worker
+relit au besoin le lot existant puis écrit la représentation Arrow d'une seule
+valeur dans un formateur paginé. Seuls 16 Kio de texte sont retenus pour une
+réponse ; le formateur ne construit pas la chaîne entière avant découpe.
+`ValuePage` distingue l'absence de valeur du texte `NULL`, conserve les
+frontières UTF-8 et masque son texte dans `Debug`. Les cellules ne rejoignent
+ni le journal de commande ni automatiquement une réponse destinée au modèle.
 
 **Données sans schéma.** Mongo et les documents JSON sont projetés vers Arrow par
 échantillonnage sur un schéma inféré, avec une colonne de débordement pour les champs hors
@@ -413,17 +455,82 @@ validés par `CatalogPath` dans l'exécuteur, sans dépendance de `oxyn-core` ve
 palier, elle lit les schémas si la session déclare `SCHEMAS`, sinon les relations.
 Elle ne décrit jamais les relations et ne charge ni index ni clés étrangères.
 
-Le scope `Relation` est le seul à descendre au détail : champs, puis index si la
+Le scope `Relation` descend au détail : champs, puis index si la
 session déclare `INDEXES`, puis clés étrangères si elle déclare `FOREIGN_KEYS`.
 **Une capacité absente laisse le champ non lu**, jamais une liste vide : le cache
 distingue « pas lu » de « aucun », et les confondre ferait affirmer à l'onglet
 Index qu'une table n'en a pas alors que personne n'a su le dire. Une erreur sur
 l'un de ces deux appels fait échouer le rafraîchissement entier — le patch est
 publié d'un bloc, et un onglet vide sans message se lirait comme « aucun index ».
-Les **contraintes** ne sont dans aucun scope : `CatalogProvider` n'expose pas de
-`list_constraints` et le cache n'a pas de case où les ranger. C'est délibéré
-(voir la note sur `oxyn_catalog::Constraint`), et ce sera un `list_constraints`
-par symétrie avec `list_indexes`, pas un champ de plus dans `Relation`.
+Les contraintes ont leur scope explicite `Constraints { catalog, namespace,
+relation }`, conditionné à `CONSTRAINTS`. Il décrit la relation puis appelle
+`CatalogProvider::list_constraints` ; le cache publie ces deux lectures
+ensemble. L'ouverture ordinaire d'une table ne charge pas les contraintes.
+L'annulation ou l'erreur conserve le dernier cache. L'ancien JSON du cache
+reste lisible : le nouveau champ absent vaut « non lu ».
+PostgreSQL fournit noms, colonnes ordonnées et définitions rendues par le moteur,
+avec les attributs NOT NULL des anciennes versions sous nom absent.
+Le statut de validation provient de `pg_constraint.convalidated` ; il ne vaut
+pas déclaration de l'application effective de la contrainte. SQLite laisse ce
+statut inconnu : une clause stockée ne prouve pas que les données existantes
+respectent la contrainte. Le champ JSON absent reste inconnu.
+Les contraintes triggers sont identifiées sans définition SQL inventée.
+La réponse est refusée au-delà de 1024 entrées ou de 16 Kio par définition.
+Cette introspection n'est pas déclarée pour Redshift. SQLite extrait ses
+contraintes déclarées depuis `sqlite_schema.sql` sur son thread de travail.
+La lecture du SQL stocké est bornée à 1 Mio avant son transfert ; les clauses
+sont conservées sans réécriture, y compris noms, commentaires internes et
+`ON CONFLICT`. L'extraction distingue citations, commentaires et parenthèses,
+y compris les contraintes de table adjacentes sans virgule acceptées par SQLite.
+Elle n'infère pas les dépendances de colonnes des CHECK ni les restrictions
+implicites des tables STRICT/WITHOUT ROWID. Les vues rendent une liste vide ;
+les tables virtuelles rendent un refus explicite, car les paramètres du module
+ne constituent pas une liste de contraintes SQL. Une source trop grande ou
+illisible produit une erreur, jamais une liste partielle présentée comme complète.
+
+Les relations entrantes utilisent le scope `IncomingForeignKeys` et la capacité
+`INCOMING_FOREIGN_KEYS`, indépendants des clés sortantes. PostgreSQL lit les
+contraintes référençant la cible, y compris entre schémas de la même base ;
+SQLite parcourt les PRAGMA de clés étrangères du seul espace de noms demandé.
+L'ordre des colonnes est explicite et les références SQLite sans colonnes
+cibles sont résolues sur la clé primaire. Une référence incomplète est signalée,
+jamais omise pour présenter une liste apparemment complète. Les ordinaux
+internes SQLite ne sont pas présentés comme des noms de contraintes.
+
+`IncomingForeignKey` porte la source, la clé et un statut optionnel d'unicité.
+La cardinalité déclarée se fonde sur les clés/index uniques directs et complets.
+Une comparaison de types, d'affinités ou de collations incompatible, un index
+partiel ou d'expression laisse le statut inconnu lorsqu'il ne peut être établi.
+SQLite consulte `Connection::column_metadata` sur le worker ; aucune analyse
+ni lecture de données ne se produit sur le thread UI. La lecture est bornée à
+1024 clés et 128 colonnes par clé ; SQLite borne aussi chaque texte à 16 Kio
+et les textes parcourus à 16 Mio. Un dépassement refuse la réponse entière.
+L'annulation conserve le cache précédent ; les nouveaux champs absents des
+anciens fichiers sont non lus. Redshift ne déclare pas cette découverte.
+
+La définition DDL passe par `CatalogRefreshScope::Definition` et
+`CatalogProvider::relation_definition`, sous `OBJECT_DEFINITION` (ADR-0018).
+`RelationDefinition` porte la provenance et les notes de portée ; le SQL est
+borné à 1 Mio et son contenu n'apparaît pas dans Debug. Les notes sont bornées à
+32 entrées/64 Kio. Le cache DDL de chaque connexion tient au plus 16 entrées et
+16 Mio de SQL/notes ; les anciennes valeurs, même invalidées, sont évincées
+sans retirer les index ni les contraintes. Le driver lit une définition cohérente, puis le bus valide
+avant de publier. Les erreurs, annulations et types d'objet non pris en charge
+ne publient pas de définition partielle.
+
+SQLite reprend les déclarations stockées de l'objet, de ses index et triggers
+dans un seul curseur, en qualifiant les noms de déclaration. PostgreSQL
+reconstruit la création avec séquences détenues, contraintes, index, règles,
+triggers utilisateur et politiques RLS, ainsi que leurs états ENABLE/FORCE.
+Les privilèges, commentaires, données et dépendances externes ne font pas
+partie de cette portée ; elle n'est pas un dump de base. Les notes exposent les
+limitations et le contexte de résolution des expressions.
+
+Le lecteur GPUI a sa propre commande annulable, sans appel au driver. Les
+retours corrélés à un objet quitté ne remplacent pas la vue courante. Un échec
+de rafraîchissement conserve un texte explicitement marqué comme antérieur.
+Open DDL in console emprunte le trajet de copie vers une nouvelle console,
+sans remplacement de brouillon ni exécution.
 
 `Executor::catalog(connection)` donne un `Option<SharedCatalog>` en mémoire :
 présent après connexion, retiré à la déconnexion. L'UI lit ce cache sans I/O,
@@ -456,13 +563,20 @@ construire des `Command` et les envoyer.
 pub enum Command {
     Connect          { connection: ConnectionId },
     Disconnect       { connection: ConnectionId },
+    CloseSession     { connection: ConnectionId, session: SessionId },
     Execute          { connection: ConnectionId, session: SessionId,
                        request: Box<ExecRequest> },
     Cancel           { connection: ConnectionId, statement: StatementHandle },
     RefreshCatalog   { connection: ConnectionId },
     RefreshCatalogScope { connection: ConnectionId, scope: CatalogRefreshScope },
+    ReadResultPage   { connection: ConnectionId, result: ResultId, batch: usize },
+    InspectResultValue { connection: ConnectionId, result: ResultId,
+                         row: usize, column: usize, offset: usize },
     Export           { connection: ConnectionId, result: ResultId,
                        format: ExportFormat, destination: PathBuf },
+    ReadWorkspacePreferences { workspace: WorkspaceId },
+    WriteWorkspacePreferences { workspace: WorkspaceId,
+                                snapshot: Box<PreferencesSnapshot> },
     OpenDocument     { workspace: WorkspaceId, document: DocumentId },
     WriteDocument    { workspace: WorkspaceId, document: DocumentId, text: String },
     CreateConnection { config: Box<ConnectionConfig> },
@@ -488,6 +602,27 @@ publiques sont `#[non_exhaustive]`.
 seconde API « pour l'IA ». Un agent ne peut rien faire d'inaccessible à l'utilisateur ;
 tout ce qu'il fait apparaît dans le même historique ; tout est annulable par le même
 mécanisme ; et le produit devient scriptable sans effort supplémentaire.
+
+`CloseSession` libère une session précise après vérification de sa connexion,
+sans déconnecter les autres sessions ni supprimer le cache de catalogue. La
+fermeture est signalée avant d'attendre le verrou de session : le jeton couvre
+la préparation comme le drainage, y compris avant l'existence d'une poignée de
+statement. L'annulation du demandeur est observée avant d'engager la fermeture ;
+une fermeture engagée termine son nettoyage. Sa portée de nettoyage est la même
+pour humain et agent et passe par la politique et le journal.
+
+Les consoles sont des entités `QueryConsole` distinctes (ADR-0015).
+Une console restaurée peut être dépourvue de contexte connecté et de session :
+aucun identifiant factice n'est produit. Elle garde l'identité de connexion du
+document pour sa persistance, mais refuse l'exécution avant un raccordement
+explicite. La vue de reprise charge les métadonnées paginées, puis les corps à
+la demande. L'éditeur est transféré au workspace connecté, avec son historique
+d'édition et son écrivain local, au lieu de recopier son texte dans une autre vue. Le workspace
+ne change que les références de vues sélectionnées ; un callback ne consulte
+jamais l'onglet actif pour retrouver sa grille. Le backend ouvre une session
+pour le catalogue/aperçu et une autre pour la première console, puis une session
+par console supplémentaire. L'introspection privilégie la session initiale du
+catalogue au lieu de choisir une console au hasard dans le registre.
 
 ### 7.2 Le Policy gate
 
@@ -651,6 +786,32 @@ sur une ligne écrite avant la colonne, et ce sont ces lignes-là qui portent le
 écritures expirées. Un refus de politique est classé
 `denied` d'où qu'il vienne — du `PolicyGate` ou de la dernière barrière avant le driver
 — parce qu'il n'est pas une panne. L'historique est purgeable, le journal ne l'est pas.
+
+**Bibliothèque locale.** Les commandes `ReadHistory` et `ListQueryDocuments`
+retournent des pages de résumés ; `ReadHistoryEntry` et `OpenDocument` ouvrent
+séparément un texte complet borné. Ces lectures et les écritures versionnées de
+documents utilisent le pool bloquant de Tokio. L'annulation observe les pas
+SQLite sous le verrou de l'opération, sans toucher une autre commande en attente.
+`query_history.result_id` référence éventuellement un tampon retenu dans cette
+instance ; `OpenRetainedResult` contrôle sa connexion d'origine et ne rejoue rien.
+Le registre distingue les références détenues par des lecteurs des tampons sans
+lecteur. Ces derniers sont évincés par ancienneté sous les plafonds d'ADR-0017.
+Les fichiers de débordement sont libérés hors du verrou du registre et hors
+thread UI ; une vue ouverte conserve son tampon pour les lectures et exports.
+`DocumentWriter`, côté backend, sérialise les autosauvegardes et les décisions
+explicites d'une console dans une file bornée (ADR-0016). Son compteur de travail
+couvre les requêtes en attente, indépendamment de la durée de vie des vues.
+La révision attendue est vérifiée dans la transaction SQLite. Un conflit arrête
+les envois ; un brouillon suspendu par une fermeture annulée peut être repris
+sans intervention du thread UI.
+Les sauvegardes explicites des consoles utilisent `SaveQueryDocument`, et leur
+fermeture `CloseQueryDocument`. Le contrôleur conserve le texte acquitté séparément
+du texte en cours d'édition. Le suivi de fin d'application attend les écritures
+de documents et de préférences déjà soumises, indépendamment des receivers UI.
+Les documents distinguent copie de travail et copie nommée, avec barrières de
+révision pour la fermeture et la suppression, selon
+[ADR-0014](adr/0014-documents-et-historique.md). Les listes d'historique conservent
+leur portée locale globale ; les documents sont filtrés par workspace.
 
 ---
 

@@ -292,3 +292,177 @@ amont :
   la sortie texte de `regproc` et des autres alias expose les noms d'objets.
   L'aperçu demande ce rendu au serveur ; des octets binaires valides en UTF-8
   ne constituent pas une représentation textuelle fiable.
+
+## Relecture locale des résultats — 2026-09-10
+
+La version de Tokio déjà résolue, `1.53.1`, reste inchangée. `oxyn-exec` active
+sa fonctionnalité `rt` pour remettre le décodage de page au pool bloquant du
+runtime de l'application. La documentation officielle confirme que
+[`Handle`](https://docs.rs/tokio/1.53.1/tokio/runtime/struct.Handle.html) est
+disponible sous `rt`, que `try_current` rend une erreur en l'absence de runtime
+et que `spawn_blocking` utilise un exécuteur dédié aux opérations bloquantes.
+Consultation du 2026-09-10 ; aucune nouvelle dépendance ni montée de version.
+Le partage du budget et les limites de cette relecture sont décidés dans
+[ADR-0012](adr/0012-lecture-pages-resultats.md).
+
+## Fermeture GPUI et préférences — 2026-09-10
+
+[`App::shutdown`](https://docs.rs/gpui/0.2.2/gpui/struct.App.html#method.shutdown)
+de GPUI `0.2.2` accorde 100 ms aux handlers `on_app_quit`, selon sa documentation
+officielle consultée le 2026-09-10 et le code résolu localement. L'attente de
+sauvegarde de la dernière fenêtre est donc placée avant l'appel à `quit`, en
+plus du hook. Cela ne prouve pas tous les chemins d'arrêt natifs ; leur recette
+reste suivie dans IMPLEMENTATION-PLAN. Aucune version de dépendance n'a changé.
+
+## Annulation des recherches locales — 2026-09-10
+
+`oxyn-store` active `hooks` sur la version de `rusqlite` déjà résolue, `0.37.0`.
+Aucune version ni entrée de verrouillage ne change. Le code source installé
+`rusqlite-0.37.0/src/hooks/mod.rs` expose `Connection::progress_handler` et
+sa désactivation par `progress_handler(0, None::<fn() -> bool>)` ; son manifeste
+confirme la fonctionnalité `hooks`. Vérification locale du 2026-09-10 ; la
+consultation de docs.rs a échoué dans l'outil de navigation.
+
+Le handler est installé sous le verrou de la connexion locale et retiré par
+un garde de portée. Il observe le jeton de la seule opération active tous les
+1 000 pas de la machine virtuelle SQLite. L'attente du verrou et le délai
+SQLite de base occupée ne sont pas interrompus par ce handler ; une tâche
+annulée en attente ne commence pas son opération après acquisition du verrou.
+Une écriture déjà validée conserve son résultat de succès.
+
+La vérification globale `verifier_versions.py` du 2026-09-10 signale aussi
+Redis `1.7.0` au registre contre `1.6.0` dans le relevé historique du 2026-09-05.
+Cet écart concerne une piste de driver ultérieure, pas la dépendance rusqlite
+modifiée ici ; aucune montée de version n'est effectuée dans ce lot.
+
+
+## Sessions SQLite en mémoire — 2026-09-10
+
+La [documentation SQLite](https://www.sqlite.org/inmemorydb.html) distingue les
+bases privées ouvertes sous `:memory:` des bases nommées en mémoire ouvertes
+avec `mode=memory&cache=shared`. Ces dernières sont partagées par les connexions
+d'un même processus utilisant le même nom et disparaissent à la fermeture de
+la dernière connexion. Source consultée le 2026-09-10.
+
+Le driver utilise maintenant un nom interne dérivé de l'identité de configuration
+pour que les sessions d'un même profil retrouvent leur base en mémoire. Deux
+profils restent isolés. Ce nom ne figure pas dans les diagnostics. La restriction
+lecture seule est appliquée par `query_only`, relevée après ouverture, puis
+conservée dans les limites de chaque requête ; un appelant demandant des limites
+inscriptibles ne peut pas la lever. Les tests de contrat vérifient lecture
+partagée, refus d'écriture, survie d'une session voisine et nouvelle base vide
+après fermeture de la dernière session. Aucune dépendance ni version n'a changé.
+
+### Introspection des contraintes — vérification du 2026-09-10
+
+`pg_constraint` fournit `contype`, `conkey` et les noms ; les colonnes de clés
+composées sont relues dans leur ordre. `pg_get_constraintdef` produit une
+reconstruction par le moteur, pas le texte saisi à l'origine.
+Sources : [catalogue des contraintes PostgreSQL](https://www.postgresql.org/docs/current/catalog-pg-constraint.html)
+et [fonctions d'information](https://www.postgresql.org/docs/current/functions-info.html).
+Les attributs NOT NULL sans entrée correspondante sont lus depuis
+`pg_attribute.attnotnull`, sans leur inventer de nom. Les limites 1024 entrées
+et 16 Kio par définition sont des limites produit, avec erreur explicite.
+
+Le test de compatibilité des anciens caches ajoute seulement
+`serde_json.workspace = true` aux dépendances de test d'`oxyn-catalog`.
+La version de workspace **1.0.151** est conservée, vérifiée avec
+`cargo info serde_json@1.0.151` ; [registre](https://crates.io/crates/serde_json/1.0.151).
+Aucune nouvelle version n'est introduite.
+
+### Contraintes SQLite — vérification du 2026-09-10
+
+Les contraintes PK, UNIQUE, CHECK, NOT NULL et REFERENCES sont déclarées dans
+le SQL stocké par SQLite. Les PRAGMA ne suffisent pas à restituer leurs noms et
+leurs clauses CHECK. L'extraction du driver conserve les tranches originales
+de `sqlite_schema.sql` ; elle ne reconstruit pas un CREATE TABLE depuis l'AST.
+Sources : [CREATE TABLE SQLite](https://www.sqlite.org/lang_createtable.html)
+et [table du schéma](https://www.sqlite.org/schematab.html).
+Les contraintes de table adjacentes sans virgule, les noms entre guillemets,
+les commentaires et les clauses `ON CONFLICT` sont vérifiés contre le moteur
+SQLite embarqué par les tests du driver. La borne de 1 Mio de SQL source,
+les 1024 contraintes et les 16 Kio par clause sont des limites produit ; tout
+dépassement est signalé. Aucune nouvelle dépendance n'est ajoutée.
+
+Le statut de la grille Constraints (`229:7998`) repose sur
+`pg_constraint.convalidated`, vérifié dans la documentation PostgreSQL citée
+ci-dessus. Un CHECK `NOT VALID` et son passage à `VALIDATE CONSTRAINT` sont
+couverts par un test sur base jetable. SQLite conserve un statut inconnu, y
+compris lorsque des données ne respectant pas un CHECK ont été insérées avec
+`ignore_check_constraints` activé ; un test empêche de présenter la seule
+présence de la clause comme une preuve de validation.
+
+### Relations entrantes — vérification du 2026-09-10
+
+Les fonctions de PRAGMA SQLite sont utilisables dans SELECT et acceptent le
+schéma comme dernier argument : [documentation](https://www.sqlite.org/pragma.html#pragma_functions).
+Les références sans liste de colonnes utilisent la clé primaire de la cible ;
+leur comparaison utilise l'affinité et la collation des colonnes parentes :
+[clés étrangères SQLite](https://www.sqlite.org/foreignkeys.html).
+Le driver lit les métadonnées natives via `Connection::column_metadata`, API
+vérifiée dans le source installé de rusqlite, sans ajout de dépendance.
+
+PostgreSQL expose la cible dans `pg_constraint.confrelid`, les listes de
+colonnes dans `conkey`/`confkey` et les index dans `pg_index`.
+Les colonnes INCLUDE sont exclues du test d'unicité en utilisant `indnkeyatts` ;
+les index invalides, partiels, d'expression ou de comparaison non établie ne
+permettent pas de certifier une relation un-à-un.
+Sources : [pg_constraint](https://www.postgresql.org/docs/current/catalog-pg-constraint.html)
+et [pg_index](https://www.postgresql.org/docs/current/catalog-pg-index.html).
+Les limites 1024 clés, 128 colonnes par clé, 16 Kio par texte et 16 Mio de textes
+SQLite parcourus sont des limites produit, pas des limites attribuées aux SGBD.
+
+### Définitions DDL — vérification du 2026-09-10
+
+SQLite conserve les statements dans
+[sqlite_schema](https://www.sqlite.org/schematab.html). Le lecteur prend objet,
+index et triggers dans un même curseur ; la qualification ne modifie que leurs
+noms de déclaration. Un test les recrée dans un espace attaché distinct et
+vérifie le fonctionnement du trigger et l'absence d'objet créé dans `main`.
+
+PostgreSQL expose des fonctions de reconstruction (`pg_get_viewdef`,
+`pg_get_indexdef`, `pg_get_triggerdef`, `pg_get_ruledef`, `pg_get_constraintdef`)
+dans ses [fonctions d'information](https://www.postgresql.org/docs/current/functions-info.html).
+Les paramètres des séquences proviennent de
+[pg_sequence](https://www.postgresql.org/docs/current/catalog-pg-sequence.html).
+La forme des colonnes générées/identity et des tables partitionnées suit
+[CREATE TABLE](https://www.postgresql.org/docs/current/sql-createtable.html).
+Le lecteur utilise `attgenerated`, présent dans
+[pg_attribute de PostgreSQL 12](https://www.postgresql.org/docs/12/catalog-pg-attribute.html) :
+`OBJECT_DEFINITION` n'est annoncé qu'à partir de cette version reconnue, et pas
+pour Redshift. Les versions plus anciennes ou illisibles n'obtiennent pas
+cette capacité par supposition.
+
+Les politiques RLS sont relues depuis
+[pg_policy](https://www.postgresql.org/docs/17/catalog-pg-policy.html), avec les
+noms de rôles de la vue publique `pg_roles` (OID 0 signifie PUBLIC). Les états
+[ENABLE/FORCE ROW LEVEL SECURITY](https://www.postgresql.org/docs/17/sql-altertable.html)
+sont reconstruits. Les tests sur PostgreSQL 17.11 vérifient leur maintien
+après recréation, ainsi que identity/serial, colonnes générées, index, triggers,
+vues, séquences et racines partitionnées. Les scripts ne sont appliqués que
+par ces fixtures explicitement isolées, via `AssertSqlSafe` de sqlx après audit.
+Aucun trajet produit n'applique automatiquement la définition affichée.
+
+### Partitions PostgreSQL et instruction courante — vérification du 2026-09-10
+
+La création d'un enfant utilise
+[PARTITION OF](https://www.postgresql.org/docs/17/sql-createtable.html), le lien
+direct de [pg_inherits](https://www.postgresql.org/docs/17/catalog-pg-inherits.html)
+et la borne de [pg_class](https://www.postgresql.org/docs/17/catalog-pg-class.html).
+Le DDL conserve les options locales et laisse PostgreSQL cloner les éléments
+hérités. Les tests de recréation vérifient parent, borne, défaut et sous-partition.
+
+L'instruction courante est résolue dans `oxyn-query`, sans dépendance native
+ni I/O. Le scanner conserve les corps SQLite/PG ; les positions UTF-8 invalides,
+textes incomplets et identifiants SQLite rendant la frontière ambiguë produisent
+une demande de sélection explicite. Cette résolution ne remplace pas le
+classificateur du bus et n'ajoute aucune nouvelle version de dépendance.
+
+La compatibilité déclarée dès PostgreSQL 12 tient compte de l'absence de
+`inhdetachpending` dans [pg_inherits 12](https://www.postgresql.org/docs/12/catalog-pg-inherits.html)
+et de `tgparentid` dans [pg_trigger 12](https://www.postgresql.org/docs/12/catalog-pg-trigger.html).
+Ces champs sont lus à travers JSONB, sans référence SQL directe qui casserait
+la lecture des tables ordinaires. Sans provenance native des triggers, la
+définition d'un enfant en portant est refusée plutôt qu'inférée depuis des
+noms ou expressions similaires. Les essais réels de ce lot utilisent PostgreSQL
+17.11 ; un serveur PostgreSQL 12 n'a pas été exécuté.

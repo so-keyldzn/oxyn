@@ -7,8 +7,9 @@ Invariants concernés : [I-05](../CLAUDE.md#i-05), [I-06](../CLAUDE.md#i-06).
 Dérive de [ADR-0002](adr/0002-arrow-result-model.md) pour tout ce qui touche aux
 résultats.
 
-> **Statut des chiffres.** Aucune mesure n'a encore été prise : il n'y a pas de
-> code. Les valeurs ci-dessous sont des **budgets décidés**, dérivés des seuils
+> **Statut des chiffres.** Le code existe et des tests vérifient des bornes
+> locales ; aucune campagne de performance complète n'a encore été effectuée.
+> Les valeurs ci-dessous sont des **budgets décidés**, dérivés des seuils
 > de perception humaine, pas des mesures constatées. Elles servent à faire
 > échouer un banc d'essai, pas à décrire l'existant. La première campagne de
 > mesure doit soit les confirmer, soit les amender **par un ADR** — jamais en
@@ -43,10 +44,18 @@ est acceptable ; une opération longue et figée ne l'est pas.**
 
 | Situation | Budget | Mode de panne |
 |---|---|---|
-| `ResultBuffer` en mémoire, par résultat | **256 Mo** par défaut, configurable ([ADR-0002](adr/0002-arrow-result-model.md)) ; au-delà, débordement en Arrow IPC mappé en mémoire | [I-06](../CLAUDE.md#i-06) : `SELECT *` sur une grande table déclenche l'OOM killer, le processus meurt sans trace, l'utilisateur perd son travail |
+| `ResultBuffer` en mémoire, par résultat | **256 Mo** par défaut, configurable ([ADR-0002](adr/0002-arrow-result-model.md)) ; au-delà, débordement en Arrow IPC relu hors thread UI ([ADR-0012](adr/0012-lecture-pages-resultats.md)) | [I-06](../CLAUDE.md#i-06) : `SELECT *` sur une grande table déclenche l'OOM killer, le processus meurt sans trace, l'utilisateur perd son travail |
 | Défilement au-delà du budget mémoire | **une lecture de page disque**, jamais une nouvelle exécution | relancer la requête est doublement faux : le coût est arbitraire, et un `SELECT` peut ne pas être idempotent |
+| Résultats conservés sans lecteur | 16 résultats, 256 Mio de lots résidents/cache et 1 Gio d'IPC cumulés ; contrôle après exécution et périodique ([ADR-0017](adr/0017-retention-resultats.md)) | accumulation de résultats inutilisés |
 | Cache de catalogue par connexion | borné, avec éviction | dix connexions sur des bases à dizaines de milliers d'objets font grossir la RSS sans plafond |
+| Définitions DDL en cache par connexion | 16 définitions et 16 Mio de SQL + notes ; éviction des anciennes valeurs, y compris invalidées ([ADR-0018](adr/0018-apercu-ddl.md)) | accumulation de scripts volumineux lors de la navigation |
 | Application au repos, une connexion ouverte, aucune requête | stable dans le temps | une croissance au repos est une fuite ; elle se voit sur une session de plusieurs heures, pas dans les tests |
+
+La rétention des lots initiaux et des pages décodées partage le budget du
+résultat selon [ADR-0012](adr/0012-lecture-pages-resultats.md). L'index des lots,
+les temporaires de décodage et les références tenues par des lecteurs doivent
+être comptés dans les mesures du processus ; une assertion sur le cache ne
+prouve pas la stabilité RSS.
 
 ## Ce qui se mesure, et comment
 

@@ -24,6 +24,23 @@ inset, repliable en icônes, selon la page 01. Les écrans des pages 04 à 09 on
 | Contraintes | [229:7637](https://www.figma.com/design/Yviemi4brBczzdRdBp1ONv/Oxyn?node-id=229-7637) |
 | Relations | [229:32690](https://www.figma.com/design/Yviemi4brBczzdRdBp1ONv/Oxyn?node-id=229-32690) |
 
+## Barre de la console
+
+Relevé au serveur Figma le 2026-09-10. La frame `191:1958` mesure 1272 × 32 et
+se pose à (12, 12) dans la console.
+
+| Élément | Nœud | x | Largeur |
+|---|---|---|---|
+| Groupe Run / Stop / Explain | [273:37036](https://www.figma.com/design/Yviemi4brBczzdRdBp1ONv/Oxyn?node-id=273-37036) | 0 | 286 (trois segments de 96) |
+| Parameters · N | [191:1993](https://www.figma.com/design/Yviemi4brBczzdRdBp1ONv/Oxyn?node-id=191-1993) | 294 | 144 |
+| Mention de lecture seule | `191:2002` | 446 | 558 |
+| Sélecteur connexion / schéma | [191:2003](https://www.figma.com/design/Yviemi4brBczzdRdBp1ONv/Oxyn?node-id=191-2003) | 1012 | 260 |
+
+Le segment sans objet est estompé : sur la planche, c'est Stop, parce que rien
+ne tourne. Le sélecteur montre `commerce-prod / public` — un exemple, non une
+connexion réelle ; ce qu'il change est tranché par
+[ADR-0019](adr/0019-contexte-de-session.md).
+
 ## États en situation
 
 | État | Table | Console SQL |
@@ -49,14 +66,21 @@ représentent aucune requête réellement exécutée.
 | Démarrage vide | `282:11550` | Workspace hors ligne |
 
 Le parcours de reprise comporte huit combinaisons de sélection et leurs issues.
-Cliquer `Restore` ou `Skip` dans la première colonne change la sélection ;
-`Restore selected drafts` est désactivé lorsque la sélection est vide.
+Les cases de la première colonne changent la sélection ; le bouton
+`Restore N selected items` annonce son décompte et reste désactivé lorsque
+la sélection est vide. Les cases vectorielles et leurs cellules portent
+les mêmes destinations du prototype.
 
 Les vues de moteurs avancés de la page 05 et leurs copies dans le prototype
 portent une étiquette de phase 4. Cette étiquette ne prouve pas la disponibilité
 du driver ou de la fonctionnalité.
 
 ## Variables et composants
+
+Les corrections de lisibilité du 2026-09-07 conservent les collections,
+les valeurs de couleur et les styles typographiques préexistants. Les quatre
+états d'Attachment tronquent le nom sur une ligne ; les cellules de données
+absentes utilisent la variante `Kind=Null` et le libellé `∅ NULL`.
 
 La planche `223:29197`, page 03, présente les noms destinés à GPUI.
 Les alias de couleur reprennent les valeurs de `Palette` dans
@@ -107,6 +131,37 @@ neutre : la compatibilité ne désigne pas le fournisseur effectif.
 
 ## Textes et limites de validation
 
+### Corrections après analyse
+
+| Sujet | Références |
+|---|---|
+| Confirmation de production sans transaction de staging imbriquée | `47:6811`, copies `62:9534` et `63:26236` |
+| Panneaux de transaction staging séparés sur le canvas | `47:7046`, `62:9562`, `63:26264` |
+| État cohérent du formulaire de connexion | `47:1137`, `62:8608`, `63:25091` |
+| Grille occupant la hauteur disponible et export explicitement limité à l'aperçu | les dix variantes de table peuplée de la page 22 |
+| Lecture confortable, large sombre / claire | `303:13195`, `303:13955` |
+| Lecture confortable, 1024 px sombre / claire | `303:14712`, `303:15336` |
+| Choix de lisibilité dans les préférences | `47:8222` ↔ `305:3416`, et les deux paires du prototype page 08 |
+| Menu d'actions compact, thème clair | `306:14765` |
+
+Les quatre paires de table sont reliées par le contrôle `Text · 13 px` /
+`Text · 14 px`. La préférence est représentée par navigation entre variantes,
+sans sauvegarde réelle dans le prototype. Les grilles peuplées contiennent
+32 lignes de démonstration pour montrer l'occupation et le défilement ; le
+compteur de 200 lignes reste une donnée du scénario, sans requête exécutée.
+
+Les contrôles après correction portent sur les captures des écrans modifiés,
+les dimensions, les 24 transitions de sélection des huit états de reprise,
+les sept destinations de restauration et l'absence d'action de restauration
+pour la sélection vide. Les huit transitions de taille de texte sont présentes.
+Le contrôle final des pages 06, 08, 09 et 22 relève 1 178 liaisons sans
+destination manquante. Les 15 pièces jointes des pages 04, 08 et 09 ne
+débordent plus et conservent leurs 15 actions de retrait local.
+Ces vérifications statiques ne constituent pas une recette au clavier dans
+le lecteur Figma ou dans GPUI.
+
+### Contrôles antérieurs et textes protégés
+
 Les textes protégés restent localisés dans `86:4218`, `44:4045`, `190:1163`,
 `47:6811`, `57:1547` et `91:3545`. Leur sens n'est pas remplacé par un changement
 de style ou de structure. Les repères permanents suivent
@@ -116,9 +171,9 @@ Les vérifications de maquette portent sur les captures, dimensions, propriété
 et destinations des interactions Figma. Elles ne valident pas l'exécution
 GPUI, le réseau, une base réelle ni la restauration après plantage.
 
-Dernière recette : le trajet Table → Structure → Constraints a été cliqué et
-contrôlé visuellement dans Figma Desktop. Le contrôle statique des pages 08,
-09 et 22 compte 1 099 liaisons vers 146 destinations existantes, sans référence
+Recette antérieure à ces corrections : le trajet Table → Structure → Constraints
+a été cliqué et contrôlé visuellement dans Figma Desktop. Le contrôle statique
+des pages 08, 09 et 22 comptait alors 1 099 liaisons vers 146 destinations, sans référence
 manquante. Cela ne constitue pas une recette interactive exhaustive. Les huit
 sélections de reprise sont reliées à leurs issues ; leur recette complète dans
 le lecteur reste à effectuer.
