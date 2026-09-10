@@ -1,0 +1,1 @@
+- [Piège chrono FromStr](piege_chrono_fromstr_separateur.md) — vérifier au scratchpad ce que FromStr accepte réellement (T vs espace, offset requis) avant de le documenter
