@@ -65,6 +65,10 @@ bitflags! {
         const PERMISSIONS          = 1 << 12;
         /// Une estimation du nombre de lignes est disponible sans compter.
         const ROW_COUNT_ESTIMATE   = 1 << 13;
+        /// Foreign keys declared by other relations can be found from their target.
+        const INCOMING_FOREIGN_KEYS = 1 << 14;
+        /// Native object creation statements can be read for inspection.
+        const OBJECT_DEFINITION     = 1 << 15;
 
         // ── Exécution ───────────────────────────────────────────────────────
         /// Transactions réelles, avec `ROLLBACK` qui annule vraiment.
@@ -102,6 +106,23 @@ bitflags! {
         /// Le serveur sait imposer une session en lecture seule — une garantie
         /// bien plus solide qu'un filtrage côté client.
         const READ_ONLY_SESSION    = 1 << 30;
+        /// La session sait déclarer où elle résout les noms non qualifiés, et
+        /// rendre ce que le serveur a effectivement retenu. Un moteur qui n'a
+        /// pas cette capacité n'affiche pas de sélecteur de contexte : ses
+        /// schémas se qualifient dans le SQL ([ADR-0019](../../docs/adr/0019-contexte-de-session.md)).
+        const SESSION_CONTEXT      = 1 << 31;
+        // Les bits 16 à 31 de l'exécution sont pris ; ces deux-là continuent
+        // au-delà des langages plutôt que d'en déloger un. Le numéro d'un
+        // drapeau est sérialisé : le réattribuer changerait le sens d'une
+        // capacité déjà écrite quelque part.
+        /// La source sait **ordonner** une lecture d'aperçu. Absente, l'ordre
+        /// des lignes reste celui que le moteur choisit, et aucun contrôle de
+        /// tri n'est proposé ([ADR-0020](../../docs/adr/0020-apercu-trie-filtre-parcouru.md)).
+        const PREVIEW_SORT         = 1 << 42;
+        /// La source sait **restreindre** une lecture d'aperçu à des lignes qui
+        /// vérifient une condition. Séparée du tri : un moteur peut savoir
+        /// ordonner sans savoir filtrer, et l'inverse.
+        const PREVIEW_FILTER       = 1 << 43;
 
         // ── Langages acceptés ───────────────────────────────────────────────
         /// SQL.
@@ -360,5 +381,46 @@ mod tests {
         let json = serde_json::to_string(&caps).expect("sérialisation");
         let relu: Capabilities = serde_json::from_str(&json).expect("désérialisation");
         assert_eq!(caps, relu);
+    }
+
+
+    /// Deux capacités qui partagent un bit sont la même capacité.
+    ///
+    /// Rien ne le signale à l'exécution : `bitflags` fusionne deux constantes de
+    /// même valeur, si bien qu'`iter_names` n'en rend qu'une et qu'un test
+    /// construit sur elle passerait. Une session PostgreSQL déclarant savoir
+    /// trier un aperçu annoncerait aussi qu'elle parle Cypher, et une interface
+    /// conditionnelle aux capacités dessinerait la mauvaise surface.
+    ///
+    /// La déclaration est donc relue **dans la source**, seul endroit où les
+    /// deux numéros existent encore côte à côte.
+    #[test]
+    fn aucun_drapeau_ne_partage_son_bit_avec_un_autre() {
+        let source = include_str!("capabilities.rs");
+        let mut vus: std::collections::HashMap<u32, String> = std::collections::HashMap::new();
+        for ligne in source.lines() {
+            let Some((gauche, droite)) = ligne.split_once("= 1 << ") else {
+                continue;
+            };
+            let Some(nom) = gauche.trim().strip_prefix("const ") else {
+                continue;
+            };
+            let Some(numero) = droite.split(';').next() else {
+                continue;
+            };
+            let Ok(bit) = numero.trim().parse::<u32>() else {
+                continue;
+            };
+            let nom = nom.trim().to_owned();
+            if let Some(precedent) = vus.insert(bit, nom.clone()) {
+                panic!("{nom} et {precedent} partagent le bit {bit}");
+            }
+        }
+        assert!(
+            vus.len() >= 50,
+            "la lecture de la source n'a trouvé que {} drapeaux : le format a changé \
+             et ce test ne vérifie plus rien",
+            vus.len()
+        );
     }
 }

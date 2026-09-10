@@ -75,7 +75,15 @@ pub mod connection;
 pub mod error;
 pub mod event;
 pub mod ids;
+pub mod library;
+pub use library::{
+    DocumentFilter, HistoryFilter, HistoryStatusFilter, MAX_QUERY_DOCUMENT_BYTES,
+    QueryDocumentUpdate,
+};
 pub mod policy;
+pub mod preferences;
+pub mod preview;
+pub use preferences::{Appearance, PreferencesSnapshot, ReadingDensity, WorkspacePreferences};
 pub mod query;
 pub mod stats;
 pub mod value;
@@ -95,7 +103,8 @@ pub use query::{
     ExecLimits, ExecRequest, MutationRisk, QueryLanguage, SqlDialect, StatementIntent,
 };
 pub use stats::ExecStats;
-pub use value::ScalarValue;
+pub use preview::{PreviewCondition, PreviewFilter, PreviewShape, PreviewSort};
+pub use value::{ParameterParseError, ParameterType, ScalarValue};
 
 /// Ce qu'on importe d'un coup quand on travaille avec le domaine.
 ///
@@ -121,7 +130,7 @@ pub mod prelude {
         ExecLimits, ExecRequest, MutationRisk, QueryLanguage, SqlDialect, StatementIntent,
     };
     pub use crate::stats::ExecStats;
-    pub use crate::value::ScalarValue;
+    pub use crate::value::{ParameterParseError, ParameterType, ScalarValue};
 }
 
 #[cfg(test)]

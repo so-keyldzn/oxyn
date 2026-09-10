@@ -14,6 +14,7 @@
 //! | Règle | Effet |
 //! |---|---|
 //! | agent + `GRANT`/`REVOKE` | `Deny` |
+//! | agent + `SetSessionContext` | `Deny` — l'effet porte sur les instructions suivantes |
 //! | commande mutante sur une connexion marquée lecture seule | `Deny`, humain compris |
 //! | commande mutante sur une connexion **inconnue** du gate | `Deny` |
 //! | agent + commande mutante + production | `Deny` — lecture seule stricte |
@@ -264,6 +265,11 @@ impl DefaultPolicy {
 
 impl PolicyGate for DefaultPolicy {
     fn authorize(&self, actor: &Actor, cmd: &Command, env: Environment) -> Decision {
+        if actor.is_agent() && matches!(cmd, Command::WriteWorkspacePreferences { .. }) {
+            return Decision::Deny {
+                reason: "only the human may change workspace display preferences".into(),
+            };
+        }
         let intent = cmd.intent();
         let mutating = cmd.is_mutating();
         let facts = cmd.target_connection().and_then(|id| self.facts(id));
@@ -280,6 +286,18 @@ impl PolicyGate for DefaultPolicy {
         // agent n'a aucun usage légitime et dont l'effet survit à la session.
         if actor.is_agent() && intent == StatementIntent::Grant {
             return Decision::deny("un agent ne peut pas modifier les droits (GRANT / REVOKE)");
+        }
+
+        // Un agent ne déplace pas le contexte de session. La commande ne lit ni
+        // n'écrit de donnée — mais son effet survit à la commande, et il porte
+        // sur le sens des instructions **suivantes** : l'utilisateur qui écrit
+        // ensuite `DELETE FROM users` frapperait un autre schéma que celui qu'il
+        // croit viser, sans qu'aucune confirmation ne parle de ce déplacement.
+        if actor.is_agent() && matches!(cmd, Command::SetSessionContext { .. }) {
+            return Decision::deny(
+                "un agent ne peut pas changer le contexte de session : \
+                 l'effet porte sur les instructions suivantes",
+            );
         }
 
         if mutating && cmd.touches_database() {
@@ -862,5 +880,39 @@ mod tests {
             gate.authorize(&humain(), &cmd, Environment::Production)
                 .is_allowed()
         );
+    }
+
+    #[test]
+    fn un_agent_ne_deplace_pas_le_contexte_de_session() {
+        // Le geste ne lit ni n'écrit de donnée : classé `Read`, il passe pour un
+        // humain, y compris sur une connexion en lecture seule où changer de
+        // schéma pour lire ailleurs est justement l'usage. Pour un agent c'est
+        // un refus, parce que l'effet porte sur les instructions suivantes.
+        let banc = Banc::new();
+        for read_only in [false, true] {
+            let cmd = Command::SetSessionContext {
+                connection: banc.connexion(read_only),
+                session: SessionId::new(),
+                catalog: None,
+                namespace: Some("analytics".to_owned()),
+            };
+            for env in [
+                Environment::Local,
+                Environment::Development,
+                Environment::Staging,
+                Environment::Production,
+            ] {
+                let humaine = banc.politique.authorize(&humain(), &cmd, env);
+                assert!(
+                    humaine.is_allowed(),
+                    "un humain change de contexte : env={env} lecture_seule={read_only} → {humaine:?}"
+                );
+                let agentive = banc.politique.authorize(&agent(), &cmd, env);
+                assert!(
+                    !agentive.is_allowed(),
+                    "un agent ne le fait jamais : env={env} lecture_seule={read_only}"
+                );
+            }
+        }
     }
 }

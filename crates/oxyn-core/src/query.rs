@@ -333,10 +333,18 @@ impl Default for ExecLimits {
 
 /// Une demande d'exécution complète.
 ///
-/// Le `Debug` est **manuel** : les paramètres liés sont masqués. Le texte de la
-/// requête est conservé — c'est sa *forme*, et l'observabilité l'autorise
+/// Le `Debug` **et** la sérialisation masquent les paramètres liés. Le texte de
+/// la requête est conservé — c'est sa *forme*, et l'observabilité l'autorise
 /// explicitement — mais les valeurs liées sont exactement ce que I-03 interdit
-/// de journaliser.
+/// de journaliser **et** d'écrire dans un fichier de workspace.
+///
+/// La protection porte sur les deux parce que la panne se produirait au premier
+/// qui persisterait une `Command` — reprise de session, file d'attente durable,
+/// pont de plugin — sans que l'asymétrie entre un `Debug` protégé et un
+/// `Serialize` dérivé se voie ni à la compilation ni en revue. Une demande
+/// relue depuis un fichier revient donc **sans ses valeurs** : le serveur la
+/// refusera, ce qui est le bon échec — bien plus sûr que de retrouver un mot de
+/// passe collé dans le mauvais champ écrit en clair sur le disque.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct ExecRequest {
     /// Langage de la requête.
@@ -344,6 +352,9 @@ pub struct ExecRequest {
     /// Texte de la requête, tel que l'utilisateur ou l'appelant l'a écrit.
     pub text: String,
     /// Paramètres liés, dans l'ordre des emplacements.
+    ///
+    /// Jamais sérialisés : voir la documentation du type.
+    #[serde(skip)]
     pub params: Vec<ScalarValue>,
     /// Intention déclarée.
     pub intent: StatementIntent,

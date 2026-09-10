@@ -162,13 +162,40 @@ pub enum CatalogRefreshScope {
     /// A source that declares neither leaves both unread rather than storing an
     /// empty list: the cache distinguishes "not read" from "none", and a view
     /// that confused them would claim a table has no index because nobody can
-    /// tell. Constraints are not part of this scope; no driver exposes them yet.
+    /// tell. Constraints have their own explicit scope.
     Relation {
         /// Absent when the source has no catalog level.
         catalog: Option<String>,
         /// Absent when the source has no schema level.
         namespace: Option<String>,
         /// Raw relation name.
+        relation: String,
+    },
+    /// Constraints of one relation, gated by the session's `CONSTRAINTS` capability.
+    Constraints {
+        /// Absent when the source has no catalog level.
+        catalog: Option<String>,
+        /// Absent when the source has no schema level.
+        namespace: Option<String>,
+        /// Raw relation name, never SQL.
+        relation: String,
+    },
+    /// Foreign keys declared by relations that reference this target.
+    IncomingForeignKeys {
+        /// Absent when the source has no catalog level.
+        catalog: Option<String>,
+        /// Absent when the source has no schema level.
+        namespace: Option<String>,
+        /// Raw target relation name.
+        relation: String,
+    },
+    /// Creation statements for one relation; this remains a metadata read.
+    Definition {
+        /// Absent when the source has no catalog level.
+        catalog: Option<String>,
+        /// Absent when the source has no schema level.
+        namespace: Option<String>,
+        /// Raw target relation name.
         relation: String,
     },
 }
@@ -197,6 +224,30 @@ pub enum Command {
     Disconnect {
         /// La connexion visée.
         connection: ConnectionId,
+    },
+
+    /// Close one session without disconnecting sibling consoles or the catalog.
+    CloseSession {
+        /// Owning connection, checked before closing.
+        connection: ConnectionId,
+        /// Session to release.
+        session: SessionId,
+    },
+
+    /// Déclarer où une session résout les noms non qualifiés.
+    ///
+    /// Les paliers voyagent en chaînes plutôt qu'en `CatalogPath` :
+    /// `oxyn-core` ne dépend pas d'`oxyn-catalog`, et l'exécuteur reconstruit
+    /// le chemin à la frontière, comme pour [`PreviewRelation`](Self::PreviewRelation).
+    SetSessionContext {
+        /// La connexion dont la politique s'applique.
+        connection: ConnectionId,
+        /// La session visée. Le contexte ne quitte jamais celle-ci.
+        session: SessionId,
+        /// Palier catalogue, quand le moteur en a un.
+        catalog: Option<String>,
+        /// Palier espace de noms — un schéma, là où il y en a.
+        namespace: Option<String>,
     },
 
     /// Exécuter une instruction.
@@ -251,6 +302,30 @@ pub enum Command {
         scope: CatalogRefreshScope,
     },
 
+    /// Inspect a bounded text page of one existing value, without executing SQL.
+    InspectResultValue {
+        /// Connection owning the result.
+        connection: ConnectionId,
+        /// Existing result.
+        result: ResultId,
+        /// Global zero-based row position.
+        row: usize,
+        /// Original Arrow column position, regardless of UI visibility.
+        column: usize,
+        /// UTF-8 byte offset in the formatted value.
+        offset: usize,
+    },
+
+    /// Load one already-produced result page without executing a query.
+    ReadResultPage {
+        /// Connection that owns the result and supplies its policy.
+        connection: ConnectionId,
+        /// Existing result, including a result whose query has finished.
+        result: ResultId,
+        /// Zero-based batch position, never a row number or SQL offset.
+        batch: usize,
+    },
+
     /// Écrire un jeu de résultats dans un fichier.
     Export {
         /// La connexion d'où vient le résultat, pour l'audit.
@@ -261,6 +336,55 @@ pub enum Command {
         format: ExportFormat,
         /// Le fichier de destination.
         destination: PathBuf,
+    },
+
+    /// Read versioned display preferences without contacting a database server.
+    ReadWorkspacePreferences {
+        /// Owning workspace.
+        workspace: WorkspaceId,
+    },
+    /// Save a newer display snapshot. Only the human may change their interface.
+    WriteWorkspacePreferences {
+        /// Owning workspace.
+        workspace: WorkspaceId,
+        /// Validated, monotonically revised snapshot.
+        snapshot: Box<crate::PreferencesSnapshot>,
+    },
+
+    /// List bounded local document summaries without loading query bodies.
+    ListQueryDocuments {
+        workspace: WorkspaceId,
+        filter: Box<crate::DocumentFilter>,
+    },
+    /// Persist a draft and optionally its named copy, without executing it.
+    SaveQueryDocument {
+        workspace: WorkspaceId,
+        update: Box<crate::QueryDocumentUpdate>,
+    },
+    /// Close a working document, retaining a barrier against late writes.
+    CloseQueryDocument {
+        /// Optional optimistic concurrency check, applied atomically with closing.
+        #[serde(default)]
+        expected_revision: Option<u64>,
+        workspace: WorkspaceId,
+        document: DocumentId,
+        revision: u64,
+        discard: bool,
+    },
+    /// Delete a named query locally; never deletes database objects.
+    DeleteQueryDocument {
+        workspace: WorkspaceId,
+        document: DocumentId,
+        revision: u64,
+    },
+    /// Search the user's local history, not a server query log.
+    ReadHistory { filter: Box<crate::HistoryFilter> },
+    /// Load a full selected historical statement separately from its list row.
+    ReadHistoryEntry { entry: i64 },
+    /// Reopen an existing result without creating a query or a session.
+    OpenRetainedResult {
+        connection: ConnectionId,
+        result: ResultId,
     },
 
     /// Ouvrir un document du workspace.
@@ -327,11 +451,24 @@ impl Command {
             Self::Execute { request, .. } => request.intent,
             Self::Connect { .. }
             | Self::Disconnect { .. }
+            | Self::CloseSession { .. }
+            | Self::SetSessionContext { .. }
             | Self::Cancel { .. }
             | Self::RefreshCatalog { .. }
             | Self::RefreshCatalogScope { .. }
             | Self::PreviewRelation { .. }
+            | Self::ReadResultPage { .. }
+            | Self::InspectResultValue { .. }
             | Self::Export { .. }
+            | Self::ReadWorkspacePreferences { .. }
+            | Self::WriteWorkspacePreferences { .. }
+            | Self::ListQueryDocuments { .. }
+            | Self::SaveQueryDocument { .. }
+            | Self::CloseQueryDocument { .. }
+            | Self::DeleteQueryDocument { .. }
+            | Self::ReadHistory { .. }
+            | Self::ReadHistoryEntry { .. }
+            | Self::OpenRetainedResult { .. }
             | Self::OpenDocument { .. }
             | Self::WriteDocument { .. } => StatementIntent::Read,
             Self::CreateConnection { .. }
@@ -347,19 +484,33 @@ impl Command {
     #[must_use]
     pub fn target_connection(&self) -> Option<ConnectionId> {
         match self {
+            Self::ReadHistory { filter } => filter.connection,
             Self::Connect { connection }
             | Self::Disconnect { connection }
+            | Self::CloseSession { connection, .. }
+            | Self::SetSessionContext { connection, .. }
             | Self::Execute { connection, .. }
             | Self::Cancel { connection, .. }
             | Self::RefreshCatalog { connection }
             | Self::RefreshCatalogScope { connection, .. }
             | Self::PreviewRelation { connection, .. }
+            | Self::ReadResultPage { connection, .. }
+            | Self::OpenRetainedResult { connection, .. }
+            | Self::InspectResultValue { connection, .. }
             | Self::Export { connection, .. }
             | Self::DeleteConnection { connection } => Some(*connection),
             Self::CreateConnection { config } | Self::UpdateConnection { config } => {
                 Some(config.id)
             }
-            Self::OpenDocument { .. } | Self::WriteDocument { .. } => None,
+            Self::ListQueryDocuments { .. }
+            | Self::SaveQueryDocument { .. }
+            | Self::CloseQueryDocument { .. }
+            | Self::DeleteQueryDocument { .. }
+            | Self::ReadHistoryEntry { .. }
+            | Self::OpenDocument { .. }
+            | Self::WriteDocument { .. }
+            | Self::ReadWorkspacePreferences { .. }
+            | Self::WriteWorkspacePreferences { .. } => None,
         }
     }
 
@@ -384,6 +535,8 @@ impl Command {
             self,
             Self::Connect { .. }
                 | Self::Disconnect { .. }
+                | Self::CloseSession { .. }
+                | Self::SetSessionContext { .. }
                 | Self::Execute { .. }
                 | Self::Cancel { .. }
                 | Self::RefreshCatalog { .. }
@@ -408,13 +561,26 @@ impl Command {
         match self {
             Self::Connect { .. } => "Connect",
             Self::Disconnect { .. } => "Disconnect",
+            Self::CloseSession { .. } => "CloseSession",
+            Self::SetSessionContext { .. } => "SetSessionContext",
             Self::Execute { .. } => "Execute",
             Self::PreviewRelation { .. } => "PreviewRelation",
+            Self::ReadResultPage { .. } => "ReadResultPage",
+            Self::InspectResultValue { .. } => "InspectResultValue",
             Self::Cancel { .. } => "Cancel",
             Self::RefreshCatalog { .. } => "RefreshCatalog",
             Self::RefreshCatalogScope { .. } => "RefreshCatalogScope",
             Self::Export { .. } => "Export",
             Self::OpenDocument { .. } => "OpenDocument",
+            Self::ListQueryDocuments { .. } => "ListQueryDocuments",
+            Self::SaveQueryDocument { .. } => "SaveQueryDocument",
+            Self::CloseQueryDocument { .. } => "CloseQueryDocument",
+            Self::DeleteQueryDocument { .. } => "DeleteQueryDocument",
+            Self::ReadHistory { .. } => "ReadHistory",
+            Self::ReadHistoryEntry { .. } => "ReadHistoryEntry",
+            Self::OpenRetainedResult { .. } => "OpenRetainedResult",
+            Self::ReadWorkspacePreferences { .. } => "ReadWorkspacePreferences",
+            Self::WriteWorkspacePreferences { .. } => "WriteWorkspacePreferences",
             Self::WriteDocument { .. } => "WriteDocument",
             Self::CreateConnection { .. } => "CreateConnection",
             Self::UpdateConnection { .. } => "UpdateConnection",
@@ -713,6 +879,24 @@ mod tests {
             !rendu.contains("secret-de-l-utilisateur"),
             "valeur liée fuitée : {rendu}"
         );
+
+        // Le `Debug` n'est qu'un des six canaux. Un fichier de workspace en est
+        // un autre, et une protection qui ne tient que sur le premier serait
+        // défaite par le premier appelant qui persiste une commande.
+        let ecrit = serde_json::to_string(&cmd).expect("commande sérialisable");
+        assert!(
+            !ecrit.contains("secret-de-l-utilisateur"),
+            "valeur liée écrite dans un fichier : {ecrit}"
+        );
+        let relue: Command = serde_json::from_str(&ecrit).expect("commande relisible");
+        let Command::Execute { request, .. } = &relue else {
+            panic!("la variante est conservée")
+        };
+        assert!(
+            request.params.is_empty(),
+            "une commande relue revient sans ses valeurs, et le serveur la refusera"
+        );
+        assert_eq!(request.text, "INSERT INTO t VALUES ($1)");
     }
 
     #[test]
