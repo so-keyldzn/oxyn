@@ -43,8 +43,8 @@ use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
 use crate::decode::BatchAssembler;
-use crate::error::map_stream_error;
-use crate::session::{BackendCanceller, SQL_ROLLBACK, StatementRegistry};
+use crate::error::{Bound, map_stream_error};
+use crate::session::{BackendCanceller, SQL_RESET_SEARCH_PATH, SQL_ROLLBACK, StatementRegistry};
 use crate::types::PgDecoding;
 
 /// Octets accumulés au-delà desquels un lot est clos et émis.
@@ -238,10 +238,27 @@ pub(crate) struct StreamRequest {
     pub(crate) statement: PgStatement,
     /// Les paramètres liés, déjà encodés.
     pub(crate) arguments: PgArguments,
+    /// Y avait-il des valeurs de l'appelant parmi eux ?
+    ///
+    /// Relevé par la session avant que `arguments` ne soit déplacé dans
+    /// `query_with` : le message du serveur peut citer une valeur liée, et
+    /// `PgArguments` ne dit plus, ici, d'où viennent ses octets
+    /// ([I-03](../../../CLAUDE.md#i-03)).
+    pub(crate) bound: Bound,
     /// Le schéma des lots, connu avant la première ligne.
     pub(crate) schema: SchemaRef,
     /// Le plan de décodage, aligné sur le schéma.
     pub(crate) decodings: Vec<PgDecoding>,
+    /// Un `search_path` a-t-il été posé pour cette exécution ?
+    ///
+    /// Il faut alors le défaire avant que la connexion reparte au bassin. Sinon
+    /// elle emporte le contexte d'une console vers tout ce qui l'empruntera
+    /// ensuite — et l'introspection en dépend : `pg_get_indexdef`,
+    /// `pg_get_constraintdef`, `pg_get_expr` et `format_type` qualifient leur
+    /// texte **relativement au `search_path`**. Un même objet se verrait alors
+    /// décrit différemment d'une lecture à l'autre, selon la connexion tirée
+    /// ([ADR-0019](../../../docs/adr/0019-contexte-de-session.md)).
+    pub(crate) restore_context: bool,
     /// Les bornes de l'exécution.
     pub(crate) limits: ExecLimits,
     /// L'intention, qui décide de la classe des erreurs de transport.
@@ -297,6 +314,8 @@ async fn run(request: StreamRequest, cancel: CancelToken, events: mpsc::Sender<C
         mut connection,
         statement,
         arguments,
+        bound,
+        restore_context,
         schema,
         decodings,
         limits,
@@ -358,7 +377,7 @@ async fn run(request: StreamRequest, cancel: CancelToken, events: mpsc::Sender<C
             let element = match resultat {
                 Ok(element) => element,
                 Err(erreur) => {
-                    let oxyn = map_stream_error(&driver, intent, limits.read_only, erreur);
+                    let oxyn = map_stream_error(&driver, intent, limits.read_only, bound, erreur);
                     let _ = events.send(CursorEvent::Failed(Box::new(oxyn))).await;
                     break Halt::Failed;
                 }
@@ -417,18 +436,47 @@ async fn run(request: StreamRequest, cancel: CancelToken, events: mpsc::Sender<C
                 "l'annulation côté serveur n'a pas abouti"
             );
         }
-    } else if limits.read_only {
-        // La transaction ouverte par `BEGIN READ ONLY` doit être refermée avant
-        // le retour au bassin : une connexion laissée `idle in transaction`
-        // garde des verrous et bloque le `VACUUM` de toute la base.
-        let referme = sqlx::raw_sql(SQL_ROLLBACK).execute(&mut *connection).await;
-        if let Err(erreur) = referme {
-            tracing::warn!(
-                target: "oxyn::driver::postgres",
-                erreur = %erreur,
-                "la transaction en lecture seule n'a pas pu être refermée"
-            );
-            connection.close_on_drop();
+    } else {
+        if limits.read_only {
+            // La transaction ouverte par `BEGIN READ ONLY` doit être refermée avant
+            // le retour au bassin : une connexion laissée `idle in transaction`
+            // garde des verrous et bloque le `VACUUM` de toute la base.
+            let referme = sqlx::raw_sql(SQL_ROLLBACK).execute(&mut *connection).await;
+            if let Err(erreur) = referme {
+                // Traduite avant d'être journalisée, comme partout ailleurs : un
+                // `sqlx::Error` brut peut porter l'URL de connexion.
+                tracing::warn!(
+                    target: "oxyn::driver::postgres",
+                    erreur = %crate::error::map_exec_error(
+                        &driver,
+                        oxyn_core::StatementIntent::Read,
+                        erreur,
+                    ),
+                    "la transaction en lecture seule n'a pas pu être refermée"
+                );
+                connection.close_on_drop();
+            }
+        }
+        // Après le `ROLLBACK`, qui ne défait pas un `SET` posé hors transaction.
+        if restore_context {
+            let remis = sqlx::raw_sql(SQL_RESET_SEARCH_PATH)
+                .execute(&mut *connection)
+                .await;
+            if let Err(erreur) = remis {
+                // Une connexion qu'on ne sait pas remettre au défaut ne repart
+                // pas au bassin : mieux vaut en ouvrir une neuve que laisser
+                // l'introspection dépendre du contexte d'une console.
+                tracing::warn!(
+                    target: "oxyn::driver::postgres",
+                    erreur = %crate::error::map_exec_error(
+                        &driver,
+                        oxyn_core::StatementIntent::Read,
+                        erreur,
+                    ),
+                    "le contexte de session n'a pas pu être défait"
+                );
+                connection.close_on_drop();
+            }
         }
     }
     drop(connection);

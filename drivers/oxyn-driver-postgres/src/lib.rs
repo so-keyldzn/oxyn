@@ -121,6 +121,8 @@ pub(crate) mod error;
 pub(crate) mod numeric;
 pub(crate) mod options;
 
+#[cfg(test)]
+mod definition_tests;
 /// Les tests qui demandent un serveur. Tous `#[ignore]`.
 #[cfg(test)]
 mod integration;

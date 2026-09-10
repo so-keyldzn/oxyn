@@ -216,9 +216,12 @@ async fn detect_variant(pool: &PgPool) -> Result<PostgresVariant> {
             .filter_map(|ligne| ligne.try_get::<String, _>(0).ok())
             .collect(),
         Err(erreur) => {
+            // Traduite avant d'être journalisée : `sqlx` compose parfois ses
+            // messages avec l'URL de connexion, et « aucun `sqlx::Error` ne sort
+            // sans traduction » est une règle qui ne vaut que sans exception.
             tracing::debug!(
                 target: "oxyn::driver::postgres",
-                erreur = %erreur,
+                erreur = %map_connect_error(&erreur),
                 "pg_extension illisible : aucune capacité d'extension ne sera déclarée"
             );
             Vec::new()

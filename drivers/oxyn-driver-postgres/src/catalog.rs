@@ -29,13 +29,16 @@
 //! l'autre rend [`OxynError::CatalogUnavailable`] — pas une liste vide, qui
 //! affirmerait qu'il n'y a rien.
 
+mod definition;
+mod incoming;
+
 use std::sync::Arc;
 
 use async_trait::async_trait;
 use oxyn_catalog::CatalogProvider;
 use oxyn_catalog::model::{
-    CatalogRef, Field, ForeignKey, ForeignKeyTarget, Index, LogicalType, NamespaceRef,
-    ReferentialAction, Relation, RelationKind, RelationRef, ServerInfo,
+    CatalogRef, Constraint, ConstraintKind, Field, ForeignKey, ForeignKeyTarget, Index,
+    LogicalType, NamespaceRef, ReferentialAction, Relation, RelationKind, RelationRef, ServerInfo,
 };
 use oxyn_catalog::path::CatalogPath;
 use oxyn_core::{CancelToken, Capabilities, DriverId, OxynError, Result, StatementIntent};
@@ -45,6 +48,34 @@ use sqlx::postgres::{PgPool, PgRow};
 use crate::error::{map_connect_error, map_exec_error};
 use crate::session::{BackendCanceller, backend_pid};
 use crate::variant::PostgresVariant;
+
+// Bound rows and definition bytes before materializing catalog metadata.
+const SQL_CONSTRAINTS: &str = r#"
+WITH target AS (
+    SELECT c.oid FROM pg_catalog.pg_class c
+    JOIN pg_catalog.pg_namespace n ON n.oid = c.relnamespace
+    WHERE n.nspname = $1 AND c.relname = $2
+), declared AS (
+    SELECT k.conname::text AS name, k.contype::text AS kind,
+           ARRAY(SELECT a.attname::text
+                 FROM pg_catalog.unnest(k.conkey) WITH ORDINALITY AS key(attnum, position)
+                 JOIN pg_catalog.pg_attribute a ON a.attrelid = k.conrelid AND a.attnum = key.attnum
+                 ORDER BY key.position) AS fields,
+           CASE WHEN k.contype = 't' THEN NULL
+                ELSE pg_catalog.pg_get_constraintdef(k.oid, false) END AS definition, k.convalidated AS validated
+    FROM pg_catalog.pg_constraint k JOIN target ON target.oid = k.conrelid
+    UNION ALL
+    SELECT ''::text, 'n'::text, ARRAY[a.attname::text], 'NOT NULL'::text, true
+    FROM pg_catalog.pg_attribute a JOIN target ON target.oid = a.attrelid
+    WHERE a.attnum > 0 AND NOT a.attisdropped AND a.attnotnull
+      AND NOT EXISTS (SELECT 1 FROM pg_catalog.pg_constraint k
+                      WHERE k.conrelid = a.attrelid AND k.contype = 'n'
+                        AND a.attnum = ANY(k.conkey))
+)
+SELECT name, kind, fields,
+       CASE WHEN octet_length(definition) <= 16384 THEN definition END, validated
+FROM declared ORDER BY name, kind, fields LIMIT 1025
+"#;
 
 /// Les bases accessibles sur ce serveur.
 const SQL_CATALOGS: &str = "\
@@ -135,14 +166,14 @@ ORDER BY ic.relname";
 const SQL_FOREIGN_KEYS: &str = "\
 SELECT con.conname::text, \
        ARRAY(SELECT a.attname::text \
-             FROM unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord) \
+             FROM pg_catalog.unnest(con.conkey) WITH ORDINALITY AS k(attnum, ord) \
              JOIN pg_catalog.pg_attribute a \
                ON a.attrelid = con.conrelid AND a.attnum = k.attnum \
              ORDER BY k.ord), \
        fn.nspname::text, \
        fc.relname::text, \
        ARRAY(SELECT a.attname::text \
-             FROM unnest(con.confkey) WITH ORDINALITY AS k(attnum, ord) \
+             FROM pg_catalog.unnest(con.confkey) WITH ORDINALITY AS k(attnum, ord) \
              JOIN pg_catalog.pg_attribute a \
                ON a.attrelid = con.confrelid AND a.attnum = k.attnum \
              ORDER BY k.ord), \
@@ -362,7 +393,7 @@ impl CatalogProvider for PostgresCatalog {
             let courante: bool = ligne.try_get(1).unwrap_or(false);
             let mut base = CatalogRef::new(nom)?;
             if courante {
-                base = base.as_default();
+                base = base.with_default();
             }
             bases.push(base);
         }
@@ -398,7 +429,7 @@ impl CatalogProvider for PostgresCatalog {
                 espace = espace.with_comment(texte);
             }
             if systeme {
-                espace = espace.as_system();
+                espace = espace.with_system();
             }
             espaces.push(espace);
         }
@@ -545,6 +576,70 @@ impl CatalogProvider for PostgresCatalog {
         Ok(index)
     }
 
+    async fn relation_definition(
+        &self,
+        relation: &CatalogPath,
+        cancel: &CancelToken,
+    ) -> Result<oxyn_catalog::RelationDefinition> {
+        self.read_definition(relation, cancel).await
+    }
+
+    async fn list_incoming_foreign_keys(
+        &self,
+        relation: &CatalogPath,
+        cancel: &CancelToken,
+    ) -> Result<Vec<oxyn_catalog::IncomingForeignKey>> {
+        self.read_incoming_keys(relation, cancel).await
+    }
+
+    async fn list_constraints(
+        &self,
+        relation: &CatalogPath,
+        cancel: &CancelToken,
+    ) -> Result<Vec<Constraint>> {
+        self.capabilities.require(Capabilities::CONSTRAINTS)?;
+        let (namespace, name) = self.require_relation(relation)?;
+        let rows = self
+            .fetch(cancel, SQL_CONSTRAINTS, &[namespace, name])
+            .await?;
+        if rows.len() > 1024 {
+            return Err(OxynError::CatalogUnavailable(
+                "constraint metadata exceeds 1024 entries".into(),
+            ));
+        }
+        rows.iter()
+            .map(|row| {
+                if cancel.is_cancelled() {
+                    return Err(OxynError::Cancelled);
+                }
+                let kind = constraint_kind(&read_text(row, 1)?)?;
+                let fields = row.try_get::<Vec<String>, _>(2).map_err(|_| {
+                    OxynError::CatalogUnavailable(
+                        "invalid constraint columns in catalog response".into(),
+                    )
+                })?;
+                let expression = row.try_get::<Option<String>, _>(3).map_err(|_| {
+                    OxynError::CatalogUnavailable(
+                        "invalid constraint definition in catalog response".into(),
+                    )
+                })?;
+                if expression.is_none() && kind != ConstraintKind::Trigger {
+                    return Err(OxynError::CatalogUnavailable(
+                        "constraint definition missing or exceeds 16 KiB".into(),
+                    ));
+                }
+                let mut constraint = Constraint::new(read_text(row, 0)?, kind, fields);
+                constraint.expression = expression;
+                constraint.validated = Some(row.try_get::<bool, _>(4).map_err(|_| {
+                    OxynError::CatalogUnavailable(
+                        "invalid constraint validation status in catalog response".into(),
+                    )
+                })?);
+                Ok(constraint)
+            })
+            .collect()
+    }
+
     /// Les clés étrangères portées par une relation.
     ///
     /// C'est ce qui permet de tracer un diagramme de relations sans le deviner ;
@@ -589,6 +684,21 @@ impl CatalogProvider for PostgresCatalog {
             cles.push(cle);
         }
         Ok(cles)
+    }
+}
+
+fn constraint_kind(value: &str) -> Result<ConstraintKind> {
+    match value {
+        "p" => Ok(ConstraintKind::PrimaryKey),
+        "u" => Ok(ConstraintKind::Unique),
+        "c" => Ok(ConstraintKind::Check),
+        "f" => Ok(ConstraintKind::ForeignKey),
+        "x" => Ok(ConstraintKind::Exclusion),
+        "n" => Ok(ConstraintKind::NotNull),
+        "t" => Ok(ConstraintKind::Trigger),
+        _ => Err(OxynError::CatalogUnavailable(
+            "unknown constraint kind in catalog response".into(),
+        )),
     }
 }
 
@@ -714,6 +824,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn unknown_constraint_kinds_are_errors_instead_of_missing_constraints() {
+        for (code, expected) in [
+            ("p", ConstraintKind::PrimaryKey),
+            ("c", ConstraintKind::Check),
+            ("u", ConstraintKind::Unique),
+            ("f", ConstraintKind::ForeignKey),
+            ("x", ConstraintKind::Exclusion),
+            ("n", ConstraintKind::NotNull),
+            ("t", ConstraintKind::Trigger),
+        ] {
+            assert_eq!(constraint_kind(code).expect("known"), expected);
+        }
+        assert!(constraint_kind("?").is_err());
+        assert!(constraint_kind("").is_err());
+    }
+
+    #[test]
     fn le_sql_d_introspection_ne_concatene_aucun_identifiant() {
         // I-10 : une table nommée `"users"; DROP TABLE audit; --` est légale.
         // Toutes les requêtes qui visent un objet nommé le font par `$1`/`$2`.
@@ -723,6 +850,7 @@ mod tests {
             ("champs", SQL_FIELDS),
             ("index", SQL_INDEXES),
             ("clés étrangères", SQL_FOREIGN_KEYS),
+            ("constraints", SQL_CONSTRAINTS),
         ] {
             assert!(
                 requete.contains("$1"),

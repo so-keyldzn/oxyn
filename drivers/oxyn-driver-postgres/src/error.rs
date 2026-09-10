@@ -12,13 +12,25 @@
 //! ambiguë pendant un `UPDATE`. Une classification qui ignorerait l'intention
 //! devrait choisir, et choisir « transitoire » est le mauvais côté.
 //!
+//! # Le message du serveur cite ce qu'on lui a lié
+//!
+//! `invalid input syntax for type integer: "…"` sur un `$1` mal typé, un
+//! `RAISE` qui concatène `NEW.colonne` : PostgreSQL recopie une valeur liée dans
+//! son message primaire. Ce message est affiché, journalisé et **persisté** par
+//! l'historique et le journal. Il n'est donc propagé que si l'instruction ne
+//! portait aucune valeur liée par l'appelant — voir [`Bound`].
+//!
 //! # Ce que ce module ne fait pas
 //!
 //! Il ne retente rien. La politique de reprise appartient à l'appelant, seul à
 //! savoir si l'opération est rejouable
 //! ([DRIVER-CONTRACT](../../../docs/DRIVER-CONTRACT.md)).
+//!
+//! Il ne **filtre** pas non plus le texte des valeurs dans le message : le
+//! serveur les tronque, les échappe et les transforme, si bien qu'un `replace`
+//! aurait l'apparence d'une protection sans en être une.
 
-use oxyn_core::{DriverId, ErrorClass, OxynError, StatementIntent};
+use oxyn_core::{DriverId, ErrorClass, OxynError, ScalarValue, StatementIntent};
 
 /// `query_canceled` : le serveur confirme l'annulation qu'on lui a demandée.
 const SQLSTATE_QUERY_CANCELED: &str = "57014";
@@ -54,6 +66,44 @@ const SQLSTATE_CLASS_RESOURCES: &str = "53";
 /// travail.
 const SQLSTATE_READ_ONLY_TRANSACTION: &str = "25006";
 
+/// D'où viennent les valeurs liées à l'instruction concernée.
+///
+/// Le message primaire du serveur peut citer une valeur liée ; il n'est donc
+/// propagé que lorsque rien de ce qu'il peut citer ne vient de l'appelant
+/// ([I-03](../../../CLAUDE.md#i-03)).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Bound {
+    /// Aucune valeur venue d'une [`ExecRequest`](oxyn_core::ExecRequest). Les
+    /// requêtes d'introspection lient bien des identifiants — un nom de schéma,
+    /// un nom de relation —, mais ceux-là viennent du catalogue déjà affiché.
+    /// La propriété tenue est « rien de ce que le serveur peut citer ne vient de
+    /// l'appelant », pas « rien n'était lié ».
+    Internal,
+    /// Au moins une valeur de l'[`ExecRequest`](oxyn_core::ExecRequest) de
+    /// l'appelant était liée.
+    Caller,
+}
+
+impl Bound {
+    /// Ce que les paramètres d'une demande impliquent pour le message du
+    /// serveur.
+    pub(crate) const fn of(params: &[ScalarValue]) -> Self {
+        if params.is_empty() {
+            Self::Internal
+        } else {
+            Self::Caller
+        }
+    }
+}
+
+/// Ce qui remplace le message du serveur quand l'instruction portait des valeurs
+/// liées.
+///
+/// Explicite plutôt que rassurant : sans cette phrase, l'utilisateur croirait à
+/// une erreur muette et chercherait un défaut dans son SQL.
+const WITHHELD_MESSAGE: &str = "the server message is withheld because the statement carried \
+                                bound values, which PostgreSQL can quote verbatim";
+
 /// L'erreur de driver telle qu'elle est emballée dans [`OxynError::Driver`].
 ///
 /// Un type nommé plutôt qu'un `Box<dyn Error>` anonyme : l'appelant qui veut le
@@ -61,9 +111,16 @@ const SQLSTATE_READ_ONLY_TRANSACTION: &str = "25006";
 #[derive(Debug, thiserror::Error)]
 #[error("{message}")]
 pub struct PostgresError {
-    /// Le message du serveur, ou celui du transport. Ne porte jamais de valeur
-    /// liée : `sqlx` ne les recopie pas dans ses messages, et le serveur ne
-    /// renvoie que ce qu'il a reçu dans le texte de la requête.
+    /// Ce qui sera montré, journalisé et persisté.
+    ///
+    /// C'est le message du serveur — ou celui du transport — **seulement** si
+    /// l'instruction ne portait aucune valeur liée par l'appelant. Sinon, c'est
+    /// [`WITHHELD_MESSAGE`] suivi du SQLSTATE : le serveur recopie une valeur
+    /// liée dans son message primaire, et ce champ finit dans l'historique et
+    /// le journal ([I-03](../../../CLAUDE.md#i-03)).
+    ///
+    /// L'erreur `sqlx` d'origine n'est jamais conservée à côté :
+    /// `#[derive(Debug)]` la ré-exposerait au premier `tracing::debug!` venu.
     message: String,
     /// Le SQLSTATE, quand l'erreur vient du serveur.
     sqlstate: Option<String>,
@@ -71,22 +128,32 @@ pub struct PostgresError {
 
 impl PostgresError {
     /// Le SQLSTATE à cinq caractères, quand le serveur en a donné un.
+    ///
+    /// Toujours présent, y compris quand le message est retenu : c'est un code,
+    /// il ne cite rien.
     #[must_use]
     pub fn sqlstate(&self) -> Option<&str> {
         self.sqlstate.as_deref()
     }
 
-    /// Le message tel que le serveur l'a formulé.
+    /// Le message tel qu'il sera montré.
     ///
-    /// « Le public lit les messages d'erreur de PostgreSQL » : on ne les
-    /// paraphrase pas.
+    /// « Le public lit les messages d'erreur de PostgreSQL » : celui du serveur
+    /// n'est jamais paraphrasé. Il est en revanche **retenu**, et le dit, quand
+    /// l'instruction portait des valeurs liées.
     #[must_use]
     pub fn message(&self) -> &str {
         &self.message
     }
 }
 
-/// Traduit une erreur `sqlx` survenue **pendant une exécution**.
+/// Traduit une erreur `sqlx` survenue sur une instruction **composée par le
+/// driver**.
+///
+/// Le message du serveur est propagé tel quel : une telle instruction ne lie que
+/// des littéraux que le driver a écrits. Pour l'exécution d'une
+/// [`ExecRequest`](oxyn_core::ExecRequest), passer par [`map_stream_error`], qui
+/// prend le relevé des valeurs liées ([I-03](../../../CLAUDE.md#i-03)).
 ///
 /// `intent` décide du sort des erreurs de transport : ambiguës si l'instruction
 /// pouvait écrire, transitoires sinon. Dans le doute — [`StatementIntent::Unknown`]
@@ -95,6 +162,21 @@ impl PostgresError {
 pub(crate) fn map_exec_error(
     driver: &DriverId,
     intent: StatementIntent,
+    err: sqlx::Error,
+) -> OxynError {
+    map_bound_error(driver, intent, Bound::Internal, err)
+}
+
+/// Traduit une erreur `sqlx` survenue **pendant une exécution**, en sachant si
+/// l'instruction portait des valeurs liées par l'appelant.
+///
+/// `bound` ne change **que** le message : la famille se lit sur le SQLSTATE et
+/// l'intention, tous deux relevés sur l'erreur d'origine.
+#[must_use]
+fn map_bound_error(
+    driver: &DriverId,
+    intent: StatementIntent,
+    bound: Bound,
     err: sqlx::Error,
 ) -> OxynError {
     // Une annulation confirmée par le serveur n'est pas une panne : c'est le
@@ -106,7 +188,7 @@ pub(crate) fn map_exec_error(
         return erreur;
     }
     let classe = classify(&err, intent);
-    OxynError::driver(driver.clone(), classe, wrap(err))
+    OxynError::driver(driver.clone(), classe, wrap(err, bound))
 }
 
 /// Traduit une erreur `sqlx` survenue **pendant l'ouverture d'une session**.
@@ -216,10 +298,29 @@ fn message_of(err: &sqlx::Error) -> String {
 }
 
 /// Emballe l'erreur `sqlx` dans le type nommé du driver.
-fn wrap(err: sqlx::Error) -> PostgresError {
-    PostgresError {
-        sqlstate: sqlstate_of(&err),
-        message: message_of(&err),
+///
+/// Deux variantes seulement sont retenues quand l'appelant avait lié des
+/// valeurs : celle **du serveur**, dont le message primaire les recopie, et
+/// celle de l'**encodeur**, qui est composée à partir de la valeur qu'il n'a pas
+/// su encoder. Les autres — coupure, TLS, bassin épuisé — sont écrites par
+/// `sqlx` à partir du transport, sans jamais y verser les arguments : les
+/// retenir coûterait un diagnostic sans rien protéger.
+fn wrap(err: sqlx::Error, bound: Bound) -> PostgresError {
+    let sqlstate = sqlstate_of(&err);
+    let message = match (bound, &err) {
+        (Bound::Caller, sqlx::Error::Database(_) | sqlx::Error::Encode(_)) => {
+            withheld(sqlstate.as_deref())
+        }
+        _ => message_of(&err),
+    };
+    PostgresError { message, sqlstate }
+}
+
+/// Le message de remplacement, qui garde le seul identifiant sûr : le SQLSTATE.
+fn withheld(sqlstate: Option<&str>) -> String {
+    match sqlstate {
+        Some(code) => format!("{WITHHELD_MESSAGE} (SQLSTATE {code})"),
+        None => WITHHELD_MESSAGE.to_owned(),
     }
 }
 
@@ -238,21 +339,26 @@ pub(crate) fn is_read_only_rejection(err: &sqlx::Error) -> bool {
 const READ_ONLY_MESSAGE: &str = "cette exécution est bornée en lecture seule : \
                                  le serveur a refusé une instruction qui écrit";
 
-/// Traduit une erreur d'exécution en tenant compte des bornes demandées.
+/// Traduit une erreur d'exécution en tenant compte des bornes demandées et des
+/// valeurs liées.
 ///
 /// Un seul endroit décide de ce message, parce qu'il est produit sur deux
 /// chemins — la préparation et le flux — et que deux formulations divergeraient.
+///
+/// C'est la porte de l'instruction **de l'appelant** : `bound` y est obligatoire
+/// pour qu'aucun de ces deux chemins ne puisse l'oublier.
 #[must_use]
 pub(crate) fn map_stream_error(
     driver: &DriverId,
     intent: StatementIntent,
     read_only: bool,
+    bound: Bound,
     err: sqlx::Error,
 ) -> OxynError {
     if read_only && is_read_only_rejection(&err) {
         return OxynError::Query(READ_ONLY_MESSAGE.to_owned());
     }
-    map_exec_error(driver, intent, err)
+    map_bound_error(driver, intent, bound, err)
 }
 
 #[cfg(test)]
@@ -269,11 +375,12 @@ mod tests {
     #[derive(Debug)]
     struct BaseFactice {
         code: &'static str,
+        message: &'static str,
     }
 
     impl std::fmt::Display for BaseFactice {
         fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            f.write_str("erreur factice")
+            f.write_str(self.message)
         }
     }
 
@@ -281,7 +388,7 @@ mod tests {
 
     impl DatabaseError for BaseFactice {
         fn message(&self) -> &str {
-            "erreur factice"
+            self.message
         }
 
         fn code(&self) -> Option<std::borrow::Cow<'_, str>> {
@@ -306,7 +413,10 @@ mod tests {
     }
 
     fn erreur_serveur(code: &'static str) -> sqlx::Error {
-        sqlx::Error::Database(Box::new(BaseFactice { code }))
+        sqlx::Error::Database(Box::new(BaseFactice {
+            code,
+            message: "erreur factice",
+        }))
     }
 
     fn coupure() -> sqlx::Error {
@@ -472,6 +582,7 @@ mod tests {
             &DriverId::postgres(),
             StatementIntent::Write,
             true,
+            Bound::Internal,
             erreur_serveur(SQLSTATE_READ_ONLY_TRANSACTION),
         );
         assert!(matches!(erreur, OxynError::Query(_)), "{erreur:?}");
@@ -488,8 +599,119 @@ mod tests {
             &DriverId::postgres(),
             StatementIntent::Write,
             false,
+            Bound::Internal,
             erreur_serveur(SQLSTATE_READ_ONLY_TRANSACTION),
         );
         assert!(matches!(erreur, OxynError::Driver { .. }), "{erreur:?}");
+    }
+
+    /// Une erreur serveur dont le message primaire cite une valeur liée, comme
+    /// le fait un cast invalide de `$1`.
+    fn erreur_bavarde() -> sqlx::Error {
+        sqlx::Error::Database(Box::new(BaseFactice {
+            code: "22P02",
+            message: "invalid input syntax for type integer: \"S3NT1NELLE-42\"",
+        }))
+    }
+
+    #[test]
+    fn le_message_du_serveur_est_retenu_des_qu_une_valeur_etait_liee() {
+        // I-03 : ce message est affiché, et persisté par `HistoryRecord::failed`
+        // et `JournalRecord::failed`, qui appellent `error.to_string()`.
+        let erreur = map_stream_error(
+            &DriverId::postgres(),
+            StatementIntent::Read,
+            false,
+            Bound::Caller,
+            erreur_bavarde(),
+        );
+        for rendu in [format!("{erreur}"), format!("{erreur:?}")] {
+            assert!(!rendu.contains("S3NT1NELLE-42"), "valeur liée : {rendu}");
+            assert!(!rendu.contains("invalid input syntax"), "{rendu}");
+        }
+        assert!(erreur.to_string().contains("withheld"), "{erreur}");
+        // Le SQLSTATE survit : c'est un code, il ne cite rien.
+        assert!(erreur.to_string().contains("22P02"), "{erreur}");
+        let OxynError::Driver { source, .. } = &erreur else {
+            panic!("attendu une erreur de driver : {erreur:?}");
+        };
+        let postgres = source
+            .downcast_ref::<PostgresError>()
+            .expect("le driver emballe ses erreurs dans PostgresError");
+        assert_eq!(postgres.sqlstate(), Some("22P02"));
+    }
+
+    #[test]
+    fn sans_valeur_liee_le_message_du_serveur_passe_inchange() {
+        // Le public d'Oxyn lit les messages de PostgreSQL : une paraphrase
+        // rassurante serait un défaut.
+        let erreur = map_stream_error(
+            &DriverId::postgres(),
+            StatementIntent::Read,
+            false,
+            Bound::Internal,
+            erreur_bavarde(),
+        );
+        assert!(
+            erreur
+                .to_string()
+                .contains("invalid input syntax for type integer"),
+            "{erreur}"
+        );
+    }
+
+    #[test]
+    fn le_retrait_du_message_ne_change_ni_la_famille_ni_l_annulation() {
+        // La famille se lit sur le SQLSTATE et l'intention, pas sur le message.
+        let coupure_en_ecriture = map_stream_error(
+            &DriverId::postgres(),
+            StatementIntent::Write,
+            false,
+            Bound::Caller,
+            coupure(),
+        );
+        assert_eq!(coupure_en_ecriture.class(), ErrorClass::Ambiguous);
+        assert!(!coupure_en_ecriture.is_retryable(), "I-13");
+
+        let interblocage = map_stream_error(
+            &DriverId::postgres(),
+            StatementIntent::Write,
+            false,
+            Bound::Caller,
+            erreur_serveur(SQLSTATE_DEADLOCK),
+        );
+        assert_eq!(interblocage.class(), ErrorClass::Transient);
+
+        let annulee = map_stream_error(
+            &DriverId::postgres(),
+            StatementIntent::Read,
+            false,
+            Bound::Caller,
+            erreur_serveur(SQLSTATE_QUERY_CANCELED),
+        );
+        assert!(annulee.is_cancelled(), "{annulee:?}");
+    }
+
+    #[test]
+    fn une_erreur_d_encodeur_est_retenue_comme_celle_du_serveur() {
+        // L'encodeur compose son message à partir de la valeur qu'il a refusée.
+        let erreur = map_stream_error(
+            &DriverId::postgres(),
+            StatementIntent::Read,
+            false,
+            Bound::Caller,
+            sqlx::Error::Encode("`S3NT1NELLE-42` is out of range".into()),
+        );
+        assert!(!erreur.to_string().contains("S3NT1NELLE-42"), "{erreur}");
+        assert!(erreur.to_string().contains("withheld"), "{erreur}");
+    }
+
+    #[test]
+    fn une_demande_sans_parametre_ne_retient_rien() {
+        assert_eq!(Bound::of(&[]), Bound::Internal);
+        assert_eq!(
+            Bound::of(&[oxyn_core::ScalarValue::Text("S3NT1NELLE-42".to_owned())]),
+            Bound::Caller
+        );
     }
 }

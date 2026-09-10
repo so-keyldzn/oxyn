@@ -179,6 +179,9 @@ impl PostgresVariant {
     #[must_use]
     pub fn capabilities(&self) -> Capabilities {
         let mut capacites = base_capabilities();
+        if self.major_version.is_none_or(|version| version < 12) {
+            capacites.remove(Capabilities::OBJECT_DEFINITION);
+        }
 
         if self.flavor == PostgresFlavor::Redshift {
             capacites.remove(redshift_missing());
@@ -228,6 +231,8 @@ pub fn base_capabilities() -> Capabilities {
         | Capabilities::INDEXES
         | Capabilities::CONSTRAINTS
         | Capabilities::FOREIGN_KEYS
+        | Capabilities::INCOMING_FOREIGN_KEYS
+        | Capabilities::OBJECT_DEFINITION
         | Capabilities::ROUTINES
         | Capabilities::TRIGGERS
         | Capabilities::SEQUENCES
@@ -245,6 +250,7 @@ pub fn base_capabilities() -> Capabilities {
         | Capabilities::DML
         | Capabilities::GRANT_REVOKE
         | Capabilities::READ_ONLY_SESSION
+        | Capabilities::SESSION_CONTEXT
         | Capabilities::SQL
         | Capabilities::RELATIONAL
         | Capabilities::FULL_TEXT_SEARCH
@@ -258,7 +264,11 @@ pub fn base_capabilities() -> Capabilities {
 /// * pas de `tsvector`, donc pas de recherche plein texte native.
 #[must_use]
 fn redshift_missing() -> Capabilities {
-    Capabilities::MATERIALIZED_VIEWS
+    // Constraint introspection uses PostgreSQL catalog functions unavailable here.
+    Capabilities::CONSTRAINTS
+        | Capabilities::INCOMING_FOREIGN_KEYS
+        | Capabilities::OBJECT_DEFINITION
+        | Capabilities::MATERIALIZED_VIEWS
         | Capabilities::TRIGGERS
         | Capabilities::SEQUENCES
         | Capabilities::USER_TYPES
@@ -383,6 +393,7 @@ mod tests {
             "Redshift n'exécute pas le plan qu'il explique"
         );
         assert!(!capacites.contains(Capabilities::TRIGGERS));
+        assert!(!capacites.contains(Capabilities::CONSTRAINTS));
         assert!(!capacites.contains(Capabilities::FULL_TEXT_SEARCH));
 
         // Ce qu'il a, il le garde.

@@ -31,6 +31,13 @@
 //! **l'annulation qui prouve l'arrêt côté serveur** et **le flux sur un volume
 //! qui ne tiendrait pas en mémoire**. Les autres couvrent la table des types,
 //! l'introspection, et la lecture seule imposée par le serveur.
+//!
+//! Le contexte de session ([ADR-0019](../../../docs/adr/0019-contexte-de-session.md))
+//! en ajoute un troisième du même genre : `search_path` est un état **par
+//! connexion**, et une session Oxyn est un bassin de quatre. Ces tests-là
+//! saturent donc le bassin et relèvent `pg_backend_pid()` dans l'exécution
+//! elle-même — un test qui n'exercerait qu'une connexion serait vert sans rien
+//! prouver.
 
 use std::time::Duration;
 
@@ -38,12 +45,229 @@ use oxyn_core::{
     CancelToken, Capabilities, ConnectionConfig, DriverId, Environment, ExecLimits, ExecRequest,
     OxynError, QueryLanguage, SqlDialect, StatementIntent,
 };
-use oxyn_driver::{Credentials, Cursor, Driver as _, ParsedDsn, Session};
+use oxyn_driver::{Credentials, Cursor, Driver as _, ParsedDsn, Session, SessionContext};
 
 use crate::PostgresDriver;
+use crate::options::MAX_CONNECTIONS;
 
 /// La variable qui porte l'URL du serveur d'essai.
 const VARIABLE: &str = "OXYN_PG_TEST_URL";
+
+#[tokio::test]
+#[ignore = "requires an isolated PostgreSQL test server"]
+async fn incoming_keys_cross_schemas_preserve_composite_order_and_declared_cardinality() {
+    use oxyn_catalog::CatalogPath;
+    let Some(session) = session().await else {
+        return;
+    };
+    for sql in [
+        "CREATE SCHEMA oxyn_incoming_source",
+        "CREATE SCHEMA oxyn_incoming_target",
+        "CREATE TABLE oxyn_incoming_target.parent (a integer, b text, PRIMARY KEY (b,a))",
+        "CREATE TABLE oxyn_incoming_source.child (id integer PRIMARY KEY, x text, y integer, FOREIGN KEY(x,y) REFERENCES oxyn_incoming_target.parent(b,a) ON DELETE CASCADE)",
+        "CREATE TABLE oxyn_incoming_source.unique_child (x text, y integer, payload text, FOREIGN KEY(x,y) REFERENCES oxyn_incoming_target.parent(b,a))",
+        "CREATE UNIQUE INDEX incoming_unique ON oxyn_incoming_source.unique_child(x,y) INCLUDE(payload)",
+        "CREATE TABLE oxyn_incoming_source.expression_child (x text, y integer, FOREIGN KEY(x,y) REFERENCES oxyn_incoming_target.parent(b,a))",
+        "CREATE UNIQUE INDEX incoming_expression ON oxyn_incoming_source.expression_child(lower(x),y)",
+        "CREATE TABLE oxyn_incoming_source.partial_child (x text, y integer, FOREIGN KEY(x,y) REFERENCES oxyn_incoming_target.parent(b,a))",
+        "CREATE UNIQUE INDEX incoming_partial ON oxyn_incoming_source.partial_child(x,y) WHERE x IS NOT NULL",
+        "CREATE TABLE oxyn_incoming_source.coercion_child (x varchar, y integer, UNIQUE(x,y), FOREIGN KEY(x,y) REFERENCES oxyn_incoming_target.parent(b,a))",
+        "CREATE TABLE oxyn_incoming_source.parent (a integer PRIMARY KEY)",
+        "CREATE TABLE oxyn_incoming_source.other_child (a integer REFERENCES oxyn_incoming_source.parent)",
+    ] {
+        appliquer(&*session, sql).await;
+    }
+    let path =
+        CatalogPath::for_relation(None, Some("oxyn_incoming_target"), "parent").expect("path");
+    let keys = session
+        .catalog()
+        .list_incoming_foreign_keys(&path, &CancelToken::new())
+        .await
+        .expect("incoming metadata");
+    assert_eq!(keys.len(), 5);
+    let child = keys
+        .iter()
+        .find(|key| key.source.relation() == Some("child"))
+        .expect("child");
+    assert_eq!(child.source.namespace(), Some("oxyn_incoming_source"));
+    assert_eq!(child.key.fields, ["x", "y"]);
+    assert_eq!(child.key.references.fields, ["b", "a"]);
+    assert_eq!(child.source_unique, Some(false));
+    assert_eq!(
+        child.key.on_delete,
+        oxyn_catalog::ReferentialAction::Cascade
+    );
+    assert_eq!(
+        keys.iter()
+            .find(|key| key.source.relation() == Some("unique_child"))
+            .expect("unique")
+            .source_unique,
+        Some(true)
+    );
+    assert_eq!(
+        keys.iter()
+            .find(|key| key.source.relation() == Some("expression_child"))
+            .expect("expression")
+            .source_unique,
+        None
+    );
+    for name in ["partial_child", "coercion_child"] {
+        assert_eq!(
+            keys.iter()
+                .find(|key| key.source.relation() == Some(name))
+                .expect("uncertain comparison")
+                .source_unique,
+            None
+        );
+    }
+    appliquer(&*session, "DROP SCHEMA oxyn_incoming_source CASCADE").await;
+    appliquer(&*session, "DROP SCHEMA oxyn_incoming_target CASCADE").await;
+}
+
+#[tokio::test]
+#[ignore = "requires an isolated PostgreSQL test server"]
+async fn constraints_report_validation_status_from_the_server() {
+    use oxyn_catalog::CatalogPath;
+    let Some(session) = session().await else {
+        return;
+    };
+    appliquer(
+        &*session,
+        "CREATE TABLE oxyn_constraint_validation (id integer)",
+    )
+    .await;
+    appliquer(
+        &*session,
+        "INSERT INTO oxyn_constraint_validation VALUES (-1)",
+    )
+    .await;
+    appliquer(
+        &*session,
+        "ALTER TABLE oxyn_constraint_validation ADD CONSTRAINT positive CHECK (id > 0) NOT VALID",
+    )
+    .await;
+    let path = CatalogPath::for_relation(None, Some("public"), "oxyn_constraint_validation")
+        .expect("path");
+    let constraints = session
+        .catalog()
+        .list_constraints(&path, &CancelToken::new())
+        .await
+        .expect("read");
+    assert_eq!(
+        constraints.first().expect("constraint").validated,
+        Some(false)
+    );
+    appliquer(&*session, "UPDATE oxyn_constraint_validation SET id = 1").await;
+    appliquer(
+        &*session,
+        "ALTER TABLE oxyn_constraint_validation VALIDATE CONSTRAINT positive",
+    )
+    .await;
+    let constraints = session
+        .catalog()
+        .list_constraints(&path, &CancelToken::new())
+        .await
+        .expect("read");
+    assert_eq!(
+        constraints.first().expect("constraint").validated,
+        Some(true)
+    );
+    appliquer(&*session, "DROP TABLE oxyn_constraint_validation").await;
+}
+
+#[tokio::test]
+#[ignore = "requires an isolated PostgreSQL test server"]
+async fn constraints_reject_oversized_catalogs_without_publishing_partial_lists() {
+    use oxyn_catalog::CatalogPath;
+    let Some(session) = session().await else {
+        return;
+    };
+    let clauses = std::iter::repeat_n("CHECK (id >= 0)", 1025)
+        .collect::<Vec<_>>()
+        .join(", ");
+    appliquer(
+        &*session,
+        &format!("CREATE TABLE oxyn_many_constraints (id integer, {clauses})"),
+    )
+    .await;
+    let path =
+        CatalogPath::for_relation(None, Some("public"), "oxyn_many_constraints").expect("path");
+    let error = session
+        .catalog()
+        .list_constraints(&path, &CancelToken::new())
+        .await
+        .expect_err("never silently truncate constraints");
+    assert!(error.to_string().contains("1024"));
+    appliquer(&*session, "DROP TABLE oxyn_many_constraints").await;
+    let literal = "x".repeat(16385);
+    appliquer(
+        &*session,
+        &format!("CREATE TABLE oxyn_large_constraint (id text CHECK (id <> '{literal}'))"),
+    )
+    .await;
+    let path =
+        CatalogPath::for_relation(None, Some("public"), "oxyn_large_constraint").expect("path");
+    let error = session
+        .catalog()
+        .list_constraints(&path, &CancelToken::new())
+        .await
+        .expect_err("definition size is bounded before transfer");
+    assert!(error.to_string().contains("16 KiB"));
+    appliquer(&*session, "DROP TABLE oxyn_large_constraint").await;
+}
+
+#[tokio::test]
+#[ignore = "requires an isolated PostgreSQL test server"]
+async fn constraints_preserve_names_column_order_and_engine_definitions() {
+    use oxyn_catalog::{CatalogPath, ConstraintKind};
+    let Some(session) = session().await else {
+        return;
+    };
+    appliquer(&*session, "CREATE TABLE \"oxyn_constraints\"\";--\" (b integer, a integer NOT NULL, score integer, CONSTRAINT \"key\"\";--\" PRIMARY KEY (b, a), CONSTRAINT score_positive CHECK (score > 0), UNIQUE (a), FOREIGN KEY (a) REFERENCES \"oxyn_constraints\"\";--\" (a))").await;
+    let path =
+        CatalogPath::for_relation(None, Some("public"), "oxyn_constraints\";--").expect("path");
+    let constraints = session
+        .catalog()
+        .list_constraints(&path, &CancelToken::new())
+        .await
+        .expect("constraints");
+    let primary = constraints
+        .iter()
+        .find(|c| c.kind == ConstraintKind::PrimaryKey)
+        .expect("primary");
+    assert_eq!(primary.name, "key\";--");
+    assert_eq!(primary.fields, ["b", "a"]);
+    let check = constraints
+        .iter()
+        .find(|c| c.kind == ConstraintKind::Check)
+        .expect("check");
+    assert_eq!(check.name, "score_positive");
+    assert!(
+        check
+            .expression
+            .as_deref()
+            .expect("definition")
+            .contains("score > 0")
+    );
+    assert!(
+        constraints
+            .iter()
+            .any(|c| c.kind == ConstraintKind::ForeignKey)
+    );
+    assert!(constraints.iter().any(|c| c.kind == ConstraintKind::Unique));
+    assert!(
+        constraints
+            .iter()
+            .any(|c| c.kind == ConstraintKind::NotNull && c.fields == ["a"])
+    );
+    let cancel = CancelToken::new();
+    cancel.cancel();
+    assert!(matches!(
+        session.catalog().list_constraints(&path, &cancel).await,
+        Err(OxynError::Cancelled)
+    ));
+    appliquer(&*session, "DROP TABLE \"oxyn_constraints\"\";--\"").await;
+}
 
 #[tokio::test]
 #[ignore = "requires an isolated PostgreSQL test server"]
@@ -157,6 +381,121 @@ async fn previews_handle_system_types_and_preserve_native_columns() {
     session.close().await.expect("close");
 }
 
+/// Une valeur improbable, pour qu'un test qui la cherche ne la trouve que si
+/// elle a réellement traversé.
+const SENTINELLE: &str = "S3NT1NELLE-42";
+
+/// L'erreur d'une exécution qui échoue, que ce soit à la préparation ou dans le
+/// flux.
+///
+/// Un cast invalide passe la préparation — le type de `$1` est `text` — et
+/// n'échoue qu'à l'exécution : l'erreur arrive alors par le curseur.
+async fn echouer(session: &dyn Session, demande: ExecRequest) -> OxynError {
+    match session.execute(demande, &CancelToken::new()).await {
+        Err(erreur) => erreur,
+        Ok(mut curseur) => loop {
+            match curseur.next_batch().await {
+                Ok(Some(_)) => {}
+                Ok(None) => panic!("l'instruction devait être refusée"),
+                Err(erreur) => break erreur,
+            }
+        },
+    }
+}
+
+#[tokio::test]
+#[ignore = "demande un serveur PostgreSQL : voir la documentation du module"]
+async fn une_valeur_liee_ne_ressort_jamais_du_message_du_serveur() {
+    // I-03 : `invalid input syntax for type integer: "…"` recopie la valeur
+    // liée. Ce message est affiché, et persisté par `HistoryRecord::failed` et
+    // `JournalRecord::failed` — qui appellent tous deux `error.to_string()`.
+    let Some(session) = session().await else {
+        return;
+    };
+
+    let erreur = echouer(
+        &*session,
+        lecture("SELECT ($1::text)::integer")
+            .with_params(vec![oxyn_core::ScalarValue::Text(SENTINELLE.to_owned())]),
+    )
+    .await;
+    for rendu in [format!("{erreur}"), format!("{erreur:?}")] {
+        assert!(!rendu.contains(SENTINELLE), "valeur liée rendue : {rendu}");
+        assert!(!rendu.contains("invalid input syntax"), "{rendu}");
+    }
+    assert!(
+        erreur.to_string().contains("withheld"),
+        "le retrait doit se dire : {erreur}"
+    );
+    // `invalid_text_representation` : le SQLSTATE survit, c'est un code.
+    assert!(erreur.to_string().contains("22P02"), "{erreur}");
+    assert_eq!(erreur.class(), oxyn_core::ErrorClass::Permanent);
+
+    // Sans valeur liée, le même refus garde le message de PostgreSQL : le
+    // public d'Oxyn le lit, et une paraphrase serait un défaut.
+    let entier = echouer(
+        &*session,
+        lecture(&format!("SELECT ('{SENTINELLE}'::text)::integer")),
+    )
+    .await;
+    assert!(
+        entier
+            .to_string()
+            .contains("invalid input syntax for type integer"),
+        "{entier}"
+    );
+
+    session.close().await.expect("close");
+}
+
+#[tokio::test]
+#[ignore = "demande un serveur PostgreSQL : voir la documentation du module"]
+async fn un_declencheur_qui_recopie_la_valeur_ne_la_fait_pas_sortir() {
+    // L'autre forme de la fuite : `RAISE` concatène `NEW.colonne`, donc la
+    // valeur qui vient d'être liée.
+    let Some(session) = session().await else {
+        return;
+    };
+    appliquer(&*session, "CREATE TABLE oxyn_withheld (note text)").await;
+    appliquer(
+        &*session,
+        "CREATE FUNCTION oxyn_withheld_guard() RETURNS trigger LANGUAGE plpgsql AS \
+         $$ BEGIN RAISE EXCEPTION 'solde : %', NEW.note; END $$",
+    )
+    .await;
+    appliquer(
+        &*session,
+        "CREATE TRIGGER oxyn_withheld_trigger BEFORE INSERT ON oxyn_withheld \
+         FOR EACH ROW EXECUTE FUNCTION oxyn_withheld_guard()",
+    )
+    .await;
+
+    let erreur = echouer(
+        &*session,
+        ecriture("INSERT INTO oxyn_withheld(note) VALUES ($1)")
+            .with_params(vec![oxyn_core::ScalarValue::Text(SENTINELLE.to_owned())]),
+    )
+    .await;
+    for rendu in [format!("{erreur}"), format!("{erreur:?}")] {
+        assert!(!rendu.contains(SENTINELLE), "valeur liée rendue : {rendu}");
+        assert!(
+            !rendu.contains("solde"),
+            "message du serveur rendu : {rendu}"
+        );
+    }
+    assert!(erreur.to_string().contains("withheld"), "{erreur}");
+    assert_eq!(erreur.class(), oxyn_core::ErrorClass::Permanent);
+
+    appliquer(
+        &*session,
+        "DROP TRIGGER oxyn_withheld_trigger ON oxyn_withheld",
+    )
+    .await;
+    appliquer(&*session, "DROP FUNCTION oxyn_withheld_guard()").await;
+    appliquer(&*session, "DROP TABLE oxyn_withheld").await;
+    session.close().await.expect("close");
+}
+
 /// La configuration d'essai, ou `None` quand aucun serveur n'est déclaré.
 fn cible() -> Option<(ConnectionConfig, Credentials)> {
     let url = std::env::var(VARIABLE).ok()?;
@@ -184,7 +523,7 @@ fn refus<T>(issue: Result<T, OxynError>, attendu: &str) -> OxynError {
 }
 
 /// Ouvre une session, ou rend `None` en le disant.
-async fn session() -> Option<Box<dyn Session>> {
+pub(super) async fn session() -> Option<Box<dyn Session>> {
     let Some((config, identifiants)) = cible() else {
         eprintln!("{VARIABLE} n'est pas défini : test ignoré");
         return None;
@@ -215,7 +554,7 @@ fn ecriture(sql: &str) -> ExecRequest {
 ///
 /// Les préparations et les nettoyages des tests passent par là : ce qui compte
 /// est que l'instruction soit acceptée, pas ce qu'elle rend.
-async fn appliquer(session: &dyn Session, sql: &str) {
+pub(super) async fn appliquer(session: &dyn Session, sql: &str) {
     let mut curseur = session
         .execute(ecriture(sql), &CancelToken::new())
         .await
@@ -685,5 +1024,786 @@ async fn une_erreur_de_syntaxe_est_permanente_et_porte_son_sqlstate() {
             .expect("le driver emballe ses erreurs");
         assert_eq!(postgres.sqlstate(), Some("42601"));
     }
+    session.close().await.expect("fermeture");
+}
+
+#[tokio::test]
+#[ignore = "demande un serveur PostgreSQL : voir la documentation du module"]
+async fn une_preparation_qui_echoue_garde_le_message_du_serveur_meme_avec_un_parametre() {
+    // Pendant de `sans_valeur_liee_le_message_du_serveur_passe_inchange`, du
+    // côté du protocole : `prepare` n'émet que Parse et Describe, qui portent le
+    // texte et les OID des paramètres — jamais leur contenu. Le serveur ne peut
+    // donc rien citer, et retirer son message ferait disparaître le diagnostic
+    // le plus fréquent d'une requête paramétrée : le nom de l'objet fautif.
+    let Some(session) = session().await else {
+        return;
+    };
+    let erreur = refus(
+        session
+            .execute(
+                lecture("SELECT * FROM oxyn_facturse WHERE client_id = $1")
+                    .with_params(vec![oxyn_core::ScalarValue::Int64(42)]),
+                &CancelToken::new(),
+            )
+            .await,
+        "une table inexistante doit être refusée à la préparation",
+    );
+
+    assert!(
+        erreur.to_string().contains("oxyn_facturse"),
+        "le nom de l'objet fautif doit survivre : {erreur}"
+    );
+    assert!(
+        !erreur.to_string().contains("withheld"),
+        "aucune valeur n'a atteint le serveur : {erreur}"
+    );
+    assert_eq!(erreur.class(), oxyn_core::ErrorClass::Permanent);
+    if let OxynError::Driver { source, .. } = &erreur {
+        let postgres = source
+            .downcast_ref::<crate::PostgresError>()
+            .expect("le driver emballe ses erreurs");
+        assert_eq!(postgres.sqlstate(), Some("42P01"));
+    }
+
+    session.close().await.expect("fermeture");
+}
+
+// ---------------------------------------------------------------------------
+// Contexte de session (ADR-0019)
+// ---------------------------------------------------------------------------
+
+/// Les deux schémas homonymes sur lesquels reposent ces tests.
+///
+/// Le **même** nom de table dans les deux : c'est la seule fixture qui rende un
+/// `search_path` faux visible. Deux noms distincts se seraient contentés
+/// d'échouer, ce qui est le cas facile.
+const SCHEMA_A: &str = "oxyn_ctx_a";
+/// Le jumeau de [`SCHEMA_A`], qu'aucun contexte de ces tests ne déclare.
+const SCHEMA_B: &str = "oxyn_ctx_b";
+/// La table homonyme, jamais présente dans `public`.
+const TABLE_PARTAGEE: &str = "shared_target";
+/// Une table que seul le `search_path` par défaut du serveur atteint.
+const TABLE_PAR_DEFAUT: &str = "oxyn_ctx_default_only";
+
+/// Un contexte qui ne nomme qu'un espace de noms.
+fn contexte(namespace: &str) -> SessionContext {
+    SessionContext::new(None, Some(namespace.to_owned()))
+}
+
+/// Crée les deux schémas jumeaux et la table que seul le défaut atteint.
+async fn preparer_jumeaux(session: &dyn Session) {
+    nettoyer_jumeaux(session).await;
+    for (schema, marqueur) in [(SCHEMA_A, "a"), (SCHEMA_B, "b")] {
+        appliquer(session, &format!("CREATE SCHEMA {schema}")).await;
+        appliquer(
+            session,
+            &format!("CREATE TABLE {schema}.{TABLE_PARTAGEE} (marker text)"),
+        )
+        .await;
+        appliquer(
+            session,
+            &format!("INSERT INTO {schema}.{TABLE_PARTAGEE} VALUES ('{marqueur}')"),
+        )
+        .await;
+    }
+    appliquer(
+        session,
+        &format!("CREATE TABLE public.{TABLE_PAR_DEFAUT} (marker text)"),
+    )
+    .await;
+    appliquer(
+        session,
+        &format!("INSERT INTO public.{TABLE_PAR_DEFAUT} VALUES ('defaut')"),
+    )
+    .await;
+}
+
+/// Défait ce que [`preparer_jumeaux`] a créé.
+async fn nettoyer_jumeaux(session: &dyn Session) {
+    for schema in [SCHEMA_A, SCHEMA_B] {
+        appliquer(session, &format!("DROP SCHEMA IF EXISTS {schema} CASCADE")).await;
+    }
+    appliquer(
+        session,
+        &format!("DROP TABLE IF EXISTS public.{TABLE_PAR_DEFAUT}"),
+    )
+    .await;
+}
+
+/// Le premier texte de la première ligne d'une lecture, flux **drainé**.
+///
+/// Le drainage n'est pas de la politesse : un curseur abandonné en cours de flux
+/// laisse des octets non lus, donc sa connexion est fermée au lieu de retourner
+/// au bassin. Les tests qui comparent des pids d'une exécution à l'autre
+/// n'auraient alors jamais deux fois la même connexion, et ne prouveraient rien
+/// de l'état qu'elle porte.
+async fn premier_texte(session: &dyn Session, sql: &str) -> String {
+    use arrow::array::AsArray as _;
+    let mut curseur = session
+        .execute(lecture(sql), &CancelToken::new())
+        .await
+        .unwrap_or_else(|erreur| panic!("`{sql}` doit s'exécuter : {erreur}"));
+    let mut premier = None;
+    while let Some(lot) = curseur
+        .next_batch()
+        .await
+        .unwrap_or_else(|erreur| panic!("`{sql}` doit rendre un lot : {erreur}"))
+    {
+        if premier.is_none() && lot.num_rows() > 0 {
+            premier = Some(
+                lot.column(0)
+                    .as_string_opt::<i32>()
+                    .expect("une colonne texte")
+                    .value(0)
+                    .to_owned(),
+            );
+        }
+    }
+    premier.unwrap_or_else(|| panic!("`{sql}` doit rendre une ligne"))
+}
+
+/// Ce que résout `SELECT marker FROM shared_target`, sans qualification.
+const LECTURE_NUE: &str = "SELECT marker FROM shared_target";
+
+/// Ce que [`requete_de_resolution`] rend quand le nom nu ne désigne rien.
+const INTROUVABLE: &str = "introuvable";
+
+/// La requête qui lit le marqueur de la table homonyme, sans qualification.
+///
+/// Le `CROSS JOIN` n'est pas décoratif : il rend le résultat assez long pour que
+/// la tâche de flux reste bloquée sur sa connexion tant qu'on ne draine pas.
+/// C'est ce qui force le bassin à en ouvrir une autre pour l'exécution suivante.
+const REQUETE_DE_MARQUEUR: &str = "SELECT marker || '@' || pg_catalog.pg_backend_pid()::text \
+                                   FROM shared_target CROSS JOIN generate_series(1, 50000)";
+
+/// La requête qui demande au serveur ce qu'il résout pour un nom nu.
+///
+/// Deux raisons de passer par `to_regclass` plutôt que par une requête qui
+/// échoue : il emprunte exactement le `search_path` d'une instruction ordinaire,
+/// et il rend `NULL` au lieu de lever. La connexion reste donc saine et retourne
+/// au bassin — condition sans laquelle deux appels successifs ne portent jamais
+/// sur les mêmes connexions, et ne prouvent rien de l'état qu'elles gardent.
+fn requete_de_resolution(nom: &str) -> String {
+    format!(
+        "SELECT coalesce(pg_catalog.to_regclass('{nom}')::text, '{INTROUVABLE}') \
+         || '@' || pg_catalog.pg_backend_pid()::text FROM generate_series(1, 50000)"
+    )
+}
+
+/// Ce que **chaque** connexion du bassin répond, indexé par pid.
+///
+/// La requête doit rendre en première colonne `valeur@pid`, et assez de lignes
+/// pour occuper sa connexion — voir [`REQUETE_DE_MARQUEUR`].
+///
+/// Les quatre exécutions sont vivantes en même temps : `execute` tient sa
+/// connexion du début à la fin et le canal du curseur est borné à un lot, donc
+/// tant qu'on ne draine pas, chaque curseur en immobilise une. Le bassin en
+/// compte quatre ([`MAX_CONNECTIONS`]), donc les quatre sont exercées. Le
+/// drainage final les rend saines : un curseur abandonné laisse des octets non
+/// lus, sa connexion est fermée, et l'appel suivant ne retrouverait pas les
+/// mêmes.
+async fn sur_tout_le_bassin(
+    session: &dyn Session,
+    sql: &str,
+) -> std::collections::BTreeMap<String, String> {
+    use arrow::array::AsArray as _;
+
+    let mut curseurs = Vec::new();
+    for _ in 0..MAX_CONNECTIONS {
+        curseurs.push(
+            session
+                .execute(lecture(sql), &CancelToken::new())
+                .await
+                .expect("exécution"),
+        );
+    }
+
+    let mut vues = std::collections::BTreeMap::new();
+    for curseur in &mut curseurs {
+        let mut premier = None;
+        while let Some(lot) = curseur.next_batch().await.expect("flux") {
+            if premier.is_none() && lot.num_rows() > 0 {
+                premier = Some(
+                    lot.column(0)
+                        .as_string_opt::<i32>()
+                        .expect("une colonne texte")
+                        .value(0)
+                        .to_owned(),
+                );
+            }
+        }
+        let brut = premier.expect("une ligne");
+        let (quoi, processus) = brut
+            .split_once('@')
+            .expect("le gabarit compose les deux champs");
+        vues.insert(processus.to_owned(), quoi.to_owned());
+    }
+    vues
+}
+
+#[tokio::test]
+#[ignore = "demande un serveur PostgreSQL : voir la documentation du module"]
+async fn le_contexte_vaut_pour_chaque_connexion_du_bassin() {
+    // Le test qui décide de la conception (ADR-0019). Une session PostgreSQL
+    // d'Oxyn est un bassin de quatre connexions et `search_path` est un état
+    // **par connexion** : un `SET` posé une fois ne vaudrait que pour la
+    // connexion qui l'a reçu, et une requête sur deux résoudrait dans un autre
+    // schéma sans que rien ne le signale. C'est le pire résultat possible — un
+    // contrôle qui a l'air de marcher —, et la fixture est faite pour le rendre
+    // visible : `shared_target` existe dans les deux schémas, avec un marqueur
+    // différent. Une résolution fausse rend `b`, pas une erreur.
+    let Some(session) = session().await else {
+        return;
+    };
+    preparer_jumeaux(&*session).await;
+    session
+        .set_context(&contexte(SCHEMA_A), &CancelToken::new())
+        .await
+        .expect("le contexte doit être accepté");
+
+    let vues = sur_tout_le_bassin(&*session, REQUETE_DE_MARQUEUR).await;
+    assert_eq!(
+        vues.len(),
+        usize::try_from(MAX_CONNECTIONS).expect("quatre tient dans un usize"),
+        "le test n'a pas exercé quatre connexions distinctes ({vues:?}) : \
+         il ne prouve alors rien de l'état par connexion"
+    );
+    for (processus, marqueur) in &vues {
+        assert_eq!(
+            marqueur, "a",
+            "la connexion {processus} a résolu ailleurs que dans {SCHEMA_A}"
+        );
+    }
+
+    nettoyer_jumeaux(&*session).await;
+    session.close().await.expect("fermeture");
+}
+
+#[tokio::test]
+#[ignore = "demande un serveur PostgreSQL : voir la documentation du module"]
+async fn un_changement_de_contexte_survit_au_cache_d_instructions_preparees() {
+    // Le corollaire du bassin, et le plus silencieux. `sqlx` garde un cache
+    // d'instructions préparées **par connexion**, indexé sur le texte : après un
+    // changement de contexte, la même requête ne repasse pas par une
+    // préparation côté client. Si le serveur ne refaisait pas son analyse, elle
+    // continuerait de lire l'ancien schéma — et comme `shared_target` existe
+    // dans les deux, elle rendrait des lignes, simplement les mauvaises.
+    let Some(session) = session().await else {
+        return;
+    };
+    preparer_jumeaux(&*session).await;
+
+    session
+        .set_context(&contexte(SCHEMA_A), &CancelToken::new())
+        .await
+        .expect("le contexte doit être accepté");
+    let avant = sur_tout_le_bassin(&*session, REQUETE_DE_MARQUEUR).await;
+    assert!(avant.values().all(|vu| vu == "a"), "{avant:?}");
+
+    session
+        .set_context(&contexte(SCHEMA_B), &CancelToken::new())
+        .await
+        .expect("le second contexte doit être accepté");
+    let apres = sur_tout_le_bassin(&*session, REQUETE_DE_MARQUEUR).await;
+    assert_eq!(
+        apres.keys().collect::<Vec<_>>(),
+        avant.keys().collect::<Vec<_>>(),
+        "le bassin doit avoir réemployé les connexions qui portaient l'instruction \
+         préparée : le test ne prouve rien du cache sinon"
+    );
+    for (processus, marqueur) in &apres {
+        assert_eq!(
+            marqueur, "b",
+            "la connexion {processus} lit encore l'ancien schéma"
+        );
+    }
+
+    nettoyer_jumeaux(&*session).await;
+    session.close().await.expect("fermeture");
+}
+
+#[tokio::test]
+#[ignore = "demande un serveur PostgreSQL : voir la documentation du module"]
+async fn revenir_au_defaut_defait_le_contexte_sur_la_connexion_qui_le_portait() {
+    // Ce que ce test prouve : de bout en bout, sur **les mêmes** processus
+    // serveur, la résolution repasse au défaut du serveur. C'est ce que
+    // l'utilisateur observe. D'où le passage par tout le bassin, saturé et rendu
+    // sain entre les deux phases : sans l'identité des pids, le test
+    // constaterait seulement qu'une connexion neuve part du défaut, ce qui
+    // n'apprend rien.
+    //
+    // Ce qu'il ne prouve **plus**, depuis que la connexion est remise au défaut
+    // avant de repartir au bassin : que `context_statement()` émette bien un
+    // `SET search_path TO DEFAULT` plutôt que rien. Les deux mécanismes visent
+    // le même effet, et celui-ci masque l'autre. Cette assertion-là vit
+    // désormais dans le test unitaire
+    // `session::tests::revenir_au_defaut_pose_une_instruction_plutot_que_rien`,
+    // qui compare le texte composé. Les deux sont nécessaires.
+    let Some(session) = session().await else {
+        return;
+    };
+    preparer_jumeaux(&*session).await;
+
+    session
+        .set_context(&contexte(SCHEMA_A), &CancelToken::new())
+        .await
+        .expect("le contexte doit être accepté");
+    assert_eq!(premier_texte(&*session, LECTURE_NUE).await, "a");
+
+    let sous_contexte = sur_tout_le_bassin(&*session, &requete_de_resolution(TABLE_PARTAGEE)).await;
+    assert_eq!(
+        sous_contexte.len(),
+        usize::try_from(MAX_CONNECTIONS).expect("quatre tient dans un usize"),
+        "le test n'a pas exercé quatre connexions distinctes : {sous_contexte:?}"
+    );
+    assert!(
+        sous_contexte.values().all(|vu| vu == TABLE_PARTAGEE),
+        "chaque connexion doit résoudre le nom nu : {sous_contexte:?}"
+    );
+
+    session
+        .set_context(&SessionContext::server_default(), &CancelToken::new())
+        .await
+        .expect("le retour au défaut doit être accepté");
+
+    let apres = sur_tout_le_bassin(&*session, &requete_de_resolution(TABLE_PARTAGEE)).await;
+    assert_eq!(
+        apres.keys().collect::<Vec<_>>(),
+        sous_contexte.keys().collect::<Vec<_>>(),
+        "le bassin n'a pas réemployé les connexions qui portaient le contexte : \
+         le test ne prouve alors pas que le `SET … TO DEFAULT` est bien émis"
+    );
+    assert!(
+        apres.values().all(|vu| vu == INTROUVABLE),
+        "hors contexte, `shared_target` ne doit plus se résoudre : {apres:?}"
+    );
+
+    let visible = sur_tout_le_bassin(&*session, &requete_de_resolution(TABLE_PAR_DEFAUT)).await;
+    assert!(
+        visible.values().all(|vu| vu == TABLE_PAR_DEFAUT),
+        "le `search_path` par défaut doit redevenir résoluble : {visible:?}"
+    );
+    assert_eq!(
+        premier_texte(&*session, &format!("SELECT marker FROM {TABLE_PAR_DEFAUT}")).await,
+        "defaut"
+    );
+
+    // Et la vraie requête, elle, échoue comme le serveur le dit.
+    //
+    // Par `echouer` et non par `refus` : `sqlx` garde un cache d'instructions
+    // préparées **par connexion**, indexé sur le texte. Le même texte ayant déjà
+    // été préparé plus haut sous `oxyn_ctx_a`, la préparation ne repart pas vers
+    // le serveur et rend la main sans erreur. C'est le serveur qui refait
+    // l'analyse à l'exécution, parce que `search_path` a changé — le refus
+    // arrive donc par le flux. Ce que ce test vérifie ici, c'est justement que
+    // le cache ne fait pas survivre l'ancienne résolution.
+    let disparue = echouer(&*session, lecture(LECTURE_NUE)).await;
+    assert!(disparue.to_string().contains(TABLE_PARTAGEE), "{disparue}");
+
+    nettoyer_jumeaux(&*session).await;
+    session.close().await.expect("fermeture");
+}
+
+#[tokio::test]
+#[ignore = "demande un serveur PostgreSQL : voir la documentation du module"]
+async fn un_schema_inexistant_est_refuse_et_laisse_le_contexte_precedent() {
+    // PostgreSQL accepte en silence un `SET search_path` vers un schéma absent.
+    // Sans la vérification préalable, Oxyn afficherait un contexte que le
+    // serveur n'applique pas — et un contexte à moitié appliqué serait pire
+    // encore : l'interface montrerait l'un, le serveur résoudrait l'autre.
+    let Some(session) = session().await else {
+        return;
+    };
+    preparer_jumeaux(&*session).await;
+    session
+        .set_context(&contexte(SCHEMA_A), &CancelToken::new())
+        .await
+        .expect("le contexte doit être accepté");
+
+    let erreur = refus(
+        session
+            .set_context(&contexte("oxyn_ctx_absent"), &CancelToken::new())
+            .await,
+        "un schéma inexistant doit être refusé",
+    );
+    assert!(matches!(erreur, OxynError::Config(_)), "{erreur:?}");
+    assert!(erreur.to_string().contains("oxyn_ctx_absent"), "{erreur}");
+    assert!(erreur.is_user_error(), "{erreur}");
+
+    assert_eq!(
+        session
+            .context()
+            .and_then(|vu| vu.namespace().map(str::to_owned)),
+        Some(SCHEMA_A.to_owned()),
+        "le contexte confirmé ne doit pas bouger sur un refus"
+    );
+    assert_eq!(premier_texte(&*session, LECTURE_NUE).await, "a");
+
+    nettoyer_jumeaux(&*session).await;
+    session.close().await.expect("fermeture");
+}
+
+#[tokio::test]
+#[ignore = "demande un serveur PostgreSQL : voir la documentation du module"]
+async fn une_autre_base_est_refusee_par_le_palier_catalog() {
+    // Une session PostgreSQL ne change pas de base. Prétendre le contraire
+    // serait le faux contrôle que l'ADR cherche à éviter : l'interface dirait
+    // `autre_base / public`, le serveur resterait où il est.
+    let Some(session) = session().await else {
+        return;
+    };
+    preparer_jumeaux(&*session).await;
+
+    let erreur = refus(
+        session
+            .set_context(
+                &SessionContext::new(
+                    Some("oxyn_une_autre_base".to_owned()),
+                    Some(SCHEMA_A.to_owned()),
+                ),
+                &CancelToken::new(),
+            )
+            .await,
+        "une autre base doit être refusée",
+    );
+    assert!(matches!(erreur, OxynError::Config(_)), "{erreur:?}");
+    assert!(erreur.to_string().contains("database"), "{erreur}");
+    assert!(
+        session.context().is_none(),
+        "aucun contexte ne doit être retenu"
+    );
+
+    // La base de la connexion, elle, est un palier `catalog` légitime.
+    let base = premier_texte(&*session, "SELECT current_database()::text").await;
+    session
+        .set_context(
+            &SessionContext::new(Some(base), Some(SCHEMA_A.to_owned())),
+            &CancelToken::new(),
+        )
+        .await
+        .expect("la base de la connexion doit être acceptée");
+    assert_eq!(premier_texte(&*session, LECTURE_NUE).await, "a");
+
+    nettoyer_jumeaux(&*session).await;
+    session.close().await.expect("fermeture");
+}
+
+#[tokio::test]
+#[ignore = "demande un serveur PostgreSQL : voir la documentation du module"]
+async fn le_sql_de_l_utilisateur_n_est_pas_reecrit_par_le_contexte() {
+    // Le contexte change ce que le **serveur** résout, pas le texte soumis. Un
+    // identifiant qualifié à la main continue donc de viser ce qu'il nomme.
+    let Some(session) = session().await else {
+        return;
+    };
+    preparer_jumeaux(&*session).await;
+    session
+        .set_context(&contexte(SCHEMA_A), &CancelToken::new())
+        .await
+        .expect("le contexte doit être accepté");
+
+    assert_eq!(premier_texte(&*session, LECTURE_NUE).await, "a");
+    assert_eq!(
+        premier_texte(
+            &*session,
+            &format!("SELECT marker FROM {SCHEMA_B}.{TABLE_PARTAGEE}")
+        )
+        .await,
+        "b",
+        "une qualification écrite à la main l'emporte sur le contexte"
+    );
+
+    // La preuve la plus directe : demander au serveur le texte qu'il a reçu.
+    const RELU: &str = "SELECT query FROM pg_catalog.pg_stat_activity \
+                        WHERE pid = pg_catalog.pg_backend_pid()";
+    assert_eq!(
+        premier_texte(&*session, RELU).await,
+        RELU,
+        "le texte reçu par le serveur doit être exactement celui soumis"
+    );
+
+    nettoyer_jumeaux(&*session).await;
+    session.close().await.expect("fermeture");
+}
+
+#[tokio::test]
+#[ignore = "demande un serveur PostgreSQL : voir la documentation du module"]
+async fn un_nom_de_schema_hostile_est_cite_et_fonctionne() {
+    use oxyn_catalog::path::{QuoteStyle, quote_identifier};
+
+    // I-10 : un schéma nommé avec un guillemet double ou un point est légal dans
+    // PostgreSQL. Concaténé, `SET search_path TO "oxyn_ctx"weird"` ne compile
+    // même pas côté serveur — et un nom mieux choisi exécuterait autre chose.
+    let Some(session) = session().await else {
+        return;
+    };
+    let hostiles = [
+        (r#"oxyn_ctx"weird"#, "guillemet"),
+        ("oxyn_ctx.dotted", "point"),
+    ];
+    let citer = |nom: &str| quote_identifier(nom, QuoteStyle::for_dialect(SqlDialect::Postgres));
+
+    for (nom, marqueur) in hostiles {
+        let cite = citer(nom);
+        appliquer(&*session, &format!("DROP SCHEMA IF EXISTS {cite} CASCADE")).await;
+        appliquer(&*session, &format!("CREATE SCHEMA {cite}")).await;
+        appliquer(
+            &*session,
+            &format!("CREATE TABLE {cite}.{TABLE_PARTAGEE} (marker text)"),
+        )
+        .await;
+        appliquer(
+            &*session,
+            &format!("INSERT INTO {cite}.{TABLE_PARTAGEE} VALUES ('{marqueur}')"),
+        )
+        .await;
+    }
+
+    for (nom, marqueur) in hostiles {
+        session
+            .set_context(&contexte(nom), &CancelToken::new())
+            .await
+            .unwrap_or_else(|erreur| panic!("`{nom}` doit être accepté : {erreur}"));
+        assert_eq!(
+            premier_texte(&*session, LECTURE_NUE).await,
+            marqueur,
+            "`{nom}` n'a pas été cité correctement"
+        );
+    }
+
+    session
+        .set_context(&SessionContext::server_default(), &CancelToken::new())
+        .await
+        .expect("retour au défaut");
+    for (nom, _) in hostiles {
+        appliquer(
+            &*session,
+            &format!("DROP SCHEMA IF EXISTS {} CASCADE", citer(nom)),
+        )
+        .await;
+    }
+    session.close().await.expect("fermeture");
+}
+
+#[tokio::test]
+#[ignore = "demande un serveur PostgreSQL : voir la documentation du module"]
+async fn un_contexte_declare_ne_desarme_pas_la_lecture_seule() {
+    // Le `SET` est posé **avant** `BEGIN READ ONLY` — sinon le `ROLLBACK` qui
+    // clôt la lecture seule le déferait. Reste à vérifier que cet ordre ne
+    // rouvre pas l'écriture : c'est le serveur qui refuse, pas un filtre client.
+    let Some(session) = session().await else {
+        return;
+    };
+    preparer_jumeaux(&*session).await;
+    session
+        .set_context(&contexte(SCHEMA_A), &CancelToken::new())
+        .await
+        .expect("le contexte doit être accepté");
+
+    let mut curseur = session
+        .execute(
+            lecture(&format!("INSERT INTO {TABLE_PARTAGEE} VALUES ('intrus')")),
+            &CancelToken::new(),
+        )
+        .await
+        .expect("la préparation d'un INSERT est acceptée");
+    let refus = curseur
+        .next_batch()
+        .await
+        .expect_err("le serveur doit refuser l'écriture");
+    assert!(
+        refus.to_string().contains("lecture seule"),
+        "le message doit nommer les bornes, pas les droits : {refus}"
+    );
+    drop(curseur);
+
+    // Et la lecture, elle, marche toujours dans le contexte déclaré.
+    assert_eq!(premier_texte(&*session, LECTURE_NUE).await, "a");
+    assert_eq!(
+        premier_texte(&*session, "SELECT count(*)::text FROM shared_target").await,
+        "1",
+        "l'écriture refusée ne doit rien avoir laissé"
+    );
+
+    nettoyer_jumeaux(&*session).await;
+    session.close().await.expect("fermeture");
+}
+
+/// La table dont on lit la définition, dans [`SCHEMA_A`].
+///
+/// Distincte de [`TABLE_PARTAGEE`] : ce qu'on éprouve ici n'est pas la
+/// résolution d'un nom nu, mais le **rendu** d'une définition.
+const TABLE_DEFINIE: &str = "ctx_defined";
+
+/// La requête qui occupe une connexion en travaillant dans [`TABLE_DEFINIE`].
+const REQUETE_DEFINIE: &str = "SELECT marker || '@' || pg_catalog.pg_backend_pid()::text \
+                               FROM ctx_defined CROSS JOIN generate_series(1, 50000)";
+
+/// Crée dans [`SCHEMA_A`] un objet dont la définition **se rend** différemment
+/// selon le `search_path`.
+///
+/// Un domaine et une fonction, tous deux dans le schéma : `format_type`,
+/// `pg_get_constraintdef` et `pg_get_expr` qualifient leur sortie quand le
+/// schéma n'est pas sur le chemin, et l'omettent quand il y est. C'est
+/// exactement le canal par lequel le contexte d'une console pouvait déteindre
+/// sur l'introspection.
+async fn preparer_objet_defini(session: &dyn Session) {
+    appliquer(
+        session,
+        &format!("DROP SCHEMA IF EXISTS {SCHEMA_A} CASCADE"),
+    )
+    .await;
+    for sql in [
+        format!("CREATE SCHEMA {SCHEMA_A}"),
+        format!("CREATE DOMAIN {SCHEMA_A}.ctx_amount AS numeric"),
+        format!(
+            "CREATE FUNCTION {SCHEMA_A}.ctx_positive(v numeric) RETURNS boolean \
+             LANGUAGE sql IMMUTABLE AS $$ SELECT v > 0 $$"
+        ),
+        format!(
+            "CREATE TABLE {SCHEMA_A}.{TABLE_DEFINIE} (\
+             marker text, amount {SCHEMA_A}.ctx_amount, \
+             CONSTRAINT ctx_defined_positive CHECK ({SCHEMA_A}.ctx_positive(amount)))"
+        ),
+        format!(
+            "CREATE INDEX ctx_defined_partial ON {SCHEMA_A}.{TABLE_DEFINIE} (marker) \
+             WHERE {SCHEMA_A}.ctx_positive(amount)"
+        ),
+        format!("INSERT INTO {SCHEMA_A}.{TABLE_DEFINIE} VALUES ('a', 1)"),
+    ] {
+        appliquer(session, &sql).await;
+    }
+}
+
+/// Tout ce que le catalogue rend de sensible au `search_path`, en une chaîne.
+///
+/// Les trois sources nommées par le constat : `format_type` pour `raw_type`,
+/// `pg_get_constraintdef` pour l'expression d'une contrainte, `pg_get_expr` pour
+/// le prédicat d'un index partiel.
+async fn empreinte_de_definition(
+    session: &dyn Session,
+    path: &oxyn_catalog::CatalogPath,
+) -> String {
+    let jeton = CancelToken::new();
+    let relation = session
+        .catalog()
+        .describe_relation(path, &jeton)
+        .await
+        .expect("la description doit aboutir");
+    let contraintes = session
+        .catalog()
+        .list_constraints(path, &jeton)
+        .await
+        .expect("les contraintes doivent aboutir");
+    let index = session
+        .catalog()
+        .list_indexes(path, &jeton)
+        .await
+        .expect("les index doivent aboutir");
+
+    let types: Vec<&str> = relation
+        .fields
+        .iter()
+        .map(|champ| champ.raw_type.as_str())
+        .collect();
+    let expressions: Vec<&str> = contraintes
+        .iter()
+        .filter_map(|contrainte| contrainte.expression.as_deref())
+        .collect();
+    let predicats: Vec<&str> = index
+        .iter()
+        .filter_map(|un_index| un_index.predicate.as_deref())
+        .collect();
+    format!("{types:?} | {expressions:?} | {predicats:?}")
+}
+
+#[tokio::test]
+#[ignore = "demande un serveur PostgreSQL : voir la documentation du module"]
+async fn l_introspection_ne_depend_pas_du_contexte_d_une_console() {
+    use oxyn_catalog::CatalogPath;
+
+    // Le catalogue partage le bassin de la session, et il n'émet **aucun**
+    // `SET` : il ne peut donc pas se protéger lui-même. Avant que la connexion
+    // soit remise au défaut en repartant au bassin, la définition d'un objet
+    // était rendue tantôt qualifiée, tantôt non, selon la connexion tirée — un
+    // écart qu'aucune erreur ne signale et qu'un utilisateur attribuerait au
+    // serveur.
+    //
+    // Le rendu est bien sensible au `search_path` ; relevé sur 17.11 :
+    //
+    // | rendu                  | hors du chemin              | sur le chemin       |
+    // |------------------------|-----------------------------|---------------------|
+    // | `format_type`          | `oxyn_ctx_a.ctx_amount`     | `ctx_amount`        |
+    // | `pg_get_constraintdef` | `CHECK (oxyn_ctx_a.ctx_…)`  | `CHECK (ctx_…)`     |
+    // | `pg_get_expr`          | `oxyn_ctx_a.ctx_positive(…)`| `ctx_positive(…)`   |
+    //
+    // Ce test n'a donc rien de tautologique : sans la remise au défaut, la
+    // lecture forcée sur une connexion recyclée rend la colonne de droite.
+    let Some(session) = session().await else {
+        return;
+    };
+    preparer_objet_defini(&*session).await;
+    let path = CatalogPath::for_relation(None, Some(SCHEMA_A), TABLE_DEFINIE).expect("chemin");
+
+    // La référence : ce que rend le serveur quand aucun contexte n'a jamais été
+    // déclaré. Les trois formes doivent y être qualifiées, sans quoi la fixture
+    // n'exercerait plus rien.
+    let reference = empreinte_de_definition(&*session, &path).await;
+    for attendu in [
+        format!("{SCHEMA_A}.ctx_amount"),
+        format!("{SCHEMA_A}.ctx_positive"),
+    ] {
+        assert!(
+            reference.contains(&attendu),
+            "la fixture n'exerce plus le rendu qualifié ({attendu}) : {reference}"
+        );
+    }
+
+    session
+        .set_context(&contexte(SCHEMA_A), &CancelToken::new())
+        .await
+        .expect("le contexte doit être accepté");
+
+    // Les quatre connexions du bassin ont porté le `SET`, puis l'ont rendu.
+    let vues = sur_tout_le_bassin(&*session, REQUETE_DEFINIE).await;
+    assert_eq!(
+        vues.len(),
+        usize::try_from(MAX_CONNECTIONS).expect("quatre tient dans un usize"),
+        "le test n'a pas exercé quatre connexions distinctes ({vues:?}) : \
+         il ne prouve alors rien de ce que le bassin garde"
+    );
+
+    // Le cas le plus dur, et il est **déterministe** : le bassin est plafonné à
+    // quatre, les quatre viennent de servir une exécution sous contexte, et
+    // trois restent immobilisées par des curseurs vivants. L'introspection ne
+    // peut donc emprunter qu'une connexion recyclée — elle n'a pas le choix.
+    let mut occupees = Vec::new();
+    for _ in 1..MAX_CONNECTIONS {
+        occupees.push(
+            session
+                .execute(lecture(REQUETE_DEFINIE), &CancelToken::new())
+                .await
+                .expect("exécution"),
+        );
+    }
+    assert_eq!(
+        empreinte_de_definition(&*session, &path).await,
+        reference,
+        "l'introspection a suivi le contexte de la console"
+    );
+    drop(occupees);
+
+    // Puis en alternance, pour couvrir les connexions à mesure que le bassin les
+    // fait tourner.
+    for tour in 0..4 {
+        let _ = sur_tout_le_bassin(&*session, REQUETE_DEFINIE).await;
+        assert_eq!(
+            empreinte_de_definition(&*session, &path).await,
+            reference,
+            "la définition a changé au tour {tour}"
+        );
+    }
+
+    appliquer(&*session, &format!("DROP SCHEMA {SCHEMA_A} CASCADE")).await;
     session.close().await.expect("fermeture");
 }
