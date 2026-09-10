@@ -30,6 +30,7 @@ use crate::ids::{
     AgentId, AgentSessionId, ConnectionId, DocumentId, ResultId, SessionId, StatementHandle,
     WorkspaceId,
 };
+use crate::preview::PreviewShape;
 use crate::query::{ExecRequest, MutationRisk, StatementIntent};
 
 /// Qui demande.
@@ -275,6 +276,14 @@ pub enum Command {
         relation: String,
         /// Maximum rows requested, in `1..=1000`.
         limit: u32,
+        /// Ordre, filtres et page demandés.
+        ///
+        /// Vide pour l'aperçu automatique d'une table qu'on vient de
+        /// sélectionner. Le driver refuse ce qu'il ne sait pas faire plutôt que
+        /// de l'ignorer : un filtre silencieusement abandonné rendrait des
+        /// lignes que l'utilisateur croit avoir exclues
+        /// ([ADR-0020](../../docs/adr/0020-apercu-trie-filtre-parcouru.md)).
+        shape: PreviewShape,
     },
 
     /// Annuler une exécution en cours.
@@ -629,6 +638,18 @@ mod tests {
             namespace: Some("schema".into()),
             relation: "table\"; DROP TABLE audit; --".into(),
             limit: 200,
+            // Une forme non triviale, pour que l'aller-retour sérialisé porte
+            // vraiment sur elle : un `Default` passerait sans rien prouver.
+            shape: crate::preview::PreviewShape {
+                sort: vec![crate::preview::PreviewSort::descending("id")],
+                filter: vec![crate::preview::PreviewFilter {
+                    column: "note".into(),
+                    condition: crate::preview::PreviewCondition::Contains {
+                        text: "100%".into(),
+                    },
+                }],
+                offset: 200,
+            },
         };
         assert_eq!(command.intent(), StatementIntent::Read);
         assert_eq!(command.target_connection(), Some(connection));

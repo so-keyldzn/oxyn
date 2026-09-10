@@ -41,7 +41,7 @@ use futures::future::BoxFuture;
 use oxyn_catalog::{CatalogPath, CatalogProvider};
 use oxyn_core::{
     CancelToken, Capabilities, ConnectionConfig, DriverId, ExecRequest, ExecStats, OxynError,
-    Result, StatementHandle,
+    PreviewShape, Result, StatementHandle,
 };
 use oxyn_data::BatchSource;
 
@@ -152,10 +152,28 @@ pub trait Session: Send + Sync {
     /// according to their dialect, and set `read_only` and `max_rows` limits.
     /// This may read column types, but never executes the preview or changes
     /// session state. Unsupported drivers fail explicitly.
+    ///
+    /// `shape` carries the order, the filters and the page asked for
+    /// ([ADR-0020](../../../docs/adr/0020-apercu-trie-filtre-parcouru.md)). It
+    /// holds **no SQL**: a column is an identifier the implementation quotes,
+    /// and a value is bound through [`ExecRequest::params`], never spliced into
+    /// the text ([I-10](../../../CLAUDE.md#i-10)).
+    ///
+    /// What an implementation must not do is ignore part of it. A filter
+    /// silently dropped returns rows the user believes they excluded, and
+    /// nothing on screen says otherwise: refuse what the engine cannot express,
+    /// with [`OxynError::NotSupported`] naming the missing capability.
+    ///
+    /// A non-zero [`PreviewShape::offset`] is only meaningful under a total
+    /// order. Implementations complete the requested sort with a unique key —
+    /// the primary key, when the catalog declares one — and refuse the page
+    /// otherwise: without it, two consecutive pages show the same row twice and
+    /// skip another, silently.
     async fn preview_request(
         &self,
         _path: &CatalogPath,
         _limit: u32,
+        _shape: &PreviewShape,
         _cancel: &CancelToken,
     ) -> Result<ExecRequest> {
         Err(OxynError::NotSupported {
