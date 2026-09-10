@@ -38,6 +38,15 @@ Pour localiser les planches et leurs états avant implémentation, consulter
 | [0009](adr/0009-source-dependance-gpui.md) | GPUI consommé depuis crates.io, non depuis le dépôt Zed | proposé |
 | [0010](adr/0010-contraintes-natives-sqlite.md) | Une seule version de libsqlite3-sys dans le graphe | accepté |
 | [0011](adr/0011-structure-commune-workspace.md) | Workbench dense comme structure commune du workspace | proposé |
+| [0012](adr/0012-lecture-pages-resultats.md) | Lecture de pages hors rendu et cache borné en octets | proposé |
+| [0013](adr/0013-preferences-workspace.md) | Préférences de lecture persistées et écritures ordonnées | proposé |
+| [0014](adr/0014-documents-et-historique.md) | Brouillons, sauvegardes explicites et historique paginé | accepté |
+| [0015](adr/0015-consoles-independantes.md) | Contrôleur et session propres à chaque console | accepté |
+| [0016](adr/0016-autosauvegarde-bornee.md) | File bornée et contrôle de concurrence des documents | accepté |
+| [0017](adr/0017-retention-resultats.md) | Rétention bornée des résultats sans lecteur | accepté |
+| [0018](adr/0018-apercu-ddl.md) | DDL inspecté comme métadonnée, préparé sans exécution | proposé |
+| [0019](adr/0019-contexte-de-session.md) | Contexte de session déclaré, jamais posé en silence | proposé |
+| [0020](adr/0020-apercu-trie-filtre-parcouru.md) | Aperçu trié, filtré et parcouru sans SQL composé dans l'interface | proposé |
 
 Les ADR restent `proposé` jusqu'au premier commit de code qui les met en œuvre.
 
