@@ -9,12 +9,14 @@
 //! hors du bassin, plutôt que d'attendre qu'une place se libère
 //! ([DRIVER-CONTRACT §2](../../../docs/DRIVER-CONTRACT.md)).
 //!
-//! **Le pid est capturé par exécution, pas par session.** Une session s'appuie
-//! sur un bassin, donc chaque exécution tourne sur un processus serveur
-//! différent. Un pid retenu à la connexion viserait, à l'annulation, une requête
-//! qui n'est pas celle qu'on veut couper — au mieux personne, au pire le voisin.
-//! `StatementRegistry` associe donc chaque [`StatementHandle`] au pid qui
-//! l'exécute.
+//! **L'annulation est envoyée par qui tient la connexion.** Une session
+//! s'appuie sur un bassin, donc chaque exécution tourne sur un processus serveur
+//! différent, et un même processus sert une requête après l'autre.
+//! [`Session::cancel`] ne vise donc pas un pid : il réveille la tâche de flux de
+//! l'exécution, qui connaît son pid et **garde sa connexion** jusqu'à ce que
+//! l'annulation soit partie. Envoyée d'ici, elle pourrait tomber sur la requête
+//! suivante, lancée sur le même processus pendant la poignée de main de
+//! l'annulation. Le détail est dans le module `cancel`.
 //!
 //! **Le SQL de l'utilisateur part tel quel ; celui d'Oxyn ne concatène rien.**
 //! Le texte d'une [`ExecRequest`] est préparé sans être analysé ni réécrit :
@@ -29,7 +31,6 @@
 //! côté client. C'est ce que déclare
 //! [`Capabilities::READ_ONLY_SESSION`](oxyn_core::Capabilities::READ_ONLY_SESSION).
 
-use std::collections::HashMap;
 use std::future::Future;
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::{Duration, Instant};
@@ -43,13 +44,24 @@ use oxyn_core::{
 use oxyn_driver::{Cursor, Session};
 use sqlx::pool::PoolConnection;
 use sqlx::postgres::{PgArguments, PgConnection, PgPool, Postgres};
-use sqlx::{Arguments as _, AssertSqlSafe, ConnectOptions as _, Connection as _, Executor as _};
+use sqlx::{Arguments as _, AssertSqlSafe, Connection as _, Executor as _};
 use sqlx::{Row as _, SqlSafeStr as _, Statement as _};
 
+use crate::cancel::{BackendCanceller, StatementRegistry};
 use crate::catalog::PostgresCatalog;
 use crate::cursor::{self, StreamRequest};
 use crate::error::{Bound, map_connect_error, map_exec_error, map_stream_error};
+use crate::lease::Lease;
 use crate::options::ConnectSpec;
+use crate::transaction_text::{controls_transaction, opens_transaction};
+
+/// Ce que dit le refus d'une instruction de contrôle de transaction.
+///
+/// Nomme la capacité manquante, puis ce que l'utilisateur doit savoir pour ne
+/// pas se tromper sur ses données : sans transaction, chaque instruction est
+/// validée seule.
+const TRANSACTIONS_REFUSED: &str = "TRANSACTIONS (transactions are not supported in the console \
+                                    yet: each statement commits on its own)";
 use crate::types::schema_for;
 use crate::variant::PostgresVariant;
 use oxyn_catalog::path::{QuoteStyle, quote_identifier};
@@ -67,6 +79,23 @@ pub(crate) const SQL_ROLLBACK: &str = "ROLLBACK";
 /// Littéral : le contexte d'une console ne doit pas être emporté par la
 /// connexion vers l'introspection ou vers une autre console.
 pub(crate) const SQL_RESET_SEARCH_PATH: &str = "SET search_path TO DEFAULT";
+/// Remet l'état de session au défaut après une exécution **inscriptible**, qui
+/// n'a pas de `ROLLBACK` pour défaire ce que l'utilisateur a pu poser.
+///
+/// Littéral, deux instructions en un seul aller-retour (protocole simple) :
+///
+/// * `standard_conforming_strings` : le découpeur d'`oxyn-query` suppose `on`.
+///   Une connexion rendue au bassin avec `off` ferait lire au serveur un
+///   `DELETE` là où le découpeur a vu une chaîne, donc une écriture classée
+///   lecture, sans la confirmation qui nomme la connexion
+///   ([I-02](../../../CLAUDE.md#i-02)). Voir [`ConnectSpec`](crate::ConnectSpec)
+///   pour la valeur posée à l'ouverture ;
+/// * `search_path` : un `SET` tapé dans une console voyagerait sinon vers
+///   l'emprunteur suivant. Il n'est de toute façon pas fiable pour
+///   l'utilisateur, dont la requête suivante peut partir sur une autre
+///   connexion ; le schéma d'une console passe par son contexte de session.
+pub(crate) const SQL_RESET_AFTER_WRITE: &str =
+    "SET standard_conforming_strings TO on; SET search_path TO DEFAULT";
 /// Le pid du processus serveur qui exécute sur cette connexion.
 const SQL_BACKEND_PID: &str = "SELECT pg_catalog.pg_backend_pid()";
 
@@ -77,98 +106,6 @@ const SQL_BACKEND_PID: &str = "SELECT pg_catalog.pg_backend_pid()";
 /// affiché. Le nom voyage **lié**, jamais concaténé (I-10).
 const SQL_NAMESPACE_EXISTS: &str = "SELECT 1 FROM pg_catalog.pg_namespace WHERE nspname = $1 \
      AND pg_catalog.has_schema_privilege(oid, 'USAGE')";
-/// Demande au serveur d'interrompre la requête d'un autre processus.
-const SQL_CANCEL_BACKEND: &str = "SELECT pg_catalog.pg_cancel_backend($1)";
-
-/// Associe chaque exécution au processus serveur qui la porte.
-///
-/// Partagé entre la session — qui interroge — et les tâches de flux — qui
-/// s'effacent en partant. Sans cet effacement, une session ouverte une journée
-/// accumulerait une entrée par requête exécutée.
-#[derive(Debug, Default)]
-pub(crate) struct StatementRegistry {
-    entries: Mutex<HashMap<StatementHandle, i32>>,
-}
-
-impl StatementRegistry {
-    /// Retient le pid d'une exécution qui démarre.
-    pub(crate) fn remember(&self, handle: StatementHandle, backend_pid: i32) {
-        self.lock().insert(handle, backend_pid);
-    }
-
-    /// Oublie une exécution terminée.
-    pub(crate) fn forget(&self, handle: StatementHandle) {
-        self.lock().remove(&handle);
-    }
-
-    /// Le pid d'une exécution en cours, s'il en reste une.
-    pub(crate) fn backend_pid(&self, handle: StatementHandle) -> Option<i32> {
-        self.lock().get(&handle).copied()
-    }
-
-    /// Nombre d'exécutions en cours. Réservé au diagnostic et aux tests.
-    #[doc(hidden)]
-    #[must_use]
-    pub fn len(&self) -> usize {
-        self.lock().len()
-    }
-
-    /// Un verrou empoisonné ne doit pas propager la panique d'une autre tâche :
-    /// la table reste exploitable, et perdre une entrée coûte moins qu'une
-    /// session inutilisable ([I-09](../../../CLAUDE.md#i-09)).
-    fn lock(&self) -> std::sync::MutexGuard<'_, HashMap<StatementHandle, i32>> {
-        self.entries.lock().unwrap_or_else(PoisonError::into_inner)
-    }
-}
-
-/// De quoi demander au serveur d'arrêter une requête.
-///
-/// Porte les paramètres de connexion parce que l'annulation ouvre sa **propre**
-/// connexion : emprunter celle du bassin ferait attendre l'annulation derrière
-/// les requêtes qu'elle doit couper.
-#[derive(Debug)]
-pub(crate) struct BackendCanceller {
-    spec: ConnectSpec,
-    driver: DriverId,
-}
-
-impl BackendCanceller {
-    /// Prépare l'annulateur d'une session.
-    pub(crate) fn new(spec: ConnectSpec, driver: DriverId) -> Self {
-        Self { spec, driver }
-    }
-
-    /// Demande au serveur d'interrompre la requête du processus `backend_pid`.
-    ///
-    /// Interrompre une requête déjà terminée n'est **pas** une erreur : le
-    /// serveur rend `false` et on n'en fait rien. Ce qui compte est qu'aucune
-    /// requête ne survive à la fermeture d'un onglet.
-    ///
-    /// # Erreurs
-    /// [`OxynError::Connection`] si la seconde connexion ne s'ouvre pas,
-    /// [`OxynError::Driver`] si le serveur refuse l'appel — typiquement faute de
-    /// droits sur un pid appartenant à un autre rôle.
-    pub(crate) async fn cancel_backend(&self, backend_pid: i32) -> Result<()> {
-        let mut connexion = self
-            .spec
-            .options()
-            .connect()
-            .await
-            .map_err(|erreur| map_connect_error(&erreur))?;
-
-        let issue = sqlx::query(SQL_CANCEL_BACKEND)
-            .bind(backend_pid)
-            .fetch_optional(&mut connexion)
-            .await;
-
-        // Fermée dans tous les cas : cette connexion n'a plus d'usage, et la
-        // laisser filer en ouvrirait une par annulation.
-        let _ = connexion.close().await;
-
-        issue.map_err(|erreur| map_exec_error(&self.driver, StatementIntent::Read, erreur))?;
-        Ok(())
-    }
-}
 
 /// Une session PostgreSQL ouverte.
 #[derive(Debug)]
@@ -269,6 +206,20 @@ impl PostgresSession {
         self.statements.len()
     }
 
+    /// L'annulateur, pour les tests qui retiennent une annulation en vol.
+    #[cfg(test)]
+    pub(crate) fn canceller(&self) -> &BackendCanceller {
+        &self.canceller
+    }
+
+    /// Déclare une capacité que le driver n'implémente pas, pour les tests qui
+    /// éprouvent ce qui se passe **derrière** un refus : le filet de sécurité
+    /// qui ferme une connexion laissée en transaction.
+    #[cfg(test)]
+    pub(crate) fn declare_for_test(&mut self, capabilities: Capabilities) {
+        self.capabilities.insert(capabilities);
+    }
+
     /// Emprunte une connexion au bassin, sans jamais devenir inannulable.
     async fn acquire(&self, cancel: &CancelToken) -> Result<PoolConnection<Postgres>> {
         race_cancel(cancel, async {
@@ -353,6 +304,16 @@ impl Session for PostgresSession {
     /// transport, classée.
     async fn execute(&self, request: ExecRequest, cancel: &CancelToken) -> Result<Box<dyn Cursor>> {
         self.capabilities.require_language(request.language)?;
+        // Avant tout emprunt : rien ne part au serveur. Voir
+        // `transaction_text::controls_transaction` pour le mensonge que ce
+        // refus empêche — un `ROLLBACK` qui « réussit » sans rien annuler.
+        if !self.capabilities.contains(Capabilities::TRANSACTIONS)
+            && controls_transaction(&request.text)
+        {
+            return Err(OxynError::NotSupported {
+                capability: TRANSACTIONS_REFUSED.to_owned(),
+            });
+        }
         if cancel.is_cancelled() {
             return Err(OxynError::Cancelled);
         }
@@ -375,7 +336,7 @@ impl Session for PostgresSession {
         // encodable doit être refusé sans avoir occupé de connexion.
         let arguments = bind_params(&params)?;
 
-        let mut connexion = self.acquire(cancel).await?;
+        let mut connexion = Lease::new(self.acquire(cancel).await?);
 
         let pid = race_cancel(cancel, async {
             backend_pid(&mut connexion)
@@ -384,12 +345,23 @@ impl Session for PostgresSession {
         })
         .await?;
 
+        // À partir du `SET` ou du `BEGIN`, la connexion porte un état qui n'est
+        // pas celui du bassin, et c'est le curseur qui la remet au défaut, lui
+        // seul. L'emprunt est donc marqué **avant** l'envoi : tout départ
+        // anticipé — une erreur, un `?`, et surtout un futur abandonné, qui ne
+        // passe par aucun des deux — ferme la connexion au lieu de la rendre.
+        // Sinon le contexte d'une console voyagerait vers l'introspection ou
+        // vers une autre console
+        // ([ADR-0019](../../../docs/adr/0019-contexte-de-session.md)). Rouvrir
+        // une connexion coûte moins qu'un `DELETE` résolu dans un autre schéma.
+
         // Avant la transaction : posé à l'intérieur, un `SET` serait défait par
         // le `ROLLBACK` qui clôt une lecture seule, et l'instruction suivante
         // sur la même connexion résoudrait ailleurs.
         let restore_context = self.context_statement().is_some();
         if let Some(statement) = self.context_statement() {
             let sql = AssertSqlSafe(statement).into_sql_str();
+            connexion.taint();
             race_cancel(cancel, async {
                 sqlx::raw_sql(sql)
                     .execute(&mut *connexion)
@@ -399,33 +371,22 @@ impl Session for PostgresSession {
             .await?;
         }
 
-        // À partir d'ici la connexion porte peut-être un `search_path` : c'est
-        // le curseur qui la remet au défaut, et lui seul. Tout départ anticipé
-        // la ferme donc au lieu de la rendre au bassin — sinon le contexte
-        // d'une console voyagerait vers l'introspection, et une faute de frappe
-        // sur un nom de table suffirait à l'y envoyer
-        // ([ADR-0019](../../../docs/adr/0019-contexte-de-session.md)). Rouvrir
-        // une connexion coûte moins qu'un catalogue qui se décrit autrement
-        // d'une lecture à l'autre.
         if limits.read_only {
-            let ouverte = race_cancel(cancel, async {
+            connexion.taint();
+            race_cancel(cancel, async {
                 sqlx::raw_sql(SQL_BEGIN_READ_ONLY)
                     .execute(&mut *connexion)
                     .await
                     .map_err(|erreur| map_exec_error(&self.driver, StatementIntent::Read, erreur))
             })
-            .await;
-            if let Err(erreur) = ouverte {
-                if restore_context {
-                    connexion.close_on_drop();
-                }
-                return Err(erreur);
-            }
+            .await?;
         }
 
         // Le SQL de l'utilisateur part **tel quel** : c'est la fonctionnalité
         // d'un outil professionnel, et la distinction avec le SQL qu'Oxyn
-        // compose est ce que garde I-10. Rien n'est concaténé ici.
+        // compose est ce que garde I-10. Rien n'est concaténé ici : le texte
+        // est seulement lu, pour savoir si sa connexion pourra être rendue.
+        let opens_transaction = opens_transaction(&text);
         let sql = AssertSqlSafe(text).into_sql_str();
         let prepare = race_cancel(cancel, async {
             (&mut *connexion)
@@ -450,26 +411,23 @@ impl Session for PostgresSession {
         })
         .await;
 
-        let statement = match prepare {
-            Ok(statement) => statement,
-            Err(erreur) => {
-                // La transaction ouverte juste au-dessus ne doit pas repartir au
-                // bassin : une connexion `idle in transaction` garde des verrous
-                // et bloque le `VACUUM` de toute la base. Un `search_path` posé
-                // pour cette exécution ne le doit pas non plus, et c'est le cas
-                // le plus atteignable des deux : il suffit d'une faute de frappe
-                // sur un nom de table dans une console en écriture.
-                if limits.read_only || restore_context {
-                    connexion.close_on_drop();
-                }
-                return Err(erreur);
-            }
-        };
+        // Une préparation qui échoue ferme la connexion si elle est déjà sale :
+        // la transaction ouverte au-dessus garderait des verrous et bloquerait
+        // le `VACUUM` de toute la base, et le `search_path` d'une console
+        // partirait avec elle. Il suffit d'une faute de frappe sur un nom de
+        // table dans une console en écriture.
+        let statement = prepare?;
+        // L'instruction de l'utilisateur va s'exécuter, et elle peut elle-même
+        // changer l'état de session (`SET standard_conforming_strings = off`) :
+        // c'est le curseur qui décidera si la connexion peut repartir.
+        connexion.taint();
 
         let (schema, decodings) = schema_for(statement.columns());
         let handle = StatementHandle::new();
-        self.statements.remember(handle, pid);
-
+        // Un **enfant** du jeton de l'appelant : annuler l'appelant annule cette
+        // exécution, mais annuler celle-ci n'annule pas les autres onglets.
+        let execution = cancel.child();
+        let verdict = self.statements.register(handle, execution.clone());
         let curseur = cursor::spawn(
             StreamRequest {
                 driver: self.driver.clone(),
@@ -478,6 +436,7 @@ impl Session for PostgresSession {
                 arguments,
                 bound,
                 restore_context,
+                opens_transaction,
                 schema,
                 decodings,
                 limits,
@@ -485,34 +444,40 @@ impl Session for PostgresSession {
                 backend_pid: pid,
                 canceller: Arc::clone(&self.canceller),
                 statements: Arc::clone(&self.statements),
+                verdict,
                 handle,
             },
-            cancel,
+            execution,
         );
         Ok(Box::new(curseur))
     }
 
     /// Demande au serveur d'interrompre une exécution.
     ///
-    /// Annuler une instruction déjà terminée n'est pas une erreur : la tâche de
-    /// flux a effacé son entrée en partant, et il n'y a plus rien à couper.
+    /// L'annulation part de la tâche de flux de l'exécution, qui tient sa
+    /// connexion pendant l'envoi : aucune autre requête ne peut démarrer sur ce
+    /// processus serveur avant qu'elle soit partie. L'appel rend quand la tâche
+    /// a statué.
+    ///
+    /// Annuler une instruction déjà terminée n'est pas une erreur, et n'envoie
+    /// rien au serveur.
     ///
     /// # Erreurs
-    /// Celles de `BackendCanceller::cancel_backend`.
+    /// Celles de `BackendCanceller::cancel_backend`, rapportées par la tâche.
     async fn cancel(&self, statement: StatementHandle) -> Result<()> {
-        let Some(backend_pid) = self.statements.backend_pid(statement) else {
-            return Ok(());
-        };
-        self.canceller.cancel_backend(backend_pid).await
+        self.statements.cancel(&self.driver, statement).await
     }
 
     async fn preview_request(
         &self,
         path: &oxyn_catalog::CatalogPath,
         limit: u32,
+        shape: &oxyn_core::PreviewShape,
         cancel: &CancelToken,
     ) -> Result<ExecRequest> {
-        self.catalog.preview_request(path, limit, cancel).await
+        self.catalog
+            .preview_request(path, limit, shape, cancel)
+            .await
     }
 
     fn catalog(&self) -> &dyn CatalogProvider {
@@ -611,7 +576,7 @@ pub(crate) fn bind_params(params: &[ScalarValue]) -> Result<PgArguments> {
                 if nanos % 1_000 != 0 {
                     return Err(unsupported_param(
                         rang,
-                        "un intervalle plus fin que la microseconde",
+                        "an interval finer than a microsecond",
                     ));
                 }
                 let microseconds = nanos / 1_000;
@@ -626,12 +591,12 @@ pub(crate) fn bind_params(params: &[ScalarValue]) -> Result<PgArguments> {
             // lier comme du texte marcherait par hasard sur certaines colonnes
             // et échouerait sur les autres.
             ScalarValue::Decimal(_) => {
-                return Err(unsupported_param(rang, "une valeur décimale exacte"));
+                return Err(unsupported_param(rang, "an exact decimal value"));
             }
             // Un tableau vide n'a pas de type d'élément, et un tableau
             // hétérogène n'en a pas un seul.
             ScalarValue::Array(_) => {
-                return Err(unsupported_param(rang, "un tableau"));
+                return Err(unsupported_param(rang, "an array"));
             }
         };
         // Le message de l'encodeur `sqlx` est abandonné : il est composé à
@@ -640,7 +605,7 @@ pub(crate) fn bind_params(params: &[ScalarValue]) -> Result<PgArguments> {
         // bug du driver et non une donnée de l'utilisateur.
         issue.map_err(|_| {
             OxynError::Internal(format!(
-                "le paramètre ${} de type `{}` n'a pas pu être encodé",
+                "parameter ${} of type `{}` could not be encoded",
                 rang.saturating_add(1),
                 valeur.type_name()
             ))
@@ -656,7 +621,7 @@ pub(crate) fn bind_params(params: &[ScalarValue]) -> Result<PgArguments> {
 fn unsupported_param(rang: usize, quoi: &str) -> OxynError {
     OxynError::NotSupported {
         capability: format!(
-            "lier {quoi} au paramètre ${} — le convertir dans la requête",
+            "binding {quoi} as parameter ${} — cast it in the query instead",
             rang.saturating_add(1)
         ),
     }
@@ -676,7 +641,9 @@ pub(crate) async fn backend_pid(
 #[cfg(test)]
 mod tests {
     use chrono::{NaiveDate, NaiveTime};
-    use oxyn_core::{ConnectionConfig, StatementHandle};
+    use oxyn_core::{ConnectionConfig, QueryLanguage};
+
+    use crate::cancel::SQL_CANCEL_BACKEND;
     use oxyn_driver::Credentials;
     use sqlx::postgres::PgPoolOptions;
 
@@ -757,6 +724,48 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn le_controle_de_transaction_est_refuse_sans_rien_envoyer() {
+        // Sans `TRANSACTIONS`, un `ROLLBACK` accepté « réussirait » côté
+        // serveur sans rien annuler. Le refus part avant tout emprunt : le
+        // bassin paresseux n'ouvre jamais la moindre connexion.
+        let session = session_hors_ligne();
+        assert!(!session.capabilities().contains(Capabilities::TRANSACTIONS));
+        for texte in [
+            "BEGIN",
+            "START TRANSACTION",
+            "COMMIT",
+            "END",
+            "ROLLBACK",
+            "ABORT",
+            "SAVEPOINT s",
+            "RELEASE SAVEPOINT s",
+            "PREPARE TRANSACTION 'x'",
+            "/* annuler */ rollback",
+        ] {
+            let demande = ExecRequest::new(QueryLanguage::Sql(SqlDialect::Postgres), texte);
+            let erreur = match session.execute(demande, &CancelToken::new()).await {
+                Ok(_) => panic!("`{texte}` doit être refusé"),
+                Err(erreur) => erreur,
+            };
+            assert!(
+                matches!(erreur, OxynError::NotSupported { .. }),
+                "`{texte}` : {erreur:?}"
+            );
+            assert!(
+                erreur
+                    .to_string()
+                    .contains("transactions are not supported in the console yet: each statement commits on its own"),
+                "{erreur}"
+            );
+        }
+        assert_eq!(
+            session.pool.size(),
+            0,
+            "aucune connexion ne doit avoir été ouverte"
+        );
+    }
+
+    #[tokio::test]
     async fn revenir_au_defaut_pose_une_instruction_plutot_que_rien() {
         // Ne rien poser laisserait la connexion du bassin sur le `search_path`
         // d'une exécution précédente : une requête sur deux résoudrait ailleurs.
@@ -773,40 +782,6 @@ mod tests {
             session.context_statement().as_deref(),
             Some(SQL_RESET_SEARCH_PATH)
         );
-    }
-
-    #[test]
-    fn le_registre_associe_une_execution_a_son_processus() {
-        // Un pid retenu à la connexion viserait, au moment d'annuler, une
-        // requête qui n'est pas celle qu'on veut couper.
-        let registre = StatementRegistry::default();
-        let une = StatementHandle::new();
-        let autre = StatementHandle::new();
-
-        registre.remember(une, 4_242);
-        registre.remember(autre, 4_243);
-        assert_eq!(registre.backend_pid(une), Some(4_242));
-        assert_eq!(registre.backend_pid(autre), Some(4_243));
-        assert_eq!(registre.len(), 2);
-    }
-
-    #[test]
-    fn une_execution_terminee_ne_reste_pas_dans_le_registre() {
-        // Sans cet effacement, une session ouverte une journée accumule une
-        // entrée par requête exécutée.
-        let registre = StatementRegistry::default();
-        let handle = StatementHandle::new();
-        registre.remember(handle, 7);
-        registre.forget(handle);
-        assert_eq!(registre.backend_pid(handle), None);
-        assert_eq!(registre.len(), 0);
-    }
-
-    #[test]
-    fn annuler_une_execution_inconnue_ne_doit_rien_couter() {
-        // « Annuler une instruction déjà terminée n'est pas une erreur. »
-        let registre = StatementRegistry::default();
-        assert_eq!(registre.backend_pid(StatementHandle::new()), None);
     }
 
     #[test]
@@ -896,12 +871,13 @@ mod tests {
 
     #[test]
     fn le_sql_compose_par_le_driver_ne_concatene_rien() {
-        // I-10 : ces cinq littéraux sont tout ce que le driver compose ici.
+        // I-10 : ces six littéraux sont tout ce que le driver compose ici.
         // Un identifiant ou une valeur qui s'y glisserait serait un `{}` visible.
         for compose in [
             SQL_BEGIN_READ_ONLY,
             SQL_ROLLBACK,
             SQL_RESET_SEARCH_PATH,
+            SQL_RESET_AFTER_WRITE,
             SQL_BACKEND_PID,
             SQL_CANCEL_BACKEND,
         ] {

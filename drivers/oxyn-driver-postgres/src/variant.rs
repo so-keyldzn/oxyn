@@ -251,6 +251,10 @@ pub fn base_capabilities() -> Capabilities {
         | Capabilities::GRANT_REVOKE
         | Capabilities::READ_ONLY_SESSION
         | Capabilities::SESSION_CONTEXT
+        // `ORDER BY` et `WHERE` sur un aperçu : le driver les compose, cite les
+        // colonnes de tri et transmet le prédicat tel quel (ADR-0020).
+        | Capabilities::PREVIEW_SORT
+        | Capabilities::PREVIEW_FILTER
         | Capabilities::SQL
         | Capabilities::RELATIONAL
         | Capabilities::FULL_TEXT_SEARCH
@@ -400,6 +404,11 @@ mod tests {
         assert!(capacites.contains(Capabilities::SERVER_SIDE_CANCEL));
         assert!(capacites.contains(Capabilities::SQL));
         assert!(capacites.contains(Capabilities::TABLES));
+        // `ORDER BY`, `WHERE` et `LIMIT … OFFSET` sont de la grammaire commune :
+        // ce que Redshift ampute, c'est le catalogue de types, pas la sélection.
+        // Les retirer priverait l'utilisateur de contrôles qui fonctionnent.
+        assert!(capacites.contains(Capabilities::PREVIEW_SORT));
+        assert!(capacites.contains(Capabilities::PREVIEW_FILTER));
     }
 
     #[test]

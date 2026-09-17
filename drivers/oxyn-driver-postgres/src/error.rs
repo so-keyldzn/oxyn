@@ -336,8 +336,8 @@ pub(crate) fn is_read_only_rejection(err: &sqlx::Error) -> bool {
 ///
 /// Le message existe pour que personne ne conclue à un défaut de droits sur sa
 /// base : c'est Oxyn qui a demandé la lecture seule, pas l'administrateur.
-const READ_ONLY_MESSAGE: &str = "cette exécution est bornée en lecture seule : \
-                                 le serveur a refusé une instruction qui écrit";
+const READ_ONLY_MESSAGE: &str = "this execution is bounded to read-only: \
+                                 the server rejected a statement that writes";
 
 /// Traduit une erreur d'exécution en tenant compte des bornes demandées et des
 /// valeurs liées.
@@ -586,7 +586,7 @@ mod tests {
             erreur_serveur(SQLSTATE_READ_ONLY_TRANSACTION),
         );
         assert!(matches!(erreur, OxynError::Query(_)), "{erreur:?}");
-        assert!(erreur.to_string().contains("lecture seule"), "{erreur}");
+        assert!(erreur.to_string().contains("read-only"), "{erreur}");
         assert!(erreur.is_user_error());
     }
 

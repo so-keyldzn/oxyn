@@ -36,15 +36,16 @@ use oxyn_core::{
     StatementIntent,
 };
 use oxyn_driver::Cursor;
-use sqlx::pool::PoolConnection;
-use sqlx::postgres::{PgArguments, PgStatement, Postgres};
+use sqlx::postgres::{PgArguments, PgStatement};
 use sqlx::{Either, Statement as _};
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 
+use crate::cancel::{BackendCanceller, StatementRegistry, Verdict, VerdictSender};
 use crate::decode::BatchAssembler;
 use crate::error::{Bound, map_stream_error};
-use crate::session::{BackendCanceller, SQL_RESET_SEARCH_PATH, SQL_ROLLBACK, StatementRegistry};
+use crate::lease::Lease;
+use crate::session::{SQL_RESET_AFTER_WRITE, SQL_RESET_SEARCH_PATH, SQL_ROLLBACK};
 use crate::types::PgDecoding;
 
 /// Octets accumulés au-delà desquels un lot est clos et émis.
@@ -202,7 +203,7 @@ impl Cursor for PostgresCursor {
             None => {
                 self.seal(true);
                 Err(OxynError::Internal(
-                    "la tâche de flux PostgreSQL s'est arrêtée sans conclure".to_owned(),
+                    "the PostgreSQL streaming task stopped without concluding".to_owned(),
                 ))
             }
         }
@@ -232,8 +233,9 @@ impl PostgresCursor {
 pub(crate) struct StreamRequest {
     /// Le driver, pour classer les erreurs.
     pub(crate) driver: DriverId,
-    /// La connexion qui portera l'exécution, empruntée au bassin.
-    pub(crate) connection: PoolConnection<Postgres>,
+    /// La connexion qui portera l'exécution, empruntée au bassin et déjà
+    /// marquée sale : elle n'y retourne que si la tâche la remet au défaut.
+    pub(crate) connection: Lease,
     /// L'instruction préparée : c'est elle qui a donné le schéma.
     pub(crate) statement: PgStatement,
     /// Les paramètres liés, déjà encodés.
@@ -259,6 +261,10 @@ pub(crate) struct StreamRequest {
     /// décrit différemment d'une lecture à l'autre, selon la connexion tirée
     /// ([ADR-0019](../../../docs/adr/0019-contexte-de-session.md)).
     pub(crate) restore_context: bool,
+    /// Le texte de l'utilisateur ouvre-t-il une transaction (`BEGIN`,
+    /// `START TRANSACTION`) ? La connexion est alors fermée au lieu d'être
+    /// rendue.
+    pub(crate) opens_transaction: bool,
     /// Les bornes de l'exécution.
     pub(crate) limits: ExecLimits,
     /// L'intention, qui décide de la classe des erreurs de transport.
@@ -269,6 +275,8 @@ pub(crate) struct StreamRequest {
     pub(crate) canceller: std::sync::Arc<BackendCanceller>,
     /// Le registre des exécutions en cours, dont la tâche s'efface en partant.
     pub(crate) statements: std::sync::Arc<StatementRegistry>,
+    /// Par où rendre à `Session::cancel` ce que la tâche a fait de l'annulation.
+    pub(crate) verdict: VerdictSender,
     /// La poignée que [`Cursor::handle`] expose.
     pub(crate) handle: StatementHandle,
 }
@@ -278,11 +286,11 @@ pub(crate) struct StreamRequest {
 /// L'appel rend la main immédiatement : le schéma est déjà connu — il vient de
 /// l'instruction préparée — donc la grille dessine ses colonnes pendant que la
 /// première ligne voyage encore.
-pub(crate) fn spawn(request: StreamRequest, parent: &CancelToken) -> PostgresCursor {
+///
+/// `cancel` est le jeton **propre** à l'exécution, déjà inscrit au registre :
+/// détruire ce curseur le déclenche, `Session::cancel` aussi.
+pub(crate) fn spawn(request: StreamRequest, cancel: CancelToken) -> PostgresCursor {
     let (envoi, reception) = mpsc::channel(1);
-    // Un **enfant** du jeton de l'appelant : annuler l'appelant annule cette
-    // exécution, mais détruire ce curseur n'annule pas les autres onglets.
-    let cancel = parent.child();
 
     let schema = SchemaRef::clone(&request.schema);
     let handle = request.handle;
@@ -316,6 +324,7 @@ async fn run(request: StreamRequest, cancel: CancelToken, events: mpsc::Sender<C
         arguments,
         bound,
         restore_context,
+        opens_transaction,
         schema,
         decodings,
         limits,
@@ -323,6 +332,7 @@ async fn run(request: StreamRequest, cancel: CancelToken, events: mpsc::Sender<C
         backend_pid,
         canceller,
         statements,
+        verdict,
         handle,
     } = request;
 
@@ -405,8 +415,17 @@ async fn run(request: StreamRequest, cancel: CancelToken, events: mpsc::Sender<C
                 assembleur.bytes() >= BATCH_BYTE_BUDGET || assembleur.rows() >= BATCH_ROW_CEILING;
 
             if lot_plein || borne_atteinte {
-                match emettre(&mut assembleur, &driver, &events).await {
+                // Le jeton est surveillé **aussi** pendant la contre-pression :
+                // une grille qui ne lit plus laisserait sinon `Session::cancel`
+                // attendre sans fin, la requête toujours en cours sur le serveur.
+                let emission = tokio::select! {
+                    biased;
+                    () = cancel.cancelled() => Emission::Annulee,
+                    emission = emettre(&mut assembleur, &driver, &events) => emission,
+                };
+                match emission {
                     Emission::Poursuivre => {}
+                    Emission::Annulee => break Halt::Cancelled,
                     Emission::Abandonne => break Halt::Abandoned,
                     Emission::Echouee => break Halt::Failed,
                 }
@@ -417,66 +436,97 @@ async fn run(request: StreamRequest, cancel: CancelToken, events: mpsc::Sender<C
         }
     };
 
-    // L'exécution ne peut plus être annulée par la session : la tâche s'efface
-    // du registre avant même de nettoyer, pour qu'un `cancel` concurrent ne
-    // vise pas un pid qui va être rendu au bassin.
+    // L'arrêt est décidé : un jeton déclenché après ce point ne change plus
+    // rien. La tâche s'efface du registre, et c'est elle — pas `Session::cancel`
+    // — qui envoie l'annulation s'il en faut une (voir le module `cancel`).
     statements.forget(handle);
 
     // Le flux est détruit : l'emprunt sur la connexion est levé.
     if arret.needs_server_cancel() {
         // Une connexion dont le flux a été abandonné a pu garder des octets non
         // lus : la rendre au bassin désynchroniserait le prochain emprunteur.
-        connection.close_on_drop();
-        if let Err(erreur) = canceller.cancel_backend(backend_pid).await {
-            // Signalé, pas propagé : l'exécution s'arrête de toute façon, et
-            // l'utilisateur n'a rien à faire de cette information.
-            tracing::warn!(
-                target: "oxyn::driver::postgres",
-                erreur = %erreur,
-                "l'annulation côté serveur n'a pas abouti"
-            );
+        // Elle est tenue **jusqu'après** l'envoi de l'annulation : tant qu'elle
+        // l'est, aucune autre requête ne peut tourner sur `backend_pid`.
+        connection.discard();
+        match canceller.cancel_backend(backend_pid).await {
+            Ok(()) => verdict.settle(Verdict::Cancelled),
+            Err(erreur) => {
+                // Signalé ici, et rendu à `Session::cancel` s'il attend : un
+                // curseur détruit, lui, n'a personne à qui le dire.
+                tracing::warn!(
+                    target: "oxyn::driver::postgres",
+                    error = %erreur,
+                    "server-side cancellation did not succeed"
+                );
+                verdict.settle(Verdict::CancelFailed(std::sync::Arc::new(erreur)));
+            }
         }
     } else {
+        // Rien à couper : `Session::cancel` n'a pas à attendre le nettoyage.
+        verdict.settle(Verdict::Finished);
+        // Chaque remise au défaut doit être **confirmée** par le serveur pour
+        // que la connexion reparte au bassin. La première qui échoue laisse
+        // l'emprunt sale, donc la connexion fermée : mieux vaut en ouvrir une
+        // neuve que laisser l'introspection ou une autre console hériter d'un
+        // état qu'elle n'a pas demandé. Une tâche interrompue entre deux
+        // `await` — arrêt du runtime — laisse l'emprunt sale, elle aussi.
+        let mut remises: Vec<(&'static str, &'static str)> = Vec::with_capacity(2);
         if limits.read_only {
-            // La transaction ouverte par `BEGIN READ ONLY` doit être refermée avant
-            // le retour au bassin : une connexion laissée `idle in transaction`
-            // garde des verrous et bloque le `VACUUM` de toute la base.
-            let referme = sqlx::raw_sql(SQL_ROLLBACK).execute(&mut *connection).await;
-            if let Err(erreur) = referme {
+            // La transaction ouverte par `BEGIN READ ONLY` doit être refermée
+            // avant le retour au bassin : une connexion laissée `idle in
+            // transaction` garde des verrous et bloque le `VACUUM` de toute la
+            // base. Le `ROLLBACK` défait aussi tout `SET` que l'instruction de
+            // l'utilisateur aurait posé dans la transaction — pas le `SET` de
+            // contexte, posé avant elle.
+            remises.push((
+                SQL_ROLLBACK,
+                "the read-only transaction could not be closed",
+            ));
+            if restore_context {
+                remises.push((
+                    SQL_RESET_SEARCH_PATH,
+                    "the session context could not be reset",
+                ));
+            }
+        } else if opens_transaction {
+            // L'utilisateur a ouvert une transaction. La rendre au bassin la
+            // ferait hériter par l'emprunteur suivant ; la défaire par un
+            // `ROLLBACK` annulerait en silence ce qu'il voulait garder. Rien
+            // n'est remis : l'emprunt reste sale, la connexion est fermée.
+            // Voir `transaction_text::opens_transaction`.
+        } else {
+            // Hors transaction, rien ne défait un `SET` tapé dans une console :
+            // ni `standard_conforming_strings = off`, que le découpeur ne
+            // suppose pas, ni un `search_path`, que le bassin rend de toute façon
+            // non fiable pour l'utilisateur — la requête suivante peut partir
+            // sur une autre connexion. Le schéma d'une console passe par son
+            // contexte de session (ADR-0019), que cette remise défait aussi.
+            remises.push((
+                SQL_RESET_AFTER_WRITE,
+                "the session state could not be reset after a write",
+            ));
+        }
+
+        let mut remise = !remises.is_empty();
+        for (instruction, echec) in remises {
+            if let Err(erreur) = sqlx::raw_sql(instruction).execute(&mut *connection).await {
                 // Traduite avant d'être journalisée, comme partout ailleurs : un
                 // `sqlx::Error` brut peut porter l'URL de connexion.
                 tracing::warn!(
                     target: "oxyn::driver::postgres",
-                    erreur = %crate::error::map_exec_error(
+                    error = %crate::error::map_exec_error(
                         &driver,
                         oxyn_core::StatementIntent::Read,
                         erreur,
                     ),
-                    "la transaction en lecture seule n'a pas pu être refermée"
+                    "{echec}"
                 );
-                connection.close_on_drop();
+                remise = false;
+                break;
             }
         }
-        // Après le `ROLLBACK`, qui ne défait pas un `SET` posé hors transaction.
-        if restore_context {
-            let remis = sqlx::raw_sql(SQL_RESET_SEARCH_PATH)
-                .execute(&mut *connection)
-                .await;
-            if let Err(erreur) = remis {
-                // Une connexion qu'on ne sait pas remettre au défaut ne repart
-                // pas au bassin : mieux vaut en ouvrir une neuve que laisser
-                // l'introspection dépendre du contexte d'une console.
-                tracing::warn!(
-                    target: "oxyn::driver::postgres",
-                    erreur = %crate::error::map_exec_error(
-                        &driver,
-                        oxyn_core::StatementIntent::Read,
-                        erreur,
-                    ),
-                    "le contexte de session n'a pas pu être défait"
-                );
-                connection.close_on_drop();
-            }
+        if remise {
+            connection.restored();
         }
     }
     drop(connection);
@@ -535,6 +585,8 @@ enum Etape {
 enum Emission {
     /// Le lot est parti, on continue.
     Poursuivre,
+    /// Le jeton s'est déclenché pendant que le canal était plein.
+    Annulee,
     /// Plus personne n'écoute : le curseur a été détruit.
     Abandonne,
     /// Le lot n'a pas pu être construit ; l'erreur est déjà émise.

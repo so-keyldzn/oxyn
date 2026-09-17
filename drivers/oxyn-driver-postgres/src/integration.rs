@@ -43,7 +43,7 @@ use std::time::Duration;
 
 use oxyn_core::{
     CancelToken, Capabilities, ConnectionConfig, DriverId, Environment, ExecLimits, ExecRequest,
-    OxynError, QueryLanguage, SqlDialect, StatementIntent,
+    OxynError, PreviewShape, PreviewSort, QueryLanguage, SqlDialect, StatementIntent,
 };
 use oxyn_driver::{Credentials, Cursor, Driver as _, ParsedDsn, Session, SessionContext};
 
@@ -280,6 +280,17 @@ async fn previews_handle_system_types_and_preserve_native_columns() {
         return;
     };
     let token = CancelToken::new();
+    // Détruites avant d'être recréées, comme les autres fixtures de ce fichier.
+    // Sans cela le test ne passe **qu'une fois** : le second lancement échoue
+    // sur « type "oxyn_preview_acl" already exists », et l'échec ressemble à un
+    // défaut du driver alors que c'est le test qui n'a pas nettoyé derrière lui.
+    // Un test d'intégration qu'on ne peut pas relancer ne sert qu'en CI neuve.
+    for sql in [
+        "DROP TABLE IF EXISTS oxyn_preview_types CASCADE",
+        "DROP DOMAIN IF EXISTS oxyn_preview_acl CASCADE",
+    ] {
+        appliquer(&*session, sql).await;
+    }
     appliquer(&*session, "CREATE DOMAIN oxyn_preview_acl AS aclitem[]").await;
     appliquer(
         &*session,
@@ -290,8 +301,14 @@ async fn previews_handle_system_types_and_preserve_native_columns() {
     .await;
     appliquer(
         &*session,
+        // `=r/<rôle>` doit nommer un rôle **qui existe**, et le protocole de
+        // test du dépôt crée `oxyn_test`, pas `postgres`. Écrire le nom en dur
+        // faisait échouer le test sur « role "postgres" does not exist » — une
+        // dépendance à un environnement que rien ne garantit. `current_user`
+        // dit la même chose sans le supposer.
         "INSERT INTO oxyn_preview_types VALUES \
-        (1, '2021-01-01 00:00:00.123456+00', ARRAY['=r/postgres'::aclitem, NULL], \
+        (1, '2021-01-01 00:00:00.123456+00', \
+         ARRAY[('=r/' || current_user)::aclitem, NULL], \
          'pg_catalog.int4in'::regproc, 'quoted'), \
         (2, NULL, NULL, NULL, NULL)",
     )
@@ -299,7 +316,7 @@ async fn previews_handle_system_types_and_preserve_native_columns() {
 
     let path = CatalogPath::for_relation(None, Some("public"), "oxyn_preview_types").expect("path");
     let request = session
-        .preview_request(&path, 200, &token)
+        .preview_request(&path, 200, &PreviewShape::unordered(), &token)
         .await
         .expect("metadata");
     let mut cursor = session.execute(request, &token).await.expect("preview");
@@ -314,10 +331,16 @@ async fn previews_handle_system_types_and_preserve_native_columns() {
     let functions = batch.column(3).as_string_opt::<i32>().expect("server text");
     let acls = batch.column(2).as_string_opt::<i32>().expect("server text");
     assert!(functions.iter().flatten().any(|value| value == "int4in"));
+    // Ce qui est éprouvé ici, c'est qu'un `aclitem[]` traverse le fil sans
+    // perte : le droit `=r/` et le `NULL` du second élément. Le **nom du rôle**
+    // n'en fait pas partie, et l'écrire en dur liait le test à un cluster créé
+    // avec un superutilisateur `postgres` — pas celui que le protocole du dépôt
+    // décrit.
     assert!(
         acls.iter()
             .flatten()
-            .any(|value| value.contains("=r/postgres") && value.contains("NULL"))
+            .any(|value| value.contains("=r/") && value.contains("NULL")),
+        "un tableau d'aclitem doit arriver avec son droit et son élément nul"
     );
     assert_eq!(acls.null_count(), 1);
     assert!(cursor.next_batch().await.expect("end").is_none());
@@ -361,7 +384,7 @@ async fn previews_handle_system_types_and_preserve_native_columns() {
     for relation in ["pg_database", "pg_attrdef", "pg_aggregate"] {
         let path = CatalogPath::for_relation(None, Some("pg_catalog"), relation).expect("path");
         let request = session
-            .preview_request(&path, 1, &token)
+            .preview_request(&path, 1, &PreviewShape::unordered(), &token)
             .await
             .expect("system metadata");
         let mut cursor = session
@@ -373,7 +396,9 @@ async fn previews_handle_system_types_and_preserve_native_columns() {
     let cancelled = CancelToken::new();
     cancelled.cancel();
     assert!(matches!(
-        session.preview_request(&path, 200, &cancelled).await,
+        session
+            .preview_request(&path, 200, &PreviewShape::unordered(), &cancelled)
+            .await,
         Err(OxynError::Cancelled)
     ));
     appliquer(&*session, "DROP TABLE oxyn_preview_types").await;
@@ -497,7 +522,7 @@ async fn un_declencheur_qui_recopie_la_valeur_ne_la_fait_pas_sortir() {
 }
 
 /// La configuration d'essai, ou `None` quand aucun serveur n'est déclaré.
-fn cible() -> Option<(ConnectionConfig, Credentials)> {
+pub(super) fn cible() -> Option<(ConnectionConfig, Credentials)> {
     let url = std::env::var(VARIABLE).ok()?;
     let relue = ParsedDsn::parse(&url).expect("OXYN_PG_TEST_URL doit être une URL `postgres://`");
     let (parts, identifiants) = relue.into_parts();
@@ -773,7 +798,7 @@ async fn la_lecture_seule_est_imposee_par_le_serveur() {
         .await
         .expect_err("le serveur doit refuser l'écriture");
     assert!(
-        refus.to_string().contains("lecture seule"),
+        refus.to_string().contains("bounded to read-only"),
         "le message doit nommer les bornes, pas les droits : {refus}"
     );
     drop(curseur);
@@ -1612,7 +1637,7 @@ async fn un_contexte_declare_ne_desarme_pas_la_lecture_seule() {
         .await
         .expect_err("le serveur doit refuser l'écriture");
     assert!(
-        refus.to_string().contains("lecture seule"),
+        refus.to_string().contains("bounded to read-only"),
         "le message doit nommer les bornes, pas les droits : {refus}"
     );
     drop(curseur);
@@ -1805,5 +1830,349 @@ async fn l_introspection_ne_depend_pas_du_contexte_d_une_console() {
     }
 
     appliquer(&*session, &format!("DROP SCHEMA {SCHEMA_A} CASCADE")).await;
+    session.close().await.expect("fermeture");
+}
+
+/// Le nombre de lignes des fixtures d'aperçu : assez pour trois pages.
+///
+/// Une pagination qui saute une ligne ou en montre deux fois la même ne se voit
+/// pas sur dix lignes ; elle se voit sur cinq cents lues page par page.
+const LIGNES_APERCU: i64 = 500;
+
+/// Prépare une table d'aperçu, ses ex æquo et une table témoin.
+///
+/// `seau` vaut `id % 7` : trier dessus laisse des dizaines d'ex æquo, donc un
+/// ordre non total tant que la clé primaire ne le complète pas.
+async fn preparer_apercu(session: &dyn Session) {
+    appliquer(
+        session,
+        "CREATE TABLE oxyn_preview_page (\
+         id bigint PRIMARY KEY, seau bigint, nom text)",
+    )
+    .await;
+    appliquer(
+        session,
+        &format!(
+            "INSERT INTO oxyn_preview_page(id, seau, nom) \
+             SELECT i, i % 7, 'ligne-' || i FROM generate_series(1, {LIGNES_APERCU}) AS s(i)"
+        ),
+    )
+    .await;
+    appliquer(session, "CREATE TABLE oxyn_preview_temoin (garde text)").await;
+    appliquer(
+        session,
+        "INSERT INTO oxyn_preview_temoin VALUES ('intacte')",
+    )
+    .await;
+}
+
+/// Compose puis exécute un aperçu, et rend les entiers de sa première colonne.
+async fn ids_apercu(
+    session: &dyn Session,
+    relation: &str,
+    limit: u32,
+    shape: &PreviewShape,
+) -> Vec<i64> {
+    use arrow::array::AsArray as _;
+    use oxyn_catalog::CatalogPath;
+
+    let jeton = CancelToken::new();
+    let chemin = CatalogPath::for_relation(None, Some("public"), relation).expect("chemin valide");
+    let demande = session
+        .preview_request(&chemin, limit, shape, &jeton)
+        .await
+        .unwrap_or_else(|erreur| panic!("composition de l'aperçu de `{relation}` : {erreur}"));
+    let mut curseur = session
+        .execute(demande, &jeton)
+        .await
+        .unwrap_or_else(|erreur| panic!("exécution de l'aperçu de `{relation}` : {erreur}"));
+    let mut ids = Vec::new();
+    while let Some(lot) = curseur.next_batch().await.expect("flux sans erreur") {
+        let colonne = lot
+            .column(0)
+            .as_primitive_opt::<arrow::datatypes::Int64Type>()
+            .expect("colonne entière");
+        ids.extend(colonne.values().iter().copied());
+    }
+    ids
+}
+
+#[tokio::test]
+#[ignore = "demande un serveur PostgreSQL : voir la documentation du module"]
+async fn les_pages_d_un_apercu_trie_ne_se_recouvrent_ni_n_omettent_une_ligne() {
+    use oxyn_catalog::CatalogPath;
+
+    let Some(session) = session().await else {
+        return;
+    };
+    preparer_apercu(&*session).await;
+
+    // Tri simple, dans les deux sens.
+    let croissant = PreviewShape {
+        sort: vec![PreviewSort::ascending("id")],
+        ..PreviewShape::default()
+    };
+    assert_eq!(
+        ids_apercu(&*session, "oxyn_preview_page", 10, &croissant).await,
+        (1..=10).collect::<Vec<_>>()
+    );
+    let decroissant = PreviewShape {
+        sort: vec![PreviewSort::descending("id")],
+        ..PreviewShape::default()
+    };
+    assert_eq!(
+        ids_apercu(&*session, "oxyn_preview_page", 10, &decroissant).await,
+        (LIGNES_APERCU - 9..=LIGNES_APERCU)
+            .rev()
+            .collect::<Vec<_>>()
+    );
+
+    // Trois pages consécutives sur une colonne pleine d'ex æquo.
+    let taille = 200_u32;
+    let mut vues = Vec::new();
+    let mut tailles = Vec::new();
+    for page in 0..3_u64 {
+        let shape = PreviewShape {
+            sort: vec![PreviewSort::ascending("seau")],
+            offset: page * u64::from(taille),
+            ..PreviewShape::default()
+        };
+        let ids = ids_apercu(&*session, "oxyn_preview_page", taille, &shape).await;
+        tailles.push(ids.len());
+        vues.extend(ids);
+    }
+    assert_eq!(tailles, vec![200, 200, 100], "trois pages, 500 lignes");
+    let mut triees = vues.clone();
+    triees.sort_unstable();
+    triees.dedup();
+    assert_eq!(
+        triees.len(),
+        vues.len(),
+        "aucune ligne ne doit apparaître sur deux pages"
+    );
+    assert_eq!(
+        triees,
+        (1..=LIGNES_APERCU).collect::<Vec<_>>(),
+        "l'union des pages est exactement la table"
+    );
+
+    // Une colonne de tri que la relation ne déclare pas : refusée ici, jamais
+    // transmise au serveur.
+    let chemin =
+        CatalogPath::for_relation(None, Some("public"), "oxyn_preview_page").expect("chemin");
+    let inconnue = PreviewShape {
+        sort: vec![PreviewSort::ascending("colonne_absente")],
+        ..PreviewShape::default()
+    };
+    let erreur = session
+        .preview_request(&chemin, 10, &inconnue, &CancelToken::new())
+        .await
+        .expect_err("une colonne inconnue ne se trie pas");
+    assert!(
+        matches!(&erreur, OxynError::CatalogUnavailable(message)
+            if message.contains("colonne_absente")),
+        "{erreur}"
+    );
+
+    // Une page sur une relation sans clé unique : refusée, en disant pourquoi.
+    appliquer(&*session, "CREATE TABLE oxyn_preview_sans_cle (x text)").await;
+    let sans_cle =
+        CatalogPath::for_relation(None, Some("public"), "oxyn_preview_sans_cle").expect("chemin");
+    let page = PreviewShape {
+        offset: 1,
+        ..PreviewShape::default()
+    };
+    let erreur = session
+        .preview_request(&sans_cle, 10, &page, &CancelToken::new())
+        .await
+        .expect_err("une page sans clé unique n'a pas de sens");
+    assert!(
+        matches!(&erreur, OxynError::NotSupported { capability }
+            if capability.contains("unique key")),
+        "{erreur}"
+    );
+    // Sa première page, elle, reste lisible : c'est l'aperçu d'aujourd'hui.
+    assert!(
+        session
+            .preview_request(
+                &sans_cle,
+                10,
+                &PreviewShape::unordered(),
+                &CancelToken::new()
+            )
+            .await
+            .is_ok()
+    );
+
+    appliquer(&*session, "DROP TABLE oxyn_preview_sans_cle").await;
+    appliquer(&*session, "DROP TABLE oxyn_preview_page").await;
+    appliquer(&*session, "DROP TABLE oxyn_preview_temoin").await;
+    session.close().await.expect("fermeture");
+}
+
+#[tokio::test]
+#[ignore = "demande un serveur PostgreSQL : voir la documentation du module"]
+async fn le_predicat_d_un_apercu_part_tel_quel_sans_atteindre_une_seconde_instruction() {
+    use arrow::array::{Array as _, AsArray as _};
+    use oxyn_catalog::CatalogPath;
+
+    let Some(session) = session().await else {
+        return;
+    };
+    preparer_apercu(&*session).await;
+    appliquer(
+        &*session,
+        "INSERT INTO oxyn_preview_page(id, seau, nom) \
+         VALUES (1001, 0, '100%'), (1002, 0, '100 pour cent')",
+    )
+    .await;
+    let jeton = CancelToken::new();
+    let chemin =
+        CatalogPath::for_relation(None, Some("public"), "oxyn_preview_page").expect("chemin");
+
+    // Le `%` n'est pas un métacaractère : le driver ne compose aucun motif, il
+    // transmet le texte de l'utilisateur.
+    async fn noms(
+        session: &dyn Session,
+        chemin: &CatalogPath,
+        jeton: &CancelToken,
+        predicate: &str,
+    ) -> Vec<String> {
+        let shape = PreviewShape {
+            predicate: Some(predicate.to_owned()),
+            ..PreviewShape::default()
+        };
+        let demande = session
+            .preview_request(chemin, 200, &shape, jeton)
+            .await
+            .expect("composition");
+        let mut curseur = session.execute(demande, jeton).await.expect("exécution");
+        let mut noms = Vec::new();
+        while let Some(lot) = curseur.next_batch().await.expect("flux") {
+            let colonne = lot.column(2).as_string_opt::<i32>().expect("colonne texte");
+            for rang in 0..colonne.len() {
+                noms.push(colonne.value(rang).to_owned());
+            }
+        }
+        noms
+    }
+    assert_eq!(
+        noms(&*session, &chemin, &jeton, "nom = '100%'").await,
+        vec!["100%".to_owned()],
+        "une égalité ne ramène que la ligne littérale"
+    );
+    let mut motif = noms(&*session, &chemin, &jeton, "nom LIKE '100%'").await;
+    motif.sort();
+    assert_eq!(motif, vec!["100 pour cent".to_owned(), "100%".to_owned()]);
+
+    for hostile in [
+        // Une seconde instruction : le protocole étendu ne prépare qu'une
+        // instruction, elle ne peut donc pas atteindre le serveur.
+        "nom = 'ligne-1'; DROP TABLE oxyn_preview_temoin",
+        "nom = 'ligne-1'; DELETE FROM oxyn_preview_temoin",
+        // Une apostrophe déséquilibrée : erreur de syntaxe, rien de plus.
+        "nom = 'ligne-1",
+        // Un commentaire de fin de ligne : il ne doit pas avaler la LIMIT.
+        "nom LIKE 'ligne-%' -- ; DROP TABLE oxyn_preview_temoin",
+    ] {
+        let shape = PreviewShape {
+            predicate: Some(hostile.to_owned()),
+            ..PreviewShape::default()
+        };
+        let demande = session
+            .preview_request(&chemin, 3, &shape, &jeton)
+            .await
+            .expect("la composition ne juge pas le prédicat");
+        assert!(
+            demande.text.contains(hostile),
+            "le prédicat part tel quel : {}",
+            demande.text
+        );
+        match session.execute(demande, &jeton).await {
+            Err(_) => {}
+            Ok(mut curseur) => {
+                let (lignes, _) = drainer(&mut curseur).await;
+                assert!(lignes <= 3, "{hostile} : {lignes} lignes malgré LIMIT 3");
+            }
+        }
+        let mut curseur = session
+            .execute(lecture("SELECT garde FROM oxyn_preview_temoin"), &jeton)
+            .await
+            .unwrap_or_else(|erreur| {
+                panic!("la table témoin doit survivre à `{hostile}` : {erreur}")
+            });
+        assert_eq!(drainer(&mut curseur).await.0, 1, "témoin après `{hostile}`");
+    }
+
+    // Les deux gardes de la clause, éprouvés ici comme sur SQLite : le saut de
+    // ligne pour le `--`, les parenthèses pour le `/*` qu'aucun saut de ligne ne
+    // termine. PostgreSQL refusait déjà le second ; il doit continuer.
+    let bloc = PreviewShape {
+        predicate: Some("nom IS NOT NULL /*".into()),
+        ..PreviewShape::default()
+    };
+    let demande = session
+        .preview_request(&chemin, 3, &bloc, &jeton)
+        .await
+        .expect("la composition ne juge pas le prédicat");
+    assert!(
+        session.execute(demande, &jeton).await.is_err(),
+        "un commentaire de bloc non fermé doit être refusé, pas exécuté sans borne"
+    );
+    // La session survit à ce refus.
+    assert_eq!(
+        ids_apercu(
+            &*session,
+            "oxyn_preview_page",
+            3,
+            &PreviewShape::unordered()
+        )
+        .await
+        .len(),
+        3
+    );
+
+    let ligne = PreviewShape {
+        predicate: Some("id > 0 -- ceci est un commentaire".into()),
+        sort: vec![PreviewSort::ascending("id")],
+        ..PreviewShape::default()
+    };
+    assert_eq!(
+        ids_apercu(&*session, "oxyn_preview_page", 3, &ligne).await,
+        vec![1, 2, 3]
+    );
+
+    // Un prédicat qui porte déjà ses parenthèses rend exactement ce que rendrait
+    // le même texte sans l'enveloppe.
+    let parenthese = PreviewShape {
+        predicate: Some("(id > 0 AND seau < 2) OR nom IS NULL".into()),
+        sort: vec![PreviewSort::ascending("id")],
+        ..PreviewShape::default()
+    };
+    let enveloppe = ids_apercu(&*session, "oxyn_preview_page", 5, &parenthese).await;
+    let mut curseur = session
+        .execute(
+            lecture(
+                "SELECT * FROM \"public\".\"oxyn_preview_page\" \
+                 WHERE (id > 0 AND seau < 2) OR nom IS NULL \
+                 ORDER BY \"id\" ASC LIMIT 5",
+            ),
+            &jeton,
+        )
+        .await
+        .expect("le même texte, sans enveloppe");
+    let mut sans_enveloppe = Vec::new();
+    while let Some(lot) = curseur.next_batch().await.expect("flux") {
+        let colonne = lot
+            .column(0)
+            .as_primitive_opt::<arrow::datatypes::Int64Type>()
+            .expect("colonne entière");
+        sans_enveloppe.extend(colonne.values().iter().copied());
+    }
+    assert_eq!(enveloppe, sans_enveloppe);
+    assert_eq!(enveloppe, vec![1, 7, 8, 14, 15]);
+
+    appliquer(&*session, "DROP TABLE oxyn_preview_page").await;
+    appliquer(&*session, "DROP TABLE oxyn_preview_temoin").await;
     session.close().await.expect("fermeture");
 }

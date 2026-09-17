@@ -67,7 +67,7 @@ const JSONB_VERSION: u8 = 1;
 #[non_exhaustive]
 pub enum DecodeError {
     /// Une valeur n'a pas pu être représentée.
-    #[error("colonne {ordinal} de type `{pg_type}` : {detail}")]
+    #[error("column {ordinal} of type `{pg_type}`: {detail}")]
     Value {
         /// Rang de la colonne dans le résultat, à partir de zéro.
         ordinal: usize,
@@ -78,7 +78,7 @@ pub enum DecodeError {
     },
 
     /// La ligne n'a pas pu être lue : rang hors bornes, métadonnées absentes.
-    #[error("ligne illisible : {detail}")]
+    #[error("unreadable row: {detail}")]
     Row {
         /// Ce qui n'allait pas.
         detail: String,
@@ -86,7 +86,7 @@ pub enum DecodeError {
 
     /// Arrow a refusé le lot construit. C'est un bug du driver : le schéma et
     /// les constructeurs de colonnes ont divergé.
-    #[error("lot Arrow invalide : {0}")]
+    #[error("invalid Arrow batch: {0}")]
     Arrow(#[from] arrow::error::ArrowError),
 }
 
@@ -106,7 +106,7 @@ fn sanitize_type(name: &str) -> String {
     if acceptable {
         name.to_owned()
     } else {
-        "<type non représentable>".to_owned()
+        "<unrepresentable type>".to_owned()
     }
 }
 
@@ -170,7 +170,7 @@ impl BatchAssembler {
         if row.columns().len() != self.columns.len() {
             return Err(DecodeError::Row {
                 detail: format!(
-                    "{} colonnes reçues, {} annoncées par le schéma",
+                    "{} columns received, {} announced by the schema",
                     row.columns().len(),
                     self.columns.len()
                 ),
@@ -336,17 +336,17 @@ impl ColumnBuilder {
             return match self {
                 Self::Text(builder, _) => {
                     let texte =
-                        std::str::from_utf8(bytes).map_err(|_| "texte non UTF-8 du serveur")?;
+                        std::str::from_utf8(bytes).map_err(|_| "non-UTF-8 text from the server")?;
                     builder.append_value(texte);
                     Ok(())
                 }
-                _ => Err("le format texte du protocole simple n'est pas décodé"),
+                _ => Err("the simple protocol's text format is not decoded"),
             };
         }
 
         match self {
             Self::Bool(builder) => {
-                let octet = bytes.first().ok_or("booléen vide")?;
+                let octet = bytes.first().ok_or("empty boolean")?;
                 builder.append_value(*octet != 0);
             }
             Self::Int16(builder) => builder.append_value(read_i16(bytes)?),
@@ -354,11 +354,11 @@ impl ColumnBuilder {
             Self::Int64(builder) => builder.append_value(read_i64(bytes)?),
             Self::UInt32(builder) => builder.append_value(read_u32(bytes)?),
             Self::Float32(builder) => {
-                let octets: [u8; 4] = bytes.try_into().map_err(|_| "float4 mal dimensionné")?;
+                let octets: [u8; 4] = bytes.try_into().map_err(|_| "float4 of unexpected size")?;
                 builder.append_value(f32::from_be_bytes(octets));
             }
             Self::Float64(builder) => {
-                let octets: [u8; 8] = bytes.try_into().map_err(|_| "float8 mal dimensionné")?;
+                let octets: [u8; 8] = bytes.try_into().map_err(|_| "float8 of unexpected size")?;
                 builder.append_value(f64::from_be_bytes(octets));
             }
             Self::Text(builder, source) => {
@@ -425,7 +425,7 @@ impl ListColumn {
             self.elements = self
                 .elements
                 .checked_add(1)
-                .ok_or("plus de 2 milliards d'éléments dans un lot")?;
+                .ok_or("more than 2 billion elements in one batch")?;
         }
         self.offsets.push(self.elements);
         self.validity.push(true);
@@ -464,23 +464,23 @@ fn render_text(
 ) -> Result<(), &'static str> {
     match source {
         TextSource::Raw => {
-            let texte = std::str::from_utf8(bytes).map_err(|_| "texte non UTF-8 du serveur")?;
+            let texte = std::str::from_utf8(bytes).map_err(|_| "non-UTF-8 text from the server")?;
             builder.append_value(texte);
         }
         TextSource::Jsonb => {
-            let (version, suite) = bytes.split_first().ok_or("jsonb vide")?;
+            let (version, suite) = bytes.split_first().ok_or("empty jsonb")?;
             if *version != JSONB_VERSION {
-                return Err("version de jsonb inconnue");
+                return Err("unknown jsonb version");
             }
-            let texte = std::str::from_utf8(suite).map_err(|_| "jsonb non UTF-8")?;
+            let texte = std::str::from_utf8(suite).map_err(|_| "non-UTF-8 jsonb")?;
             builder.append_value(texte);
         }
         TextSource::Numeric => {
-            let rendu = render_binary(bytes).ok_or("numeric illisible")?;
+            let rendu = render_binary(bytes).ok_or("unreadable numeric")?;
             builder.append_value(&rendu);
         }
         TextSource::Uuid => {
-            let octets: [u8; UUID_LEN] = bytes.try_into().map_err(|_| "uuid mal dimensionné")?;
+            let octets: [u8; UUID_LEN] = bytes.try_into().map_err(|_| "uuid of unexpected size")?;
             let identifiant = uuid::Uuid::from_bytes(octets);
             let mut tampon = uuid::Uuid::encode_buffer();
             let canonique: &str = identifiant.hyphenated().encode_lower(&mut tampon);
@@ -501,11 +501,11 @@ fn render_text(
 /// ([DRIVER-CONTRACT §7](../../../docs/DRIVER-CONTRACT.md)).
 fn render_timetz(bytes: &[u8]) -> Result<String, &'static str> {
     let mut lecteur = Lecteur::new(bytes);
-    let micros = lecteur.i64().ok_or("timetz tronqué")?;
-    let ouest = lecteur.i32().ok_or("timetz sans décalage")?;
+    let micros = lecteur.i64().ok_or("truncated timetz")?;
+    let ouest = lecteur.i32().ok_or("timetz without an offset")?;
 
     if !(0..=86_400_000_000).contains(&micros) {
-        return Err("timetz hors des bornes d'une journée");
+        return Err("timetz outside the bounds of a day");
     }
     let secondes = micros / 1_000_000;
     let reste = micros % 1_000_000;
@@ -513,7 +513,7 @@ fn render_timetz(bytes: &[u8]) -> Result<String, &'static str> {
     let minutes = (secondes % 3_600) / 60;
     let sec = secondes % 60;
 
-    let est = ouest.checked_neg().ok_or("décalage de timetz absurde")?;
+    let est = ouest.checked_neg().ok_or("nonsensical timetz offset")?;
     let signe = if est < 0 { '-' } else { '+' };
     let absolu = est.unsigned_abs();
     let heures_offset = absolu / 3_600;
@@ -530,25 +530,25 @@ fn render_timetz(bytes: &[u8]) -> Result<String, &'static str> {
 
 /// Un `int2` gros-boutiste.
 fn read_i16(bytes: &[u8]) -> Result<i16, &'static str> {
-    let octets: [u8; 2] = bytes.try_into().map_err(|_| "int2 mal dimensionné")?;
+    let octets: [u8; 2] = bytes.try_into().map_err(|_| "int2 of unexpected size")?;
     Ok(i16::from_be_bytes(octets))
 }
 
 /// Un `int4` gros-boutiste.
 fn read_i32(bytes: &[u8]) -> Result<i32, &'static str> {
-    let octets: [u8; 4] = bytes.try_into().map_err(|_| "int4 mal dimensionné")?;
+    let octets: [u8; 4] = bytes.try_into().map_err(|_| "int4 of unexpected size")?;
     Ok(i32::from_be_bytes(octets))
 }
 
 /// Un `int8` gros-boutiste.
 fn read_i64(bytes: &[u8]) -> Result<i64, &'static str> {
-    let octets: [u8; 8] = bytes.try_into().map_err(|_| "int8 mal dimensionné")?;
+    let octets: [u8; 8] = bytes.try_into().map_err(|_| "int8 of unexpected size")?;
     Ok(i64::from_be_bytes(octets))
 }
 
 /// Un `oid` gros-boutiste.
 fn read_u32(bytes: &[u8]) -> Result<u32, &'static str> {
-    let octets: [u8; 4] = bytes.try_into().map_err(|_| "oid mal dimensionné")?;
+    let octets: [u8; 4] = bytes.try_into().map_err(|_| "oid of unexpected size")?;
     Ok(u32::from_be_bytes(octets))
 }
 
@@ -559,18 +559,18 @@ fn read_date(bytes: &[u8]) -> Result<i32, &'static str> {
         // `infinity` et `-infinity` sont des dates légales en PostgreSQL. Aucune
         // valeur de `Date32` ne les représente ; les rendre comme la date
         // extrême serait faux, et `NULL` serait un mensonge.
-        return Err("date infinie, non représentable en Date32 — la convertir en texte");
+        return Err("infinite date, not representable as Date32 — cast it to text");
     }
     jours
         .checked_add(EPOCH_SHIFT_DAYS)
-        .ok_or("date hors des bornes de Date32")
+        .ok_or("date outside the bounds of Date32")
 }
 
 /// Un `time` : microsecondes depuis minuit.
 fn read_time(bytes: &[u8]) -> Result<i64, &'static str> {
     let micros = read_i64(bytes)?;
     if !(0..=86_400_000_000).contains(&micros) {
-        return Err("time hors des bornes d'une journée");
+        return Err("time outside the bounds of a day");
     }
     Ok(micros)
 }
@@ -580,22 +580,22 @@ fn read_time(bytes: &[u8]) -> Result<i64, &'static str> {
 fn read_timestamp(bytes: &[u8]) -> Result<i64, &'static str> {
     let micros = read_i64(bytes)?;
     if micros == i64::MIN || micros == i64::MAX {
-        return Err("horodatage infini, non représentable — le convertir en texte");
+        return Err("infinite timestamp, not representable — cast it to text");
     }
     micros
         .checked_add(EPOCH_SHIFT_MICROS)
-        .ok_or("horodatage hors des bornes")
+        .ok_or("timestamp out of bounds")
 }
 
 /// Un `interval` : microsecondes, jours, mois — dans cet ordre sur le fil.
 fn read_interval(bytes: &[u8]) -> Result<IntervalMonthDayNano, &'static str> {
     let mut lecteur = Lecteur::new(bytes);
-    let micros = lecteur.i64().ok_or("interval tronqué")?;
-    let jours = lecteur.i32().ok_or("interval sans jours")?;
-    let mois = lecteur.i32().ok_or("interval sans mois")?;
+    let micros = lecteur.i64().ok_or("truncated interval")?;
+    let jours = lecteur.i32().ok_or("interval without days")?;
+    let mois = lecteur.i32().ok_or("interval without months")?;
     let nanos = micros
         .checked_mul(1_000)
-        .ok_or("interval de plus de 292 ans en microsecondes, non représentable")?;
+        .ok_or("interval longer than 292 years in microseconds, not representable")?;
     Ok(IntervalMonthDayNano::new(mois, jours, nanos))
 }
 
@@ -607,9 +607,9 @@ fn read_interval(bytes: &[u8]) -> Result<IntervalMonthDayNano, &'static str> {
 /// serveur de faire décoder n'importe quoi comme n'importe quoi.
 fn split_array(bytes: &[u8]) -> Result<Vec<Option<&[u8]>>, &'static str> {
     let mut lecteur = Lecteur::new(bytes);
-    let dimensions = lecteur.i32().ok_or("en-tête de tableau tronqué")?;
-    let _drapeaux = lecteur.i32().ok_or("en-tête de tableau tronqué")?;
-    let _type_element = lecteur.u32().ok_or("en-tête de tableau tronqué")?;
+    let dimensions = lecteur.i32().ok_or("truncated array header")?;
+    let _drapeaux = lecteur.i32().ok_or("truncated array header")?;
+    let _type_element = lecteur.u32().ok_or("truncated array header")?;
 
     if dimensions == 0 {
         return Ok(Vec::new());
@@ -617,32 +617,30 @@ fn split_array(bytes: &[u8]) -> Result<Vec<Option<&[u8]>>, &'static str> {
     if dimensions != 1 {
         // Une liste Arrow est à une dimension. Aplatir perdrait la forme sans
         // le dire ; refuser la nomme.
-        return Err("tableau à plusieurs dimensions, non représentable en liste Arrow");
+        return Err("multi-dimensional array, not representable as an Arrow list");
     }
 
-    let longueur = lecteur.i32().ok_or("dimension de tableau tronquée")?;
-    let _borne_basse = lecteur.i32().ok_or("dimension de tableau tronquée")?;
-    let longueur = usize::try_from(longueur).map_err(|_| "longueur de tableau négative")?;
+    let longueur = lecteur.i32().ok_or("truncated array dimension")?;
+    let _borne_basse = lecteur.i32().ok_or("truncated array dimension")?;
+    let longueur = usize::try_from(longueur).map_err(|_| "negative array length")?;
 
     // Chaque élément coûte au moins ses quatre octets de longueur : une valeur
     // plus grande que ce que le tampon peut contenir est hostile, et
     // `with_capacity` sur une telle valeur épuiserait la mémoire.
     if longueur > lecteur.reste().len() / 4 + 1 {
-        return Err("longueur de tableau incohérente avec le tampon reçu");
+        return Err("array length inconsistent with the buffer received");
     }
 
     let mut elements = Vec::with_capacity(longueur);
     for _ in 0..longueur {
-        let taille = lecteur.i32().ok_or("élément de tableau tronqué")?;
+        let taille = lecteur.i32().ok_or("truncated array element")?;
         if taille == -1 {
             elements.push(None);
             continue;
         }
-        let taille = usize::try_from(taille).map_err(|_| "taille d'élément négative")?;
+        let taille = usize::try_from(taille).map_err(|_| "negative element size")?;
         elements.push(Some(
-            lecteur
-                .prendre(taille)
-                .ok_or("élément de tableau tronqué")?,
+            lecteur.prendre(taille).ok_or("truncated array element")?,
         ));
     }
     Ok(elements)
@@ -726,7 +724,7 @@ mod tests {
         // PostgreSQL admet `infinity` ; Date32 non. La rendre comme la date
         // extrême ou comme NULL serait un mensonge sur une donnée réelle.
         let erreur = read_date(&i32::MAX.to_be_bytes()).expect_err("refus attendu");
-        assert!(erreur.contains("infinie"), "{erreur}");
+        assert!(erreur.contains("infinite"), "{erreur}");
         assert!(read_date(&i32::MIN.to_be_bytes()).is_err());
     }
 
@@ -890,7 +888,7 @@ mod tests {
         octets.extend_from_slice(&0_i32.to_be_bytes());
         octets.extend_from_slice(&23_u32.to_be_bytes());
         let erreur = split_array(&octets).expect_err("refus attendu");
-        assert!(erreur.contains("dimensions"), "{erreur}");
+        assert!(erreur.contains("dimensional"), "{erreur}");
     }
 
     #[test]
@@ -909,9 +907,9 @@ mod tests {
         // Un type utilisateur peut porter des séquences de contrôle de terminal.
         assert_eq!(sanitize_type("int4"), "int4");
         assert_eq!(sanitize_type("BYTEA[]"), "BYTEA[]");
-        assert_eq!(sanitize_type("\u{1b}[2J"), "<type non représentable>");
-        assert_eq!(sanitize_type(""), "<type non représentable>");
-        assert_eq!(sanitize_type(&"a".repeat(200)), "<type non représentable>");
+        assert_eq!(sanitize_type("\u{1b}[2J"), "<unrepresentable type>");
+        assert_eq!(sanitize_type(""), "<unrepresentable type>");
+        assert_eq!(sanitize_type(&"a".repeat(200)), "<unrepresentable type>");
     }
 
     #[test]

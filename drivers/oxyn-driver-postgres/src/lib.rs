@@ -108,12 +108,15 @@
 //! Les tests d'annulation demandent en plus un serveur qui accepte
 //! `pg_cancel_backend` sur ses propres processus, ce qui est le cas par défaut.
 
+mod cancel;
 pub mod catalog;
 pub mod cursor;
 pub mod decode;
 pub mod driver;
+mod lease;
 mod preview;
 pub mod session;
+mod transaction_text;
 pub mod types;
 pub mod variant;
 
@@ -121,6 +124,12 @@ pub(crate) mod error;
 pub(crate) mod numeric;
 pub(crate) mod options;
 
+/// Les tests de `Session::cancel` qui demandent un serveur. Tous `#[ignore]`.
+#[cfg(test)]
+mod cancel_tests;
+/// L'état de session qu'une connexion emporte au bassin. Tous `#[ignore]`.
+#[cfg(test)]
+mod context_tests;
 #[cfg(test)]
 mod definition_tests;
 /// Les tests qui demandent un serveur. Tous `#[ignore]`.

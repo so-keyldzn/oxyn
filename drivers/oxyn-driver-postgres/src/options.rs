@@ -120,7 +120,7 @@ impl ConnectSpec {
                 "port" => {
                     port = valeur.trim().parse::<u16>().map_err(|_| {
                         OxynError::Config(
-                            "le paramètre `port` attend un entier entre 1 et 65535".to_owned(),
+                            "parameter `port` expects an integer between 1 and 65535".to_owned(),
                         )
                     })?;
                 }
@@ -142,19 +142,15 @@ impl ConnectSpec {
         }
 
         if host.is_empty() {
-            return Err(OxynError::Config(
-                "le paramètre `host` est obligatoire".to_owned(),
-            ));
+            return Err(OxynError::Config("parameter `host` is required".to_owned()));
         }
         if database.is_empty() {
             return Err(OxynError::Config(
-                "le paramètre `database` est obligatoire".to_owned(),
+                "parameter `database` is required".to_owned(),
             ));
         }
         if user.is_empty() {
-            return Err(OxynError::Config(
-                "le paramètre `user` est obligatoire".to_owned(),
-            ));
+            return Err(OxynError::Config("parameter `user` is required".to_owned()));
         }
 
         // `new_without_pgpass` plutôt que `new` : le second lit en plus le
@@ -179,6 +175,23 @@ impl ConnectSpec {
         if !extras.is_empty() {
             options = options.options(extras.iter().map(|(k, v)| (k.as_str(), v.as_str())));
         }
+        // Un réglage de session que le driver **impose**, et déclare ici.
+        //
+        // Le découpeur et le classifieur d'`oxyn-query` lisent `'a\'` comme une
+        // chaîne complète, ce qui n'est vrai qu'avec
+        // `standard_conforming_strings = on`. Un serveur réglé à `off` —
+        // `ALTER DATABASE … SET`, héritage d'une application ancienne — lirait
+        // la suite comme du code : un `DELETE` classé lecture partirait sans la
+        // confirmation qui nomme la connexion ([I-02](../../../CLAUDE.md#i-02)).
+        //
+        // Posé comme paramètre de démarrage, **après** les options de
+        // l'utilisateur : un `-c` plus tardif l'emporte, et un paramètre de
+        // connexion prime sur `ALTER DATABASE` et `ALTER ROLE`. Il ne change le
+        // sens d'aucune requête écrite pour un serveur à jour — c'est la valeur
+        // par défaut de PostgreSQL. Un serveur qui refuserait le paramètre
+        // refuse la connexion, ce qui se voit ; le curseur le repose après
+        // toute exécution qui aurait pu le changer (`SQL_RESET_AFTER_WRITE`).
+        options = options.options([("standard_conforming_strings", "on")]);
 
         Ok(Self {
             options,
@@ -243,7 +256,7 @@ impl fmt::Debug for ConnectSpec {
             .field("database", &self.apercu.database)
             .field("user", &self.apercu.user)
             .field("sslmode", &self.apercu.sslmode)
-            .field("password", &"<masqué>")
+            .field("password", &"<redacted>")
             .finish()
     }
 }
@@ -262,8 +275,8 @@ fn parse_ssl_mode(valeur: &str) -> Result<(PgSslMode, &'static str)> {
         "verify-full" | "verify_full" => (PgSslMode::VerifyFull, "verify-full"),
         _ => {
             return Err(OxynError::Config(
-                "le paramètre `sslmode` attend : disable, allow, prefer, require, \
-                 verify-ca ou verify-full"
+                "parameter `sslmode` expects: disable, allow, prefer, require, \
+                 verify-ca or verify-full"
                     .to_owned(),
             ));
         }
@@ -313,7 +326,7 @@ mod tests {
 
         let rendu = format!("{spec:?}");
         assert!(!rendu.contains(MOT_DE_PASSE), "fuite : {rendu}");
-        assert!(rendu.contains("<masqué>"), "{rendu}");
+        assert!(rendu.contains("<redacted>"), "{rendu}");
 
         // Ce qui reste doit rester utile au diagnostic.
         assert!(rendu.contains("db.interne"), "{rendu}");

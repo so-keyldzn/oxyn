@@ -45,8 +45,9 @@ use oxyn_core::{CancelToken, Capabilities, DriverId, OxynError, Result, Statemen
 use sqlx::Row as _;
 use sqlx::postgres::{PgPool, PgRow};
 
+use crate::cancel::BackendCanceller;
 use crate::error::{map_connect_error, map_exec_error};
-use crate::session::{BackendCanceller, backend_pid};
+use crate::session::backend_pid;
 use crate::variant::PostgresVariant;
 
 // Bound rows and definition bytes before materializing catalog metadata.
@@ -283,8 +284,8 @@ impl PostgresCatalog {
                 if let Err(erreur) = self.canceller.cancel_backend(pid).await {
                     tracing::warn!(
                         target: "oxyn::driver::postgres",
-                        erreur = %erreur,
-                        "l'introspection n'a pas pu être annulée côté serveur"
+                        error = %erreur,
+                        "introspection could not be cancelled on the server"
                     );
                 }
                 Err(OxynError::Cancelled)
@@ -292,20 +293,39 @@ impl PostgresCatalog {
         }
     }
 
+    /// Compose l'aperçu d'une relation, et lit ce que sa forme exige.
+    ///
+    /// Deux lectures de métadonnées, chacune payée seulement quand elle sert :
+    /// les colonnes à rendre en texte pour la projection, et la description de
+    /// la relation quand un tri ou une page demande un ordre. Un aperçu sans
+    /// demande ne fait donc aucun aller-retour de plus qu'avant.
+    ///
+    /// # Erreurs
+    /// [`OxynError::Cancelled`] si le jeton se déclenche, celles de
+    /// [`crate::preview::request_with_columns`] — colonne de tri inconnue, page
+    /// sans clé unique —, et toute erreur du serveur pendant l'introspection.
     pub(crate) async fn preview_request(
         &self,
         path: &CatalogPath,
         limit: u32,
+        shape: &oxyn_core::PreviewShape,
         cancel: &CancelToken,
     ) -> Result<oxyn_core::ExecRequest> {
         if cancel.is_cancelled() {
             return Err(OxynError::Cancelled);
         }
         let dialect = self.variant.flavor.dialect();
-        let request = crate::preview::request(&self.database, dialect, path, limit)?;
+        // La clé unique et la liste des colonnes ne servent qu'à composer un
+        // `ORDER BY` : sans tri ni page, rien ne les lit. Le prédicat, lui, part
+        // tel quel et ne demande aucune métadonnée.
+        let facts = if shape.needs_total_order() {
+            crate::preview::RelationFacts::of(&self.describe_relation(path, cancel).await?)
+        } else {
+            crate::preview::RelationFacts::default()
+        };
         // Redshift does not expose PostgreSQL's complete type catalog.
         if dialect == oxyn_core::SqlDialect::Redshift {
-            return Ok(request);
+            return crate::preview::request(&self.database, dialect, path, limit, shape, &facts);
         }
         let (Some(namespace), Some(relation)) = (path.namespace(), path.relation()) else {
             return Err(OxynError::CatalogUnavailable(
@@ -320,7 +340,15 @@ impl PostgresCatalog {
             .map(|row| Ok((row.try_get::<String, _>(0)?, row.try_get::<bool, _>(1)?)))
             .collect::<std::result::Result<Vec<_>, sqlx::Error>>()
             .map_err(|error| map_exec_error(&self.driver, StatementIntent::Read, error))?;
-        crate::preview::request_with_columns(&self.database, dialect, path, limit, &columns)
+        crate::preview::request_with_columns(
+            &self.database,
+            dialect,
+            path,
+            limit,
+            &columns,
+            shape,
+            &facts,
+        )
     }
 
     /// Vérifie qu'un chemin vise bien la base de cette session.
@@ -334,8 +362,8 @@ impl PostgresCatalog {
             None => Ok(()),
             Some(nom) if nom == self.database => Ok(()),
             Some(_) => Err(OxynError::CatalogUnavailable(format!(
-                "cette session est connectée à `{}` ; PostgreSQL n'autorise pas \
-                 l'introspection d'une autre base — ouvrir une connexion vers elle",
+                "this session is connected to `{}`; PostgreSQL does not allow \
+                 introspecting another database — open a connection to it",
                 self.database
             ))),
         }
@@ -346,8 +374,8 @@ impl PostgresCatalog {
         self.check_catalog(path.catalog())?;
         path.namespace().ok_or_else(|| {
             OxynError::CatalogUnavailable(
-                "un chemin PostgreSQL doit nommer un schéma : les relations n'existent \
-                 pas au niveau du serveur"
+                "a PostgreSQL path must name a schema: relations do not exist \
+                 at the server level"
                     .to_owned(),
             )
         })
@@ -357,7 +385,7 @@ impl PostgresCatalog {
     fn require_relation<'a>(&self, path: &'a CatalogPath) -> Result<(&'a str, &'a str)> {
         let espace = self.require_namespace(path)?;
         let relation = path.relation().ok_or_else(|| {
-            OxynError::CatalogUnavailable("ce chemin ne nomme pas de relation".to_owned())
+            OxynError::CatalogUnavailable("this path does not name a relation".to_owned())
         })?;
         Ok((espace, relation))
     }
@@ -487,7 +515,7 @@ impl CatalogProvider for PostgresCatalog {
         let entetes = self.fetch(cancel, SQL_RELATION, &[espace, nom]).await?;
         let Some(entete) = entetes.first() else {
             return Err(OxynError::CatalogUnavailable(
-                "cette relation n'existe pas, ou le compte n'a pas le droit de la voir".to_owned(),
+                "this relation does not exist, or the account is not allowed to see it".to_owned(),
             ));
         };
 
@@ -709,7 +737,7 @@ fn constraint_kind(value: &str) -> Result<ConstraintKind> {
 fn read_text(row: &PgRow, ordinal: usize) -> Result<String> {
     row.try_get::<String, _>(ordinal).map_err(|_| {
         OxynError::CatalogUnavailable(format!(
-            "la colonne {ordinal} du catalogue n'a pas rendu de texte lisible"
+            "catalog column {ordinal} did not return readable text"
         ))
     })
 }

@@ -81,22 +81,22 @@ pub fn postgres_metadata() -> DriverMetadata {
     DriverMetadata::new(DriverId::postgres(), "PostgreSQL", DriverFamily::Relational)
         .with_default_port(DEFAULT_PORT)
         .with_fields([
-            ConnectionField::new("host", "Hôte", FieldKind::Text)
+            ConnectionField::new("host", "Host", FieldKind::Text)
                 .required()
                 .with_default("localhost")
-                .with_help("Nom d'hôte ou adresse du serveur."),
+                .with_help("Server host name or address."),
             ConnectionField::new("port", "Port", FieldKind::Number)
                 .with_default(DEFAULT_PORT.to_string()),
-            ConnectionField::new("database", "Base", FieldKind::Text)
+            ConnectionField::new("database", "Database", FieldKind::Text)
                 .required()
                 .with_default("postgres")
-                .with_help("Une connexion ne voit qu'une base : PostgreSQL n'autorise pas l'introspection croisée."),
-            ConnectionField::new("user", "Utilisateur", FieldKind::Text).required(),
-            ConnectionField::new("password", "Mot de passe", FieldKind::Password)
-                .with_help("Conservé dans le trousseau du système, jamais dans le workspace."),
+                .with_help("A connection sees one database: PostgreSQL does not allow cross-database introspection."),
+            ConnectionField::new("user", "User", FieldKind::Text).required(),
+            ConnectionField::new("password", "Password", FieldKind::Password)
+                .with_help("Kept in the system keyring, never in the workspace."),
             ConnectionField::new(
                 "sslmode",
-                "Mode TLS",
+                "TLS mode",
                 FieldKind::Choice(vec![
                     "disable".to_owned(),
                     "allow".to_owned(),
@@ -107,10 +107,10 @@ pub fn postgres_metadata() -> DriverMetadata {
                 ]),
             )
             .with_default("prefer")
-            .with_help("`verify-full` est le seul mode qui authentifie le serveur."),
-            ConnectionField::new("application_name", "Nom applicatif", FieldKind::Text)
+            .with_help("`verify-full` is the only mode that authenticates the server."),
+            ConnectionField::new("application_name", "Application name", FieldKind::Text)
                 .with_default(DEFAULT_APPLICATION_NAME)
-                .with_help("Visible dans `pg_stat_activity` côté serveur."),
+                .with_help("Shown in `pg_stat_activity` on the server."),
         ])
 }
 
@@ -221,8 +221,8 @@ async fn detect_variant(pool: &PgPool) -> Result<PostgresVariant> {
             // sans traduction » est une règle qui ne vaut que sans exception.
             tracing::debug!(
                 target: "oxyn::driver::postgres",
-                erreur = %map_connect_error(&erreur),
-                "pg_extension illisible : aucune capacité d'extension ne sera déclarée"
+                error = %map_connect_error(&erreur),
+                "pg_extension is unreadable: no extension capability will be declared"
             );
             Vec::new()
         }
