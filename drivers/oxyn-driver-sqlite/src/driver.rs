@@ -115,6 +115,11 @@ impl SqliteDriver {
             | Capabilities::DDL
             | Capabilities::DML
             | Capabilities::READ_ONLY_SESSION
+            // Aperçu : `ORDER BY` sur des colonnes citées, prédicat écrit par
+            // l'utilisateur, `LIMIT … OFFSET` (ADR-0020). Ces deux-là survivent
+            // à une session en lecture seule : elles ne lisent que.
+            | Capabilities::PREVIEW_SORT
+            | Capabilities::PREVIEW_FILTER
     }
 
     /// Reads both file flags and the engine's query-only state after opening.
@@ -141,11 +146,13 @@ fn metadata() -> DriverMetadata {
     DriverMetadata::new(DriverId::sqlite(), "SQLite", DriverFamily::Relational)
         // Pas de `default_port` : une base embarquée n'écoute nulle part.
         .with_field(
-            ConnectionField::new(SqliteDriver::PATH, "Fichier de base", FieldKind::Path)
+            // Shown as is in the interface, which is in English (CLAUDE.md,
+            // « Langue ») like every message a user reads.
+            ConnectionField::new(SqliteDriver::PATH, "Database file", FieldKind::Path)
                 .required()
                 .with_help(
-                    "Chemin du fichier SQLite. La valeur `:memory:` ouvre une base \
-                     en mémoire, partagée entre les sessions de cette connexion et perdue à la fermeture de la dernière session.",
+                    "Path to the SQLite file. `:memory:` opens an in-memory database, \
+                     shared by the sessions of this connection and lost when the last one closes.",
                 ),
         )
 }
@@ -193,7 +200,7 @@ impl Driver for SqliteDriver {
             .filter(|value| !value.is_empty())
             .ok_or_else(|| {
                 OxynError::Config(format!(
-                    "driver `sqlite` : le paramètre `{}` est obligatoire",
+                    "driver `sqlite`: parameter `{}` is required",
                     Self::PATH
                 ))
             })?;

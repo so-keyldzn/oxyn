@@ -9,8 +9,10 @@
 //!
 //! Abandonner le futur ne suffirait pas — c'est exactement la panne que
 //! [`DRIVER-CONTRACT` §2](../../../docs/DRIVER-CONTRACT.md) décrit. C'est aussi
-//! ce que fait [`Drop`] : un curseur détruit sans avoir été épuisé interrompt ce
-//! qui tourne encore.
+//! pourquoi l'attente d'un lot interrompt sa tâche quand son futur est détruit
+//! (`WorkerHandle::await_reply`) : un curseur détruit pendant qu'il attend un
+//! lot interrompt ce qui tourne encore. Détruit au repos, il ferme seulement le
+//! canal, et le thread porteur sort de sa boucle de diffusion.
 //!
 //! # Ce que ce curseur ne prétend pas être
 //!
@@ -36,6 +38,7 @@ use oxyn_driver::Cursor;
 use tokio::sync::{mpsc, oneshot};
 
 use crate::error;
+use crate::interrupt::WorkId;
 use crate::stream::{Pull, Pulled, StreamStart};
 use crate::worker::WorkerHandle;
 
@@ -48,18 +51,14 @@ pub struct SqliteCursor {
     pending: Option<RecordBatch>,
     pulls: mpsc::UnboundedSender<Pull>,
     worker: WorkerHandle,
+    /// La tâche du thread porteur qui diffuse ce flux : une interruption ne
+    /// vise qu'elle.
+    work: WorkId,
     cancel: CancelToken,
     stats: ExecStats,
     started: Instant,
     elapsed: Option<Duration>,
     finished: bool,
-    /// Une demande de lot est-elle partie sans que sa réponse soit revenue ?
-    ///
-    /// C'est ce qui distingue « le thread porteur est peut-être dans
-    /// `sqlite3_step` » de « il attend tranquillement ». Interrompre dans le
-    /// second cas serait au mieux inutile, au pire un drapeau posé sur le moteur
-    /// dont la prochaine instruction hériterait.
-    pulling: bool,
 }
 
 impl std::fmt::Debug for SqliteCursor {
@@ -82,6 +81,7 @@ impl SqliteCursor {
         start: StreamStart,
         pulls: mpsc::UnboundedSender<Pull>,
         worker: WorkerHandle,
+        work: WorkId,
         cancel: CancelToken,
         started: Instant,
     ) -> Self {
@@ -98,12 +98,12 @@ impl SqliteCursor {
             pending: None,
             pulls,
             worker,
+            work,
             cancel,
             stats,
             started,
             elapsed: None,
             finished: false,
-            pulling: false,
         };
 
         match start.first {
@@ -177,14 +177,11 @@ impl Cursor for SqliteCursor {
         }
 
         // Le jeton est cloné : `await_reply` l'emprunte, et `self` est déjà
-        // emprunté mutablement.
+        // emprunté mutablement. À partir d'ici, le thread porteur peut être dans
+        // `sqlite3_step` : si ce futur est abandonné, `await_reply` interrompt
+        // la tâche du flux.
         let cancel = self.cancel.clone();
-        // À partir d'ici, le thread porteur peut être dans `sqlite3_step`. Si ce
-        // futur est abandonné avant la ligne qui suit, `pulling` reste vrai et
-        // c'est `Drop` qui interrompra.
-        self.pulling = true;
-        let pulled = self.worker.await_reply(answer, &cancel).await;
-        self.pulling = false;
+        let pulled = self.worker.await_reply(answer, &cancel, self.work).await;
 
         match pulled {
             Ok(Pulled::Batch(batch)) => {
@@ -212,22 +209,5 @@ impl Cursor for SqliteCursor {
         // mesurer par instruction coûterait deux lectures d'horloge par ligne,
         // sur le chemin le plus chaud du driver.
         stats
-    }
-}
-
-impl Drop for SqliteCursor {
-    /// Un curseur détruit **pendant** qu'il attend un lot interrompt le moteur.
-    ///
-    /// C'est le cas d'un futur `next_batch` abandonné : fermer un onglet pendant
-    /// une agrégation de quatre minutes laisserait sinon le thread porteur
-    /// bloqué dans `sqlite3_step`, et la session entière avec lui.
-    ///
-    /// Quand aucune demande n'est en vol, il n'y a rien à interrompre : la
-    /// destruction du canal, juste après, suffit à faire sortir le thread de sa
-    /// boucle de diffusion.
-    fn drop(&mut self) {
-        if self.pulling {
-            self.worker.interrupt();
-        }
     }
 }

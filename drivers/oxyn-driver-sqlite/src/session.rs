@@ -146,19 +146,23 @@ impl Session for SqliteSession {
         let (pulls, orders) = mpsc::unbounded_channel();
         let (start, opened) = oneshot::channel();
 
-        self.worker.start_stream(Box::new(StreamJob {
+        let work = self.worker.start_stream(Box::new(StreamJob {
             request,
             limits: self.limits,
             start,
             pulls: orders,
         }))?;
 
-        let begun = self.worker.await_reply(opened, cancel).await?;
+        // C'est pendant cette attente que SQLite calcule le premier lot — tout
+        // un `count(*)`, par exemple. Abandonner ce futur interrompt la tâche :
+        // voir `WorkerHandle::await_reply`.
+        let begun = self.worker.await_reply(opened, cancel, work).await?;
         Ok(Box::new(SqliteCursor::new(
             handle,
             begun,
             pulls,
             self.worker.clone(),
+            work,
             cancel.clone(),
             started,
         )))
@@ -177,16 +181,34 @@ impl Session for SqliteSession {
         })
     }
 
+    /// Compose l'aperçu d'une relation, et lit ce que sa forme exige.
+    ///
+    /// La description de la relation — ses colonnes et sa clé primaire — n'est
+    /// lue que si un tri ou une page demande un ordre : un aperçu sans demande
+    /// ne paie pas un `PRAGMA table_info` pour une clause qu'il ne compose pas.
+    /// Cette lecture passe par le thread porteur et s'interrompt comme les
+    /// autres.
+    ///
+    /// # Erreurs
+    /// [`OxynError::Cancelled`] si le jeton se déclenche, celles de la
+    /// composition — colonne de tri inconnue, page sans clé unique —, et celles
+    /// du moteur pendant l'introspection.
     async fn preview_request(
         &self,
         path: &oxyn_catalog::CatalogPath,
         limit: u32,
+        shape: &oxyn_core::PreviewShape,
         cancel: &CancelToken,
     ) -> Result<ExecRequest> {
         if cancel.is_cancelled() {
             return Err(OxynError::Cancelled);
         }
-        crate::preview::request(path, limit)
+        let facts = if shape.needs_total_order() {
+            crate::preview::RelationFacts::of(&self.catalog.describe_relation(path, cancel).await?)
+        } else {
+            crate::preview::RelationFacts::default()
+        };
+        crate::preview::request(path, limit, shape, &facts)
     }
 
     fn catalog(&self) -> &dyn CatalogProvider {
@@ -245,5 +267,61 @@ impl Session for SqliteSession {
 
     async fn rollback(&self, cancel: &CancelToken) -> Result<()> {
         self.transaction(cancel, "ROLLBACK", Effect::Mutating).await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::pin::pin;
+
+    use oxyn_core::{ConnectionId, QueryLanguage, SqlDialect};
+
+    use super::*;
+    use crate::worker::{self, OpenSpec, OpenTarget};
+
+    /// Un `count(*)` sur une suite sans fin : il ne rend jamais la main tout seul.
+    const SANS_FIN: &str =
+        "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c) SELECT count(*) FROM c";
+
+    #[tokio::test]
+    async fn abandonner_execute_pendant_le_premier_lot_libere_le_moteur() {
+        // Le scénario : l'onglet se ferme pendant que SQLite calcule le premier
+        // lot d'une agrégation. Le curseur n'existe pas encore, donc personne
+        // d'autre ne peut interrompre. Sans interruption, la session reste
+        // occupée pour toute la durée du calcul — ici, pour toujours.
+        let jeton = CancelToken::new();
+        let spec = OpenSpec {
+            target: OpenTarget::Memory(ConnectionId::new()),
+            read_only: false,
+        };
+        let (handle, thread) = worker::spawn(spec, &jeton).await.expect("ouverture");
+        let session = SqliteSession::new(handle, thread, Capabilities::SQL, BatchLimits::new());
+
+        {
+            let demande = ExecRequest::new(QueryLanguage::Sql(SqlDialect::Sqlite), SANS_FIN);
+            let mut execution = pin!(session.execute(demande, &jeton));
+            assert!(futures::poll!(execution.as_mut()).is_pending());
+            // Le thread porteur s'est saisi de l'exécution : on n'abandonne pas
+            // une tâche encore en file, ce qui prouverait autre chose.
+            tokio::time::timeout(Duration::from_secs(10), async {
+                while session.worker.running().is_none() {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("le thread porteur prend l'exécution");
+        }
+
+        // La preuve côté moteur : il répond à un `SELECT 1`.
+        let reponse = tokio::time::timeout(Duration::from_secs(10), session.ping()).await;
+        let aller_retour = reponse
+            .expect("le moteur doit être libéré par l'abandon")
+            .expect("ping");
+        assert!(
+            aller_retour < Duration::from_secs(1),
+            "le moteur doit répondre vite : {aller_retour:?}"
+        );
+
+        Box::new(session).close().await.expect("fermeture");
     }
 }

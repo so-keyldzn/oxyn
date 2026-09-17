@@ -45,6 +45,7 @@ use tokio::sync::{mpsc, oneshot};
 
 use crate::convert::{ColumnBuilder, ColumnPlan, Observed, ProbeValue, schema_of, value_bytes};
 use crate::error::{self, Bound, Effect, SqliteError};
+use crate::interrupt::Interrupter;
 use crate::options::BatchLimits;
 use crate::params;
 
@@ -89,7 +90,11 @@ pub(crate) struct StreamJob {
 
 /// Exécute une demande et diffuse ses lots jusqu'à épuisement ou destruction du
 /// curseur.
-pub(crate) fn run(connection: &Connection, job: StreamJob) {
+///
+/// `interrupter` est consulté juste avant le démarrage de chaque instruction :
+/// une interruption posée pendant une préparation serait sinon effacée par le
+/// moteur au premier pas de l'instruction suivante ([`crate::interrupt`]).
+pub(crate) fn run(connection: &Connection, job: StreamJob, interrupter: &Interrupter) {
     let StreamJob {
         request,
         limits,
@@ -104,7 +109,7 @@ pub(crate) fn run(connection: &Connection, job: StreamJob) {
     let bound = Bound::of(&request.params);
     let mut affected = 0_u64;
     let mut batch = Batch::new(connection, &request.text);
-    let last = match select_last(connection, &mut batch, &request, &mut affected) {
+    let last = match select_last(connection, &mut batch, &request, &mut affected, interrupter) {
         Ok(statement) => statement,
         Err(err) => {
             let _ = start.send(Err(err));
@@ -130,6 +135,10 @@ pub(crate) fn run(connection: &Connection, job: StreamJob) {
     }
 
     let effect = effect_of(&statement);
+    if let Err(err) = interrupter.checkpoint(effect, bound) {
+        let _ = start.send(Err(err));
+        return;
+    }
     if statement.column_count() == 0 {
         // Écriture ou DDL : pas de colonnes, donc pas de flux. Ce que
         // l'utilisateur attend, c'est le compte de lignes affectées.
@@ -165,6 +174,7 @@ fn select_last<'conn>(
     batch: &mut Batch<'conn, '_>,
     request: &ExecRequest,
     affected: &mut u64,
+    interrupter: &Interrupter,
 ) -> Result<Option<Statement<'conn>>> {
     let mut pending = next_statement(batch)?;
     loop {
@@ -181,6 +191,7 @@ fn select_last<'conn>(
         if request.params.is_empty() && statement.column_count() == 0 {
             guard_read_only(&statement, request)?;
             let effect = effect_of(&statement);
+            interrupter.checkpoint(effect, Bound::Internal)?;
             let before = connection.total_changes();
             statement
                 .raw_execute()
@@ -204,6 +215,8 @@ fn select_last<'conn>(
             ));
         }
         guard_read_only(&statement, request)?;
+        // Après la préparation de la suivante, qui efface le drapeau du moteur.
+        interrupter.checkpoint(effect_of(&statement), Bound::Internal)?;
         // Ce jeu de résultats est écrasé par celui de l'instruction suivante. On
         // l'exécute quand même — ses effets comptent — et on jette ses lignes.
         discard(&mut statement, connection, affected)?;
@@ -291,7 +304,7 @@ fn stream_rows(
                 column = index,
                 storage_classes = %plan.observed.names(),
                 resolved = %plan.kind,
-                "colonne au typage mêlé : le rendu retenu est un repli"
+                "column with mixed storage classes: the chosen rendering is a fallback"
             );
         }
     }
@@ -573,8 +586,7 @@ fn effect_of(statement: &Statement<'_>) -> Effect {
 fn guard_read_only(statement: &Statement<'_>, request: &ExecRequest) -> Result<()> {
     if request.limits.read_only && !statement.readonly() {
         return Err(OxynError::PolicyDenied {
-            reason: "l'exécution est déclarée en lecture seule et l'instruction peut écrire"
-                .to_owned(),
+            reason: "the execution is declared read-only and the statement may write".to_owned(),
         });
     }
     Ok(())

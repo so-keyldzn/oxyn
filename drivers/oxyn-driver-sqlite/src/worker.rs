@@ -27,7 +27,11 @@
 //! * **L'interruption, elle, ne fait pas la queue.** `InterruptHandle` est
 //!   `Send + Sync` et vise le moteur directement : c'est ce qui permet à un
 //!   `Échap` d'atteindre un `sqlite3_step` déjà parti
-//!   ([`DRIVER-CONTRACT` §2](../../../docs/DRIVER-CONTRACT.md)).
+//!   ([`DRIVER-CONTRACT` §2](../../../docs/DRIVER-CONTRACT.md)). Elle vise une
+//!   **tâche**, pas la connexion : voir le module `interrupt`.
+//! * **Toute attente abandonnée interrompt sa tâche.** Détruire le futur de
+//!   `execute`, d'une introspection ou d'un lot arrête le moteur, ou retire la
+//!   tâche de la file si elle n'a pas commencé.
 //! * Le thread s'arrête quand son canal se ferme, même si personne n'appelle
 //!   [`Session::close`](oxyn_driver::Session::close) : une session oubliée ne
 //!   laisse pas de thread derrière elle.
@@ -39,10 +43,11 @@ use std::thread::JoinHandle;
 
 use futures::future::{Either, select};
 use oxyn_core::{CancelToken, OxynError, Result};
-use rusqlite::{Connection, InterruptHandle, OpenFlags};
+use rusqlite::{Connection, OpenFlags};
 use tokio::sync::{mpsc, oneshot};
 
 use crate::error;
+use crate::interrupt::{AbandonGuard, Interrupter, WorkId};
 use crate::stream::{self, StreamJob};
 
 /// Une tâche courte à exécuter sur le thread porteur.
@@ -55,10 +60,10 @@ pub(crate) type Job = Box<dyn FnOnce(&Connection) + Send + 'static>;
 /// Ce qui est demandé au thread porteur de la connexion.
 pub(crate) enum WorkerCommand {
     /// Une opération courte : `ping`, transaction, introspection.
-    Job(Job),
+    Job(WorkId, Job),
     /// Une exécution en flux. Le thread garde la main jusqu'à ce que le curseur
     /// soit épuisé ou détruit.
-    Stream(Box<StreamJob>),
+    Stream(WorkId, Box<StreamJob>),
     /// Ferme la connexion et termine le thread.
     Close(oneshot::Sender<Result<()>>),
 }
@@ -99,7 +104,7 @@ impl std::fmt::Debug for OpenTarget {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Memory(_) => f.write_str("Memory"),
-            Self::File(_) => f.write_str("File(<chemin masqué>)"),
+            Self::File(_) => f.write_str("File(<redacted path>)"),
         }
     }
 }
@@ -110,7 +115,7 @@ impl std::fmt::Debug for OpenTarget {
 #[derive(Clone)]
 pub(crate) struct WorkerHandle {
     commands: mpsc::UnboundedSender<WorkerCommand>,
-    interrupt: Arc<InterruptHandle>,
+    interrupter: Arc<Interrupter>,
 }
 
 impl std::fmt::Debug for WorkerHandle {
@@ -124,20 +129,12 @@ impl std::fmt::Debug for WorkerHandle {
 }
 
 impl WorkerHandle {
-    /// Demande au moteur d'interrompre ce qu'il est en train de faire.
-    ///
-    /// `sqlite3_interrupt` n'a **aucun effet** si aucune instruction ne tourne :
-    /// l'appeler à tort n'annule pas la requête suivante.
-    pub(crate) fn interrupt(&self) {
-        self.interrupt.interrupt();
-    }
-
     /// Exécute une tâche courte sur la connexion et rend son résultat.
     ///
     /// L'annulation est traitée **ici** : si le jeton se déclenche pendant
-    /// l'attente, le moteur est interrompu et l'appel rend
-    /// [`OxynError::Cancelled`]. Abandonner le futur sans interrompre laisserait
-    /// le thread bloqué dans `sqlite3_step`.
+    /// l'attente, ou si le futur est abandonné, la tâche est interrompue et
+    /// l'appel rend [`OxynError::Cancelled`]. Abandonner le futur sans
+    /// interrompre laisserait le thread bloqué dans `sqlite3_step`.
     ///
     /// # Erreurs
     /// Celle de la tâche, [`OxynError::Cancelled`] si le jeton se déclenche, ou
@@ -155,23 +152,36 @@ impl WorkerHandle {
             // L'échec d'envoi signifie que l'appelant a renoncé : rien à faire.
             let _ = reply.send(job(conn));
         });
-        self.commands
-            .send(WorkerCommand::Job(wrapped))
-            .map_err(|_| error::closed())?;
-        self.await_reply(answer, cancel).await
+        let id = self.submit(|id| WorkerCommand::Job(id, wrapped))?;
+        self.await_reply(answer, cancel, id).await
     }
 
-    /// Démarre une exécution en flux.
+    /// Démarre une exécution en flux, et rend l'identité de sa tâche.
+    ///
+    /// L'identité sert à toutes les attentes de ce flux : le premier lot, puis
+    /// chaque lot réclamé par le curseur.
     ///
     /// # Erreurs
     /// Une erreur de driver si le thread porteur a disparu.
-    pub(crate) fn start_stream(&self, job: Box<StreamJob>) -> Result<()> {
-        self.commands
-            .send(WorkerCommand::Stream(job))
-            .map_err(|_| error::closed())
+    pub(crate) fn start_stream(&self, job: Box<StreamJob>) -> Result<WorkId> {
+        self.submit(|id| WorkerCommand::Stream(id, job))
     }
 
-    /// Attend une réponse, ou l'annulation.
+    /// Enregistre une tâche, puis l'envoie au thread porteur.
+    fn submit(&self, command: impl FnOnce(WorkId) -> WorkerCommand) -> Result<WorkId> {
+        let id = self.interrupter.enqueue();
+        if self.commands.send(command(id)).is_err() {
+            self.interrupter.withdraw(id);
+            return Err(error::closed());
+        }
+        Ok(id)
+    }
+
+    /// Attend la réponse de la tâche `id`, ou l'annulation.
+    ///
+    /// Le jeton qui se déclenche **et** le futur abandonné interrompent la
+    /// tâche `id` — elle seule : si elle est déjà terminée, la tâche suivante
+    /// n'est pas touchée.
     ///
     /// # Erreurs
     /// Celle de la tâche, [`OxynError::Cancelled`], ou une erreur de driver si
@@ -180,19 +190,39 @@ impl WorkerHandle {
         &self,
         answer: oneshot::Receiver<Result<T>>,
         cancel: &CancelToken,
+        id: WorkId,
     ) -> Result<T> {
+        // Armée avant la première suspension : c'est pendant l'attente qu'un
+        // onglet se ferme.
+        let mut abandon = AbandonGuard::new(&self.interrupter, id);
         let answer = pin!(answer);
         let cancelled = pin!(cancel.cancelled());
         match select(answer, cancelled).await {
-            Either::Left((Ok(result), _)) => result,
-            Either::Left((Err(_), _)) => Err(error::closed()),
-            Either::Right(((), _)) => {
-                // Le jeton signale ; c'est ici qu'il devient un
-                // `sqlite3_interrupt`.
-                self.interrupt();
-                Err(OxynError::Cancelled)
+            Either::Left((Ok(result), _)) => {
+                abandon.disarm();
+                result
             }
+            Either::Left((Err(_), _)) => {
+                abandon.disarm();
+                Err(error::closed())
+            }
+            // Le jeton signale ; la garde, en tombant, en fait une interruption
+            // de la tâche.
+            Either::Right(((), _)) => Err(OxynError::Cancelled),
         }
+    }
+
+    /// La tâche que le thread porteur exécute, pour les tests.
+    #[cfg(test)]
+    pub(crate) fn running(&self) -> Option<WorkId> {
+        self.interrupter.running()
+    }
+
+    /// Interrompt la tâche `id`, pour les tests qui simulent une interruption
+    /// arrivée trop tard.
+    #[cfg(test)]
+    pub(crate) fn interrupt(&self, id: WorkId) {
+        self.interrupter.interrupt(id);
     }
 
     /// Ferme la connexion et termine le thread.
@@ -247,16 +277,17 @@ pub(crate) async fn spawn(
                     return;
                 }
             };
-            if ready.send(Ok(connection.get_interrupt_handle())).is_err() {
+            let interrupter = Arc::new(Interrupter::new(connection.get_interrupt_handle()));
+            if ready.send(Ok(Arc::clone(&interrupter))).is_err() {
                 // L'appelant a renoncé pendant l'ouverture.
                 let _ = connection.close();
                 return;
             }
-            run(connection, orders);
+            run(connection, &interrupter, orders);
         })?;
 
-    let interrupt = match opened.await {
-        Ok(Ok(interrupt)) => Arc::new(interrupt),
+    let interrupter = match opened.await {
+        Ok(Ok(interrupter)) => interrupter,
         Ok(Err(err)) => return Err(err),
         Err(_) => {
             return Err(OxynError::Connection(
@@ -268,7 +299,7 @@ pub(crate) async fn spawn(
     Ok((
         WorkerHandle {
             commands,
-            interrupt,
+            interrupter,
         },
         thread,
     ))
@@ -309,12 +340,32 @@ fn open(spec: &OpenSpec) -> Result<Connection> {
 /// `Close`, mais aussi quand le canal se ferme parce que la session a été
 /// abandonnée. Sans cela, le fichier resterait verrouillé jusqu'à la fin du
 /// processus.
-fn run(connection: Connection, mut orders: mpsc::UnboundedReceiver<WorkerCommand>) {
+///
+/// Chaque tâche est encadrée par [`Interrupter::begin`] et
+/// [`Interrupter::end`] : `end` n'est appelé qu'une fois la tâche revenue, donc
+/// ses instructions finalisées, et c'est ce qui borne une interruption à la
+/// tâche qu'elle vise. Une tâche abandonnée pendant qu'elle attendait est
+/// détruite sans être exécutée ; son canal de réponse tombe avec elle.
+fn run(
+    connection: Connection,
+    interrupter: &Interrupter,
+    mut orders: mpsc::UnboundedReceiver<WorkerCommand>,
+) {
     let mut closing = None;
     while let Some(command) = orders.blocking_recv() {
         match command {
-            WorkerCommand::Job(job) => job(&connection),
-            WorkerCommand::Stream(job) => stream::run(&connection, *job),
+            WorkerCommand::Job(id, job) => {
+                if interrupter.begin(id) {
+                    job(&connection);
+                    interrupter.end();
+                }
+            }
+            WorkerCommand::Stream(id, job) => {
+                if interrupter.begin(id) {
+                    stream::run(&connection, *job, interrupter);
+                    interrupter.end();
+                }
+            }
             WorkerCommand::Close(reply) => {
                 closing = Some(reply);
                 break;
@@ -376,6 +427,177 @@ mod tests {
         assert!(
             issue.expect_err("refus attendu").is_cancelled(),
             "un jeton déjà annulé ne doit pas lancer de travail"
+        );
+
+        handle.close().await.expect("fermeture");
+        thread.join().expect("le thread se termine");
+    }
+
+    /// Une suite finie qui garde une instruction **active** entre deux pas.
+    const SUITE: &str = "WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c \
+                         WHERE x < 50000) SELECT x FROM c";
+
+    /// Soumet une tâche qui lit une ligne de [`SUITE`], signale qu'elle est au
+    /// milieu de son instruction, attend le feu vert, puis compte le reste.
+    ///
+    /// Ce qui est garanti quand `active` répond : le thread porteur exécute
+    /// cette tâche et son instruction est active (`nVdbeActive > 0`). C'est
+    /// l'état exact où un `sqlite3_interrupt` frappe l'instruction en cours.
+    fn tache_suspendue(
+        handle: &WorkerHandle,
+    ) -> (
+        WorkId,
+        oneshot::Receiver<()>,
+        std::sync::mpsc::Sender<()>,
+        oneshot::Receiver<Result<i64>>,
+    ) {
+        let (active, actif) = oneshot::channel();
+        let (feu_vert, attente) = std::sync::mpsc::channel::<()>();
+        let (reply, answer) = oneshot::channel();
+        let job: Job = Box::new(move |conn: &Connection| {
+            let issue = (|| {
+                let mut statement = conn
+                    .prepare(SUITE)
+                    .map_err(|err| error::engine(err, error::Effect::ReadOnly))?;
+                let mut rows = statement.raw_query();
+                let mut lues = 0_i64;
+                let step = |rows: &mut rusqlite::Rows<'_>| {
+                    rows.next()
+                        .map(|row| row.is_some())
+                        .map_err(|err| error::engine(err, error::Effect::ReadOnly))
+                };
+                if step(&mut rows)? {
+                    lues += 1;
+                }
+                let _ = active.send(());
+                let _ = attente.recv();
+                while step(&mut rows)? {
+                    lues += 1;
+                }
+                Ok(lues)
+            })();
+            let _ = reply.send(issue);
+        });
+        let id = handle
+            .submit(|id| WorkerCommand::Job(id, job))
+            .expect("soumission");
+        (id, actif, feu_vert, answer)
+    }
+
+    #[tokio::test]
+    async fn une_interruption_tardive_ne_frappe_pas_la_tache_suivante() {
+        // Le scénario : un onglet est fermé au moment exact où sa requête se
+        // termine, et le thread porteur est déjà dans la requête suivante.
+        // `sqlite3_interrupt` vise la connexion ; sans ciblage, c'est la
+        // requête suivante qui mourrait.
+        let jeton = CancelToken::new();
+        let (handle, thread) = spawn(memoire(), &jeton).await.expect("ouverture");
+
+        let (reply, answer) = oneshot::channel();
+        let precedente = handle
+            .submit(|id| {
+                WorkerCommand::Job(
+                    id,
+                    Box::new(move |_: &Connection| {
+                        let _ = reply.send(Ok(()));
+                    }),
+                )
+            })
+            .expect("soumission");
+        handle
+            .await_reply(answer, &jeton, precedente)
+            .await
+            .expect("la tâche précédente se termine");
+
+        let (suivante, actif, feu_vert, reponse) = tache_suspendue(&handle);
+        actif
+            .await
+            .expect("la tâche suivante est dans son instruction");
+        assert_eq!(handle.running(), Some(suivante));
+
+        // L'interruption de la tâche précédente arrive trop tard.
+        handle.interrupt(precedente);
+        feu_vert.send(()).expect("feu vert");
+
+        let lues = handle
+            .await_reply(reponse, &jeton, suivante)
+            .await
+            .expect("la tâche suivante ne doit pas être interrompue");
+        assert_eq!(lues, 50_000);
+
+        handle.close().await.expect("fermeture");
+        thread.join().expect("le thread se termine");
+    }
+
+    #[tokio::test]
+    async fn l_interruption_de_la_tache_en_cours_l_arrete() {
+        // Le pendant du test précédent : le ciblage ne doit pas désarmer
+        // l'interruption légitime.
+        let jeton = CancelToken::new();
+        let (handle, thread) = spawn(memoire(), &jeton).await.expect("ouverture");
+
+        let (en_cours, actif, feu_vert, reponse) = tache_suspendue(&handle);
+        actif.await.expect("la tâche est dans son instruction");
+
+        handle.interrupt(en_cours);
+        feu_vert.send(()).expect("feu vert");
+
+        let issue = handle.await_reply(reponse, &jeton, en_cours).await;
+        assert!(
+            matches!(issue, Err(ref err) if err.is_cancelled()),
+            "la tâche visée doit être interrompue : {issue:?}"
+        );
+
+        handle.close().await.expect("fermeture");
+        thread.join().expect("le thread se termine");
+    }
+
+    #[tokio::test]
+    async fn une_tache_abandonnee_en_file_n_est_pas_executee() {
+        // Un onglet fermé pendant que sa requête attend son tour : l'exécuter
+        // ensuite occuperait la session pour personne.
+        let jeton = CancelToken::new();
+        let (handle, thread) = spawn(memoire(), &jeton).await.expect("ouverture");
+
+        let (bloquante, actif, feu_vert, reponse) = tache_suspendue(&handle);
+        actif.await.expect("le thread porteur est occupé");
+
+        let executee = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let temoin = Arc::clone(&executee);
+        let (reply, answer) = oneshot::channel::<Result<()>>();
+        let en_file = handle
+            .submit(|id| {
+                WorkerCommand::Job(
+                    id,
+                    Box::new(move |_: &Connection| {
+                        temoin.store(true, std::sync::atomic::Ordering::SeqCst);
+                        let _ = reply.send(Ok(()));
+                    }),
+                )
+            })
+            .expect("soumission");
+        {
+            // Le futur de l'attente est détruit avant d'avoir abouti.
+            let mut attente = pin!(handle.await_reply(answer, &jeton, en_file));
+            assert!(futures::poll!(attente.as_mut()).is_pending());
+        }
+
+        feu_vert.send(()).expect("feu vert");
+        handle
+            .await_reply(reponse, &jeton, bloquante)
+            .await
+            .expect("la tâche bloquante se termine");
+        let apres: i64 = handle
+            .call(&jeton, |conn: &Connection| {
+                conn.query_row("SELECT 1", [], |row| row.get(0))
+                    .map_err(|err| error::engine(err, error::Effect::ReadOnly))
+            })
+            .await
+            .expect("la session répond");
+        assert_eq!(apres, 1);
+        assert!(
+            !executee.load(std::sync::atomic::Ordering::SeqCst),
+            "une tâche abandonnée en file ne doit pas s'exécuter"
         );
 
         handle.close().await.expect("fermeture");

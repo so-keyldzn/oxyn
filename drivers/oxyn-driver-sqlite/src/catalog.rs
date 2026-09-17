@@ -82,7 +82,7 @@ impl SqliteCatalog {
     /// Le nom de relation d'un chemin.
     fn relation_of(path: &CatalogPath) -> Result<&str> {
         path.relation()
-            .ok_or_else(|| OxynError::Config("le chemin ne désigne pas une relation".to_owned()))
+            .ok_or_else(|| OxynError::Config("the path does not name a relation".to_owned()))
     }
 }
 
@@ -209,7 +209,7 @@ impl CatalogProvider for SqliteCatalog {
 
         let Some(described) = described else {
             return Err(OxynError::Query(format!(
-                "la relation `{visible}` n'existe pas"
+                "relation `{visible}` does not exist"
             )));
         };
 

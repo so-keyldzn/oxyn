@@ -25,4 +25,11 @@ tokio = { workspace = true, features = ["rt", "sync", "time", "macros"] }
 tracing.workspace = true
 
 [dev-dependencies]
+criterion.workspace = true
 tempfile.workspace = true
+
+# `harness = false` : criterion fournit son propre `main`. Sans cela, le harnais
+# de test de libtest s'installe et les arguments de criterion sont refusés.
+[[bench]]
+name    = "row_to_batch"
+harness = false

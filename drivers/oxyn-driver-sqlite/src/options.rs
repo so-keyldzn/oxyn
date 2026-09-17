@@ -93,7 +93,7 @@ impl Default for BatchLimits {
 
 impl fmt::Display for BatchLimits {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "{} lignes / {} octets", self.max_rows, self.max_bytes)
+        write!(f, "{} rows / {} bytes", self.max_rows, self.max_bytes)
     }
 }
 
