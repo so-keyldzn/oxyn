@@ -244,7 +244,7 @@ pub fn classify_language(language: QueryLanguage, sql: &str) -> Classification {
         Some(dialect) => classify(sql, dialect),
         None => Classification::opaque(
             sql,
-            format!("langage non analysé par oxyn-query : {language}"),
+            format!("language not parsed by oxyn-query: {language}"),
         ),
     }
 }
@@ -265,6 +265,12 @@ pub fn classify_language(language: QueryLanguage, sql: &str) -> Classification {
 pub fn validate(sql: &str, dialect: SqlDialect) -> Result<(), QueryError> {
     let grammar = parser_dialect(dialect);
     for fragment in split::split(sql, dialect) {
+        if fragment.unreadable_comment {
+            return Err(QueryError::Syntax {
+                message: UNREADABLE_COMMENT.to_owned(),
+                span: fragment.span,
+            });
+        }
         if let Err(err) = Parser::parse_sql(grammar, fragment.text) {
             return Err(QueryError::Syntax {
                 message: err.to_string(),
@@ -370,11 +376,28 @@ fn max_risk(a: MutationRisk, b: MutationRisk) -> MutationRisk {
 // Classification d'un fragment
 // ─────────────────────────────────────────────────────────────────────────────
 
+/// Why a fragment holding an [`unreadable_comment`](Fragment::unreadable_comment)
+/// is not read.
+const UNREADABLE_COMMENT: &str = "a line comment contains a carriage return followed by text; \
+     whether it ends there depends on the server, so the statements it holds cannot be known";
+
 fn classify_fragment(
     fragment: &Fragment<'_>,
     dialect: SqlDialect,
     grammar: &dyn Dialect,
 ) -> StatementInfo {
+    // The parser's own reading of the comment is no better than the splitter's:
+    // for this dialect, nobody checked which one the server shares.
+    if fragment.unreadable_comment {
+        return StatementInfo {
+            text: fragment.text.to_owned(),
+            span: fragment.span.clone(),
+            intent: StatementIntent::Unknown,
+            risk: MutationRisk::None,
+            basis: Basis::Unparsed,
+            error: Some(UNREADABLE_COMMENT.to_owned()),
+        };
+    }
     let (facts, basis, error) = match Parser::parse_sql(grammar, fragment.text) {
         Ok(parsed) if !parsed.is_empty() => {
             let facts = parsed
@@ -397,7 +420,7 @@ fn classify_fragment(
             if facts == Facts::READ && sweepable && hides_a_mutation(fragment.text, dialect) {
                 tracing::debug!(
                     span = ?fragment.span,
-                    "mot-clé mutant hors AST : instruction déclassée en Unknown"
+                    "mutating keyword outside the AST: statement downgraded to Unknown"
                 );
                 (Facts::UNKNOWN, Basis::KeywordSweep, None)
             } else {
@@ -409,13 +432,13 @@ fn classify_fragment(
         Ok(_) => (
             Facts::UNKNOWN,
             Basis::Unparsed,
-            Some("aucune instruction lue".to_owned()),
+            Some("no statement was read".to_owned()),
         ),
         Err(err) => {
             tracing::debug!(
                 span = ?fragment.span,
-                erreur = %err,
-                "instruction illisible : classée Unknown"
+                error = %err,
+                "statement could not be parsed: classified as Unknown"
             );
             (Facts::UNKNOWN, Basis::Unparsed, Some(err.to_string()))
         }
@@ -635,6 +658,11 @@ fn set_expr_facts(body: &SetExpr) -> Facts {
     match body {
         // Une sous-requête d'un `SELECT` ne peut pas muter : seule la clause
         // `WITH` de plus haut niveau le peut, et elle est traitée ailleurs.
+        // Sauf `SELECT … INTO t` : PostgreSQL et SQL Server y créent la table
+        // `t` et la remplissent. C'est un `CREATE TABLE AS` qui commence par
+        // `SELECT` ; lu comme une lecture, il passait sans la confirmation qui
+        // nomme la connexion (I-02).
+        SetExpr::Select(select) if select.into.is_some() => Facts::DDL,
         SetExpr::Select(_) | SetExpr::Values(_) | SetExpr::Table(_) => Facts::READ,
         SetExpr::Query(inner) => query_facts(inner),
         SetExpr::SetOperation { left, right, .. } => {
@@ -868,6 +896,12 @@ mod tests {
         StatementIntent::Write
     )]
     #[case("COPY t FROM '/tmp/x.csv'", StatementIntent::Write)]
+    #[case("SELECT * INTO copie FROM clients", StatementIntent::Ddl)]
+    #[case("SELECT a INTO TEMP copie FROM clients", StatementIntent::Ddl)]
+    #[case(
+        "WITH r AS (SELECT 1) SELECT * INTO copie FROM r",
+        StatementIntent::Ddl
+    )]
     #[case("CREATE TABLE t (a int)", StatementIntent::Ddl)]
     #[case("ALTER TABLE t ADD COLUMN b int", StatementIntent::Ddl)]
     #[case("DROP TABLE t", StatementIntent::Ddl)]

@@ -14,7 +14,7 @@ use oxyn_core::{OxynError, QueryLanguage};
 #[non_exhaustive]
 pub enum QueryError {
     /// Le curseur ne désigne pas une instruction entière exécutable.
-    #[error("sélection d'instruction impossible à l'octet {cursor}: {message}")]
+    #[error("cannot select a statement at byte {cursor}: {message}")]
     Selection {
         /// Position du curseur dans le texte UTF-8.
         cursor: usize,
@@ -29,7 +29,7 @@ pub enum QueryError {
     /// quel par [`ExecRequest`](oxyn_core::ExecRequest) et fait partie de ce que
     /// le journal enregistre. Les **valeurs liées**, elles, ne passent jamais
     /// par ici.
-    #[error("SQL illisible à l'octet {} : {message}", .span.start)]
+    #[error("cannot parse SQL at byte {}: {message}", .span.start)]
     Syntax {
         /// Message de l'analyseur.
         message: String,
@@ -42,7 +42,7 @@ pub enum QueryError {
     /// Ce n'est pas un défaut de la requête. `oxyn-query` analyse le SQL ; un
     /// langage de graphe ou de document sera classé par son propre analyseur
     /// (ADR-0003), pas ramené au SQL.
-    #[error("langage non analysé par oxyn-query : {language}")]
+    #[error("language not parsed by oxyn-query: {language}")]
     UnsupportedLanguage {
         /// Le langage refusé.
         language: QueryLanguage,

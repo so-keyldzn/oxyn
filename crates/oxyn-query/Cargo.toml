@@ -18,4 +18,11 @@ thiserror.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+criterion.workspace = true
 rstest.workspace = true
+
+# `harness = false` : criterion fournit son propre `main`. Sans cela, le harnais
+# de test de libtest s'installe et les arguments de criterion sont refusés.
+[[bench]]
+name    = "analysis"
+harness = false

@@ -48,6 +48,34 @@ pub struct Fragment<'a> {
     pub has_comment: bool,
     /// Le fragment se terminait par un `;` explicite dans le lot.
     pub terminated: bool,
+    /// A line comment in this fragment holds a lone `\r` followed by text, in a
+    /// dialect whose lexer was not checked ([`LineCommentEnd::Unverified`]).
+    ///
+    /// Where that comment ends depends on the server, so which statements the
+    /// fragment holds cannot be known: [`classify`](crate::classify()) makes it
+    /// `Unknown` and [`validate`](crate::validate()) refuses it.
+    pub unreadable_comment: bool,
+}
+
+/// Which bytes end a `--` (or `#`) comment, as the server's own lexer reads it.
+///
+/// Neither choice is safe by default. Ending too late hides a statement the
+/// server runs — PostgreSQL runs `-- x\rDROP TABLE audit`. Ending too early
+/// exposes a `/*` or a quote the server reads as comment text, and the
+/// statement behind it vanishes into what the splitter takes for a block
+/// comment — SQLite runs the `DROP` in `SELECT 1; -- x\r/*\nDROP TABLE audit -- */`.
+/// Sources: docs/RESEARCH-NOTES.md, « Fin d'un commentaire `--` ».
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum LineCommentEnd {
+    /// `\n` only: SQLite (`tokenize.c`).
+    LineFeed,
+    /// `\n` or `\r`: PostgreSQL (`scan.l`, `newline [\n\r]`).
+    LineFeedOrCarriageReturn,
+    /// Not checked against the server's lexer. The comment runs to `\n`, and a
+    /// lone `\r` followed by anything but whitespace marks the fragment
+    /// [`unreadable_comment`](Fragment::unreadable_comment).
+    Unverified,
 }
 
 /// Un mot nu du texte : ni dans une chaîne, ni dans un identifiant cité, ni
@@ -95,6 +123,8 @@ pub struct SplitProfile {
     pub hash_line_comments: bool,
     /// `/* /* */ */` s'imbrique (PostgreSQL, DuckDB, ClickHouse).
     pub nested_block_comments: bool,
+    /// Where a line comment ends.
+    pub line_comment_end: LineCommentEnd,
 }
 
 impl SplitProfile {
@@ -117,6 +147,11 @@ impl SplitProfile {
                 dollar_quotes: true,
                 hash_line_comments: false,
                 nested_block_comments: true,
+                line_comment_end: if matches!(dialect, SqlDialect::Postgres) {
+                    LineCommentEnd::LineFeedOrCarriageReturn
+                } else {
+                    LineCommentEnd::Unverified
+                },
             },
             SqlDialect::MySql => Self {
                 backslash_escapes: true,
@@ -126,6 +161,7 @@ impl SplitProfile {
                 dollar_quotes: false,
                 hash_line_comments: true,
                 nested_block_comments: false,
+                line_comment_end: LineCommentEnd::Unverified,
             },
             SqlDialect::Sqlite => Self {
                 backslash_escapes: false,
@@ -135,6 +171,7 @@ impl SplitProfile {
                 dollar_quotes: false,
                 hash_line_comments: false,
                 nested_block_comments: false,
+                line_comment_end: LineCommentEnd::LineFeed,
             },
             SqlDialect::SqlServer => Self {
                 backslash_escapes: false,
@@ -144,6 +181,7 @@ impl SplitProfile {
                 dollar_quotes: false,
                 hash_line_comments: false,
                 nested_block_comments: true,
+                line_comment_end: LineCommentEnd::Unverified,
             },
             SqlDialect::ClickHouse => Self {
                 backslash_escapes: true,
@@ -153,6 +191,7 @@ impl SplitProfile {
                 dollar_quotes: false,
                 hash_line_comments: true,
                 nested_block_comments: true,
+                line_comment_end: LineCommentEnd::Unverified,
             },
             SqlDialect::DuckDb => Self {
                 backslash_escapes: false,
@@ -162,6 +201,7 @@ impl SplitProfile {
                 dollar_quotes: true,
                 hash_line_comments: false,
                 nested_block_comments: true,
+                line_comment_end: LineCommentEnd::Unverified,
             },
             SqlDialect::Snowflake | SqlDialect::BigQuery => Self {
                 backslash_escapes: true,
@@ -171,6 +211,7 @@ impl SplitProfile {
                 dollar_quotes: matches!(dialect, SqlDialect::Snowflake),
                 hash_line_comments: false,
                 nested_block_comments: false,
+                line_comment_end: LineCommentEnd::Unverified,
             },
             // `Ansi`, `Oracle`, et toute valeur ajoutée plus tard : le profil
             // inclusif.
@@ -189,6 +230,7 @@ impl SplitProfile {
             dollar_quotes: true,
             hash_line_comments: false,
             nested_block_comments: true,
+            line_comment_end: LineCommentEnd::Unverified,
         }
     }
 }
@@ -363,7 +405,9 @@ fn sqlite_statements(sql: &str, cursor: usize) -> Result<Vec<Fragment<'_>>, Quer
         sql,
         SplitProfile::for_dialect(SqlDialect::Sqlite),
         &mut |token, span| match token {
-            Tok::Comment => has_comment = true,
+            // The SQLite profile ends comments at `\n`, as `tokenize.c` does:
+            // an unreadable comment cannot occur here.
+            Tok::Comment | Tok::UnreadableComment => has_comment = true,
             Tok::Word => {
                 let word = sql.get(span.clone()).unwrap_or_default();
                 let mut began_body = false;
@@ -409,7 +453,8 @@ fn sqlite_statements(sql: &str, cursor: usize) -> Result<Vec<Fragment<'_>>, Quer
             }
             Tok::Semicolon if !(body && !ended) => {
                 if has_code {
-                    push_fragment(sql, start, span.start, has_comment, true, &mut fragments);
+                    let flags = Flags::new(has_comment, true, false);
+                    push_fragment(sql, start..span.start, flags, &mut fragments);
                 }
                 start = span.end;
                 has_comment = false;
@@ -438,7 +483,8 @@ fn sqlite_statements(sql: &str, cursor: usize) -> Result<Vec<Fragment<'_>>, Quer
         });
     }
     if has_code {
-        push_fragment(sql, start, sql.len(), has_comment, false, &mut fragments);
+        let flags = Flags::new(has_comment, false, false);
+        push_fragment(sql, start..sql.len(), flags, &mut fragments);
     }
     Ok(fragments)
 }
@@ -470,22 +516,32 @@ pub fn split_with(sql: &str, profile: SplitProfile) -> Vec<Fragment<'_>> {
     let mut start = 0usize;
     let mut has_comment = false;
     let mut has_code = false;
+    let mut unreadable = false;
 
     scan(sql, profile, &mut |token, span| match token {
         Tok::Comment => has_comment = true,
+        // Never dropped as « comments only »: what it hides may run.
+        Tok::UnreadableComment => {
+            has_comment = true;
+            has_code = true;
+            unreadable = true;
+        }
         Tok::Semicolon => {
             if has_code {
-                push_fragment(sql, start, span.start, has_comment, true, &mut fragments);
+                let flags = Flags::new(has_comment, true, unreadable);
+                push_fragment(sql, start..span.start, flags, &mut fragments);
             }
             start = span.end;
             has_comment = false;
             has_code = false;
+            unreadable = false;
         }
         Tok::Word | Tok::Quoted | Tok::Symbol => has_code = true,
     });
 
     if has_code {
-        push_fragment(sql, start, sql.len(), has_comment, false, &mut fragments);
+        let flags = Flags::new(has_comment, false, unreadable);
+        push_fragment(sql, start..sql.len(), flags, &mut fragments);
     }
     fragments
 }
@@ -502,7 +558,7 @@ pub fn contains_comment(sql: &str, dialect: SqlDialect) -> bool {
         sql,
         SplitProfile::for_dialect(dialect),
         &mut |token, _span| {
-            if token == Tok::Comment {
+            if matches!(token, Tok::Comment | Tok::UnreadableComment) {
                 seen = true;
             }
         },
@@ -566,6 +622,10 @@ enum Tok {
     Quoted,
     /// Un commentaire, quelle que soit sa forme.
     Comment,
+    /// A line comment whose end depends on a lexer nobody checked
+    /// ([`LineCommentEnd::Unverified`]): it may hold a statement, so it counts
+    /// as code and makes its fragment unreadable.
+    UnreadableComment,
     /// Le séparateur d'instructions.
     Semicolon,
     /// Tout le reste : ponctuation, opérateurs, nombres.
@@ -584,13 +644,13 @@ fn scan(sql: &str, profile: SplitProfile, on: &mut dyn FnMut(Tok, Range<usize>))
     while let Some(&c) = b.get(i) {
         match c {
             b'-' if b.get(i + 1) == Some(&b'-') => {
-                let end = skip_to_eol(b, i + 2);
-                on(Tok::Comment, i..end);
+                let (end, token) = skip_line_comment(b, i + 2, profile.line_comment_end);
+                on(token, i..end);
                 i = end;
             }
             b'#' if profile.hash_line_comments => {
-                let end = skip_to_eol(b, i + 1);
-                on(Tok::Comment, i..end);
+                let (end, token) = skip_line_comment(b, i + 1, profile.line_comment_end);
+                on(token, i..end);
                 i = end;
             }
             b'/' if b.get(i + 1) == Some(&b'*') => {
@@ -673,14 +733,32 @@ fn skip_word(b: &[u8], mut i: usize) -> usize {
     i
 }
 
-fn skip_to_eol(b: &[u8], mut i: usize) -> usize {
+/// End of a line comment starting at `i`, and how it reads.
+///
+/// The end must be the server's: a comment that runs past it hides a statement
+/// the server executes, from the splitter and from the keyword sweep alike.
+fn skip_line_comment(b: &[u8], mut i: usize, end: LineCommentEnd) -> (usize, Tok) {
+    let mut lone_carriage_return = false;
+    let mut unreadable = false;
     while let Some(&c) = b.get(i) {
-        if c == b'\n' {
-            return i;
+        match (c, end) {
+            (b'\n', _) | (b'\r', LineCommentEnd::LineFeedOrCarriageReturn) => break,
+            (b'\r', LineCommentEnd::Unverified) => lone_carriage_return = true,
+            // Only text after the `\r` makes the two readings differ; trailing
+            // blanks read the same either way.
+            (_, LineCommentEnd::Unverified) if lone_carriage_return && !c.is_ascii_whitespace() => {
+                unreadable = true;
+            }
+            _ => {}
         }
         i += 1;
     }
-    b.len()
+    let token = if unreadable {
+        Tok::UnreadableComment
+    } else {
+        Tok::Comment
+    };
+    (i, token)
 }
 
 /// Un commentaire de bloc non fermé avale la fin du texte : c'est ce que fait
@@ -807,15 +885,27 @@ fn next_visible_byte(b: &[u8], mut i: usize) -> Option<u8> {
     None
 }
 
-fn push_fragment<'a>(
-    sql: &'a str,
-    start: usize,
-    end: usize,
+/// What the scanner learned about a fragment, beside its bounds.
+#[derive(Clone, Copy)]
+struct Flags {
     has_comment: bool,
     terminated: bool,
-    out: &mut Vec<Fragment<'a>>,
-) {
-    let Some(raw) = sql.get(start..end) else {
+    unreadable_comment: bool,
+}
+
+impl Flags {
+    const fn new(has_comment: bool, terminated: bool, unreadable_comment: bool) -> Self {
+        Self {
+            has_comment,
+            terminated,
+            unreadable_comment,
+        }
+    }
+}
+
+fn push_fragment<'a>(sql: &'a str, range: Range<usize>, flags: Flags, out: &mut Vec<Fragment<'a>>) {
+    let start = range.start;
+    let Some(raw) = sql.get(range) else {
         return;
     };
     let text = raw.trim();
@@ -827,8 +917,9 @@ fn push_fragment<'a>(
     out.push(Fragment {
         text,
         span: from..from + text.len(),
-        has_comment,
-        terminated,
+        has_comment: flags.has_comment,
+        terminated: flags.terminated,
+        unreadable_comment: flags.unreadable_comment,
     });
 }
 
