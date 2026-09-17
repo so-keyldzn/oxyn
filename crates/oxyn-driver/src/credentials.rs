@@ -120,7 +120,7 @@ impl fmt::Debug for Credentials {
     /// (I-03). C'est le `tracing::debug!("{creds:?}")` ajouté six mois plus tard
     /// qui fuit.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "Credentials(<masqué : {:?}>)", self.filled_fields())
+        write!(f, "Credentials(<redacted: {:?}>)", self.filled_fields())
     }
 }
 
@@ -189,7 +189,7 @@ mod tests {
     #[test]
     fn le_debug_d_identifiants_vides_ne_ment_pas() {
         let rendu = format!("{:?}", Credentials::new());
-        assert_eq!(rendu, "Credentials(<masqué : []>)");
+        assert_eq!(rendu, "Credentials(<redacted: []>)");
     }
 
     #[test]

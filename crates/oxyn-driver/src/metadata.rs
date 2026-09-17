@@ -303,20 +303,20 @@ impl DriverMetadata {
             let cle = champ.key.trim();
             if cle.is_empty() {
                 return Err(OxynError::Config(format!(
-                    "driver `{}` : un champ de connexion a une clé vide",
+                    "driver `{}`: a connection field has an empty key",
                     self.id
                 )));
             }
             if vues.contains(&champ.key.as_str()) {
                 return Err(OxynError::Config(format!(
-                    "driver `{}` : le champ de connexion `{}` est déclaré deux fois",
+                    "driver `{}`: connection field `{}` is declared twice",
                     self.id, champ.key
                 )));
             }
             if champ.is_secret() && champ.default.is_some() {
                 return Err(OxynError::Config(format!(
-                    "driver `{}` : le champ secret `{}` porte une valeur par défaut, \
-                     qui serait écrite en clair",
+                    "driver `{}`: secret field `{}` carries a default value, \
+                     which would be written in clear text",
                     self.id, champ.key
                 )));
             }
@@ -343,7 +343,7 @@ impl DriverMetadata {
     pub fn validate(&self, config: &ConnectionConfig) -> Result<()> {
         if config.driver != self.id {
             return Err(OxynError::Config(format!(
-                "la connexion désigne le driver `{}`, pas `{}`",
+                "the connection names driver `{}`, not `{}`",
                 config.driver, self.id
             )));
         }
@@ -351,8 +351,8 @@ impl DriverMetadata {
         for cle in config.params.keys() {
             if looks_like_secret(cle) {
                 return Err(OxynError::Config(format!(
-                    "le paramètre `{}` porte un secret : un secret vit dans le trousseau \
-                     du système et ne se persiste pas avec la connexion (I-03)",
+                    "parameter `{}` carries a secret: a secret lives in the system keychain \
+                     and is not persisted with the connection (I-03)",
                     sanitize_key(cle)
                 )));
             }
@@ -365,8 +365,8 @@ impl DriverMetadata {
                 // inattendue — `dsn`, `passphrase_fichier`…
                 if config.params.contains_key(&champ.key) {
                     return Err(OxynError::Config(format!(
-                        "le paramètre `{}` est déclaré secret par le driver `{}` : \
-                         il ne se persiste pas avec la connexion (I-03)",
+                        "parameter `{}` is declared secret by driver `{}`: \
+                         it is not persisted with the connection (I-03)",
                         sanitize_key(&champ.key),
                         self.id
                     )));
@@ -382,7 +382,7 @@ impl DriverMetadata {
                 .is_some_and(|v| !v.trim().is_empty());
             if !renseigne {
                 return Err(OxynError::Config(format!(
-                    "driver `{}` : le paramètre `{}` est obligatoire",
+                    "driver `{}`: parameter `{}` is required",
                     self.id, champ.key
                 )));
             }
@@ -443,7 +443,7 @@ pub(crate) fn sanitize_key(key: &str) -> String {
     if acceptable {
         key.to_owned()
     } else {
-        "<clé non représentable>".to_owned()
+        "<unrepresentable key>".to_owned()
     }
 }
 
@@ -592,9 +592,9 @@ mod tests {
         // Une clé peut venir d'un fichier écrit par un tiers : elle peut porter
         // des séquences de contrôle, ou le secret lui-même.
         let hostile = "password\u{1b}[2Jhunter2";
-        assert_eq!(sanitize_key(hostile), "<clé non représentable>");
+        assert_eq!(sanitize_key(hostile), "<unrepresentable key>");
         assert_eq!(sanitize_key("sslmode"), "sslmode");
-        assert_eq!(sanitize_key(&"x".repeat(65)), "<clé non représentable>");
+        assert_eq!(sanitize_key(&"x".repeat(65)), "<unrepresentable key>");
     }
 
     #[test]

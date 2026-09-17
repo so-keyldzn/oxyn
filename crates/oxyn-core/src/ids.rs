@@ -26,7 +26,7 @@ use uuid::Uuid;
 /// connexion mal formé reste un identifiant de connexion, et il n'a rien à faire
 /// dans un journal ou une boîte de dialogue (I-03).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[error("identifiant `{kind}` invalide : {detail}")]
+#[error("invalid `{kind}`: {detail}")]
 pub struct IdParseError {
     kind: &'static str,
     detail: &'static str,
@@ -119,7 +119,7 @@ macro_rules! define_uuid_ids {
                         .map(Self)
                         .map_err(|_| IdParseError::new(
                             stringify!($name),
-                            "ce n'est pas un UUID",
+                            "not a UUID",
                         ))
                 }
             }
@@ -174,6 +174,20 @@ define_uuid_ids! {
     /// Une commande soumise au bus. Sert de clé de corrélation entre la demande
     /// d'approbation, la décision et le journal d'audit.
     CommandId,
+
+    /// Un lancement de l'application. Sert à distinguer un arrêt propre d'un
+    /// plantage : la ligne qu'il identifie porte sa fermeture et son battement
+    /// ([ADR-0021](../../docs/adr/0021-marqueur-d-arret.md)).
+    AppSessionId,
+
+    /// Un fil de conversation avec l'assistant, tel qu'il est persisté et
+    /// retrouvé d'un lancement à l'autre.
+    ///
+    /// Distinct d'[`AgentSessionId`], et la distinction porte : une session
+    /// d'agent est **une** exécution de tour, et un fil en enchaîne plusieurs —
+    /// une relance ou une reprise en ouvre une nouvelle sans changer de fil.
+    /// Confondre les deux ferait repartir l'historique à chaque relance.
+    ConversationId,
 }
 
 /// Identifiant stable d'un driver, par **protocole** et non par produit.
@@ -207,15 +221,15 @@ impl DriverId {
     pub fn new(name: impl AsRef<str>) -> Result<Self, IdParseError> {
         let name = name.as_ref();
         if name.is_empty() {
-            return Err(IdParseError::new("DriverId", "la chaîne est vide"));
+            return Err(IdParseError::new("DriverId", "the string is empty"));
         }
         if name.len() > 32 {
-            return Err(IdParseError::new("DriverId", "plus de 32 caractères"));
+            return Err(IdParseError::new("DriverId", "longer than 32 characters"));
         }
         if !name.starts_with(|c: char| c.is_ascii_lowercase()) {
             return Err(IdParseError::new(
                 "DriverId",
-                "doit commencer par une lettre minuscule ASCII",
+                "must start with an ASCII lowercase letter",
             ));
         }
         if !name
@@ -224,7 +238,7 @@ impl DriverId {
         {
             return Err(IdParseError::new(
                 "DriverId",
-                "caractères autorisés : a-z, 0-9, `-`, `_`",
+                "allowed characters: a-z, 0-9, `-`, `_`",
             ));
         }
         Ok(Self(Arc::from(name)))
@@ -233,7 +247,7 @@ impl DriverId {
     /// Construit un identifiant dont la validité est garantie par le code
     /// appelant. Réservé aux constantes de ce module.
     fn known(name: &'static str) -> Self {
-        debug_assert!(Self::new(name).is_ok(), "constante de driver invalide");
+        debug_assert!(Self::new(name).is_ok(), "invalid driver constant");
         Self(Arc::from(name))
     }
 

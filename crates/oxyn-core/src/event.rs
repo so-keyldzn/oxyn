@@ -18,6 +18,7 @@ use serde::{Deserialize, Serialize};
 use crate::error::OxynError;
 use crate::ids::{CommandId, ResultId};
 use crate::policy::Preview;
+use crate::query::StatementIntent;
 use crate::stats::ExecStats;
 
 /// Un événement d'exécution destiné à l'interface.
@@ -52,6 +53,16 @@ pub enum Event {
         result: ResultId,
         /// Ce qu'elle a coûté.
         stats: ExecStats,
+        /// Ce que l'instruction faisait, **tel que le classificateur l'a lu**
+        /// après reclassification — pas ce que l'appelant avait déclaré.
+        ///
+        /// C'est ce qui permet à une vue de savoir qu'un rafraîchissement a du
+        /// sens : une écriture ou un DDL périme ce qui est affiché, une lecture
+        /// non ([ADR-0022](../../docs/adr/0022-rafraichissement-automatique.md)).
+        /// L'événement ne dit pas **quel objet** a changé : le classificateur ne
+        /// nomme pas les tables, et prétendre le contraire produirait des
+        /// invalidations fausses dans les deux sens.
+        intent: StatementIntent,
     },
 
     /// L'exécution a échoué.
@@ -130,6 +141,7 @@ mod tests {
             Event::Completed {
                 result: resultat,
                 stats: ExecStats::default(),
+                intent: StatementIntent::Read,
             }
             .is_terminal()
         );
@@ -206,6 +218,9 @@ mod tests {
     #[test]
     fn aller_retour_json() {
         let evt = Event::Completed {
+            // Une écriture, pour que l'aller-retour porte sur autre chose que
+            // la valeur par défaut de l'intention.
+            intent: StatementIntent::Write,
             result: ResultId::new(),
             stats: ExecStats {
                 rows: 3,

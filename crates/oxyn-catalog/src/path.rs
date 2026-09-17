@@ -54,7 +54,7 @@ const PALIERS: usize = 3;
 /// séquences d'échappement de terminal, et un message d'erreur finit dans un
 /// journal ([SECURITY, surface d'entrée §2](../../../docs/SECURITY.md)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, thiserror::Error)]
-#[error("chemin de catalogue invalide : {detail}")]
+#[error("invalid catalog path: {detail}")]
 pub struct CatalogPathError {
     detail: &'static str,
 }
@@ -94,13 +94,11 @@ impl From<CatalogPathError> for oxyn_core::OxynError {
 /// sont des noms légaux, et [`CatalogPath::qualify`] sait les citer.
 pub(crate) fn validate_segment(name: &str) -> Result<(), CatalogPathError> {
     if name.is_empty() {
-        return Err(CatalogPathError::new(
-            "un palier nommé ne peut pas être vide",
-        ));
+        return Err(CatalogPathError::new("a named level cannot be empty"));
     }
     if name.chars().any(char::is_control) {
         return Err(CatalogPathError::new(
-            "un nom de palier contient un caractère de contrôle",
+            "a level name contains a control character",
         ));
     }
     Ok(())
@@ -201,9 +199,9 @@ impl CatalogLevel {
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
-            Self::Server => "serveur",
-            Self::Catalog => "catalogue",
-            Self::Namespace => "espace de noms",
+            Self::Server => "server",
+            Self::Catalog => "catalog",
+            Self::Namespace => "namespace",
             Self::Relation => "relation",
         }
     }
@@ -565,7 +563,7 @@ fn decouper(entree: &str) -> Result<Vec<Option<String>>, CatalogPathError> {
             EtatLecture::ApresCitation => {
                 if c != '.' {
                     return Err(CatalogPathError::new(
-                        "un palier cité doit être suivi d'un séparateur",
+                        "a quoted level must be followed by a separator",
                     ));
                 }
                 segments.push(cloturer(&mut courant, true)?);
@@ -575,7 +573,7 @@ fn decouper(entree: &str) -> Result<Vec<Option<String>>, CatalogPathError> {
                 '"' if courant.is_empty() => etat = EtatLecture::Cite,
                 '"' => {
                     return Err(CatalogPathError::new(
-                        "une citation ne peut pas commencer au milieu d'un palier",
+                        "a quote cannot start in the middle of a level",
                     ));
                 }
                 '.' => segments.push(cloturer(&mut courant, false)?),
@@ -585,7 +583,7 @@ fn decouper(entree: &str) -> Result<Vec<Option<String>>, CatalogPathError> {
     }
 
     match etat {
-        EtatLecture::Cite => Err(CatalogPathError::new("citation non fermée")),
+        EtatLecture::Cite => Err(CatalogPathError::new("unterminated quote")),
         EtatLecture::ApresCitation => {
             segments.push(cloturer(&mut courant, true)?);
             Ok(segments)
@@ -602,9 +600,7 @@ fn cloturer(courant: &mut String, etait_cite: bool) -> Result<Option<String>, Ca
     let valeur = std::mem::take(courant);
     if valeur.is_empty() {
         if etait_cite {
-            return Err(CatalogPathError::new(
-                "un palier cité ne peut pas être vide",
-            ));
+            return Err(CatalogPathError::new("a quoted level cannot be empty"));
         }
         return Ok(None);
     }

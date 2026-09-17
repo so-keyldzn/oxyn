@@ -248,17 +248,17 @@ impl MutationRisk {
     pub const fn reason(&self) -> Option<&'static str> {
         match self {
             Self::None => None,
-            Self::UnboundedUpdate => Some("UPDATE sans clause WHERE : toutes les lignes"),
-            Self::UnboundedDelete => Some("DELETE sans clause WHERE : toutes les lignes"),
-            Self::Truncate => Some("TRUNCATE : vidage complet de la table"),
-            Self::DropObject => Some("DROP : suppression de l'objet et de ses données"),
+            Self::UnboundedUpdate => Some("UPDATE without a WHERE clause: every row"),
+            Self::UnboundedDelete => Some("DELETE without a WHERE clause: every row"),
+            Self::Truncate => Some("TRUNCATE: the table is emptied"),
+            Self::DropObject => Some("DROP: the object and its data are removed"),
         }
     }
 }
 
 impl std::fmt::Display for MutationRisk {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.write_str(self.reason().unwrap_or("aucun risque signalé"))
+        f.write_str(self.reason().unwrap_or("no risk reported"))
     }
 }
 
@@ -427,7 +427,7 @@ struct Masque(usize);
 
 impl std::fmt::Debug for Masque {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "<{} valeur(s) liée(s) masquée(s)>", self.0)
+        write!(f, "<{} redacted bound value(s)>", self.0)
     }
 }
 
@@ -513,7 +513,7 @@ mod tests {
             !rendu.contains("123-45-6789"),
             "une valeur liée a fuité dans le Debug : {rendu}"
         );
-        assert!(rendu.contains("1 valeur(s) liée(s) masquée(s)"));
+        assert!(rendu.contains("1 redacted bound value(s)"));
         assert!(
             rendu.contains("SELECT * FROM users"),
             "la forme de la requête reste journalisable"

@@ -94,16 +94,16 @@ pub type SharedCatalog = Arc<RwLock<CatalogCache>>;
 #[non_exhaustive]
 pub enum CacheError {
     /// Le chemin ne désigne pas une relation.
-    #[error("le chemin ne désigne pas une relation")]
+    #[error("the path does not name a relation")]
     NotARelation,
     /// Le chemin descend plus bas que le palier espace de noms.
-    #[error("le chemin ne désigne pas un espace de noms")]
+    #[error("the path does not name a namespace")]
     NotANamespace,
     /// La relation visée n'est pas dans le cache.
     ///
     /// Attacher des index à une relation inconnue en inventerait une, avec une
     /// nature devinée. Lister ou décrire la relation d'abord.
-    #[error("la relation n'est pas dans le cache")]
+    #[error("the relation is not in the cache")]
     UnknownRelation,
 }
 
@@ -364,7 +364,7 @@ impl CatalogScope {
 impl std::fmt::Display for CatalogScope {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self.path() {
-            None => f.write_str("serveur"),
+            None => f.write_str("server"),
             Some(chemin) => write!(f, "{} {chemin}", self.level()),
         }
     }
@@ -846,7 +846,7 @@ impl CatalogCache {
     /// l'**espace de noms**, parce que c'est son listing qui vient de devenir
     /// faux.
     pub fn invalidate(&mut self, scope: &CatalogScope) {
-        tracing::debug!(scope = %scope, "invalidation du cache de catalogue");
+        tracing::debug!(scope = %scope, "catalog cache invalidated");
         match scope {
             CatalogScope::Server => {
                 self.server.freshness.invalidate();
@@ -900,7 +900,7 @@ impl CatalogCache {
     /// le laisser frais ferait réapparaître l'objet au prochain
     /// rafraîchissement.
     pub fn forget(&mut self, scope: &CatalogScope) {
-        tracing::debug!(scope = %scope, "retrait du cache de catalogue");
+        tracing::debug!(scope = %scope, "catalog cache entry removed");
         match scope {
             CatalogScope::Server => *self = Self::new(),
             CatalogScope::Catalog(chemin) => {
@@ -1560,7 +1560,7 @@ mod tests {
     fn le_rendu_d_un_scope_nomme_le_palier() {
         let scope = CatalogScope::Relation(chemin(Some("caisse"), Some("public"), "clients"));
         assert_eq!(scope.to_string(), "relation caisse.public.clients");
-        assert_eq!(CatalogScope::Server.to_string(), "serveur");
+        assert_eq!(CatalogScope::Server.to_string(), "server");
     }
 
     fn definition_fixture(sql_len: usize, notes: Vec<String>) -> RelationDefinition {

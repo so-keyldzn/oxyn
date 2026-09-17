@@ -57,6 +57,7 @@ pub mod buffer;
 pub mod cell;
 pub mod error;
 pub mod export;
+pub mod find;
 pub mod sink;
 mod spill;
 pub mod value_page;
@@ -64,10 +65,11 @@ pub mod value_page;
 pub use buffer::{BatchIndex, BufferLimits, DEFAULT_MEMORY_BUDGET, Pressure, ResultBuffer};
 pub use cell::{
     BinaryDisplay, CellValue, DEFAULT_MAX_LEN, FormatOptions, GROUP_SEPARATOR, NumberGrouping,
-    format_cell, format_value,
+    TimestampDisplay, format_cell, format_value, timestamp_display,
 };
 pub use error::{DataError, Result};
 pub use export::{ExportOptions, ExportSummary, export, is_supported};
+pub use find::{FindOutcome, find_rows};
 pub use sink::{BatchProgress, BatchSink, BatchSource, SinkOutcome};
 
 /// Ce qu'on importe d'un coup quand on travaille avec des résultats.

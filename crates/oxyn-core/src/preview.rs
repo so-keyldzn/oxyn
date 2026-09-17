@@ -1,28 +1,31 @@
-//! Ce qu'on demande d'un aperçu de relation : un ordre, un filtre, une page.
+//! Ce qu'on demande d'un aperçu de relation : un ordre, un prédicat, une page.
 //!
-//! Ces types ne portent **aucun texte SQL**, et c'est leur raison d'être. Un
-//! fragment de `WHERE` composé dans l'interface exécuterait ce qu'il contient au
-//! premier nom de colonne bien choisi ([I-10](../../CLAUDE.md#i-10)) ; ici la
-//! colonne est un identifiant que le driver cite, et la valeur est une
-//! [`ScalarValue`] qu'il lie ([ADR-0020](../../docs/adr/0020-apercu-trie-filtre-parcouru.md)).
+//! # Deux moitiés qui ne se ressemblent pas
 //!
-//! # Ce que le typage empêche d'écrire
+//! L'**ordre** est structuré : une colonne est un identifiant que le driver
+//! cite, jamais une expression. Le laisser libre rouvrirait la composition de
+//! SQL du mauvais côté de la frontière, sur une chaîne qu'Oxyn insérerait dans
+//! une requête qu'il compose lui-même ([I-10](../../CLAUDE.md#i-10)).
 //!
-//! [`PreviewCondition`] porte sa valeur dans la variante qui en a besoin. Il n'y
-//! a donc pas d'état incohérent à valider ensuite : on ne peut pas construire un
-//! « est nul » avec une valeur à comparer, ni un « contient » avec un entier.
-//! C'est le genre de contrôle qu'un couple `(opérateur, valeur)` obligerait à
-//! écrire à la main dans chaque driver — et qu'un driver oublierait.
+//! Le **prédicat**, lui, est du SQL que l'utilisateur écrit. C'est le champ
+//! `WHERE` de la maquette (`272:10667`), et [I-10](../../CLAUDE.md#i-10) le dit
+//! sans ambiguïté : « le SQL que *l'utilisateur écrit* part tel quel — c'est la
+//! fonctionnalité ». Ce qui est interdit, c'est qu'Oxyn concatène un
+//! identifiant **reçu du serveur** ; pas qu'il transmette ce qu'un
+//! professionnel a tapé.
+//!
+//! Ce prédicat n'est pour autant pas une porte ouverte. Le texte final est
+//! reclassifié par `oxyn-query` et refusé s'il devient mutant, la session est
+//! tenue en lecture seule par le serveur, et la borne de lignes s'applique
+//! ([ADR-0020](../../docs/adr/0020-apercu-trie-filtre-parcouru.md)).
 
 use serde::{Deserialize, Serialize};
-
-use crate::value::ScalarValue;
 
 /// Une colonne de tri, et son sens.
 ///
 /// `column` est le **nom exact** d'une colonne de la relation, jamais une
-/// expression : accepter une expression ici rouvrirait la composition de SQL du
-/// mauvais côté de la frontière.
+/// expression : c'est la moitié structurée de la demande, celle qu'Oxyn compose
+/// et cite lui-même.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PreviewSort {
     /// Nom de colonne, tel que le catalogue le donne.
@@ -51,108 +54,7 @@ impl PreviewSort {
     }
 }
 
-/// Ce qu'une colonne doit vérifier pour qu'une ligne soit retenue.
-///
-/// Énumération **fermée** : chaque variante doit être traduite par chaque
-/// driver, et en ajouter une doit faire échouer leur compilation. Une variante
-/// qu'un driver ne saurait pas traduire silencieusement rendrait un filtre qui
-/// ne filtre pas.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case", tag = "condition")]
-pub enum PreviewCondition {
-    /// Égal à cette valeur.
-    ///
-    /// [`ScalarValue::Null`] y est **refusé** par les drivers : en SQL
-    /// `= NULL` n'est jamais vrai, et une comparaison qui ne remonte jamais
-    /// rien ressemble trop à une table vide. La nullité se demande par
-    /// [`IsNull`](Self::IsNull).
-    Equals {
-        /// La valeur comparée, liée par le driver.
-        value: ScalarValue,
-    },
-    /// Différent de cette valeur.
-    NotEquals {
-        /// La valeur comparée, liée par le driver.
-        value: ScalarValue,
-    },
-    /// Strictement inférieur.
-    LessThan {
-        /// La borne, liée par le driver.
-        value: ScalarValue,
-    },
-    /// Inférieur ou égal.
-    AtMost {
-        /// La borne, liée par le driver.
-        value: ScalarValue,
-    },
-    /// Strictement supérieur.
-    GreaterThan {
-        /// La borne, liée par le driver.
-        value: ScalarValue,
-    },
-    /// Supérieur ou égal.
-    AtLeast {
-        /// La borne, liée par le driver.
-        value: ScalarValue,
-    },
-    /// Contient ce texte.
-    ///
-    /// Le driver **échappe** les métacaractères de son moteur avant de composer
-    /// sa recherche : sans cela, chercher `100%` remonterait tout, et personne
-    /// ne verrait que le filtre ne fait pas ce qu'il annonce.
-    Contains {
-        /// Le texte cherché, littéral et non un motif.
-        text: String,
-    },
-    /// Commence par ce texte, mêmes règles d'échappement.
-    StartsWith {
-        /// Le texte cherché, littéral et non un motif.
-        text: String,
-    },
-    /// Finit par ce texte, mêmes règles d'échappement.
-    EndsWith {
-        /// Le texte cherché, littéral et non un motif.
-        text: String,
-    },
-    /// La colonne est nulle.
-    IsNull,
-    /// La colonne n'est pas nulle.
-    IsNotNull,
-}
-
-impl PreviewCondition {
-    /// La valeur à lier, quand la condition en compare une.
-    ///
-    /// `None` pour les conditions qui n'en ont pas — la nullité — et pour celles
-    /// dont le driver compose lui-même le motif à partir d'un texte échappé.
-    #[must_use]
-    pub const fn bound_value(&self) -> Option<&ScalarValue> {
-        match self {
-            Self::Equals { value }
-            | Self::NotEquals { value }
-            | Self::LessThan { value }
-            | Self::AtMost { value }
-            | Self::GreaterThan { value }
-            | Self::AtLeast { value } => Some(value),
-            Self::Contains { .. }
-            | Self::StartsWith { .. }
-            | Self::EndsWith { .. }
-            | Self::IsNull
-            | Self::IsNotNull => None,
-        }
-    }
-}
-
-/// Un filtre sur une colonne.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct PreviewFilter {
-    /// Nom de colonne, tel que le catalogue le donne.
-    pub column: String,
-    /// Ce que cette colonne doit vérifier.
-    pub condition: PreviewCondition,
-}
-
-/// La forme demandée d'un aperçu : son ordre, ses filtres, sa page.
+/// La forme demandée d'un aperçu : son ordre, son prédicat, sa page.
 ///
 /// Groupée plutôt qu'éclatée en trois champs de commande : ces trois-là ne se
 /// comprennent qu'ensemble — un `offset` sans ordre déterministe ne veut rien
@@ -165,8 +67,13 @@ pub struct PreviewShape {
     /// sans ordre total, deux pages consécutives peuvent montrer deux fois la
     /// même ligne et en omettre une autre.
     pub sort: Vec<PreviewSort>,
-    /// Les filtres, tous devant être vérifiés ensemble.
-    pub filter: Vec<PreviewFilter>,
+    /// Le prédicat écrit par l'utilisateur, **sans** le mot-clé `WHERE`.
+    ///
+    /// Transmis tel quel : ni analysé, ni réécrit, ni complété. Un prédicat vide
+    /// ou fait d'espaces vaut « aucun filtre » — insérer un `WHERE` sans
+    /// condition produirait une erreur de syntaxe là où l'utilisateur croit
+    /// avoir tout effacé.
+    pub predicate: Option<String>,
     /// Combien de lignes sauter avant la page demandée.
     ///
     /// `0` est la première page. Une valeur non nulle n'a de sens que si l'ordre
@@ -182,13 +89,42 @@ impl PreviewShape {
         Self::default()
     }
 
-    /// Rien n'a été demandé : ni ordre, ni filtre, ni page suivante.
+    /// Le prédicat, s'il en reste un une fois les espaces retirés.
+    ///
+    /// C'est la seule normalisation appliquée au texte de l'utilisateur, et elle
+    /// ne change pas son sens : un champ où il ne reste qu'une espace est un
+    /// champ vide.
+    #[must_use]
+    pub fn predicate(&self) -> Option<&str> {
+        self.predicate
+            .as_deref()
+            .map(str::trim)
+            .filter(|text| !text.is_empty())
+    }
+
+    /// Cette demande exige-t-elle un ordre **total** ?
+    ///
+    /// Vrai dès qu'un tri est demandé ou qu'une page autre que la première
+    /// l'est. Dans les deux cas le driver doit compléter l'ordre par une clé
+    /// unique, ce qui lui coûte une lecture de métadonnées : c'est la seule
+    /// raison pour laquelle un aperçu en paie une, et un aperçu sans demande
+    /// n'en paie aucune.
+    ///
+    /// Le tri seul en a besoin autant que la page : ordonner la première page
+    /// par une colonne et la suivante par deux ferait réapparaître une ligne
+    /// exactement à la frontière.
+    #[must_use]
+    pub fn needs_total_order(&self) -> bool {
+        !self.sort.is_empty() || self.offset > 0
+    }
+
+    /// Rien n'a été demandé : ni ordre, ni prédicat, ni page suivante.
     ///
     /// C'est ce qui distingue l'aperçu automatique d'une table qu'on vient de
     /// sélectionner d'une lecture que l'utilisateur a composée.
     #[must_use]
     pub fn is_plain(&self) -> bool {
-        self.sort.is_empty() && self.filter.is_empty() && self.offset == 0
+        self.sort.is_empty() && self.predicate().is_none() && self.offset == 0
     }
 }
 
@@ -197,23 +133,32 @@ mod tests {
     use super::*;
 
     #[test]
-    fn seules_les_conditions_comparatives_portent_une_valeur_a_lier() {
+    fn un_predicat_vide_ou_blanc_ne_filtre_rien() {
+        let vide = PreviewShape {
+            predicate: Some(String::new()),
+            ..PreviewShape::default()
+        };
+        assert!(vide.predicate().is_none());
+        assert!(vide.is_plain(), "un champ effacé ne compose aucun WHERE");
+
+        let blanc = PreviewShape {
+            predicate: Some("   \n\t ".into()),
+            ..PreviewShape::default()
+        };
+        assert!(blanc.predicate().is_none());
+    }
+
+    #[test]
+    fn le_texte_de_l_utilisateur_n_est_pas_reecrit() {
+        // Les espaces de bordure tombent, le reste est intact : ni normalisation
+        // de casse, ni guillemets ajoutés, ni opérateur traduit.
+        let forme = PreviewShape {
+            predicate: Some("  status = 'active' AND note LIKE '100%'  ".into()),
+            ..PreviewShape::default()
+        };
         assert_eq!(
-            PreviewCondition::Equals {
-                value: ScalarValue::Int64(1)
-            }
-            .bound_value(),
-            Some(&ScalarValue::Int64(1))
-        );
-        assert!(PreviewCondition::IsNull.bound_value().is_none());
-        // Le texte d'un `Contains` n'est pas lié tel quel : le driver en compose
-        // un motif après échappement, et c'est ce motif qu'il lie.
-        assert!(
-            PreviewCondition::Contains {
-                text: "100%".into()
-            }
-            .bound_value()
-            .is_none()
+            forme.predicate(),
+            Some("status = 'active' AND note LIKE '100%'")
         );
     }
 
@@ -225,10 +170,38 @@ mod tests {
             ..PreviewShape::default()
         };
         assert!(!trie.is_plain());
+        let filtre = PreviewShape {
+            predicate: Some("id > 10".into()),
+            ..PreviewShape::default()
+        };
+        assert!(!filtre.is_plain());
         let page = PreviewShape {
             offset: 200,
             ..PreviewShape::default()
         };
         assert!(!page.is_plain());
+    }
+
+    #[test]
+    fn un_ordre_total_est_exige_par_le_tri_autant_que_par_la_page() {
+        assert!(!PreviewShape::unordered().needs_total_order());
+        // Un prédicat seul ne change pas l'ordre : il n'exige aucune clé, et ne
+        // doit donc pas coûter une lecture de métadonnées.
+        let filtre = PreviewShape {
+            predicate: Some("id > 10".into()),
+            ..PreviewShape::default()
+        };
+        assert!(!filtre.needs_total_order());
+
+        let trie = PreviewShape {
+            sort: vec![PreviewSort::ascending("name")],
+            ..PreviewShape::default()
+        };
+        assert!(trie.needs_total_order(), "dès la première page");
+        let page = PreviewShape {
+            offset: 200,
+            ..PreviewShape::default()
+        };
+        assert!(page.needs_total_order());
     }
 }

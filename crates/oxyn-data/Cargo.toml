@@ -14,7 +14,6 @@ workspace = true
 oxyn-core.workspace = true
 arrow.workspace = true
 futures.workspace = true
-memmap2.workspace = true
 parking_lot.workspace = true
 serde.workspace = true
 tempfile.workspace = true
@@ -23,7 +22,12 @@ tokio.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+criterion.workspace = true
 rstest.workspace = true
 # Relit un `FormatOptions` écrit avant l'ajout d'un champ : la compatibilité de
 # lecture d'un format persisté (I-11) ne se prouve pas sans désérialiser.
 serde_json.workspace = true
+
+[[bench]]
+name    = "spilled_page"
+harness = false

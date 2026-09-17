@@ -1,6 +1,7 @@
-//! Configuration d'une connexion, et marquage de son environnement.
+//! Configuration d'une connexion : marquage de son environnement, et niveau de
+//! confidentialité de ce qui peut rejoindre une invite IA.
 //!
-//! Deux règles gouvernent ce module, et les deux viennent de
+//! Trois règles gouvernent ce module. Les deux premières viennent de
 //! [`SECURITY`](../../../docs/SECURITY.md) :
 //!
 //! 1. **Aucun secret ici.** Mot de passe, chaîne de connexion complète, clé SSH,
@@ -14,6 +15,15 @@
 //!    contraignante. Le défaut inverse est ce qui laisse partir un `UPDATE` sans
 //!    `WHERE` sur la base client parce que l'utilisateur a ajouté la connexion à
 //!    la hâte sans remplir le champ.
+//!
+//! La troisième vient de [ADR-0006](../../../docs/adr/0006-ai-privacy-tiers.md) :
+//!
+//! 3. **Le [`PrivacyTier`] est porté par la connexion**, pas par la session, le
+//!    fournisseur ou l'application, et son défaut est
+//!    [`Metadata`](PrivacyTier::Metadata). Le type vit ici — et non dans
+//!    `oxyn-ai` — précisément parce que c'est cette structure qui le porte : un
+//!    niveau rangé ailleurs finit par être un réglage global, ce qu'ADR-0006
+//!    refuse.
 //!
 //! Le `Debug` de [`ConnectionConfig`] est écrit à la main : les valeurs des
 //! paramètres sont masquées. Un `Debug` dérivé est le mode de fuite le plus
@@ -93,7 +103,149 @@ impl FromStr for Environment {
             "production" | "prod" => Ok(Self::Production),
             _ => Err(IdParseError::new(
                 "Environment",
-                "attendu : local, development, staging ou production",
+                "expected: local, development, staging or production",
+            )),
+        }
+    }
+}
+
+/// Ce qui a le droit de quitter la machine pour une connexion donnée.
+///
+/// Autorité : [ADR-0006](../../../docs/adr/0006-ai-privacy-tiers.md). Le tableau
+/// des niveaux y vit et n'est pas recopié ici.
+///
+/// # Pourquoi par connexion, et jamais globalement
+///
+/// La panne visée par [AI-PROVIDERS](../../../docs/AI-PROVIDERS.md) :
+/// l'utilisateur règle le niveau sur `Sampled` pour sa base de bac à sable,
+/// l'oublie, puis ouvre trois jours plus tard la base client de son employeur.
+/// Si le niveau était global, des lignes réelles partiraient chez un
+/// fournisseur tiers. Techniquement rien n'a échoué ; contractuellement, c'est
+/// irréversible.
+///
+/// Conséquence de conception : ce type ne porte **aucun** constructeur qui le
+/// dérive d'un fournisseur, d'une session ou d'un réglage d'application. Il
+/// vient du champ [`ConnectionConfig::privacy_tier`] et de rien d'autre (I-04).
+///
+/// # `Metadata` par défaut n'est pas « rien ne sort »
+///
+/// Le DDL, les noms, les types, les index et les cardinalités **sortent** dès
+/// qu'un fournisseur distant est configuré. Une table `patients` avec une
+/// colonne `hiv_status` révèle l'essentiel sans qu'une seule ligne ne sorte.
+/// C'est un compromis délibéré, et l'interface doit le montrer en permanence.
+///
+/// # L'énumération est fermée
+///
+/// Contrairement à la convention du dépôt sur les énumérations publiques : la
+/// triade d'ADR-0006 est un contrat, et un quatrième niveau serait une décision
+/// d'ADR, pas une variante ajoutée au fil de l'eau. Un `_ =>` dans l'interface
+/// qui avalerait un niveau inconnu choisirait silencieusement le mauvais
+/// comportement.
+///
+/// L'ordre est celui de la **divulgation croissante** : `Local < Metadata <
+/// Sampled`. C'est ce qui rend [`most_restrictive`](Self::most_restrictive)
+/// écrivable, et donc composable quand deux niveaux s'appliquent au même envoi.
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
+)]
+#[serde(rename_all = "snake_case")]
+pub enum PrivacyTier {
+    /// Rien ne quitte la machine. Modèle local uniquement.
+    Local,
+    /// DDL, noms, types, index, cardinalités, plans d'exécution.
+    /// **Aucune valeur de ligne.** C'est le défaut.
+    #[default]
+    Metadata,
+    /// Idem, plus un échantillon de lignes explicitement approuvé, colonne par
+    /// colonne.
+    Sampled,
+}
+
+impl PrivacyTier {
+    /// Des valeurs de lignes peuvent-elles rejoindre une invite ?
+    ///
+    /// Seul [`Sampled`](Self::Sampled) répond `true`, et même alors les valeurs
+    /// doivent avoir été approuvées colonne par colonne en amont : ce prédicat
+    /// est une condition nécessaire, pas suffisante.
+    ///
+    /// C'est **le** prédicat qui gouverne tout contenu susceptible de citer une
+    /// ligne — un échantillon, mais aussi un message d'erreur de serveur, qui
+    /// recopie la valeur qui viole une contrainte.
+    #[must_use]
+    pub const fn allows_row_values(&self) -> bool {
+        matches!(self, Self::Sampled)
+    }
+
+    /// Un fournisseur dont les données quittent la machine est-il utilisable ?
+    ///
+    /// `false` pour [`Local`](Self::Local). Ce n'est pas une valeur par défaut
+    /// qu'un réglage renverse : c'est la promesse du niveau.
+    ///
+    /// Le classement local/distant d'un point d'accès ne se fait **jamais** sur
+    /// la forme de son URL — un point d'accès compatible OpenAI en écoute sur
+    /// la boucle locale peut être un mandataire vers le nuage. Il se fait sur
+    /// l'hôte réel après résolution, ce qui est une opération bloquante : elle
+    /// vit dans `oxyn-llm`, avec le reste de ce qui parle au réseau.
+    #[must_use]
+    pub const fn allows_remote_provider(&self) -> bool {
+        !matches!(self, Self::Local)
+    }
+
+    /// Le plus contraignant des deux niveaux.
+    ///
+    /// Sert partout où deux niveaux se rencontrent — une conversation qui
+    /// touche deux connexions, un contexte assemblé avant que l'utilisateur ne
+    /// change de connexion. Le résultat ne divulgue jamais plus que le plus
+    /// prudent des deux.
+    #[must_use]
+    pub fn most_restrictive(self, other: Self) -> Self {
+        self.min(other)
+    }
+
+    /// Nom stable, pour l'affichage, la persistance et l'audit.
+    #[must_use]
+    pub const fn as_str(&self) -> &'static str {
+        match self {
+            Self::Local => "local",
+            Self::Metadata => "metadata",
+            Self::Sampled => "sampled",
+        }
+    }
+
+    /// Ce qui sort de la machine sous ce niveau, en une phrase montrable.
+    ///
+    /// En anglais : cette phrase rejoint une invite, c'est donc du texte de
+    /// code. L'interface doit afficher le niveau effectif **en permanence** et
+    /// non dans un panneau de réglages : un utilisateur qui ne peut pas dire
+    /// d'un coup d'œil où part sa requête ne donne pas un consentement éclairé
+    /// (AI-PROVIDERS).
+    #[must_use]
+    pub const fn describe(&self) -> &'static str {
+        match self {
+            Self::Local => "nothing leaves this machine; local model only",
+            Self::Metadata => "schema only: names, types, indexes, cardinalities — no row values",
+            Self::Sampled => "schema, plus row samples you approved column by column",
+        }
+    }
+}
+
+impl fmt::Display for PrivacyTier {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(self.as_str())
+    }
+}
+
+impl FromStr for PrivacyTier {
+    type Err = IdParseError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "local" => Ok(Self::Local),
+            "metadata" => Ok(Self::Metadata),
+            "sampled" => Ok(Self::Sampled),
+            _ => Err(IdParseError::new(
+                "PrivacyTier",
+                "expected: local, metadata or sampled",
             )),
         }
     }
@@ -119,6 +271,14 @@ pub struct ConnectionConfig {
     /// [`Environment::Production`].
     #[serde(default)]
     pub environment: Environment,
+    /// Ce qui a le droit de rejoindre une invite IA pour cette connexion.
+    ///
+    /// Absent du fichier, il vaut [`PrivacyTier::Metadata`] : le défaut
+    /// d'ADR-0006, et jamais [`Sampled`](PrivacyTier::Sampled). Le sens de la
+    /// prudence est celui d'[`environment`](Self::environment) — un champ
+    /// manquant ne dégrade pas la protection.
+    #[serde(default)]
+    pub privacy_tier: PrivacyTier,
     /// Paramètres non secrets : hôte, port, base, schéma, mode TLS…
     ///
     /// Un mot de passe n'a rien à faire ici. Voir
@@ -140,8 +300,8 @@ pub struct ConnectionConfig {
 
 impl ConnectionConfig {
     /// Crée une configuration avec les défauts prudents : identifiant frais,
-    /// environnement [`Production`](Environment::Production), aucun paramètre,
-    /// aucun secret.
+    /// environnement [`Production`](Environment::Production), niveau
+    /// [`Metadata`](PrivacyTier::Metadata), aucun paramètre, aucun secret.
     #[must_use]
     pub fn new(name: impl Into<String>, driver: DriverId) -> Self {
         Self {
@@ -149,6 +309,7 @@ impl ConnectionConfig {
             name: name.into(),
             driver,
             environment: Environment::default(),
+            privacy_tier: PrivacyTier::default(),
             params: IndexMap::new(),
             secret_ref: None,
             read_only: false,
@@ -159,6 +320,17 @@ impl ConnectionConfig {
     #[must_use]
     pub fn with_environment(mut self, environment: Environment) -> Self {
         self.environment = environment;
+        self
+    }
+
+    /// Fixe le niveau de confidentialité de cette connexion.
+    ///
+    /// C'est un acte de l'utilisateur sur **une** connexion : il n'existe
+    /// volontairement pas de chemin qui l'applique à plusieurs d'un coup
+    /// (ADR-0006).
+    #[must_use]
+    pub fn with_privacy_tier(mut self, tier: PrivacyTier) -> Self {
+        self.privacy_tier = tier;
         self
     }
 
@@ -200,7 +372,7 @@ impl fmt::Debug for ConnectionConfig {
         impl fmt::Debug for ClesSeules<'_> {
             fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
                 f.debug_map()
-                    .entries(self.0.keys().map(|k| (k, "<masqué>")))
+                    .entries(self.0.keys().map(|k| (k, "<redacted>")))
                     .finish()
             }
         }
@@ -209,10 +381,13 @@ impl fmt::Debug for ConnectionConfig {
             .field("name", &self.name)
             .field("driver", &self.driver)
             .field("environment", &self.environment)
+            // Le niveau est montrable, et il doit l'être : un incident se
+            // diagnostique en sachant sous quel niveau la connexion tournait.
+            .field("privacy_tier", &self.privacy_tier)
             .field("params", &ClesSeules(&self.params))
             .field(
                 "secret_ref",
-                &self.secret_ref.as_ref().map(|_| "<référence masquée>"),
+                &self.secret_ref.as_ref().map(|_| "<redacted reference>"),
             )
             .field("read_only", &self.read_only)
             .finish_non_exhaustive()
@@ -247,6 +422,70 @@ mod tests {
         );
         assert!(!cfg.read_only);
         assert!(cfg.params.is_empty());
+    }
+
+    #[test]
+    fn une_connexion_sans_niveau_explicite_vaut_metadata() {
+        // ADR-0006 : le défaut est sûr. Une connexion dont le niveau n'est pas
+        // renseigné ne vaut **jamais** `Sampled` — c'est le sens de prudence
+        // d'I-02 appliqué à la frontière IA.
+        let cfg = ConnectionConfig::new("base client", DriverId::postgres());
+        assert_eq!(cfg.privacy_tier, PrivacyTier::Metadata);
+        assert!(!cfg.privacy_tier.allows_row_values());
+    }
+
+    #[test]
+    fn un_niveau_absent_du_fichier_vaut_metadata() {
+        // Le champ manquant est le cas réel : un workspace écrit avant que le
+        // champ n'existe. Il ne doit pas se relire en `Sampled`.
+        let json = r#"{
+            "id": "018f0000-0000-7000-8000-000000000000",
+            "name": "base client",
+            "driver": "postgres"
+        }"#;
+        let cfg: ConnectionConfig = serde_json::from_str(json).expect("désérialisation");
+        assert_eq!(cfg.privacy_tier, PrivacyTier::Metadata);
+    }
+
+    #[test]
+    fn le_niveau_se_persiste_avec_la_connexion() {
+        // Le niveau appartient à la connexion : l'aller-retour doit être exact,
+        // sinon un workspace relu dégraderait — ou élargirait — la protection.
+        for niveau in [
+            PrivacyTier::Local,
+            PrivacyTier::Metadata,
+            PrivacyTier::Sampled,
+        ] {
+            let cfg =
+                ConnectionConfig::new("bac à sable", DriverId::sqlite()).with_privacy_tier(niveau);
+            let json = serde_json::to_string(&cfg).expect("sérialisation");
+            let relu: ConnectionConfig = serde_json::from_str(&json).expect("désérialisation");
+            assert_eq!(relu.privacy_tier, niveau, "{json}");
+            assert_eq!(niveau.as_str().parse::<PrivacyTier>(), Ok(niveau));
+        }
+        assert!("confidentiel".parse::<PrivacyTier>().is_err());
+    }
+
+    #[test]
+    fn l_ordre_des_niveaux_va_du_moins_au_plus_divulgant() {
+        assert!(PrivacyTier::Local < PrivacyTier::Metadata);
+        assert!(PrivacyTier::Metadata < PrivacyTier::Sampled);
+        assert_eq!(
+            PrivacyTier::Sampled.most_restrictive(PrivacyTier::Metadata),
+            PrivacyTier::Metadata
+        );
+        assert_eq!(
+            PrivacyTier::Metadata.most_restrictive(PrivacyTier::Local),
+            PrivacyTier::Local
+        );
+
+        assert!(!PrivacyTier::Local.allows_row_values());
+        assert!(!PrivacyTier::Metadata.allows_row_values());
+        assert!(PrivacyTier::Sampled.allows_row_values());
+
+        assert!(!PrivacyTier::Local.allows_remote_provider());
+        assert!(PrivacyTier::Metadata.allows_remote_provider());
+        assert!(PrivacyTier::Sampled.allows_remote_provider());
     }
 
     #[test]

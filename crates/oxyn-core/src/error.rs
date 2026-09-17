@@ -47,17 +47,25 @@ impl ErrorClass {
         matches!(self, Self::Transient)
     }
 
-    /// Nom stable, pour l'audit.
+    /// Nom stable, écrit dans l'état local et lu par un humain sans Oxyn
+    /// ([I-11](../../../CLAUDE.md#i-11)).
+    ///
+    /// Les versions antérieures au 2026-09-16 écrivaient ce code en français ;
+    /// `oxyn-store` relit encore ces trois valeurs, mais plus personne ne les
+    /// écrit.
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
-            Self::Transient => "transitoire",
-            Self::Permanent => "permanente",
-            Self::Ambiguous => "ambiguë",
+            Self::Transient => "transient",
+            Self::Permanent => "permanent",
+            Self::Ambiguous => "ambiguous",
         }
     }
 }
 
+/// Un seul nom pour une famille : celui qu'on affiche est celui qu'on écrit.
+/// Deux rendus différant par la seule langue laissaient un lecteur incapable
+/// de dire lequel des deux était le code d'audit.
 impl std::fmt::Display for ErrorClass {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.write_str(self.as_str())
@@ -75,19 +83,19 @@ impl std::fmt::Display for ErrorClass {
 pub enum OxynError {
     /// Configuration invalide ou incomplète : workspace illisible, paramètre de
     /// connexion manquant, valeur hors domaine.
-    #[error("configuration invalide : {0}")]
+    #[error("invalid configuration: {0}")]
     Config(String),
 
     /// La connexion au serveur n'a pas pu être établie ou a été perdue.
     ///
     /// C'est la famille transitoire : coupure réseau, `too many connections`,
     /// serveur en redémarrage.
-    #[error("connexion impossible : {0}")]
+    #[error("connection failed: {0}")]
     Connection(String),
 
     /// Le serveur a refusé les identifiants, ou le compte n'a pas les droits
     /// nécessaires pour ouvrir la session.
-    #[error("authentification refusée : {0}")]
+    #[error("authentication failed: {0}")]
     Authentication(String),
 
     /// Erreur remontée par un driver, avec la famille à laquelle il la
@@ -96,7 +104,7 @@ pub enum OxynError {
     /// Le driver **classe** son erreur : c'est lui, et lui seul, qui sait si
     /// `08006` est une coupure ou un refus définitif. L'appelant lit
     /// [`ErrorClass`], il ne relit pas le message.
-    #[error("driver `{driver}` ({class}) : {source}")]
+    #[error("driver `{driver}` ({class} error): {source}")]
     Driver {
         /// Le driver d'où vient l'erreur.
         driver: DriverId,
@@ -114,34 +122,46 @@ pub enum OxynError {
     /// Le serveur a rejeté l'instruction : syntaxe, objet absent, contrainte
     /// violée, droits insuffisants. Famille permanente : on affiche, on ne
     /// retente pas.
-    #[error("requête rejetée : {0}")]
+    #[error("query rejected: {0}")]
     Query(String),
 
     /// Le délai imparti est écoulé **côté client**.
     ///
     /// Famille ambiguë : rien ne dit que le serveur n'a pas appliqué l'écriture.
     /// Voir [`OxynError::is_retryable`].
-    #[error("délai dépassé après {after:?}")]
+    #[error("timed out after {after:?}")]
     Timeout {
         /// Durée au bout de laquelle l'attente a été abandonnée.
         after: Duration,
     },
 
+    /// La requête est partie et son effet côté serveur est inconnu.
+    ///
+    /// Famille ambiguë, comme [`Timeout`](Self::Timeout), pour le cas où aucun
+    /// délai n'a expiré : la connexion a lâché après l'envoi. Un fournisseur de
+    /// modèles a peut-être produit — et facturé — la réponse ; un serveur a
+    /// peut-être appliqué l'écriture.
+    ///
+    /// Le texte décrit le fait. Il ne porte ni URL, ni hôte, ni en-tête, ni le
+    /// message brut de la pile réseau, qui peut contenir les trois (I-03).
+    #[error("outcome unknown: {0}")]
+    OutcomeUnknown(String),
+
     /// L'opération a été annulée, à la demande de l'utilisateur ou par
     /// propagation d'un [`CancelToken`](crate::cancel::CancelToken) parent.
-    #[error("opération annulée")]
+    #[error("operation cancelled")]
     Cancelled,
 
     /// Le `PolicyGate` a refusé la commande. Ce n'est pas une panne : c'est le
     /// produit qui fait son travail.
-    #[error("refusé par la politique : {reason}")]
+    #[error("denied by policy: {reason}")]
     PolicyDenied {
         /// Motif du refus, montrable tel quel à l'utilisateur.
         reason: String,
     },
 
     /// La commande exige une approbation explicite qui n'a pas été donnée.
-    #[error("approbation requise : {reason}")]
+    #[error("approval required: {reason}")]
     ApprovalRequired {
         /// Ce sur quoi l'utilisateur doit se prononcer.
         reason: String,
@@ -151,7 +171,7 @@ pub enum OxynError {
     ///
     /// « Ne pas savoir faire est une réponse acceptable ; laisser croire ne
     /// l'est pas » ([`DRIVER-CONTRACT` §5](../../../docs/DRIVER-CONTRACT.md)).
-    #[error("capacité absente : {capability}")]
+    #[error("capability not supported: {capability}")]
     NotSupported {
         /// Nom du ou des drapeaux manquants.
         capability: String,
@@ -159,21 +179,21 @@ pub enum OxynError {
 
     /// Échec d'entrée-sortie locale : débordement disque, fichier de workspace,
     /// export.
-    #[error("erreur d'entrée-sortie : {0}")]
+    #[error("I/O error: {0}")]
     Io(#[from] std::io::Error),
 
     /// Une donnée n'a pas pu être encodée ou décodée : workspace écrit par une
     /// version future, JSON malformé, identifiant illisible.
-    #[error("erreur de sérialisation : {0}")]
+    #[error("serialization error: {0}")]
     Serialization(String),
 
     /// Le catalogue n'est pas disponible : introspection en cours, cache vide,
     /// droits insuffisants pour lire les métadonnées.
-    #[error("catalogue indisponible : {0}")]
+    #[error("catalog unavailable: {0}")]
     CatalogUnavailable(String),
 
     /// Invariant interne rompu. C'est un bug d'Oxyn, pas une erreur d'usage.
-    #[error("erreur interne : {0}")]
+    #[error("internal error: {0}")]
     Internal(String),
 }
 
@@ -200,7 +220,7 @@ impl OxynError {
         match self {
             Self::Driver { class, .. } => *class,
             Self::Connection(_) | Self::CatalogUnavailable(_) => ErrorClass::Transient,
-            Self::Timeout { .. } => ErrorClass::Ambiguous,
+            Self::Timeout { .. } | Self::OutcomeUnknown(_) => ErrorClass::Ambiguous,
             _ => ErrorClass::Permanent,
         }
     }
@@ -211,6 +231,9 @@ impl OxynError {
     ///
     /// * [`Timeout`](Self::Timeout) répond `false` : l'effet côté serveur est
     ///   inconnu, et rejouer un `INSERT` expiré crée un doublon ;
+    /// * [`OutcomeUnknown`](Self::OutcomeUnknown) répond `false` pour la même
+    ///   raison, sans qu'un délai ait expiré : la requête est partie, la réponse
+    ///   n'est pas arrivée ;
     /// * [`Driver`](Self::Driver) répond selon la classe que le driver a
     ///   déclarée, et elle seule.
     ///
@@ -344,6 +367,9 @@ mod tests {
             .class(),
             ErrorClass::Ambiguous
         );
+        let inconnu = OxynError::OutcomeUnknown("connexion perdue après l'envoi".into());
+        assert_eq!(inconnu.class(), ErrorClass::Ambiguous);
+        assert!(!inconnu.is_retryable());
         assert_eq!(
             OxynError::Query("syntaxe".into()).class(),
             ErrorClass::Permanent
@@ -381,6 +407,7 @@ mod tests {
             OxynError::Timeout {
                 after: Duration::from_millis(1),
             },
+            OxynError::OutcomeUnknown("inconnu".into()),
             OxynError::Cancelled,
             OxynError::PolicyDenied { reason: "r".into() },
             OxynError::ApprovalRequired { reason: "r".into() },

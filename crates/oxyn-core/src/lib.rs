@@ -18,6 +18,7 @@
 //! | [`connection`] | configuration et marquage d'environnement | SECURITY |
 //! | [`command`] | [`Command`], [`Actor`] | ADR-0004 |
 //! | [`policy`] | [`PolicyGate`], [`DefaultPolicy`] | ADR-0004, SECURITY |
+//! | [`ai`] | déclaration d'un fournisseur, provenance d'un texte | ADR-0023 |
 //! | [`stats`] | volumétrie et temps d'une exécution | — |
 //! | [`event`] | ce qui remonte vers l'interface | UX-SPEC |
 //!
@@ -68,6 +69,7 @@
 //! assert!(decision.is_denied());
 //! ```
 
+pub mod ai;
 pub mod cancel;
 pub mod capabilities;
 pub mod command;
@@ -77,33 +79,40 @@ pub mod event;
 pub mod ids;
 pub mod library;
 pub use library::{
-    DocumentFilter, HistoryFilter, HistoryStatusFilter, MAX_QUERY_DOCUMENT_BYTES,
-    QueryDocumentUpdate,
+    DocumentFilter, HistoryConnectionFilter, HistoryFilter, HistoryStatusFilter,
+    MAX_QUERY_DOCUMENT_BYTES, QueryDocumentUpdate,
 };
 pub mod policy;
 pub mod preferences;
 pub mod preview;
-pub use preferences::{Appearance, PreferencesSnapshot, ReadingDensity, WorkspacePreferences};
+pub use preferences::{
+    Appearance, BinaryPreference, ObjectLocation, ObjectSection, PreferencesSnapshot,
+    ReadingDensity, WorkspacePreferences,
+};
 pub mod query;
 pub mod stats;
 pub mod value;
 
+pub use ai::{
+    AiProviderConfig, AiProviderKind, ExternalAgentConfig, MAX_PROVENANCE_BYTES, Provenance,
+    ProviderId, ReasoningBlock, Role, StopReason,
+};
 pub use cancel::CancelToken;
 pub use capabilities::Capabilities;
 pub use command::{Actor, CatalogRefreshScope, Command, ExportFormat};
-pub use connection::{ConnectionConfig, Environment};
+pub use connection::{ConnectionConfig, Environment, PrivacyTier};
 pub use error::{ErrorClass, OxynError, Result};
 pub use event::Event;
 pub use ids::{
-    AgentId, AgentSessionId, CommandId, ConnectionId, DocumentId, DriverId, IdParseError, ResultId,
-    SessionId, StatementHandle, WorkspaceId,
+    AgentId, AgentSessionId, AppSessionId, CommandId, ConnectionId, ConversationId, DocumentId,
+    DriverId, IdParseError, ResultId, SessionId, StatementHandle, WorkspaceId,
 };
 pub use policy::{ConnectionFacts, Decision, DefaultPolicy, PolicyGate, Preview};
+pub use preview::{PreviewShape, PreviewSort};
 pub use query::{
     ExecLimits, ExecRequest, MutationRisk, QueryLanguage, SqlDialect, StatementIntent,
 };
 pub use stats::ExecStats;
-pub use preview::{PreviewCondition, PreviewFilter, PreviewShape, PreviewSort};
 pub use value::{ParameterParseError, ParameterType, ScalarValue};
 
 /// Ce qu'on importe d'un coup quand on travaille avec le domaine.
@@ -118,7 +127,7 @@ pub mod prelude {
     pub use crate::cancel::CancelToken;
     pub use crate::capabilities::Capabilities;
     pub use crate::command::{Actor, Command, ExportFormat};
-    pub use crate::connection::{ConnectionConfig, Environment};
+    pub use crate::connection::{ConnectionConfig, Environment, PrivacyTier};
     pub use crate::error::{ErrorClass, OxynError, Result};
     pub use crate::event::Event;
     pub use crate::ids::{

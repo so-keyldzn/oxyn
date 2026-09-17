@@ -32,8 +32,8 @@ use std::fmt::Write as _;
 
 use arrow::array::{Array, AsArray};
 use arrow::datatypes::{
-    DataType, Decimal128Type, Int8Type, Int16Type, Int32Type, Int64Type, UInt8Type, UInt16Type,
-    UInt32Type, UInt64Type,
+    DataType, Decimal128Type, Int8Type, Int16Type, Int32Type, Int64Type, Schema, UInt8Type,
+    UInt16Type, UInt32Type, UInt64Type,
 };
 use arrow::record_batch::RecordBatch;
 use arrow::util::display::{ArrayFormatter, FormatOptions as ArrowFormatOptions};
@@ -628,6 +628,80 @@ const fn unrenderable<'a>(raison: &'static str) -> CellValue<'a> {
     }
 }
 
+/// The time zone in which a result displays its zone-aware instants.
+///
+/// Derived from the schema rather than chosen: Oxyn converts nothing. A driver
+/// declares the zone on the Arrow field — the PostgreSQL driver maps
+/// `timestamptz` to `Timestamp(_, Some("UTC"))` — and the cell is rendered in
+/// that zone, offset included.
+///
+/// **Naive timestamps are deliberately ignored.** `timestamp without time zone`
+/// arrives as `Timestamp(_, None)` and carries no zone at all; it renders
+/// without a `Z` and without an offset. Counting it here would let the interface
+/// announce a zone the server never sent, which is the one thing a timestamp
+/// label must not do.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+#[non_exhaustive]
+pub enum TimestampDisplay {
+    /// No zone-aware column in this result: there is nothing to announce.
+    #[default]
+    Absent,
+    /// Every zone-aware column declares this same zone.
+    Uniform(String),
+    /// Zone-aware columns disagree. Naming one of them would describe the other
+    /// columns wrongly, so the interface must say that they differ instead.
+    Mixed,
+}
+
+/// The zone in which this schema's instants will be displayed.
+///
+/// Scans fields once; a result has tens of columns, not thousands, and this is
+/// called when a result completes rather than per frame.
+/// Longueur maximale retenue pour un nom de fuseau venu du serveur.
+///
+/// Voir le corps de [`timestamp_display`] : ce nom est une entrée hostile, et il
+/// partage sa ligne avec la mention qui dit à quelle exécution appartiennent les
+/// lignes affichées.
+const ZONE_MAX_CHARS: usize = 64;
+
+#[must_use]
+pub fn timestamp_display(schema: &Schema) -> TimestampDisplay {
+    let mut vu: Option<&str> = None;
+    for champ in schema.fields() {
+        // Only the top level: a zone buried in a struct or a list is not what
+        // the footer is describing, and claiming it would overstate.
+        let DataType::Timestamp(_, Some(zone)) = champ.data_type() else {
+            continue;
+        };
+        match vu {
+            None => vu = Some(zone.as_ref()),
+            Some(deja) if deja == zone.as_ref() => {}
+            Some(_) => return TimestampDisplay::Mixed,
+        }
+    }
+    // Le nom de fuseau vient du schéma, donc du serveur : c'est une entrée
+    // hostile, y compris quand elle n'est « que » affichée. La phrase du pied se
+    // termine par « Results belong to this execution », la seule mention qui
+    // garantit que les lignes viennent de l'exécution en cours ; un nom très
+    // long, ou porteur d'une marque de direction, la repousserait hors du cadre
+    // ou en brouillerait la lecture. Un fuseau réel tient largement dans la
+    // borne — `America/Argentina/ComodRivadavia` fait 32 caractères.
+    vu.map_or(TimestampDisplay::Absent, |zone| {
+        let propre: String = zone
+            .chars()
+            .filter(|caractere| !caractere.is_control())
+            .take(ZONE_MAX_CHARS)
+            .collect();
+        if propre.is_empty() {
+            // Rien de nommable : se taire plutôt qu'afficher une chaîne vide
+            // derrière « Display timezone ».
+            TimestampDisplay::Absent
+        } else {
+            TimestampDisplay::Uniform(propre)
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::sync::Arc;
@@ -1004,6 +1078,59 @@ mod tests {
         assert_eq!(
             format_cell(&batch, 0, 2, &opts).text(),
             Some("1970-01-01T00:00:00")
+        );
+    }
+
+    /// Un schéma à une colonne horodatée, avec ou sans fuseau.
+    fn schema_horodate(zones: &[Option<&str>]) -> Schema {
+        Schema::new(
+            zones
+                .iter()
+                .enumerate()
+                .map(|(index, zone)| {
+                    Field::new(
+                        format!("t{index}"),
+                        DataType::Timestamp(TimeUnit::Microsecond, zone.map(Into::into)),
+                        true,
+                    )
+                })
+                .collect::<Vec<_>>(),
+        )
+    }
+
+    #[test]
+    fn le_fuseau_daffichage_se_deduit_du_schema() {
+        // Aucune colonne horodatée : rien à annoncer.
+        assert_eq!(
+            timestamp_display(&Schema::new(vec![Field::new("id", DataType::Int32, false)])),
+            TimestampDisplay::Absent
+        );
+        // Le cas PostgreSQL courant : `timestamptz` arrive en UTC.
+        assert_eq!(
+            timestamp_display(&schema_horodate(&[Some("UTC"), Some("UTC")])),
+            TimestampDisplay::Uniform("UTC".to_owned())
+        );
+        // Deux zones différentes : en nommer une décrirait l'autre à tort.
+        assert_eq!(
+            timestamp_display(&schema_horodate(&[Some("UTC"), Some("+02:00")])),
+            TimestampDisplay::Mixed
+        );
+    }
+
+    #[test]
+    fn un_horodatage_sans_fuseau_nen_fait_pas_annoncer_un() {
+        // `timestamp without time zone` ne porte aucun fuseau. C'est le défaut
+        // que ce test tient fermé : annoncer « UTC » ici inventerait une
+        // information que le serveur n'a pas envoyée, et la valeur elle-même se
+        // rend sans `Z` ni décalage — les deux doivent rester cohérents.
+        assert_eq!(
+            timestamp_display(&schema_horodate(&[None, None])),
+            TimestampDisplay::Absent
+        );
+        // Mêlé à une colonne qui, elle, en porte un : seule celle-ci compte.
+        assert_eq!(
+            timestamp_display(&schema_horodate(&[None, Some("UTC")])),
+            TimestampDisplay::Uniform("UTC".to_owned())
         );
     }
 

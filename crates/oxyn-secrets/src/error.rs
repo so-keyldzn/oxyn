@@ -35,7 +35,7 @@ pub enum SecretError {
     ///
     /// Ce n'est pas une panne d'Oxyn ; c'est une capacité absente de
     /// l'environnement, et l'interface doit le dire ainsi.
-    #[error("trousseau indisponible : {detail}")]
+    #[error("keychain unavailable: {detail}")]
     Unavailable {
         /// Diagnostic de la plateforme, sans contenu stocké.
         detail: String,
@@ -46,14 +46,14 @@ pub enum SecretError {
     ///
     /// Ce n'est **pas** une erreur à retenter en boucle : c'est l'utilisateur
     /// qui doit agir.
-    #[error("accès au trousseau refusé : {detail}")]
+    #[error("keychain access denied: {detail}")]
     AccessDenied {
         /// Diagnostic de la plateforme, sans contenu stocké.
         detail: String,
     },
 
     /// Le trousseau a échoué pour une raison qui lui est propre.
-    #[error("échec du trousseau : {detail}")]
+    #[error("keychain failure: {detail}")]
     Backend {
         /// Diagnostic de la plateforme, sans contenu stocké.
         detail: String,
@@ -66,7 +66,7 @@ pub enum SecretError {
     /// citer ni le contenu fautif, ni la position de l'erreur d'analyse. Une
     /// erreur `serde_json` recopie volontiers un fragment de son entrée ; on ne
     /// la propage pas.
-    #[error("secret illisible : {detail}")]
+    #[error("unreadable secret: {detail}")]
     Malformed {
         /// Nature du défaut, choisie parmi un ensemble fini de constantes.
         detail: &'static str,
@@ -75,7 +75,7 @@ pub enum SecretError {
     /// Le trousseau impose une limite de taille que la valeur dépasse.
     ///
     /// Cas réel : une clé privée SSH de 8 Ko face à une limite de plateforme.
-    #[error("`{attribute}` dépasse la limite de {limit} caractères du trousseau")]
+    #[error("`{attribute}` exceeds the keychain limit of {limit} characters")]
     TooLarge {
         /// Nom de l'attribut refusé, tel que la plateforme le nomme.
         attribute: String,
@@ -88,7 +88,7 @@ pub enum SecretError {
     /// Elle vient d'un fichier de workspace, et un fichier de workspace n'est
     /// pas une entrée fiable ([`SECURITY`](../../../docs/SECURITY.md), surface
     /// d'entrée n° 3).
-    #[error("référence de secret invalide : {detail}")]
+    #[error("invalid secret reference: {detail}")]
     InvalidReference {
         /// Raison du rejet, sans recopier la valeur fautive.
         detail: &'static str,
@@ -97,11 +97,11 @@ pub enum SecretError {
 
 impl SecretError {
     /// Détail employé quand le contenu relu n'est pas un bundle JSON.
-    pub(crate) const NOT_A_BUNDLE: &'static str = "ce n'est pas un bundle d'identifiants JSON";
+    pub(crate) const NOT_A_BUNDLE: &'static str = "not a JSON credentials bundle";
     /// Détail employé quand le bundle n'a pas pu être encodé.
-    pub(crate) const NOT_ENCODABLE: &'static str = "le bundle n'a pas pu être encodé en JSON";
+    pub(crate) const NOT_ENCODABLE: &'static str = "the bundle could not be encoded as JSON";
     /// Détail employé quand la plateforme rend des octets non textuels.
-    pub(crate) const NOT_UTF8: &'static str = "le trousseau a rendu des octets non textuels";
+    pub(crate) const NOT_UTF8: &'static str = "the keychain returned non-textual bytes";
 }
 
 impl From<SecretError> for OxynError {
@@ -113,10 +113,10 @@ impl From<SecretError> for OxynError {
     fn from(err: SecretError) -> Self {
         match err {
             SecretError::Unavailable { detail } => Self::NotSupported {
-                capability: format!("trousseau du système ({detail})"),
+                capability: format!("system keychain ({detail})"),
             },
             SecretError::AccessDenied { detail } => {
-                Self::Authentication(format!("trousseau du système : {detail}"))
+                Self::Authentication(format!("system keychain: {detail}"))
             }
             other @ (SecretError::Backend { .. } | SecretError::TooLarge { .. }) => {
                 Self::Io(std::io::Error::other(other.to_string()))

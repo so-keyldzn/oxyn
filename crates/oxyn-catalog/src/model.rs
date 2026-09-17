@@ -162,7 +162,7 @@ impl NamespaceRef {
     pub fn new(parent: CatalogPath, name: impl Into<String>) -> Result<Self, CatalogPathError> {
         if parent.namespace().is_some() || parent.relation().is_some() {
             return Err(CatalogPathError::new(
-                "le parent d'un espace de noms est un catalogue, ou rien",
+                "the parent of a namespace is a catalog, or nothing",
             ));
         }
         let name = name.into();
@@ -350,7 +350,7 @@ impl RelationRef {
     ) -> Result<Self, CatalogPathError> {
         if parent.relation().is_some() {
             return Err(CatalogPathError::new(
-                "le parent d'une relation ne peut pas être une relation",
+                "the parent of a relation cannot be a relation",
             ));
         }
         let name = name.into();

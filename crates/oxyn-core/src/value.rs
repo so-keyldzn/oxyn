@@ -137,7 +137,7 @@ impl fmt::Display for ScalarValue {
                     write!(f, "{octet:02x}")?;
                 }
                 if b.len() > Self::APERCU_OCTETS {
-                    write!(f, "… ({} octets)", b.len())?;
+                    write!(f, "… ({} bytes)", b.len())?;
                 }
                 Ok(())
             }
@@ -480,7 +480,7 @@ mod tests {
 
         let long = ScalarValue::Bytes(vec![0xab; 1024]);
         let rendu = long.to_string();
-        assert!(rendu.contains("1024 octets"), "rendu : {rendu}");
+        assert!(rendu.contains("1024 bytes"), "rendu : {rendu}");
         assert!(
             rendu.len() < 128,
             "un BLOB ne doit pas être rendu en entier"

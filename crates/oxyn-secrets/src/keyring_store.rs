@@ -126,7 +126,7 @@ impl SecretStore for KeyringSecretStore {
             .map_err(|err| map_keyring(&err))?;
         // La référence est publique ; la valeur ne l'est pas et n'apparaît pas
         // ici. C'est toute la raison d'être de la séparation des deux.
-        tracing::debug!(secret_ref = %reference, "secret écrit dans le trousseau");
+        tracing::debug!(secret_ref = %reference, "secret written to the keychain");
         Ok(())
     }
 
@@ -152,7 +152,7 @@ impl SecretStore for KeyringSecretStore {
             // succès. Sans cela, supprimer une connexion sans mot de passe
             // ferait remonter une erreur à l'utilisateur pour rien.
             Ok(()) | Err(keyring::Error::NoEntry) => {
-                tracing::debug!(secret_ref = %reference, "secret supprimé du trousseau");
+                tracing::debug!(secret_ref = %reference, "secret removed from the keychain");
                 Ok(())
             }
             Err(err) => Err(map_keyring(&err)),
@@ -178,16 +178,16 @@ fn map_keyring(err: &keyring::Error) -> SecretError {
 
     match err {
         K::NoEntry => SecretError::Backend {
-            detail: "aucun secret sous cette référence".into(),
+            detail: "no secret under this reference".into(),
         },
         K::NoDefaultStore => SecretError::Unavailable {
-            detail: "aucun magasin d'identifiants n'a pu être initialisé".into(),
+            detail: "no credential store could be initialized".into(),
         },
         K::Invalid(attribute, _) if attribute.as_str() == "platform" => SecretError::Unavailable {
-            detail: "plateforme non gérée par le trousseau".into(),
+            detail: "platform not supported by the keychain".into(),
         },
         K::Invalid(attribute, _) => SecretError::Backend {
-            detail: format!("paramètre `{attribute}` refusé par le trousseau"),
+            detail: format!("parameter `{attribute}` rejected by the keychain"),
         },
         K::NoStorageAccess(cause) => SecretError::AccessDenied {
             detail: cause.to_string(),
@@ -199,20 +199,20 @@ fn map_keyring(err: &keyring::Error) -> SecretError {
             detail: SecretError::NOT_UTF8,
         },
         K::BadDataFormat(_, _) => SecretError::Malformed {
-            detail: "le trousseau n'a pas su décoder ce qu'il stocke",
+            detail: "the keychain could not decode what it stores",
         },
         K::BadStoreFormat(raison) => SecretError::Backend {
-            detail: format!("magasin d'identifiants illisible : {raison}"),
+            detail: format!("unreadable credential store: {raison}"),
         },
         K::TooLong(attribute, limite) => SecretError::TooLarge {
             attribute: attribute.clone(),
             limit: *limite,
         },
         K::Ambiguous(_) => SecretError::Backend {
-            detail: "plusieurs entrées du trousseau correspondent à cette référence".into(),
+            detail: "several keychain entries match this reference".into(),
         },
         _ => SecretError::Backend {
-            detail: "erreur inconnue du trousseau".into(),
+            detail: "unknown keychain error".into(),
         },
     }
 }

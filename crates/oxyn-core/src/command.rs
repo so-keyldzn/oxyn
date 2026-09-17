@@ -390,6 +390,18 @@ pub enum Command {
     ReadHistory { filter: Box<crate::HistoryFilter> },
     /// Load a full selected historical statement separately from its list row.
     ReadHistoryEntry { entry: i64 },
+    /// List the connections history recorded, including ones since removed.
+    ///
+    /// Separate from [`Command::ReadHistory`] on purpose: that one answers
+    /// "which executions match these filters", this one answers "which
+    /// connections may be filtered on". Folding them together would make a
+    /// single command whose two answers have no reason to be paged alike.
+    ListHistoryConnections {
+        /// Workspace against which existence is resolved, not a history scope.
+        workspace: WorkspaceId,
+        /// Page bounds; history may name many connections.
+        filter: crate::HistoryConnectionFilter,
+    },
     /// Reopen an existing result without creating a query or a session.
     OpenRetainedResult {
         connection: ConnectionId,
@@ -434,6 +446,58 @@ pub enum Command {
         /// La connexion visée.
         connection: ConnectionId,
     },
+
+    /// List the AI providers declared on this machine, without contacting any
+    /// of them.
+    ///
+    /// This is what decides whether the AI workspace exists at all: an empty
+    /// list is the default installation, not a failure
+    /// ([ADR-0023](../../docs/adr/0023-fournisseurs-declares-et-provenance.md)).
+    /// It resolves no name and reports no reach — a stored classification would
+    /// be yesterday's DNS answer applied to today's request.
+    ListAiProviders,
+
+    /// Declare an AI provider, or replace the declaration bearing its
+    /// identifier.
+    SaveAiProvider {
+        /// The declaration, carrying a secret reference and never a key.
+        /// Boxed like [`CreateConnection`](Self::CreateConnection): it would
+        /// otherwise widen every other variant.
+        config: Box<crate::ai::AiProviderConfig>,
+    },
+
+    /// List the declared external agents.
+    ///
+    /// Separate from [`ListAiProviders`](Self::ListAiProviders) because the two
+    /// declarations have nothing in common: an external agent has no endpoint,
+    /// no model, and above all **no secret reference**
+    /// ([ADR-0026](../../docs/adr/0026-agents-externes-acp.md)).
+    ListExternalAgents,
+
+    /// Declare an external agent, or replace the declaration bearing its
+    /// identifier.
+    SaveExternalAgent {
+        /// The declaration: a command to run, its arguments, its environment.
+        /// **Never a secret** — an external agent carries its own
+        /// authentication, which is the point of the mode.
+        agent: Box<crate::ai::ExternalAgentConfig>,
+    },
+
+    /// Remove a declared external agent.
+    ///
+    /// Nothing else is revoked: unlike a provider, there is no keychain entry
+    /// behind it.
+    RemoveExternalAgent {
+        /// The declaration to forget.
+        id: crate::ai::ProviderId,
+    },
+
+    /// Remove a declared AI provider. Documents keep the provenance they were
+    /// written with.
+    RemoveAiProvider {
+        /// The declaration to forget.
+        id: crate::ai::ProviderId,
+    },
 }
 
 impl Command {
@@ -454,6 +518,16 @@ impl Command {
     ///   passent donc par une approbation.
     /// * [`Cancel`](Self::Cancel) répond `Read` : annuler ne modifie rien, et
     ///   une annulation qu'il faut faire approuver n'est pas une annulation.
+    /// * les commandes de déclaration de fournisseur d'IA répondent `Read`,
+    ///   comme [`WriteDocument`](Self::WriteDocument) et pour la même raison :
+    ///   elles n'atteignent aucune base, et une confirmation « base de
+    ///   données » qui ne correspond à rien finit par être cliquée sans être
+    ///   lue. Ce qui les protège n'est pas une approbation mais un **refus** :
+    ///   le `PolicyGate` interdit [`SaveAiProvider`](Self::SaveAiProvider) et
+    ///   [`RemoveAiProvider`](Self::RemoveAiProvider) à un
+    ///   [`Actor::Agent`] — un agent qui déclarerait le point
+    ///   d'accès par lequel il parle disposerait d'un canal d'exfiltration, et
+    ///   c'est la catégorie d'action dont il n'a aucun usage légitime.
     #[must_use]
     pub fn intent(&self) -> StatementIntent {
         match self {
@@ -477,9 +551,16 @@ impl Command {
             | Self::DeleteQueryDocument { .. }
             | Self::ReadHistory { .. }
             | Self::ReadHistoryEntry { .. }
+            | Self::ListHistoryConnections { .. }
             | Self::OpenRetainedResult { .. }
             | Self::OpenDocument { .. }
-            | Self::WriteDocument { .. } => StatementIntent::Read,
+            | Self::WriteDocument { .. }
+            | Self::ListAiProviders
+            | Self::SaveAiProvider { .. }
+            | Self::RemoveAiProvider { .. }
+            | Self::ListExternalAgents
+            | Self::SaveExternalAgent { .. }
+            | Self::RemoveExternalAgent { .. } => StatementIntent::Read,
             Self::CreateConnection { .. }
             | Self::UpdateConnection { .. }
             | Self::DeleteConnection { .. } => StatementIntent::Ddl,
@@ -516,10 +597,20 @@ impl Command {
             | Self::CloseQueryDocument { .. }
             | Self::DeleteQueryDocument { .. }
             | Self::ReadHistoryEntry { .. }
+            | Self::ListHistoryConnections { .. }
             | Self::OpenDocument { .. }
             | Self::WriteDocument { .. }
             | Self::ReadWorkspacePreferences { .. }
-            | Self::WriteWorkspacePreferences { .. } => None,
+            | Self::WriteWorkspacePreferences { .. }
+            // Un fournisseur est déclaré **par machine** (ADR-0023) : il n'a
+            // pas de connexion visée, et le niveau de confidentialité qui
+            // gouverne son usage reste celui de la connexion ouverte.
+            | Self::ListAiProviders
+            | Self::SaveAiProvider { .. }
+            | Self::RemoveAiProvider { .. }
+            | Self::ListExternalAgents
+            | Self::SaveExternalAgent { .. }
+            | Self::RemoveExternalAgent { .. } => None,
         }
     }
 
@@ -587,6 +678,7 @@ impl Command {
             Self::DeleteQueryDocument { .. } => "DeleteQueryDocument",
             Self::ReadHistory { .. } => "ReadHistory",
             Self::ReadHistoryEntry { .. } => "ReadHistoryEntry",
+            Self::ListHistoryConnections { .. } => "ListHistoryConnections",
             Self::OpenRetainedResult { .. } => "OpenRetainedResult",
             Self::ReadWorkspacePreferences { .. } => "ReadWorkspacePreferences",
             Self::WriteWorkspacePreferences { .. } => "WriteWorkspacePreferences",
@@ -594,6 +686,12 @@ impl Command {
             Self::CreateConnection { .. } => "CreateConnection",
             Self::UpdateConnection { .. } => "UpdateConnection",
             Self::DeleteConnection { .. } => "DeleteConnection",
+            Self::ListAiProviders => "ListAiProviders",
+            Self::SaveAiProvider { .. } => "SaveAiProvider",
+            Self::RemoveAiProvider { .. } => "RemoveAiProvider",
+            Self::ListExternalAgents => "ListExternalAgents",
+            Self::SaveExternalAgent { .. } => "SaveExternalAgent",
+            Self::RemoveExternalAgent { .. } => "RemoveExternalAgent",
         }
     }
 
@@ -642,12 +740,7 @@ mod tests {
             // vraiment sur elle : un `Default` passerait sans rien prouver.
             shape: crate::preview::PreviewShape {
                 sort: vec![crate::preview::PreviewSort::descending("id")],
-                filter: vec![crate::preview::PreviewFilter {
-                    column: "note".into(),
-                    condition: crate::preview::PreviewCondition::Contains {
-                        text: "100%".into(),
-                    },
-                }],
+                predicate: Some("note LIKE '100%'".into()),
                 offset: 200,
             },
         };
@@ -918,6 +1011,93 @@ mod tests {
             "une commande relue revient sans ses valeurs, et le serveur la refusera"
         );
         assert_eq!(request.text, "INSERT INTO t VALUES ($1)");
+    }
+
+    #[test]
+    fn declarer_un_fournisseur_n_atteint_aucune_base_et_reste_refuse_a_un_agent() {
+        use crate::ai::{AiProviderConfig, AiProviderKind, ProviderId};
+        use crate::{DefaultPolicy, Environment, PolicyGate};
+
+        let config = AiProviderConfig::new(
+            ProviderId::ollama(),
+            AiProviderKind::OpenAiCompatible,
+            "Ollama du portable",
+            "http://localhost:11434/v1",
+            "llama3.2",
+        );
+        let gate = DefaultPolicy::new();
+        let agent = Actor::agent(AgentId::new(), AgentSessionId::new());
+
+        for cmd in [
+            Command::ListAiProviders,
+            Command::SaveAiProvider {
+                config: Box::new(config.clone()),
+            },
+            Command::RemoveAiProvider {
+                id: config.id.clone(),
+            },
+        ] {
+            // Un fournisseur se déclare par machine : aucune connexion visée,
+            // aucun serveur atteint (ADR-0023).
+            assert_eq!(cmd.target_connection(), None, "{}", cmd.name());
+            assert!(!cmd.touches_database(), "{}", cmd.name());
+            assert!(!cmd.is_mutating(), "{}", cmd.name());
+            assert_eq!(cmd.statement_text(), None, "{}", cmd.name());
+
+            // L'humain n'a pas à confirmer un réglage local : une confirmation
+            // qui ne correspond à rien finit par être cliquée sans être lue.
+            assert!(
+                gate.authorize(&Actor::Human, &cmd, Environment::Production)
+                    .is_allowed(),
+                "{}",
+                cmd.name()
+            );
+
+            // L'agent, lui, est refusé sur ce qui **écrit** la déclaration :
+            // le point d'accès par lequel il parle ne se choisit pas lui-même.
+            let decision = gate.authorize(&agent, &cmd, Environment::Local);
+            if matches!(cmd, Command::ListAiProviders) {
+                assert!(decision.is_allowed(), "lister ne déclare rien");
+            } else {
+                assert!(decision.is_denied(), "{} : {decision:?}", cmd.name());
+                assert!(
+                    !decision.requires_approval(),
+                    "un refus, jamais une confirmation renforcée (I-02)"
+                );
+            }
+
+            let json = serde_json::to_string(&cmd).expect("commande sérialisable");
+            assert_eq!(
+                serde_json::from_str::<Command>(&json).expect("aller-retour typé"),
+                cmd
+            );
+        }
+    }
+
+    #[test]
+    fn une_commande_de_fournisseur_ne_transporte_pas_de_cle() {
+        // I-03 : le seul champ prévu pour le trousseau est une référence, et le
+        // `Debug` de la commande ne la rend pas.
+        use crate::ai::{AiProviderConfig, AiProviderKind, ProviderId};
+
+        let cmd = Command::SaveAiProvider {
+            config: Box::new(
+                AiProviderConfig::new(
+                    ProviderId::openai(),
+                    AiProviderKind::OpenAi,
+                    "OpenAI",
+                    "https://api.openai.com/v1",
+                    "gpt-5",
+                )
+                .with_secret_ref("keychain://oxyn/openai"),
+            ),
+        };
+        let rendu = format!("{cmd:?}");
+        assert!(
+            !rendu.contains("keychain://oxyn/openai"),
+            "référence fuitée : {rendu}"
+        );
+        assert!(rendu.contains("api.openai.com"), "{rendu}");
     }
 
     #[test]

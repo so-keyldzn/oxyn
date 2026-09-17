@@ -28,6 +28,19 @@ pub struct QueryDocumentUpdate {
     pub save_named: bool,
     /// Whether the document should be offered for local restoration.
     pub is_open: bool,
+    /// Where this text came from, when an agent wrote it.
+    ///
+    /// `None` means **nothing new to record**, never "nobody": sending it on a
+    /// document that already bears a provenance does not clear the mark. On a
+    /// document that has none, it leaves none — and a stored `NULL` does mean
+    /// the user wrote it, because no other writer leaves the column empty. The
+    /// mark says an agent wrote this text, and once said it is never unsaid
+    /// ([ADR-0023](../../docs/adr/0023-fournisseurs-declares-et-provenance.md)).
+    ///
+    /// It carries no prompt, no model reply, no endpoint and no key: it dates
+    /// an origin, it does not archive a conversation.
+    #[serde(default)]
+    pub provenance: Option<crate::ai::Provenance>,
 }
 
 impl std::fmt::Debug for QueryDocumentUpdate {
@@ -184,6 +197,39 @@ impl HistoryFilter {
         Ok(())
     }
 }
+
+/// A bounded page of the connections history has recorded, not those still saved.
+///
+/// The two lists differ on purpose. `query_history` carries no foreign key, so
+/// an execution outlives the connection it ran on; a filter menu built from the
+/// saved connections alone can therefore never offer a removed one, even though
+/// its entries are still listed and still searchable.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HistoryConnectionFilter {
+    /// Connections whose most recent recorded execution is older than this cursor.
+    pub before: Option<i64>,
+    /// Page size, from 1 to 200.
+    pub limit: u16,
+}
+impl Default for HistoryConnectionFilter {
+    fn default() -> Self {
+        Self {
+            before: None,
+            limit: 100,
+        }
+    }
+}
+impl HistoryConnectionFilter {
+    /// Validates the page bounds; history may hold many distinct connections.
+    pub fn validate(&self) -> Result<()> {
+        validate_page(self.limit, "")?;
+        if self.before.is_some_and(|id| id <= 0) {
+            return Err(OxynError::Config("invalid history cursor".into()));
+        }
+        Ok(())
+    }
+}
+
 fn validate_page(limit: u16, search: &str) -> Result<()> {
     if !(1..=200).contains(&limit) || search.len() > 1024 {
         return Err(OxynError::Config(

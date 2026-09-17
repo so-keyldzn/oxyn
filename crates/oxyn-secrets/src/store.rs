@@ -124,7 +124,7 @@ impl SecretRef {
     /// recopie jamais la valeur fautive.
     pub fn parse(text: &str) -> Result<Self> {
         if text.len() > Self::MAX_LEN {
-            return Err(invalid("référence trop longue"));
+            return Err(invalid("reference too long"));
         }
         let mut segments = text.split(':');
         let (Some(scheme), Some(kind), Some(name), None) = (
@@ -133,10 +133,10 @@ impl SecretRef {
             segments.next(),
             segments.next(),
         ) else {
-            return Err(invalid("forme attendue : oxyn:<genre>:<nom>"));
+            return Err(invalid("expected form: oxyn:<kind>:<name>"));
         };
         if scheme != Self::SCHEME {
-            return Err(invalid("le préfixe doit être `oxyn`"));
+            return Err(invalid("the prefix must be `oxyn`"));
         }
         validate_kind(kind)?;
         validate_name(name)?;
@@ -184,21 +184,19 @@ fn invalid(detail: &'static str) -> SecretError {
 /// Valide un segment de genre : minuscules ASCII, chiffres, `-` et `_`.
 fn validate_kind(kind: &str) -> Result<()> {
     if kind.is_empty() {
-        return Err(invalid("le genre est vide"));
+        return Err(invalid("the kind is empty"));
     }
     if kind.len() > SecretRef::MAX_KIND_LEN {
-        return Err(invalid("genre trop long"));
+        return Err(invalid("kind too long"));
     }
     if !kind.starts_with(|c: char| c.is_ascii_lowercase()) {
-        return Err(invalid("le genre doit commencer par une lettre minuscule"));
+        return Err(invalid("the kind must start with a lowercase letter"));
     }
     if !kind
         .chars()
         .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
     {
-        return Err(invalid(
-            "caractères autorisés dans le genre : a-z, 0-9, -, _",
-        ));
+        return Err(invalid("allowed characters in the kind: a-z, 0-9, -, _"));
     }
     Ok(())
 }
@@ -210,25 +208,23 @@ fn validate_kind(kind: &str) -> Result<()> {
 /// glisser un espace, un octet de contrôle ou un séparateur.
 fn validate_name(name: &str) -> Result<()> {
     if name.is_empty() {
-        return Err(invalid("le nom est vide"));
+        return Err(invalid("the name is empty"));
     }
     if name.len() > SecretRef::MAX_NAME_LEN {
-        return Err(invalid("nom trop long"));
+        return Err(invalid("name too long"));
     }
     // Le premier caractère est alphanumérique, ce qui exclut `.` et `..` : une
     // référence finit un jour dans un nom de fichier de cache, et un nom qui
     // désigne un répertoire parent y serait une remontée d'arborescence.
     if !name.starts_with(|c: char| c.is_ascii_alphanumeric()) {
-        return Err(invalid(
-            "le nom doit commencer par une lettre ou un chiffre",
-        ));
+        return Err(invalid("the name must start with a letter or a digit"));
     }
     if !name
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '_' | '.'))
     {
         return Err(invalid(
-            "caractères autorisés dans le nom : A-Z, a-z, 0-9, -, _, .",
+            "allowed characters in the name: A-Z, a-z, 0-9, -, _, .",
         ));
     }
     Ok(())

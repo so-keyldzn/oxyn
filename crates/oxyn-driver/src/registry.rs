@@ -66,15 +66,15 @@ impl DriverRegistry {
         let id = driver.id();
         if id != metadata.id {
             return Err(OxynError::Config(format!(
-                "le driver se déclare `{id}` mais ses métadonnées disent `{}` : \
-                 il serait introuvable après enregistrement",
+                "the driver declares itself `{id}` but its metadata says `{}`: \
+                 it would be unreachable once registered",
                 metadata.id
             )));
         }
         if self.drivers.contains_key(&id) {
             return Err(OxynError::Config(format!(
-                "un driver `{id}` est déjà enregistré : remplacer celui d'origine \
-                 détournerait les connexions qui le visent"
+                "a driver `{id}` is already registered: replacing the original one \
+                 would divert the connections that target it"
             )));
         }
 
@@ -102,7 +102,7 @@ impl DriverRegistry {
     pub fn require(&self, id: &DriverId) -> Result<Arc<dyn Driver>> {
         self.get(id).ok_or_else(|| {
             OxynError::Config(format!(
-                "aucun driver `{id}` n'est enregistré dans cette version d'Oxyn"
+                "no driver `{id}` is registered in this build of Oxyn"
             ))
         })
     }
@@ -324,7 +324,7 @@ mod tests {
 
         let mut registre = DriverRegistry::new();
         let err = registre.register(driver.arc()).expect_err("refus attendu");
-        assert!(err.to_string().contains("introuvable"), "{err}");
+        assert!(err.to_string().contains("unreachable"), "{err}");
         assert!(registre.is_empty());
     }
 

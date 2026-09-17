@@ -153,22 +153,35 @@ pub trait Session: Send + Sync {
     /// This may read column types, but never executes the preview or changes
     /// session state. Unsupported drivers fail explicitly.
     ///
-    /// `shape` carries the order, the filters and the page asked for
-    /// ([ADR-0020](../../../docs/adr/0020-apercu-trie-filtre-parcouru.md)). It
-    /// holds **no SQL**: a column is an identifier the implementation quotes,
-    /// and a value is bound through [`ExecRequest::params`], never spliced into
-    /// the text ([I-10](../../../CLAUDE.md#i-10)).
+    /// `shape` carries the order, the predicate and the page asked for
+    /// ([ADR-0020](../../../docs/adr/0020-apercu-trie-filtre-parcouru.md)). Its
+    /// two halves are not alike.
     ///
-    /// What an implementation must not do is ignore part of it. A filter
-    /// silently dropped returns rows the user believes they excluded, and
-    /// nothing on screen says otherwise: refuse what the engine cannot express,
-    /// with [`OxynError::NotSupported`] naming the missing capability.
+    /// The **sort** is structured: a column is an identifier the implementation
+    /// quotes, because Oxyn composes that fragment and answers for what it
+    /// contains ([I-10](../../../CLAUDE.md#i-10)). A column the relation does
+    /// not declare is refused, not forwarded in the hope the server rejects it.
+    ///
+    /// The **predicate** is SQL the user wrote, and it travels through
+    /// untouched — neither parsed nor rewritten — exactly like the text of a
+    /// console. It still ends up inside a statement Oxyn composes, so the
+    /// implementation must make sure it cannot silently swallow what follows
+    /// it: an unterminated comment at its end would otherwise eat the very
+    /// `LIMIT` that bounds the read.
+    ///
+    /// What an implementation must not do is ignore part of `shape`. A
+    /// predicate silently dropped returns rows the user believes they excluded,
+    /// and nothing on screen says otherwise: refuse what the engine cannot
+    /// express, with [`OxynError::NotSupported`] naming the missing capability.
     ///
     /// A non-zero [`PreviewShape::offset`] is only meaningful under a total
-    /// order. Implementations complete the requested sort with a unique key —
-    /// the primary key, when the catalog declares one — and refuse the page
-    /// otherwise: without it, two consecutive pages show the same row twice and
-    /// skip another, silently.
+    /// order — see [`PreviewShape::needs_total_order`]. Implementations
+    /// complete the requested sort with a unique key, the primary key when the
+    /// catalog declares one, and refuse the page otherwise: without it, two
+    /// consecutive pages show the same row twice and skip another, silently.
+    /// The completion applies from the first page: ordering page 0 by one
+    /// column and page 1 by two would make a row reappear exactly at the
+    /// boundary.
     async fn preview_request(
         &self,
         _path: &CatalogPath,
@@ -389,8 +402,8 @@ impl BatchSource for Box<dyn Cursor> {
 /// qu'il ne soit pas montré à l'utilisateur comme une limitation du serveur.
 fn unimplemented_transaction(operation: &'static str) -> OxynError {
     OxynError::Internal(format!(
-        "la session déclare TRANSACTIONS sans implémenter `{operation}` : \
-         un ROLLBACK qui n'annule rien laisse l'écriture appliquée"
+        "the session declares TRANSACTIONS without implementing `{operation}`: \
+         a ROLLBACK that undoes nothing leaves the write applied"
     ))
 }
 

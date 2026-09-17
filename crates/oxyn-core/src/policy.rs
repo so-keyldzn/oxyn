@@ -138,9 +138,17 @@ pub struct Preview {
     /// Le **nom** de la connexion, jamais son identifiant.
     pub connection: String,
     /// Estimation du nombre de lignes touchées, quand elle est connue.
-    // TODO(phase 2) : l'estimation demande une interrogation du catalogue ou un
-    // EXPLAIN ; elle vaut `None` tant que `oxyn-catalog` n'existe pas. Un
-    // chiffre inventé serait pire que pas de chiffre.
+    // TODO(2026-12-31) : l'estimation demande un `EXPLAIN` avant revue, dont le
+    // coût et la forme diffèrent par driver — c'est cela qui la débloque, et
+    // c'est un lot identifié dans IMPLEMENTATION-PLAN.
+    //
+    // La rédaction précédente disait « tant que `oxyn-catalog` n'existe pas ».
+    // Cette crate existe et sert partout depuis longtemps : la marque portait
+    // une condition déjà satisfaite, donc un déblocage qui ne viendrait jamais.
+    // `script/verifier-todo` contrôle l'échéance, pas la véracité du motif.
+    //
+    // Un chiffre inventé serait pire que pas de chiffre : la revue de
+    // production le lirait comme une mesure.
     pub estimated_rows: Option<u64>,
 }
 
@@ -251,7 +259,7 @@ impl DefaultPolicy {
     /// Nom montrable d'une connexion, ou une mention neutre si elle est
     /// inconnue. Ne rend **jamais** l'identifiant (I-03).
     fn display_name(facts: Option<&ConnectionFacts>) -> String {
-        facts.map_or_else(|| "connexion inconnue".to_owned(), |f| f.name.clone())
+        facts.map_or_else(|| "unknown connection".to_owned(), |f| f.name.clone())
     }
 
     /// Construit la prévisualisation d'une commande.
@@ -270,6 +278,25 @@ impl PolicyGate for DefaultPolicy {
                 reason: "only the human may change workspace display preferences".into(),
             };
         }
+        // Un agent ne déclare pas le point d'accès par lequel il parle. Une
+        // déclaration porte une URL de base : un agent qui pourrait l'écrire
+        // ferait sortir de la machine tout ce qu'on lui confie ensuite, sans
+        // qu'aucune exécution ne figure au journal. C'est un refus et non une
+        // approbation renforcée — une confirmation finit par être cliquée
+        // (I-02, ADR-0023).
+        if actor.is_agent()
+            && matches!(
+                cmd,
+                Command::SaveAiProvider { .. }
+                    | Command::RemoveAiProvider { .. }
+                    | Command::SaveExternalAgent { .. }
+                    | Command::RemoveExternalAgent { .. }
+            )
+        {
+            return Decision::Deny {
+                reason: "only the human may declare or remove an AI provider".into(),
+            };
+        }
         let intent = cmd.intent();
         let mutating = cmd.is_mutating();
         let facts = cmd.target_connection().and_then(|id| self.facts(id));
@@ -285,7 +312,7 @@ impl PolicyGate for DefaultPolicy {
         // confiance dans le modèle : c'est la seule catégorie d'action dont un
         // agent n'a aucun usage légitime et dont l'effet survit à la session.
         if actor.is_agent() && intent == StatementIntent::Grant {
-            return Decision::deny("un agent ne peut pas modifier les droits (GRANT / REVOKE)");
+            return Decision::deny("an agent may not change privileges (GRANT / REVOKE)");
         }
 
         // Un agent ne déplace pas le contexte de session. La commande ne lit ni
@@ -295,8 +322,8 @@ impl PolicyGate for DefaultPolicy {
         // croit viser, sans qu'aucune confirmation ne parle de ce déplacement.
         if actor.is_agent() && matches!(cmd, Command::SetSessionContext { .. }) {
             return Decision::deny(
-                "un agent ne peut pas changer le contexte de session : \
-                 l'effet porte sur les instructions suivantes",
+                "an agent may not change the session context: \
+                 it changes the meaning of the statements that follow",
             );
         }
 
@@ -304,13 +331,13 @@ impl PolicyGate for DefaultPolicy {
             match (cmd.target_connection(), facts.as_ref()) {
                 (Some(_), None) => {
                     return Decision::deny(
-                        "connexion inconnue de la politique : \
-                         impossible de vérifier son marquage",
+                        "connection unknown to the policy: \
+                         its markings cannot be checked",
                     );
                 }
                 (Some(_), Some(f)) if f.read_only => {
                     return Decision::deny(format!(
-                        "la connexion « {} » est marquée en lecture seule",
+                        "connection \"{}\" is marked read-only",
                         f.name
                     ));
                 }
@@ -322,7 +349,7 @@ impl PolicyGate for DefaultPolicy {
         // stricte. Un refus, pas une confirmation renforcée.
         if actor.is_agent() && mutating && env.is_production() {
             return Decision::deny(format!(
-                "un agent est en lecture seule stricte sur « {} » (production)",
+                "an agent is strictly read-only on \"{}\" (production)",
                 Self::display_name(facts.as_ref())
             ));
         }
@@ -338,7 +365,7 @@ impl PolicyGate for DefaultPolicy {
         if actor.is_agent() && mutating {
             return Decision::approval(
                 format!(
-                    "un agent demande une opération {intent} sur « {} »",
+                    "an agent is requesting a {intent} operation on \"{}\"",
                     Self::display_name(facts.as_ref())
                 ),
                 Self::preview(cmd, facts.as_ref()),
@@ -350,7 +377,7 @@ impl PolicyGate for DefaultPolicy {
         if mutating && env.is_production() {
             return Decision::approval(
                 format!(
-                    "opération {intent} sur « {} », marquée production",
+                    "{intent} operation on \"{}\", marked production",
                     Self::display_name(facts.as_ref())
                 ),
                 Self::preview(cmd, facts.as_ref()),

@@ -42,6 +42,15 @@ async-trait   = "0.1.92"
 bitflags      = { version = "2.13.1", features = ["serde"] }
 bytes         = "1.12.1"
 chrono        = { version = "0.4.45", features = ["serde"] }
+async-process = "2.5.0"
+# Serveur MCP sur la boucle locale (ADR-0030). Déjà dans l'arbre par `reqwest`
+# et `tauri` : les déclarer n'y fait entrer aucune famille nouvelle.
+hyper         = { version = "1.11.1", features = ["server", "http1"] }
+hyper-util    = { version = "0.1.20", features = ["tokio"] }
+http-body-util = "0.1.5"
+# Alignée sur la version que tire déjà `agent-client-protocol` : une seconde
+# copie d'une crate d'appels système dans l'arbre n'apporterait rien.
+rustix        = { version = "0.38.44", features = ["process"] }
 futures       = "0.3.34"
 indexmap      = { version = "2.14.2", features = ["serde"] }
 parking_lot   = "0.12.5"
@@ -56,7 +65,6 @@ uuid          = { version = "1.26.0", features = ["v4", "v7", "serde"] }
 
 # --- données -----------------------------------------------------------------
 arrow         = { version = "59.3.0", features = ["chrono-tz"] }
-memmap2       = "0.9.11"
 tempfile      = "3.27.0"
 
 # --- requêtes ----------------------------------------------------------------
@@ -94,18 +102,34 @@ reqwest       = { version = "0.13.4", default-features = false, features = [
     "json", "stream", "rustls", "http2", "charset",
 ] }
 schemars      = "1.2.2"
+# Le protocole des agents externes (ADR-0026). Apache-2.0, donc compatible avec
+# la licence du dépôt — contrairement au source de Zed, qui est GPL-3.0-or-later
+# et qu'il ne faut donc pas recopier ici. Le numéro de la crate ne dit **pas**
+# celui du protocole : la 2.1.0 porte un v1 stable et un v2 brouillon.
+# Vérifié le 2026-09-14, voir RESEARCH-NOTES.
+agent-client-protocol = "2.1.0"
 
 # --- plugins (optionnel, feature `wasm-host`) --------------------------------
 wasmtime      = "48.0.1"
 toml          = "0.9.8"
 
 # --- UI ----------------------------------------------------------------------
+# gpui reste tant qu'oxyn-ui et oxyn-app n'ont pas été retirés (ADR-0029).
 gpui          = "0.2.2"
+# Tauri n'est une dépendance que d'oxyn-desktop : la règle d'isolation de
+# l'ADR-0001, transposée par l'ADR-0029. Versions relevées sur crates.io le
+# 2026-09-15, voir RESEARCH-NOTES.
+tauri               = "2.11.5"
+tauri-build         = "2.6.3"
+tauri-plugin-dialog = "2.7.3"
 
 # --- observabilité & binaire -------------------------------------------------
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
 # --- dev ---------------------------------------------------------------------
+# `criterion` n'est jamais une dépendance normale : il n'entre dans le graphe que
+# par les `[[bench]]` (RESEARCH-NOTES § bancs d'essai).
+criterion     = "0.8.2"
 insta         = "1.48.0"
 rstest        = "0.26.1"
 

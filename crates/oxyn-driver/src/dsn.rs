@@ -65,21 +65,21 @@ const REDACTED: &str = "***";
 #[non_exhaustive]
 pub enum DsnError {
     /// Le schéma d'URL n'est pas utilisable.
-    #[error("schéma d'URL invalide : {detail}")]
+    #[error("invalid URL scheme: {detail}")]
     InvalidScheme {
         /// Ce qui n'allait pas, sans reprendre la valeur.
         detail: &'static str,
     },
 
     /// L'hôte n'est pas utilisable tel quel.
-    #[error("hôte invalide : {detail}")]
+    #[error("invalid host: {detail}")]
     InvalidHost {
         /// Ce qui n'allait pas, sans reprendre la valeur.
         detail: &'static str,
     },
 
     /// Le port n'est pas un entier sur 16 bits.
-    #[error("port invalide : {detail}")]
+    #[error("invalid port: {detail}")]
     InvalidPort {
         /// Ce qui n'allait pas, sans reprendre la valeur.
         detail: &'static str,
@@ -89,7 +89,7 @@ pub enum DsnError {
     ///
     /// Le texte fautif n'est **jamais** repris : une URL de connexion malformée
     /// reste une URL de connexion, et elle peut porter un mot de passe.
-    #[error("l'URL de connexion est illisible : {detail}")]
+    #[error("the connection URL cannot be parsed: {detail}")]
     Malformed {
         /// Ce qui n'allait pas, sans reprendre la valeur.
         detail: &'static str,
@@ -97,8 +97,8 @@ pub enum DsnError {
 
     /// Un paramètre persisté porte un secret.
     #[error(
-        "le paramètre `{key}` porte un secret : un secret vit dans le trousseau du système \
-         et ne se persiste pas avec la connexion (I-03)"
+        "parameter `{key}` carries a secret: a secret lives in the system keychain \
+         and is not persisted with the connection (I-03)"
     )]
     SecretInParams {
         /// La clé fautive, assainie. Jamais la valeur.
@@ -107,20 +107,18 @@ pub enum DsnError {
 
     /// L'URL n'a pas d'autorité : ni utilisateur, ni mot de passe, ni port ne
     /// peuvent y figurer. C'est le cas des sources sur fichier (SQLite).
-    #[error(
-        "cette source n'a pas d'hôte : elle n'accepte ni utilisateur, ni mot de passe, ni port"
-    )]
+    #[error("this source has no host: it accepts neither user, nor password, nor port")]
     NoAuthority,
 
     /// Le chemin d'une source sur fichier n'est pas absolu.
     #[error(
-        "le chemin doit être absolu : un driver ne résout pas un chemin relatif, \
-         il ne connaît pas le répertoire courant de l'application"
+        "the path must be absolute: a driver does not resolve a relative path, \
+         it does not know the application's current directory"
     )]
     RelativePath,
 
     /// Le chemin et le nom de base sont tous les deux renseignés.
-    #[error("`path` et `database` désignent tous les deux le chemin de l'URL : n'en donner qu'un")]
+    #[error("`path` and `database` both name the URL path: give only one of them")]
     ConflictingPath,
 }
 
@@ -312,7 +310,7 @@ impl DsnBuilder {
                         .trim()
                         .parse::<u16>()
                         .map_err(|_| DsnError::InvalidPort {
-                            detail: "attendu : un entier entre 1 et 65535",
+                            detail: "expected: an integer between 1 and 65535",
                         })?;
                     builder.port = Some(port);
                 }
@@ -472,7 +470,7 @@ impl DsnBuilder {
         let mut url =
             Url::parse(&format!("{}://{PLACEHOLDER_HOST}", self.scheme)).map_err(|_| {
                 DsnError::InvalidScheme {
-                    detail: "attendu : une lettre puis des lettres, chiffres, `+`, `-` ou `.`",
+                    detail: "expected: a letter, then letters, digits, `+`, `-` or `.`",
                 }
             })?;
 
@@ -480,7 +478,7 @@ impl DsnBuilder {
             // Le bloc borne l'emprunt : `PathSegmentsMut` a un `Drop` qui
             // recompose l'URL, donc il doit finir avant tout autre accès.
             let mut chemin = url.path_segments_mut().map_err(|()| DsnError::Malformed {
-                detail: "cette forme d'URL n'accepte pas de chemin",
+                detail: "this URL form does not accept a path",
             })?;
             chemin.extend(segments.iter());
         }
@@ -497,24 +495,24 @@ impl DsnBuilder {
                 check_host(hote)?;
                 url.set_host(Some(hote))
                     .map_err(|_| DsnError::InvalidHost {
-                        detail: "caractère interdit dans un nom d'hôte",
+                        detail: "forbidden character in a host name",
                     })?;
                 if let Some(port) = port {
                     url.set_port(Some(port))
                         .map_err(|()| DsnError::InvalidHost {
-                            detail: "cette forme d'URL n'accepte pas de port",
+                            detail: "this URL form does not accept a port",
                         })?;
                 }
                 if let Some(user) = self.user.as_deref() {
                     url.set_username(user).map_err(|()| DsnError::InvalidHost {
-                        detail: "cette forme d'URL n'accepte pas d'utilisateur",
+                        detail: "this URL form does not accept a user",
                     })?;
                 }
             }
             None => {
                 // Autorité vide : la forme `sqlite:` + `///` + chemin absolu.
                 url.set_host(Some("")).map_err(|_| DsnError::InvalidHost {
-                    detail: "cette forme d'URL n'accepte pas d'autorité vide",
+                    detail: "this URL form does not accept an empty authority",
                 })?;
             }
         }
@@ -699,29 +697,26 @@ impl ParsedDsn {
     /// texte fautif n'est jamais repris dans l'erreur.
     pub fn parse(text: &str) -> Result<Self, DsnError> {
         let url = Url::parse(text.trim()).map_err(|_| DsnError::Malformed {
-            detail: "attendu : un schéma, une autorité facultative, un chemin",
+            detail: "expected: a scheme, an optional authority, a path",
         })?;
 
         let user = match url.username() {
             "" => None,
-            brut => Some(decode(
-                brut,
-                "l'utilisateur porte un encodage `%` invalide",
-            )?),
+            brut => Some(decode(brut, "the user carries an invalid `%` encoding")?),
         };
 
         let mut credentials = Credentials::new();
         match url.password() {
             None | Some("") => {}
             Some(brut) => {
-                let clair = decode(brut, "le mot de passe porte un encodage `%` invalide")?;
+                let clair = decode(brut, "the password carries an invalid `%` encoding")?;
                 credentials = credentials.with_password(clair);
             }
         }
 
         let mut segments = Vec::new();
         for brut in url.path().split('/').filter(|s| !s.is_empty()) {
-            segments.push(decode(brut, "le chemin porte un encodage `%` invalide")?);
+            segments.push(decode(brut, "the path carries an invalid `%` encoding")?);
         }
 
         let mut options = IndexMap::new();
@@ -799,17 +794,17 @@ fn validate_scheme(scheme: &str) -> Result<(), DsnError> {
     let mut caracteres = scheme.chars();
     let Some(premier) = caracteres.next() else {
         return Err(DsnError::InvalidScheme {
-            detail: "le schéma est vide",
+            detail: "the scheme is empty",
         });
     };
     if !premier.is_ascii_alphabetic() {
         return Err(DsnError::InvalidScheme {
-            detail: "le schéma doit commencer par une lettre ASCII",
+            detail: "the scheme must start with an ASCII letter",
         });
     }
     if !caracteres.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')) {
         return Err(DsnError::InvalidScheme {
-            detail: "caractères autorisés : lettres, chiffres, `+`, `-`, `.` — pas `_`",
+            detail: "allowed characters: letters, digits, `+`, `-`, `.` — not `_`",
         });
     }
     Ok(())
@@ -826,13 +821,13 @@ fn check_host(host: &str) -> Result<(), DsnError> {
             Ok(())
         } else {
             Err(DsnError::InvalidHost {
-                detail: "adresse IPv6 sans crochet fermant",
+                detail: "IPv6 address without a closing bracket",
             })
         };
     }
     if host.contains(':') {
         return Err(DsnError::InvalidHost {
-            detail: "le port ne se met pas dans l'hôte : il serait ignoré en silence",
+            detail: "the port does not belong in the host: it would be ignored silently",
         });
     }
     Ok(())

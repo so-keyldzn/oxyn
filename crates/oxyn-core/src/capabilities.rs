@@ -241,7 +241,7 @@ impl fmt::Display for Capabilities {
     /// Liste les capacités actives, séparées par ` | `.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         if self.is_empty() {
-            return f.write_str("(aucune)");
+            return f.write_str("(none)");
         }
         let mut premier = true;
         for (nom, _) in self.iter_names() {
@@ -316,7 +316,7 @@ mod tests {
         assert!(rendu.contains("SQL"), "{rendu}");
         assert!(rendu.contains("TRANSACTIONS"), "{rendu}");
         assert!(rendu.contains(" | "), "{rendu}");
-        assert_eq!(Capabilities::empty().to_string(), "(aucune)");
+        assert_eq!(Capabilities::empty().to_string(), "(none)");
     }
 
     #[test]
@@ -382,7 +382,6 @@ mod tests {
         let relu: Capabilities = serde_json::from_str(&json).expect("désérialisation");
         assert_eq!(caps, relu);
     }
-
 
     /// Deux capacités qui partagent un bit sont la même capacité.
     ///
