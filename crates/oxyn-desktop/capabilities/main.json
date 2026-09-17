@@ -1,0 +1,11 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "main",
+  "description": "What the main window's JavaScript may reach. Oxyn's own commands are registered in src/main.rs; every plugin permission added here widens what an XSS in the webview could do (docs/adr/0029-interface-tauri-shadcn.md).",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:window:allow-start-dragging",
+    "dialog:allow-open"
+  ]
+}

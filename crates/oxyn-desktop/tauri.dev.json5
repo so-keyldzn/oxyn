@@ -1,0 +1,14 @@
+// Merged over tauri.conf.json by `make desktop-dev`, and never by a build.
+//
+// In development the page comes from Vite, whose hot reload and TanStack
+// Start's client entry are inline scripts. Tauri injects nonces into the CSP
+// in development too, and a nonce disables 'unsafe-inline': with any CSP the
+// window stays blank, without an error. The production CSP in tauri.conf.json
+// stays strict and is what ships (docs/adr/0029-interface-tauri-shadcn.md).
+{
+  app: {
+    security: {
+      csp: null,
+    },
+  },
+}

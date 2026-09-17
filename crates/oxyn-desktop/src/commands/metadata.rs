@@ -1,0 +1,189 @@
+//! IPC commands of the object view: catalog, relation facets, shaped preview.
+//!
+//! Each parses what the webview sent and hands it to [`Backend`]; the reads of
+//! the server become `Command`s there ([I-01](../../../../CLAUDE.md#i-01)).
+//! Every one is `async`: a synchronous command runs on the main thread, and a
+//! cache lock waited for there would stall the window
+//! ([I-05](../../../../CLAUDE.md#i-05)). Those that read the cache under its
+//! lock do so on the blocking pool, so that a long refresh holding the lock
+//! stalls no runtime worker either.
+
+use tauri::State;
+use tauri::ipc::Channel;
+
+use super::parse;
+use crate::backend::Backend;
+use crate::ipc::metadata::{
+    CatalogSearchHit, Pagination, PreviewShapeDraft, RefreshSignal, RelatedRowsQuery,
+    RelatedRowsSource, RelationFacet, RelationFacets,
+};
+use crate::ipc::{CatalogAddress, CatalogNode, CommandOutcome, IpcError, RelationDetail};
+
+/// Reads a bounded preview. Without `shape`, the plain first page: no order,
+/// no filter (ADR-0020).
+#[tauri::command]
+pub async fn preview_relation(
+    backend: State<'_, Backend>,
+    command_id: String,
+    connection: String,
+    session: String,
+    address: CatalogAddress,
+    shape: Option<PreviewShapeDraft>,
+) -> Result<CommandOutcome, IpcError> {
+    let id = parse("command id", &command_id)?;
+    let connection = parse("connection", &connection)?;
+    let session = parse("session", &session)?;
+    backend
+        .preview_relation(id, connection, session, address, shape.unwrap_or_default())
+        .await
+}
+
+#[tauri::command]
+pub async fn preview_pagination(
+    backend: State<'_, Backend>,
+    connection: String,
+    address: CatalogAddress,
+    shape: PreviewShapeDraft,
+    rows: u64,
+) -> Result<Pagination, IpcError> {
+    backend.preview_pagination(parse("connection", &connection)?, &address, &shape, rows)
+}
+
+#[tauri::command]
+pub async fn refresh_catalog(
+    backend: State<'_, Backend>,
+    command_id: String,
+    connection: String,
+    session: String,
+    address: Option<CatalogAddress>,
+) -> Result<CommandOutcome, IpcError> {
+    let id = parse("command id", &command_id)?;
+    let connection = parse("connection", &connection)?;
+    let session = parse("session", &session)?;
+    backend
+        .refresh_catalog(id, connection, session, address)
+        .await
+}
+
+#[tauri::command]
+pub async fn refresh_relation_facet(
+    backend: State<'_, Backend>,
+    command_id: String,
+    connection: String,
+    session: String,
+    address: CatalogAddress,
+    facet: RelationFacet,
+) -> Result<CommandOutcome, IpcError> {
+    let id = parse("command id", &command_id)?;
+    let connection = parse("connection", &connection)?;
+    let session = parse("session", &session)?;
+    backend
+        .refresh_relation_facet(id, connection, session, address, facet)
+        .await
+}
+
+#[tauri::command]
+pub async fn catalog_tree(
+    backend: State<'_, Backend>,
+    connection: String,
+) -> Result<Vec<CatalogNode>, IpcError> {
+    let connection = parse("connection", &connection)?;
+    backend
+        .on_blocking_pool(move |backend| backend.catalog_tree(connection))
+        .await
+}
+
+#[tauri::command]
+pub async fn relation_detail(
+    backend: State<'_, Backend>,
+    connection: String,
+    address: CatalogAddress,
+) -> Result<Option<RelationDetail>, IpcError> {
+    let connection = parse("connection", &connection)?;
+    backend
+        .on_blocking_pool(move |backend| backend.relation_detail(connection, &address))
+        .await
+}
+
+#[tauri::command]
+pub async fn relation_facets(
+    backend: State<'_, Backend>,
+    connection: String,
+    address: CatalogAddress,
+) -> Result<RelationFacets, IpcError> {
+    let connection = parse("connection", &connection)?;
+    backend
+        .on_blocking_pool(move |backend| backend.relation_facets(connection, &address))
+        .await
+}
+
+#[tauri::command]
+pub async fn search_catalog(
+    backend: State<'_, Backend>,
+    connection: String,
+    query: String,
+) -> Result<Vec<CatalogSearchHit>, IpcError> {
+    let connection = parse("connection", &connection)?;
+    backend
+        .on_blocking_pool(move |backend| backend.search_catalog(connection, &query))
+        .await
+}
+
+/// A query to review in a new console; this command never runs it.
+#[tauri::command]
+pub async fn related_rows_template(
+    backend: State<'_, Backend>,
+    connection: String,
+    address: CatalogAddress,
+    incoming: bool,
+    index: usize,
+    source: Option<RelatedRowsSource>,
+) -> Result<Option<RelatedRowsQuery>, IpcError> {
+    let connection = parse("connection", &connection)?;
+    backend
+        .on_blocking_pool(move |backend| {
+            backend.related_rows_template(connection, &address, incoming, index, source)
+        })
+        .await
+}
+
+/// Streams what visible views should read again (ADR-0022), until the channel
+/// closes.
+///
+/// A separate channel from the execution events: those carry progress for a
+/// command someone awaits, these carry « something changed on this
+/// connection » for whoever shows it. On a lag the subscriber is told it
+/// missed events, and reads everything visible again.
+#[tauri::command]
+pub async fn subscribe_refresh_signals(
+    backend: State<'_, Backend>,
+    channel: Channel<RefreshSignal>,
+) -> Result<(), IpcError> {
+    // A reload subscribes again and ends this task (see `subscriptions`).
+    static SIGNALS: super::subscriptions::Stream = std::sync::OnceLock::new();
+    let mut superseded = super::subscriptions::supersede(&SIGNALS);
+    let mut events = backend.subscribe();
+    tauri::async_runtime::spawn(async move {
+        loop {
+            let received = tokio::select! {
+                () = superseded.wait() => break,
+                received = events.recv() => received,
+            };
+            let signal = match received {
+                Ok(event) => match RefreshSignal::of(&event) {
+                    Some(signal) => signal,
+                    None => continue,
+                },
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(missed)) => {
+                    tracing::warn!(missed, "refresh signals dropped for a slow webview");
+                    RefreshSignal::Lagged
+                }
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            };
+            if channel.send(signal).is_err() {
+                break;
+            }
+        }
+    });
+    Ok(())
+}

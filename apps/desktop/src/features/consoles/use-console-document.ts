@@ -1,0 +1,285 @@
+import * as React from "react"
+import { useDebouncer } from "@tanstack/react-pacer"
+
+import type { SaveState } from "@/components/oxyn/console-toolbar"
+import { saveNotice, titleTooLong } from "@/features/consoles/console-model"
+import type { ParameterInput } from "@/lib/ipc/consoles"
+import { library } from "@/lib/ipc/library"
+import type { DocumentWrite } from "@/lib/ipc/library"
+
+/**
+ * The typing pause after which the draft is written: under the 300 ms of
+ * visible feedback, above the interval of fast typing, so a sentence typed in
+ * one go writes once (ADR-0024).
+ */
+export const DRAFT_IDLE_MS = 250
+
+/** Where a console's text comes from when it opens. */
+export interface ConsoleSeed {
+  document: string
+  /** The last revision the store acknowledged for this document, 0 if new. */
+  revision: number
+  title: string
+  text: string
+  savedTitle: string | null
+  savedText: string | null
+  hasSavedCopy: boolean
+  fromAgent: boolean
+  /**
+   * Values to bind, pre-filled in the Parameters panel. They come from the
+   * user's own data: bound by the driver, never written into the text, never
+   * saved with the query and never logged (I-03, I-10).
+   */
+  parameters: Array<ParameterInput>
+  /** A value is still missing: the console says so before anything runs. */
+  needsValues: boolean
+}
+
+function message(error: unknown) {
+  return error instanceof Error ? error.message : String(error)
+}
+
+/**
+ * One console's query document: working draft, named copy, revision check.
+ *
+ * The backend owns the write queue; this hook only numbers revisions and says
+ * what happened. A conflict freezes writes and keeps the local text: the only
+ * way forward is a new copy (ADR-0016).
+ */
+export function useConsoleDocument({
+  seed,
+  connection,
+}: {
+  seed: ConsoleSeed
+  connection: string
+}) {
+  const [document, setDocument] = React.useState(seed.document)
+  const [title, setTitle] = React.useState(seed.title)
+  const [text, setText] = React.useState(seed.text)
+  const [savedTitle, setSavedTitle] = React.useState(seed.savedTitle ?? "")
+  const [savedText, setSavedText] = React.useState(seed.savedText ?? "")
+  const [hasSavedCopy, setHasSavedCopy] = React.useState(seed.hasSavedCopy)
+  const [conflict, setConflict] = React.useState(false)
+  const [saving, setSaving] = React.useState(false)
+  const [closing, setClosing] = React.useState(false)
+  const [notice, setNotice] = React.useState<string | null>(null)
+  /** The last save or close did not go through: its notice is a warning. */
+  const [problem, setProblem] = React.useState(false)
+  const [draftNotice, setDraftNotice] = React.useState(
+    "Draft recovery has not been written yet."
+  )
+
+  // Read by writes that outlive the render which started them.
+  const latest = React.useRef({ document, title, text, conflict, closing })
+  latest.current = { document, title, text, conflict, closing }
+  const revision = React.useRef(seed.revision)
+  const lastDraft = React.useRef({ title: seed.title, text: seed.text })
+
+  const onConflict = (write: DocumentWrite) => {
+    if (write.type !== "conflict") return false
+    setConflict(true)
+    setNotice(write.message)
+    return true
+  }
+
+  const writeDraft = React.useCallback(async () => {
+    const current = latest.current
+    if (current.conflict || current.closing) return
+    if (
+      lastDraft.current.text === current.text &&
+      lastDraft.current.title === current.title
+    )
+      return
+    if (titleTooLong(current.title)) return
+    revision.current += 1
+    lastDraft.current = { title: current.title, text: current.text }
+    setDraftNotice("Saving recovery draft…")
+    try {
+      const write = await library.saveDocument({
+        document: current.document,
+        revision: revision.current,
+        title: current.title,
+        text: current.text,
+        connection,
+        named: false,
+      })
+      if (latest.current.document !== current.document) return
+      if (write.type === "saved")
+        setDraftNotice("Recovery draft saved locally.")
+      else if (write.type === "conflict" && onConflict(write))
+        setDraftNotice(`Draft not saved: ${write.message}`)
+    } catch (error) {
+      setDraftNotice(`Draft not saved: ${message(error)}`)
+    }
+  }, [connection])
+
+  const debouncer = useDebouncer(() => void writeDraft(), {
+    wait: DRAFT_IDLE_MS,
+  })
+
+  /** Writes a pending draft now: before running, closing, on blur (ADR-0024). */
+  const flush = React.useCallback(async () => {
+    debouncer.cancel()
+    await writeDraft()
+  }, [debouncer, writeDraft])
+
+  const change = (next: { text?: string; title?: string }) => {
+    if (next.text !== undefined) {
+      setText(next.text)
+      latest.current.text = next.text
+    }
+    if (next.title !== undefined) {
+      setTitle(next.title)
+      latest.current.title = next.title
+    }
+    if (!latest.current.conflict) debouncer.maybeExecute()
+  }
+
+  const unsaved = conflict || text !== savedText || title !== savedTitle
+
+  const saveNamed = async (target: string) => {
+    const current = latest.current
+    if (titleTooLong(current.title) || current.title.trim() === "") {
+      setProblem(true)
+      setNotice(
+        current.title.trim() === ""
+          ? "A saved query needs a name."
+          : "Query names must not exceed 256 UTF-8 bytes."
+      )
+      return false
+    }
+    debouncer.cancel()
+    revision.current += 1
+    const sent = { title: current.title, text: current.text }
+    lastDraft.current = sent
+    setSaving(true)
+    setProblem(false)
+    setNotice(null)
+    try {
+      const write = await library.saveDocument({
+        document: target,
+        revision: revision.current,
+        title: sent.title,
+        text: sent.text,
+        connection,
+        named: true,
+      })
+      if (onConflict(write)) return false
+      if (write.type !== "saved") {
+        setProblem(true)
+        setNotice("The save was replaced by a newer one before it was written.")
+        return false
+      }
+      setConflict(false)
+      setSavedText(sent.text)
+      setSavedTitle(sent.title)
+      setHasSavedCopy(true)
+      setNotice(
+        latest.current.text === sent.text && latest.current.title === sent.title
+          ? "Saved in query library."
+          : "Saved the requested version. Newer edits are not saved."
+      )
+      return true
+    } catch (error) {
+      setProblem(true)
+      setNotice(message(error))
+      return false
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const save = async () => {
+    if (latest.current.conflict || saving || closing) return false
+    return saveNamed(latest.current.document)
+  }
+
+  /** Preserves the local text as a new document; the stored one is untouched. */
+  const saveAsNew = async () => {
+    if (saving || closing) return false
+    void library.releaseDocument(latest.current.document).catch(() => undefined)
+    const fresh = await library.newDocument()
+    revision.current = 0
+    latest.current = { ...latest.current, document: fresh, conflict: false }
+    setDocument(fresh)
+    setConflict(false)
+    setHasSavedCopy(false)
+    setSavedText("")
+    setSavedTitle("")
+    return saveNamed(fresh)
+  }
+
+  /**
+   * Closes the working copy. Without a named copy the draft is discarded: the
+   * caller asked the user first. In conflict nothing is written.
+   */
+  const close = async (discard: boolean) => {
+    if (saving || closing) return false
+    if (!discard) await flush()
+    debouncer.cancel()
+    const current = latest.current
+    if (current.conflict) {
+      void library.releaseDocument(current.document).catch(() => undefined)
+      return true
+    }
+    revision.current += 1
+    setClosing(true)
+    latest.current.closing = true
+    setNotice("Closing the saved query…")
+    try {
+      const write = await library.closeDocument(
+        current.document,
+        revision.current,
+        discard || !hasSavedCopy
+      )
+      if (write.type === "closed") return true
+      if (!onConflict(write)) setProblem(true)
+      return false
+    } catch (error) {
+      setProblem(true)
+      setNotice(message(error))
+      return false
+    } finally {
+      setClosing(false)
+      latest.current.closing = false
+    }
+  }
+
+  const saveState: SaveState = saving
+    ? { status: "saving" }
+    : conflict
+      ? {
+          status: "conflict",
+          notice:
+            notice ??
+            "The stored query changed elsewhere. Save a new query to preserve both versions.",
+        }
+      : problem && notice !== null
+        ? { status: "failed", notice }
+        : {
+            status: "idle",
+            notice: notice ?? saveNotice({ hasSavedCopy, unsaved }),
+          }
+
+  return {
+    document,
+    title,
+    text,
+    unsaved,
+    conflict,
+    hasSavedCopy,
+    saving,
+    closing,
+    draftNotice,
+    saveState,
+    titleError: titleTooLong(title)
+      ? "Query names must not exceed 256 UTF-8 bytes."
+      : null,
+    fromAgent: seed.fromAgent,
+    change,
+    flush,
+    save,
+    saveAsNew,
+    close,
+  }
+}

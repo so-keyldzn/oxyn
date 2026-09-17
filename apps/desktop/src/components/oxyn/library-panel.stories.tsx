@@ -1,0 +1,177 @@
+import type { Meta, StoryObj } from "@storybook/react-vite"
+import { expect, fn, screen, userEvent, waitFor } from "storybook/test"
+
+import { LibraryPanel } from "./library-panel"
+import type { DocumentEntry, HistoryRow } from "@/lib/ipc/library"
+
+const CURRENT = "018f0000-0000-7000-8000-000000000001"
+
+const history: Array<HistoryRow> = [
+  {
+    id: 12,
+    at: "2026-09-15T09:42:10+00:00",
+    connectionName: "billing replica",
+    preview:
+      "SELECT c.name, i.amount FROM invoices AS i JOIN customers AS c ON c.id = i.customer_id",
+    status: "succeeded",
+    durationMs: 84,
+    rows: 112,
+    needsInspection: false,
+    connection: CURRENT,
+    result: "018f0000-0000-7000-8000-00000000aaaa",
+  },
+  {
+    id: 11,
+    at: "2026-09-15T09:40:02+00:00",
+    connectionName: "billing primary",
+    preview: "UPDATE invoices SET paid_at = now() WHERE id = $1",
+    status: "failed",
+    durationMs: 30000,
+    rows: null,
+    needsInspection: true,
+    connection: "018f0000-0000-7000-8000-000000000002",
+    result: "018f0000-0000-7000-8000-00000000bbbb",
+  },
+]
+
+const saved: Array<DocumentEntry> = [
+  {
+    id: "doc-1",
+    title: "unpaid invoices.sql",
+    connection: CURRENT,
+    connectionName: "billing replica",
+    updatedAt: "2026-09-14T17:00:00+00:00",
+    isSaved: true,
+    isOpen: false,
+    hasChanges: false,
+    fromAgent: false,
+  },
+  {
+    id: "doc-2",
+    title: "churn by month.sql",
+    connection: null,
+    connectionName: null,
+    updatedAt: "2026-09-12T08:00:00+00:00",
+    isSaved: true,
+    isOpen: false,
+    hasChanges: true,
+    fromAgent: true,
+  },
+]
+
+const meta = {
+  title: "Oxyn/LibraryPanel",
+  component: LibraryPanel,
+  decorators: [
+    (Story) => (
+      <div className="flex h-[640px] w-[300px] flex-col border">
+        <Story />
+      </div>
+    ),
+  ],
+  args: {
+    view: "history",
+    onViewChange: fn(),
+    search: "",
+    onSearchChange: fn(),
+    filters: { connection: "", days: 7, status: "all" },
+    onFiltersChange: fn(),
+    connections: [
+      { value: CURRENT, label: "billing replica" },
+      { value: "gone", label: "old warehouse · not in this workspace" },
+    ],
+    state: { status: "history", entries: history },
+    hasPrevious: false,
+    hasNext: true,
+    onPrevious: fn(),
+    onNext: fn(),
+    onRefresh: fn(),
+    currentConnection: CURRENT,
+    onOpenHistory: fn(),
+    onOpenResult: fn(),
+    onOpenSaved: fn(),
+    onResumeSaved: fn(),
+    onDeleteSaved: fn(),
+  },
+} satisfies Meta<typeof LibraryPanel>
+
+export default meta
+type Story = StoryObj<typeof meta>
+
+/** An ambiguous write offers inspection only: no copy, no replay. */
+export const History: Story = {
+  play: async ({ canvas, args }) => {
+    const copies = canvas.getAllByRole("button", { name: /Open copy/ })
+    await expect(copies).toHaveLength(1)
+    await userEvent.click(copies[0]!)
+    await expect(args.onOpenHistory).toHaveBeenCalledWith(history[0])
+    await expect(canvas.getByText("Needs inspection")).toBeVisible()
+    await expect(canvas.queryByText(new RegExp(CURRENT))).toBeNull()
+  },
+}
+
+/** Only a run of this connection offers its rows; another's stays a copy. */
+export const OpenRetainedResult: Story = {
+  play: async ({ canvas, args }) => {
+    const open = canvas.getAllByRole("button", { name: /Open result/ })
+    await expect(open).toHaveLength(1)
+    await userEvent.click(open[0]!)
+    await expect(args.onOpenResult).toHaveBeenCalledWith(history[0])
+  },
+}
+
+/** Hostile and right-to-left text stays text, truncated in place. */
+export const HostileText: Story = {
+  args: {
+    state: {
+      status: "history",
+      entries: [
+        {
+          ...history[0]!,
+          connectionName: "مخزن الفواتير — <img src=x onerror=alert(1)>",
+          preview:
+            'SELECT * FROM "users"; DROP TABLE audit; -- \u202Egnp.exe 🧾 '.repeat(
+              8
+            ),
+        },
+      ],
+    },
+  },
+  play: async ({ canvas }) => {
+    await expect(canvas.getByText(/<img src=x/)).toBeVisible()
+  },
+}
+
+export const SavedQueries: Story = {
+  args: { view: "saved", state: { status: "saved", entries: saved } },
+  play: async ({ canvas, args }) => {
+    // Only a query of this connection can be resumed.
+    await expect(
+      canvas.getAllByRole("button", { name: /Resume/ })
+    ).toHaveLength(1)
+    await userEvent.click(
+      canvas.getByRole("button", { name: "Delete unpaid invoices.sql" })
+    )
+    const cancel = await screen.findByRole("button", { name: "Cancel" })
+    await waitFor(() => expect(cancel).toHaveFocus())
+    await userEvent.keyboard("{Enter}")
+    await expect(args.onDeleteSaved).not.toHaveBeenCalled()
+  },
+}
+
+export const Loading: Story = {
+  args: { state: { status: "loading" } },
+}
+
+export const Empty: Story = {
+  args: { state: { status: "history", entries: [] }, hasNext: false },
+}
+
+export const Failed: Story = {
+  args: {
+    state: {
+      status: "error",
+      message: "local list limit must be 1..=200 and search at most 1024 bytes",
+    },
+  },
+}

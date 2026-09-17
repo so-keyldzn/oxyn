@@ -1,0 +1,8 @@
+# Install scripts run arbitrary code from the registry on every developer
+# machine and in CI. Both packages below ship their native binary as an
+# optional platform dependency, so their scripts only re-check what is already
+# installed: they stay disabled. A new entry here is a reviewed decision
+# (docs/SECURITY.md, « Dépendances »), never a reflex to silence the warning.
+allowBuilds:
+  esbuild: false
+  unrs-resolver: false

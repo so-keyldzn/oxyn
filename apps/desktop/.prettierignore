@@ -1,0 +1,12 @@
+pnpm-lock.yaml
+# Agent memory, not front source. An agent launched from this directory has its
+# project memory resolved here, and a note it wrote in its own style made
+# `make front` fail on a file nobody ships.
+.claude
+dist
+storybook-static
+node_modules
+# Generated: by the TanStack Router plugin, and by `shadcn add`.
+src/routeTree.gen.ts
+src/components/ui
+src/hooks/use-mobile.ts

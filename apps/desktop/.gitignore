@@ -1,0 +1,17 @@
+node_modules
+.DS_Store
+dist
+*.local
+.env*
+.tanstack
+
+# typescript
+*.tsbuildinfo
+
+# Storybook
+*storybook.log
+storybook-static
+
+# Vitest browser mode screenshots of failed stories
+__screenshots__
+.vitest-attachments
