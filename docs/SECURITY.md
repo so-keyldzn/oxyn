@@ -44,6 +44,18 @@ secret.** L'implémentation est manuelle et rédige la valeur. Un `Debug` dériv
 est le mode de fuite le plus fréquent parce qu'il est invisible à la relecture —
 c'est le `tracing::debug!("{cfg:?}")` ajouté six mois plus tard qui fuit.
 
+### Ce qui sort vers un destinataire IA laisse une trace
+
+**Ce qui part vers un destinataire IA est journalisé**, dans `ai_egress`, table
+locale en ajout seul protégée comme `audit_journal` et jamais élaguée : la
+connexion, la source, les **noms** des colonnes envoyées, le nombre de lignes,
+le destinataire (fournisseur ou agent, modèle, portée `local`, `remote` ou
+`unresolved` mesurée pour cet envoi), la commande qui a lu les données et la
+conversation. **Jamais une valeur ni un jeton** : il n'y a pas de colonne pour
+les ranger, et le fichier refuse une liste de colonnes qui contiendrait autre
+chose que des noms. L'entrée s'écrit **avant** l'envoi ; si elle échoue, rien
+ne part.
+
 ## Marquage des connexions
 
 Toute connexion porte un environnement : `local`, `development`, `staging`,
@@ -81,23 +93,40 @@ Ce qui entre dans Oxyn et n'est pas fiable, par ordre de sous-estimation :
    ([ADR-0005](adr/0005-wasm-plugins.md)). Le bac à sable borne les dégâts ; il
    ne dispense pas de ne rien lui confier. Voir
    [PLUGIN-CONTRACT](PLUGIN-CONTRACT.md).
-5. **Les réponses des fournisseurs IA.** Ce sont des propositions, pas des
+5. **La webview.** Une valeur de cellule, un nom d'objet ou une réponse de modèle
+   rendus dans le DOM sont le premier vecteur d'une XSS, et une XSS dans la
+   webview atteint les commandes Tauri ([ADR-0029](adr/0029-interface-tauri-shadcn.md)).
+   D'où : rendu en texte seulement — jamais `dangerouslySetInnerHTML` sur une
+   donnée reçue —, CSP stricte dans `crates/oxyn-desktop/tauri.conf.json`,
+   *capabilities* minimales dans `capabilities/main.json`, et une surface IPC
+   dont chaque commande est relue comme un changement de sécurité.
+6. **Les réponses des fournisseurs IA.** Ce sont des propositions, pas des
    ordres : elles passent par le `PolicyGate` comme n'importe quelle commande
    ([ADR-0004](adr/0004-command-bus.md)). Voir [I-07](../CLAUDE.md#i-07).
 
 ## Politique `unsafe`
 
-`unsafe` n'est pas interdit — GPUI, les FFI de pilotes et le rendu graphique en
-imposent. Il est **encadré** :
+**`unsafe` est refusé à la compilation.** `[workspace.lints.rust]` porte
+`unsafe_code = "deny"`, et aucune des quinze crates n'en contient ni ne le
+réautorise. C'est le manifeste qui fait foi ici, parce que c'est lui qui est
+exécuté : ce document décrivait auparavant une politique d'encadrement que la
+compilation n'accorde pas, et [ADR-0021](adr/0021-marqueur-d-arret.md) a fondé
+une décision d'architecture — ne pas vérifier un pid — sur le refus, pas sur
+l'encadrement.
 
-- chaque bloc `unsafe` porte un commentaire `// SAFETY:` qui énonce l'invariant
-  qui le rend correct, et **qui** le garantit ;
-- il n'y a pas de `unsafe` dans `oxyn-core`, `oxyn-core` ni `oxyn-driver` : ces
-  couches n'en ont pas besoin, et un `unsafe` qui y apparaît signale une erreur
-  de découpage ;
-- tout `unsafe` nouveau passe par la relecture de l'agent `relecteur-securite` ;
-- les crates qui exposent du `unsafe` derrière une API sûre documentent les
-  conditions de cette sûreté.
+Lever ce refus est une décision d'architecture, pas un `#[allow]` local :
+
+- elle passe par un **ADR** qui dit ce que `unsafe` achète et ce qu'il coûte ;
+- le `#[allow(unsafe_code)]` qui en découle est porté au plus près, jamais au
+  workspace ;
+- chaque bloc porte un `// SAFETY:` qui énonce l'invariant qui le rend correct,
+  et **qui** le garantit ;
+- il passe par la relecture de l'agent `relecteur-securite` ;
+- la crate qui l'expose derrière une API sûre documente les conditions de cette
+  sûreté.
+
+Les dépendances externes, elles, en contiennent — GPUI et les FFI de pilotes en
+imposent. Le refus porte sur **ce que ce dépôt écrit**.
 
 Un `// SAFETY:` qui paraphrase le code (« on déréférence un pointeur valide »)
 ne vaut rien : il doit dire **pourquoi** le pointeur est valide à cet endroit et
@@ -107,8 +136,11 @@ ce qui le maintiendra valide.
 
 - toute nouvelle dépendance directe est justifiée en revue : ce qu'elle apporte,
   et le coût de s'en passer ;
-- `cargo deny` (ou équivalent) sur les licences et les avis de sécurité fait
-  partie de la porte de qualité ;
+- `cargo deny` sur les licences et les avis de sécurité fait partie de la porte
+  de qualité, par la cible `make deny` que `make qualite` appelle. Elle **avertit
+  sans bloquer** quand `cargo-deny` n'est pas installé : une porte qui échoue sur
+  un outil absent finit par être contournée, et c'est alors tout le contrôle qui
+  disparaît. La configuration vit dans `deny.toml` ;
 - une dépendance qui n'est utilisée qu'à un seul endroit pour une seule fonction
   est un candidat à la réécriture, pas une évidence ;
 - une crate non maintenue sur une frontière externe est un risque à documenter,

@@ -55,6 +55,55 @@ construire un paquet dont le `rust-version` dépasse la toolchain.
 > conformément à la recommandation de
 > [ADR-0008](adr/0008-chaine-outils-rust.md).
 
+## Interface Tauri et front
+
+Relevé le 2026-09-15 au registre npm (`npm view <paquet> version`) et sur
+crates.io (API `/api/v1/crates/<crate>`), pour l'[ADR-0029](adr/0029-interface-tauri-shadcn.md).
+Les versions sont écrites **exactes** dans `apps/desktop/package.json` et le
+`Cargo.toml` racine ; `pnpm-lock.yaml` fige le reste du graphe.
+
+### Crates
+
+| Crate | Version | `rust-version` | Vérifié le |
+|---|---|---|---|
+| `tauri` | `2.11.5` | `1.77.2` | 2026-09-15 |
+| `tauri-build` | `2.6.3` | `1.77.2` | 2026-09-15 |
+| `tauri-plugin-dialog` | `2.7.3` | `1.77.2` | 2026-09-15 |
+
+### Paquets npm
+
+| Paquet | Version retenue | Dernière publiée | Pourquoi l'écart |
+|---|---|---|---|
+| `pnpm` (`packageManager`) | `11.1.2` | `12.4.2` | version installée sur la machine de dev ; monter est un commit délibéré |
+| `@tauri-apps/cli` · `@tauri-apps/api` | `2.11.4` · `2.11.1` | idem | — |
+| `@tanstack/react-start` · `react-router` · `router-plugin` | `1.168.54` · `1.170.36` · `1.168.38` | idem | — |
+| `@tanstack/react-query` · `react-virtual` · `react-form` | `5.102.8` · `3.14.13` · `1.33.5` | idem | — |
+| `@tanstack/react-store` · `react-hotkeys` · `react-pacer` | `0.11.1` · `0.10.0` · `0.23.0` | idem | `react-hotkeys` se déclare **alpha** dans son README |
+| `@tanstack/react-table` | `8.21.3` | `9.2.4` | les composants et exemples shadcn supposent l'API v8 |
+| `shadcn` (CLI) · `@base-ui/react` | `4.21.0` · `1.8.0` | idem | style `base-nova` |
+| `@hugeicons/react` · `@hugeicons/core-free-icons` | `1.1.10` · `4.3.3` | idem | UX-SPEC impose Hugeicons |
+| `react` · `react-dom` | `19.3.0` | idem | — |
+| `vite` · `@vitejs/plugin-react` | `8.3.0` · `6.1.1` | idem | — |
+| `tailwindcss` · `@tailwindcss/vite` | `4.3.3` | idem | — |
+| `typescript` | `6.0.3` | `7.0.2` | voir ADR-0029, alternatives écartées |
+| `storybook` · `@storybook/react-vite` · addons | `10.6.0` | idem | — |
+| `vitest` · `@vitest/browser-playwright` | `4.1.11` | `5.0.1` | `@storybook/addon-vitest@10.6.0` exige `vitest ^3 \|\| ^4` |
+| `playwright` | `1.63.0` | idem | Chromium seul, pour les stories |
+| `@uiw/react-codemirror` · `@codemirror/lang-sql` | `4.25.11` · `6.10.0` | idem | — |
+| `zod` | `4.6.5` | idem | relevé le 2026-09-16 ; valide les réponses IPC ([ADR-0031](adr/0031-validation-des-reponses-ipc.md)). Était déclaré depuis ADR-0029 et importé nulle part |
+
+### Faits qui ont décidé du code
+
+| Fait | Source | Vérifié le |
+|---|---|---|
+| Tauri ne sert que du statique : SSG, SPA ou MPA, pas de SSR | `https://v2.tauri.app/start/frontend/` | 2026-09-15 |
+| Le mode SPA de Start écrit un shell (`/_shell.html` par défaut, `prerender.outputPath`) | `https://tanstack.com/start/latest/docs/framework/react/guide/spa-mode` | 2026-09-15 |
+| Cibles de build du guide Vite de Tauri : `chrome105` sous Windows, `safari13` ailleurs | `https://v2.tauri.app/start/frontend/vite/` | 2026-09-15 |
+| Tauri injecte nonces et hashes dans la CSP **aussi en développement** ; un nonce annule `'unsafe-inline'`, et les scripts inline de Vite sont bloqués : la fenêtre reste blanche sans erreur visible | `https://v2.tauri.app/reference/config/` et constat sur macOS 26.2 | 2026-09-15 |
+| `@storybook/tanstack-react@10.6.0` embarque `@tanstack/router-core@1.171.30` ; avec `react-router@1.170.36`, toute story échoue sur `path.endsWith is not a function` | constat, `vitest --project storybook` | 2026-09-15 |
+| Une commande sans `async` s'exécute **sur le thread principal**, sauf déclarée `#[tauri::command(async)]` ; une commande `async` ne peut prendre `State<'_, T>` qu'en renvoyant un `Result` | `https://v2.tauri.app/develop/calling-rust/` | 2026-09-15 |
+| `esbuild` et `unrs-resolver` livrent leur binaire en dépendance optionnelle : leurs scripts d'installation sont refusés (`allowBuilds`) | `pnpm install`, pnpm 11.1.2 | 2026-09-15 |
+
 ## GPUI
 
 | Fait | Valeur | Source | Vérifié le |
@@ -134,12 +183,16 @@ passer par [`/adr`](../.claude/commands/adr.md) si elle engage l'architecture.
 | `thiserror` | `2.0.20` | 2026-08-08 | 2026-09-05 |
 | `anyhow` | `1.0.104` | 2026-07-18 | 2026-09-05 |
 | `tracing` | `0.1.44` | 2025-12-18 | 2026-09-05 |
-| `criterion` | `0.8.2` | 2026-02-04 | 2026-09-05 |
+| `criterion` | `0.8.2` | 2026-02-04 | 2026-09-10 |
 | `gpui` | `0.2.2` | 2025-10-22 | 2026-09-05 |
 
 > `gpui` figure ici pour être couverte par le vérificateur automatique ; elle est
 > adoptée, non candidate — voir la section GPUI ci-dessus et
 > [ADR-0009](adr/0009-source-dependance-gpui.md).
+
+> `criterion` est adoptée depuis le 2026-09-10, en **`[dev-dependencies]`
+> seulement** — voir la section « Bancs d'essai » ci-dessous. Elle reste dans
+> ce tableau pour être couverte par le vérificateur automatique.
 
 > `duckdb` versionne en suivant la version amont de DuckDB (`1.10505.0`), pas en
 > semver Rust classique. Ne pas déduire une rupture d'API d'un saut de majeure.
@@ -229,11 +282,26 @@ voir la table des manques ci-dessous.
 |---|---|---|---|
 | Échelle d'espacement | `space/0`=0, `space/4`=4, `space/8`=8, `space/12`=12, `space/16`=16, `space/24`=24 | Nœuds `13:291` et `47:8222` | 2026-09-07 |
 | Rayons de coin | `radius/6`=6, `radius/8`=8, `radius/full`=999 | idem | 2026-09-07 |
-| Hauteur de barre d'outils | `52` | Nœud `47:8422` « Workspace toolbar » | 2026-09-07 |
+| Hauteur de barre d'outils | `48` | Nœud `47:8422` « Connection toolbar », confirmé par `190:1543`, `229:7640`, `232:9103` | 2026-09-15 |
 | Largeur du panneau latéral déplié | `280` | Nœuds `8:4`, `13:292` | 2026-09-07 |
 | Largeur du panneau latéral replié | `64` | Nœuds `13:165`, `13:484` | 2026-09-07 |
 | Hauteur d'un contrôle | `38` | Nœuds `47:8461`, `47:8465`, `47:8469` | 2026-09-07 |
 | Familles et graisses | Geist — Title 24/32 SemiBold, Body 13/20 Regular, Label 13/20 Medium, Caption 11/16 Regular, Section 11/16 Medium | Nœuds `13:291`, `47:8222` | 2026-09-07 |
+
+> **Correction du 2026-09-15 — la hauteur de barre d'outils valait `52`.**
+> Le nœud `47:8422` avait été lu sous le nom « Workspace toolbar » le
+> 2026-09-07 ; relu au serveur, il s'appelle « Connection toolbar » et mesure
+> **48**. Les trois planches de workspace le confirment sans exception. Le `52`
+> ne venait donc d'aucune frame.
+>
+> Ce qui rend le cas instructif, et qui est exactement le mode de panne
+> qu'[I-12](../CLAUDE.md#i-12) décrit : le dépôt avait pourtant tout ce qu'il
+> fallait pour s'en apercevoir — la valeur était documentée, sourcée, datée, et
+> un test de `theme.rs` l'ancrait. Le test était vert, sur une valeur fausse.
+> Rien ne rougissait parce que **le champ n'avait aucun lecteur** : la barre de
+> connexion se dessinait avec un `48` écrit en dur dans la vue. Deux sources
+> pour une même mesure, dont une fausse et l'autre invisible au thème. La vue
+> lit désormais `Metrics::toolbar_height`.
 
 ### Les binaires embarqués et leurs licences
 
@@ -292,6 +360,306 @@ amont :
   la sortie texte de `regproc` et des autres alias expose les noms d'objets.
   L'aperçu demande ce rendu au serveur ; des octets binaires valides en UTF-8
   ne constituent pas une représentation textuelle fiable.
+
+## `rustls` — avis de sécurité du 2026-09-14
+
+`cargo deny` a signalé **RUSTSEC-2026-0285** sur `rustls 0.23.43`, tiré par
+`reqwest 0.13.4` via `hyper-rustls 0.27.9` pour `oxyn-llm`.
+
+L'avis : rustls acceptait des messages de handshake TLS 1.3 envoyés au **mauvais
+niveau de chiffrement** lorsqu'ils suivaient un message changeant de clé dans le
+même enregistrement — un `EncryptedExtensions` en clair empaqueté avec le
+`ServerHello`, par exemple. RFC 8446 §5.1 exige de terminer la connexion par une
+alerte `unexpected_message`. Même défaut fonctionnel que
+[GO-2026-4340](https://pkg.go.dev/vuln/GO-2026-4340) (CVE-2025-61730).
+
+**Portée réelle, telle que l'avis la décrit** : la transcription du handshake
+reste authentifiée, donc un attaquant en position réseau ne peut ni l'altérer ni
+le compléter. L'effet pratique est qu'un pair pouvait envoyer en clair des
+messages qui auraient dû être chiffrés sans que rustls refuse la connexion.
+
+Corrigé par `cargo update -p rustls` : **0.23.43 → 0.23.45**, mise à jour de
+correctif dans la même plage sémantique. Aucun manifeste modifié, seul
+`Cargo.lock`. Vérifié le 2026-09-14 : `cargo deny check advisories` ne signale
+plus rien.
+
+## Agent Client Protocol — vérification du 2026-09-14
+
+Piste ouverte par l'utilisateur : « regarder le repo de Zed pour l'intégration
+IA, surtout pour ne pas passer par les API ; il y a deux modes, un avec API et
+l'autre les agents externes ». Vérification faite aux sources, pas de mémoire.
+
+**Le protocole.** L'Agent Client Protocol est du **JSON-RPC**, sur `stdio` pour
+un agent local, sur HTTP ou WebSocket pour un agent distant. Un agent local est
+un **processus enfant de l'éditeur**. Le tour de dialogue est documenté avec ses
+méthodes : `session/prompt` (client → agent) ouvre le tour, `session/update`
+(agent → client) diffuse les fragments — `agent_message_chunk`, `plan`,
+`tool_call`, `tool_call_update`, `usage_update` —, `session/request_permission`
+(**agent → client**) demande l'autorisation avant d'exécuter un outil, et
+`session/cancel` (client → agent) interrompt. Le tour se termine par une réponse
+portant un `StopReason` : `end_turn`, `max_tokens`, `max_turn_requests`,
+`refusal` ou `cancelled`. Consultation d'[agentclientprotocol.com](https://agentclientprotocol.com/protocol/prompt-turn)
+le 2026-09-14.
+
+**La bibliothèque.** `agent-client-protocol` **2.1.0** sur crates.io, publiée le
+2026-09-04, sous **Apache-2.0** — licence déjà acceptée par `deny.toml`.
+`rust-version` déclaré **1.88.0**, édition **2024** : compatible avec la chaîne
+épinglée du dépôt (1.98.1) sans y toucher. Dépôt :
+[agentclientprotocol/rust-sdk](https://github.com/agentclientprotocol/rust-sdk).
+Le SDK expose les rôles `Client`, `Agent`, `Proxy` et `Conductor` avec des
+constructeurs de connexion ; **le numéro de version majeur ne dit pas la version
+du protocole** — la 2.1.0 porte le protocole v1 *stable* et un v2 *brouillon*,
+ce dernier derrière `.v2()`. Les transports HTTP/SSE et WebSocket vivent dans une
+crate séparée, `agent-client-protocol-http`, dont nous n'aurions pas besoin pour
+un agent local.
+
+**Ce que devient le processus enfant à l'annulation** — lu dans la source de la
+crate le **2026-09-15**, parce que toute l'annulation d'un tour d'agent en
+dépend et que l'affirmation circulait sans preuve. Dans
+`agent-client-protocol-2.1.0/src/acp_agent.rs` :
+
+| Fait | Où |
+|---|---|
+| L'enfant est lancé **chef de son propre groupe** (`std_cmd.process_group(0)`) — tuer le groupe n'atteint donc pas Oxyn | `spawn_process` |
+| `ChildGuard::terminate` envoie `SIGKILL` au **groupe** (`rustix::process::kill_process_group`) puis `kill()` en secours, ce qui atteint les petits-enfants d'un lanceur `npx` ou `uvx` | `ChildGuard` |
+| Le garde est construit **avant le premier `poll`** : « Create the guard eagerly so cancelling this connection before the monitor is first polled still terminates the whole process group » | à la création de `child_wait` |
+
+Conséquence retenue : **abandonner le futur de conversation suffit** à terminer
+l'agent, y compris si l'annulation arrive avant que quoi que ce soit n'ait été
+lu. C'est ce sur quoi repose `run_turn`, qui sélectionne la conversation contre
+le jeton d'annulation plutôt que de relire un drapeau entre deux étapes.
+
+**Ce que Zed en fait.** Un agent externe se déclare dans les réglages sous
+`agent_servers`, par une commande, ses arguments et son environnement — par
+exemple `{"type": "custom", "command": "node", "args": ["…/index.js", "--acp"]}`.
+Zed le lance en processus séparé. La documentation est explicite sur le point qui
+nous intéresse : **aucune clé d'API n'est requise pour un agent externe**, qui
+porte sa propre authentification, et « Billing, legal terms, retention, and data
+handling are between you and the agent provider ». Cela s'oppose à ses
+fournisseurs natifs, où la clé est configurée dans l'éditeur. Consultation de
+[zed.dev/docs/ai/external-agents](https://zed.dev/docs/ai/external-agents) le
+2026-09-14.
+
+**Ce que la crate ajoute au processus**, mesuré le 2026-09-14 par
+`cargo tree -p oxyn-ai --edges normal -i <crate>` : `async-io 2.6.0`,
+`async-process 2.5.0`, `async-signal 0.2.14` et `blocking 1.7.0`. Tokio n'est
+qu'une dépendance **de développement** de la crate — son cœur est `futures`,
+agnostique. En revanche `async-io` démarre un fil de réacteur et `blocking` un
+pool : **deux réacteurs cohabitent** avec celui de Tokio. `smol`,
+`async-executor` et `async-global-executor` apparaissent dans `Cargo.lock` mais
+**pas** dans le graphe normal d'`oxyn-ai` — ils viennent de dépendances de
+développement d'ailleurs, et la distinction vaut d'être faite : lire le
+`Cargo.lock` seul aurait fait conclure à un runtime complet de plus.
+
+Le chemin `ConnectTo` de la crate installe un garde qui termine le **groupe de
+processus** (`process_group(0)` sur Unix), et non le seul enfant : un agent
+distribué derrière `npx` ou `uvx` se ré-attacherait sinon à pid 1 et ne
+s'arrêterait pas de façon fiable sur EOF de son entrée standard.
+
+Ce que le dépôt en déduit est décidé dans
+[ADR-0026](adr/0026-agents-externes-acp.md), pas ici.
+
+### Adaptateurs ACP de Claude Code et de Codex — vérification du 2026-09-15
+
+Demande de l'utilisateur : se connecter à Claude par **Claude Code déjà installé
+et authentifié** (son abonnement, aucune clé confiée à Oxyn), et de même pour
+**Codex**. Aucun des deux ne parle ACP nativement : chacun passe par un
+adaptateur. Relevé au registre npm, dans le registre ACP, dans la source des
+adaptateurs et dans la documentation officielle, le **2026-09-15** ; ce sont les
+valeurs de `crates/oxyn-ai/src/external/presets.rs`.
+
+| Paquet | Version | Licence | `bin` | Source |
+|---|---|---|---|---|
+| `@agentclientprotocol/claude-agent-acp` | **0.78.0** | Apache-2.0 (le registre ACP écrit « proprietary », voir plus bas) | `claude-agent-acp` ; `engines` : `node >=22` | [registre npm](https://registry.npmjs.org/@agentclientprotocol/claude-agent-acp), [registre ACP](https://github.com/agentclientprotocol/registry/blob/main/claude-acp/agent.json) |
+| `@anthropic-ai/claude-agent-sdk` (dépendance, CLI embarquée 2.1.270) | 0.3.270 | « SEE LICENSE IN README.md » | — | [registre npm](https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk/0.3.270) |
+| `@agentclientprotocol/codex-acp` | **1.12.0** | Apache-2.0 | `codex-acp` ; aucun `engines` déclaré | [registre npm](https://registry.npmjs.org/@agentclientprotocol/codex-acp), [registre ACP](https://github.com/agentclientprotocol/registry/blob/main/codex-acp/agent.json) |
+| `@openai/codex` (dépendance) | 0.154.0 | Apache-2.0 | `codex` ; `node >=16` | [registre npm](https://registry.npmjs.org/@openai/codex/latest) |
+| `@zed-industries/claude-code-acp`, `@zed-industries/codex-acp` | 0.16.2, 0.16.0 | Apache-2.0 | — | **dépréciés** au profit des deux premiers ; le dépôt `zed-industries/codex-acp` est archivé |
+
+Les deux adaptateurs publient plusieurs fois par semaine (les deux dernières
+versions datent du 2026-09-15 à sept minutes d'écart) : la commande proposée
+**épingle** la version, `npx -y <paquet>@<version>`, forme déclarée par le
+registre ACP.
+
+**Connexion.** Relevé dans la source de chaque adaptateur (`src/acp-agent.ts`,
+`src/CodexAuthMethod.ts`) et dans la documentation de chaque agent :
+
+- Claude : l'adaptateur n'annonce **aucune** méthode si le client ne déclare pas
+  `clientCapabilities.auth.terminal` ; il annonce sinon des méthodes `terminal`
+  (`--cli auth login --claudeai`). La spécification réserve cette capacité au
+  client qui « can reproduce the configured agent invocation in an interactive
+  terminal » : Oxyn ne le peut pas et **ne la déclare pas**. Sans session, il
+  renvoie `auth_required` (-32000). La connexion se fait dans un terminal par
+  `claude auth login` ([référence de la CLI](https://code.claude.com/docs/en/cli-reference)) ;
+  les identifiants vivent dans le trousseau macOS ou `~/.claude`
+  ([authentification](https://code.claude.com/docs/en/authentication)), que
+  l'adaptateur relit. **Déduit, non écrit** dans la documentation de
+  l'adaptateur : une connexion faite avec le `claude` de l'utilisateur est
+  réutilisée à configuration identique.
+- Codex : méthodes de genre `agent`, qui passent par `authenticate` —
+  `chat-gpt` (réussit aussitôt si un compte est déjà connecté, ouvre le
+  navigateur sinon) et `api-key` (clé passée en `_meta` ou lue dans
+  l'environnement, qu'Oxyn **ne propose pas** : il ne détient aucune clé
+  d'agent). `session/new` rend `auth_required` sans compte ; la connexion en
+  terminal est `codex login` ([authentification Codex](https://developers.openai.com/codex/auth)).
+
+**Emplacements usuels** cherchés par le bouton « Detect », parce qu'une
+application lancée depuis le Finder n'hérite pas du `PATH` du shell :
+`~/.local/bin` (installateurs natifs de Claude Code et de Codex,
+[installation Claude Code](https://code.claude.com/docs/en/setup),
+[script d'installation Codex](https://raw.githubusercontent.com/openai/codex/main/scripts/install/install.sh)),
+`~/.claude/local` (ancienne installation npm locale de Claude Code),
+`/opt/homebrew/bin`, `/usr/local/bin`, `/home/linuxbrew/.linuxbrew/bin`
+([Homebrew](https://docs.brew.sh/Installation)). **Non vérifiés, donc non
+cherchés** : les répertoires de nvm, fnm, volta et asdf.
+
+**Écart à signaler.** Le registre ACP déclare la licence de Claude Agent
+« proprietary » quand `package.json` et `LICENSE` disent Apache-2.0 ;
+l'explication probable est la dépendance `@anthropic-ai/claude-agent-sdk`, sous
+conditions Anthropic. Oxyn ne redistribue ni l'un ni l'autre : `npx` les
+télécharge sur la machine de l'utilisateur.
+
+### Exposer les outils d'Oxyn à un agent externe — vérification du 2026-09-16
+
+Question : par quel transport un agent externe peut-il atteindre les outils
+d'Oxyn ([ADR-0030](adr/0030-outils-oxyn-exposes-a-un-agent-externe.md)) ?
+
+**Ce que la crate offre.** `agent-client-protocol` 2.1.0 déclare quatre
+transports de serveur MCP dans `NewSessionRequest.mcp_servers`
+(`agent-client-protocol-schema-1.7.0/src/v1/agent.rs:2628`) : `Stdio` — « All
+Agents MUST support this transport » —, `Http`, `Sse`, et `Acp`. Seul `Acp`
+porte le serveur **en mémoire**, sans processus ni port ; il est derrière la
+feature `unstable_mcp_over_acp` et conditionné à une capacité annoncée par
+l'agent (`McpCapabilities.acp`, même fichier, ligne 4537).
+
+**Mesure, et non supposition.** Les deux adaptateurs, tels qu'installés sur la
+machine de développement, ont été interrogés par un `initialize` ACP — sans
+authentification ni accès à une base. Ce qu'ils annoncent :
+
+| Adaptateur | Version mesurée | `mcpCapabilities` |
+|---|---|---|
+| `@agentclientprotocol/claude-agent-acp` | 0.78.0 | `{"http": true, "sse": true}` — `acp` **absent** |
+| `@agentclientprotocol/codex-acp` | 1.12.0 | `{"acp": false, "http": true, "sse": false}` |
+
+**Conséquence : le transport `Acp` est inutilisable aujourd'hui**, et le seul
+transport accepté par les deux agents en plus de `stdio` est **`http`**.
+`McpServerHttp` porte `name`, `url` et `headers`
+(`.../schema-1.7.0/src/v1/agent.rs:2667`), donc un jeton porteur.
+
+La mesure confirme au passage les versions relevées le 2026-09-15 : les binaires
+en cache déclarent bien 0.78.0 et 1.12.0, et Codex annonce les méthodes
+d'authentification `api-key` et `chat-gpt`, comme documenté plus haut.
+
+**Le protocole MCP n'est pas dans la crate.** `agent-client-protocol` 2.1.0 ne
+contient ni `initialize`, ni `tools/list`, ni `tools/call` : `McpToolRegistry`
+fournit le catalogue et les schémas, rien ne les sert sur le fil. La crate
+d'adaptation est nommée dans ses propres sources
+(`agent-client-protocol-2.1.0/src/mcp_server/mod.rs:18`) :
+
+| Crate | Version | Licence | Publiée | Exige |
+|---|---|---|---|---|
+| `agent-client-protocol-rmcp` | **3.1.0** | Apache-2.0 | 2026-09-04 | `agent-client-protocol ^2.1.0`, `rmcp ^2.1.0`, `tokio ^1.52`, `tokio-util ^0.7`, `schemars ^1.0` |
+
+Relevé à [crates.io](https://crates.io/api/v1/crates/agent-client-protocol-rmcp)
+le 2026-09-16.
+
+**Elle n'est pas retenue.** Le transport `Acp` qu'elle sert est celui que les
+agents n'acceptent pas (mesure ci-dessus), et sur un transport HTTP le protocole
+MCP est à notre charge de toute façon. La consigner ici sert à ce que la
+question ne soit pas reposée sans la mesure.
+
+**Ce que le pont utilise à la place**, relevé à crates.io le **2026-09-16**.
+`hyper`, `hyper-util` et `http-body-util` étaient déjà dans `Cargo.lock` par
+`reqwest` et `tauri` : les déclarer ne fait entrer aucune nouvelle famille dans
+l'arbre.
+
+| Crate | Version | Licence | Pourquoi |
+|---|---|---|---|
+| `hyper` | **1.11.1** | MIT | l'écoute HTTP du serveur MCP, sur la boucle locale |
+| `hyper-util` | **0.1.20** | MIT | le service et l'acceptation des connexions |
+| `http-body-util` | **0.1.5** | MIT | lire et écrire un corps complet |
+| `async-process` | **2.5.0** | Apache-2.0 OR MIT | lancer l'agent avec un environnement en liste blanche ; ses flux sont déjà des `futures::io`, donc aucun pont d'exécuteur |
+| `rustix` | **0.38.44** | Apache-2.0 WITH LLVM-exception OR Apache-2.0 OR MIT | tuer le **groupe** de processus. La version maximale est `1.1.4` ; nous alignons sur `0.38.44`, celle qu'`agent-client-protocol` tire déjà, pour ne pas compiler deux copies d'une crate d'appels système |
+
+**Les révisions MCP que le pont annonce**, relevées le **2026-09-16** dans le
+paquet installé par l'adaptateur Claude, et non de mémoire. Le serveur les
+**négocie** : il garde la révision demandée par l'agent quand elle figure dans la
+liste, et répond la plus récente sinon (`crates/oxyn-ai/src/external/mcp.rs`,
+`SUPPORTED_VERSIONS`).
+
+| Source | Version | Licence | Où |
+|---|---|---|---|
+| `@modelcontextprotocol/sdk` | **1.30.0** | MIT | `dist/esm/types.js:4` et `dist/cjs/types.js:33-35`, dans le cache `npx` de `@agentclientprotocol/claude-agent-acp` 0.78.0 ; dépendance *peer* `^1.29.0` de `@anthropic-ai/claude-agent-sdk` 0.3.270 |
+
+`LATEST_PROTOCOL_VERSION = '2025-11-25'`, puis
+`SUPPORTED_PROTOCOL_VERSIONS = [LATEST, '2025-06-18', '2025-03-26', '2024-11-05', '2024-10-07']`.
+
+**Non mesuré : les révisions de Codex 1.12.0.** L'adaptateur Codex n'embarque pas
+ce paquet JavaScript. La négociation couvre le cas d'une révision qu'Oxyn ne
+connaît pas (il répond la sienne, l'agent décide), mais une révision **connue**
+dont les exigences de transport différeraient — un flux sur `GET`, par exemple —
+ne serait pas détectée. À vérifier avec la prochaine montée de version de l'un
+ou l'autre adaptateur.
+
+### Environnement minimal d'un agent ACP — mesure du 2026-09-16
+
+Oxyn lance l'agent avec une **liste blanche** d'environnement
+([ADR-0030](adr/0030-outils-oxyn-exposes-a-un-agent-externe.md)). Reste à savoir
+ce qu'il faut y mettre. Mesuré en envoyant un `initialize` seul à chaque
+adaptateur — aucun prompt, aucune base touchée — et en faisant varier le seul
+environnement. Seuls le `kind` et le `label` de l'état d'authentification sont
+relevés, jamais une valeur d'environnement.
+
+| Environnement de l'enfant | Claude Agent 0.78.0 | Codex 1.12.0 |
+|---|---|---|
+| complet | `account / Claude Max` | `account / ChatGPT` |
+| `PATH`, `HOME`, `LANG`, `TMPDIR` | **`none / Not logged in`** | `account / ChatGPT` |
+| + `LOGNAME` | `none / Not logged in` | — |
+| + `SHELL` | `none / Not logged in` | — |
+| + `SECURITYSESSIONID` | `none / Not logged in` | — |
+| + **`USER`** | **`account / Claude Max`** | inchangé |
+| `PATH`, `HOME`, `USER` | `account / Claude Max` | — |
+
+**Conclusion : `USER`, et elle seule.** Aucun substitut ne convient, et Codex
+n'en a pas besoin — la mesure ne se généralise pas d'un adaptateur à l'autre.
+
+**Le piège, qui vaut plus que la valeur elle-même.** Sans `USER`, `initialize`
+**réussit quand même**, `authMethods` vaut `[]` dans les deux cas, et
+l'adaptateur note sur `stderr` : `[authStatus] session account carries no
+identity signal; keeping`. Le refus n'arrive qu'au **prompt**. Un contrôle
+arrêté au handshake ne voit donc rien, et l'utilisateur reçoit « connecte-toi »
+après avoir posé une question, alors que `claude auth status` répond
+`loggedIn: true` sur la même machine.
+
+C'est le coût d'une liste blanche : **une variable manquante ne casse pas
+l'agent, elle le dégrade en silence**. D'où la règle : chaque nom de la liste
+porte la mesure qui l'y a mis.
+
+### Modes et options de session — vérification du 2026-09-16
+
+Un agent peut déclarer ses modes deux fois : par `modes` et par une option de
+`configOptions` de catégorie `mode`. Le panneau affichait alors deux sélecteurs.
+
+**Le schéma 1.7.0 ne tranche pas.** `agent-client-protocol-schema` 1.7.0 déclare
+les deux champs côte à côte (`src/v1/agent.rs:877-884`) et ne parle ni de
+remplacement ni d'obsolescence. Sa seule consigne sur les catégories
+(`src/v1/agent.rs:2281-2286`) : elles servent l'ergonomie et « MUST NOT be
+required for correctness ».
+
+**La documentation du protocole tranche**, lue sur la source Markdown du site :
+
+| Fichier | Ligne | Texte |
+|---|---|---|
+| [`protocol/session-config-options.md`](https://agentclientprotocol.com/protocol/session-config-options) | 333 | « Session Config Options supersede the older Session Modes API. » |
+| idem | 340 | « Clients that support config options **SHOULD** use `configOptions` exclusively and ignore `modes` » |
+| idem | 342 | « Agents **SHOULD** keep both in sync » |
+| [`protocol/session-modes.md`](https://agentclientprotocol.com/protocol/session-modes) | 10-11 | « Dedicated session mode methods will be removed in a future version » |
+
+**Ce qu'Oxyn en fait** (`crates/oxyn-ai/src/external/settings.rs`,
+`supersede_modes`) : dès qu'une option de catégorie `mode` existe, `modes` et
+le mode courant ne sont plus retenus, ni affichés, ni acceptés en changement. Un
+agent qui ne déclare que `modes` garde son sélecteur : la consigne vise la
+transition, pas les agents anciens.
 
 ## Relecture locale des résultats — 2026-09-10
 
@@ -466,3 +834,341 @@ la lecture des tables ordinaires. Sans provenance native des triggers, la
 définition d'un enfant en portant est refusée plutôt qu'inférée depuis des
 noms ou expressions similaires. Les essais réels de ce lot utilisent PostgreSQL
 17.11 ; un serveur PostgreSQL 12 n'a pas été exécuté.
+
+## Fin d'un commentaire `--` — vérification du 2026-09-16
+
+Le découpeur d'`oxyn-query` décide quel texte est une instruction, et le
+classificateur en déduit qu'elle écrit. Il doit terminer un commentaire de ligne
+**là où le serveur le termine**. Aucun des deux choix n'est sûr par défaut.
+
+- **Finir trop tard** cache une instruction que le serveur exécute.
+- **Finir trop tôt** fait lire comme du code un `/*` ou une apostrophe que le
+  serveur lit comme commentaire. L'instruction qui suit disparaît alors dans un
+  faux commentaire de bloc.
+
+| Moteur | Fin de `--` | Source |
+|---|---|---|
+| PostgreSQL, serveur | `\n` **ou** `\r` | [`scan.l` au tag `REL_17_6`](https://github.com/postgres/postgres/blob/REL_17_6/src/backend/parser/scan.l#L224-L227), l. 224-227 : `newline [\n\r]`, `comment ("--"{non_newline}*)`. Même définition sur `master` au commit `a4f18fd8f280`, l. 206-209 |
+| PostgreSQL, `psql` | `\n` ou `\r` | [`psqlscan.l` au tag `REL_17_6`](https://github.com/postgres/postgres/blob/REL_17_6/src/fe_utils/psqlscan.l#L160-L163), l. 160-163 |
+| SQLite | `\n` ou NUL, **pas** `\r` | [`tokenize.c`](https://github.com/sqlite/sqlite/blob/version-3.50.2/src/tokenize.c), `sqlite3GetToken`, `case CC_MINUS` : `for(i=2; (c=z[i])!=0 && c!='\n'; i++){}`. Identique dans l'amalgamation **3.50.2** qu'embarque `libsqlite3-sys` `0.35.0` (`sqlite3.c`, l. 181599) |
+| `sqlparser` `0.62.0` | `\n` ; aussi `\r` pour `PostgreSqlDialect` seulement | `src/tokenizer.rs`, `tokenize_single_line_comment`, l. 2039-2044 |
+
+Les commentaires `/* */` ne donnent aucun rôle à `\r`. PostgreSQL les imbrique,
+SQLite non.
+
+**Vérifié à l'exécution.** Un PostgreSQL 17.11 jetable a été interrogé en
+protocole simple et en protocole étendu Parse/Bind/Execute/Sync, celui qu'emploie
+`sqlx` au `prepare`.
+
+- `-- x\rDROP TABLE audit` supprime la table dans les deux protocoles.
+- `SELECT 1; -- x\rDROP TABLE audit` la supprime en protocole simple. En
+  protocole étendu, le serveur répond `42601 cannot insert multiple commands into
+  a prepared statement` et n'exécute rien.
+- Un `;` vide en tête ne compte pas comme une commande :
+  `; -- x\rDROP TABLE audit` passe en protocole étendu.
+
+SQLite 3.53.3 a été interrogé via `executescript` : le texte qui suit un `\r`
+isolé reste un commentaire.
+
+**Ce qu'Oxyn en fait.** `LineCommentEnd`, dans `crates/oxyn-query/src/split.rs`,
+fixe la fin de commentaire par dialecte :
+
+- `Postgres` : `\r` ou `\n` ;
+- `Sqlite` : `\n` ;
+- tout dialecte **non vérifié** ici, Redshift compris (son lexer est fermé) : un
+  commentaire de ligne qui contient un `\r` isolé suivi de texte rend son
+  instruction illisible, donc `Unknown`.
+
+Non vérifié :
+
+- MySQL, SQL Server, ClickHouse, DuckDB, Snowflake, BigQuery, Oracle ;
+- le traitement d'un NUL dans le message Parse de PostgreSQL.
+
+## Fournisseur Anthropic — vérification du 2026-09-16
+
+Relevé pour l'implémentation de `crates/oxyn-llm/src/anthropic/`. **La
+documentation a changé de domaine** : `docs.anthropic.com` et `docs.claude.com`
+répondent `301`/`302` vers `platform.claude.com/docs/en/…`. Les URL ci-dessous
+sont celles qui répondent directement.
+
+### Transport
+
+| Fait | Valeur | Source | Vérifié le |
+|---|---|---|---|
+| Génération | `POST /v1/messages` | [Messages API](https://platform.claude.com/docs/en/api/messages) | 2026-09-16 |
+| Comptage de jetons | `POST /v1/messages/count_tokens`, réponse `{"input_tokens": N}` | [Token counting](https://platform.claude.com/docs/en/build-with-claude/token-counting) | 2026-09-16 |
+| Liste des modèles | `GET /v1/models`, `limit` de 1 à 1000 (défaut 20), curseurs `after_id`/`before_id` | [List Models](https://platform.claude.com/docs/en/api/models/list) | 2026-09-16 |
+| En-têtes obligatoires | `x-api-key`, `anthropic-version`, `content-type: application/json` | [Messages API](https://platform.claude.com/docs/en/api/messages) | 2026-09-16 |
+| Valeur d'`anthropic-version` | `2023-06-01` | idem, et exemples cURL de toutes les pages consultées | 2026-09-16 |
+| Champ obligatoire | `max_tokens` (avec `model` et `messages`) | idem | 2026-09-16 |
+| Taille maximale d'une requête | 32 Mo sur Messages et sur le comptage | [Errors § request size limits](https://platform.claude.com/docs/en/api/errors) | 2026-09-16 |
+
+> **`temperature`, `top_p` et `top_k` sont documentés comme dépréciés**, et les
+> modèles récents n'acceptent plus que `1.0` (respectivement `≥ 0.99`). Oxyn ne
+> les envoie que si l'appelant les a explicitement fixés — le comportement était
+> déjà celui-là, et cette note dit pourquoi il ne faut pas le « corriger » en
+> posant un défaut.
+
+### Flux SSE
+
+Huit types d'événements, chacun portant son nom en `event:` **et** un champ
+`type` dans sa charge. Le décodeur lit le champ, pas le nom : les deux sont
+redondants et la charge est ce qu'un mandataire altère le moins.
+
+| Événement | Ce qu'il porte |
+|---|---|
+| `message_start` | l'objet `message`, `content` vide, `usage` d'entrée déjà renseigné |
+| `content_block_start` | `index` et `content_block` (avec son `type`) |
+| `content_block_delta` | `index` et `delta` |
+| `content_block_stop` | `index` |
+| `message_delta` | `delta.stop_reason`, `delta.stop_sequence`, et `usage` **cumulatif** |
+| `message_stop` | rien |
+| `ping` | rien — maintien de connexion, en nombre quelconque |
+| `error` | `error.type` et `error.message`, après un `200` |
+
+Quatre types de `delta`, tous vérifiés sur les exemples de la page
+[Streaming](https://platform.claude.com/docs/en/build-with-claude/streaming) :
+`text_delta` (`text`), `input_json_delta` (`partial_json`), `thinking_delta`
+(`thinking`), `signature_delta` (`signature`). Le `signature_delta` arrive juste
+avant le `content_block_stop` du bloc de raisonnement.
+
+Types de blocs de contenu rencontrés : `text`, `tool_use`, `thinking`,
+`redacted_thinking` (champ `data`), `server_tool_use`,
+`web_search_tool_result`. Oxyn n'offre aucun outil côté serveur ; les deux
+derniers sont suivis sans être exploités.
+
+> **Il n'y a pas de sentinelle de fin.** Contrairement aux protocoles
+> compatibles OpenAI, aucun `[DONE]` : la fin est `message_stop`. Une
+> fermeture du flux sans `message_stop` — propre ou non — n'est pas une fin :
+> Oxyn la classe `StopReason::Interrupted` et jette les blocs sans
+> `content_block_stop`.
+
+### Raisons d'arrêt
+
+Sept valeurs, [Handling stop reasons](https://platform.claude.com/docs/en/build-with-claude/handling-stop-reasons),
+vérifiées le 2026-09-16 : `end_turn`, `max_tokens`, `stop_sequence`, `tool_use`,
+`pause_turn`, `refusal`, `model_context_window_exceeded`. La page de versionnage
+annonce que cette liste peut grandir : une valeur inconnue est **conservée**
+(`StopReason::Other`) et jamais rabattue sur `end_turn`.
+
+### Erreurs et reprise
+
+| Statut | `error.type` | Famille retenue |
+|---|---|---|
+| 400 | `invalid_request_error` | permanente |
+| 401 | `authentication_error` | permanente |
+| 402 | `billing_error` | permanente |
+| 403 | `permission_error` | permanente |
+| 404 | `not_found_error` | permanente |
+| 409 | `conflict_error` | permanente |
+| 413 | `request_too_large` | permanente |
+| 429 | `rate_limit_error` | **transitoire** |
+| 500 | `api_error` | **transitoire** |
+| 504 | `timeout_error` | **ambiguë** |
+| 529 | `overloaded_error` | **transitoire** |
+
+Source : [Claude API errors](https://platform.claude.com/docs/en/api/errors).
+
+#### Rejouer un `500`, `502` ou `504` — relevé le 2026-09-17
+
+| Statut | Anthropic ([Claude API errors](https://platform.claude.com/docs/en/api/errors)) | OpenAI ([Error codes](https://developers.openai.com/api/docs/guides/error-codes)) | Famille retenue |
+|---|---|---|---|
+| `500` | `api_error` : « Retry the request with exponential backoff » | « Retry your request after a brief wait and contact us if the issue persists » | transitoire — **sourcée** chez les deux |
+| `502` | non documenté | non documenté | transitoire — **non vérifié** : classement antérieur conservé faute de source |
+| `504` | `timeout_error` : « The request timed out **while processing** » | non documenté | **ambiguë** |
+
+Le `504` n'est pas une surcharge : le traitement avait commencé, et la réponse a
+pu être produite — et facturée — sans arriver (I-13). Une passerelle placée
+devant un fournisseur compatible répond de même `504` après avoir transmis la
+requête. Il est donc ambigu, comme `LlmError::ResponseTimeout` et
+`LlmError::ConnectionLost`, et se projette sur `OxynError::OutcomeUnknown`.
+
+Aucune des deux pages ne dit si une requête en échec a été facturée. La page
+Anthropic ajoute que ses SDK rejouent d'eux-mêmes « 5xx server errors » : c'est
+un choix de SDK, pas une garantie d'absence d'effet, et Oxyn ne rejoue jamais de
+lui-même.
+Corps d'erreur : `{"type":"error","error":{"type":…,"message":…},"request_id":…}`.
+
+> **`529` a fait corriger le code.** Il ne fait partie d'aucun standard HTTP, et
+> la table de `LlmError::class` le rangeait dans « reste des `5xx` », donc
+> permanent : l'interface aurait proposé « reconfigurer » pour une surcharge
+> passagère. Il est désormais transitoire.
+
+L'en-tête `retry-after` est renvoyé sur un `429` de limitation, **en secondes**
+([Rate limits § response headers](https://platform.claude.com/docs/en/api/rate-limits)).
+Deux exceptions documentées où il est absent : le `429` de plafond de dépense
+mensuel, reconnaissable à `error.details.error_code = enforced_spend_limit_reached`,
+et pour lequel rejouer échoue jusqu'au mois suivant. Oxyn ne rejoue jamais de
+lui-même (I-13) : cet en-tête n'est donc pas encore lu, et le noter ici évite
+qu'on le croie traité.
+
+### Raisonnement : deux réglages distincts
+
+C'est le point qui se rate, parce que les deux noms se ressemblent et ne font
+pas la même chose.
+
+| Réglage | Où il vit | Valeurs | Source |
+|---|---|---|---|
+| Effort | `output_config.effort`, premier niveau du corps | `low`, `medium`, `high`, `xhigh`, `max` | [Effort](https://platform.claude.com/docs/en/build-with-claude/effort) |
+| Mode de réflexion | `thinking.type` | `adaptive`, `enabled` (avec `budget_tokens`), `disabled` | [Thinking](https://platform.claude.com/docs/en/build-with-claude/thinking) |
+| Rendu du raisonnement | `thinking.display` | `summarized`, `omitted` (défaut sur plusieurs modèles), `updates` (bêta) | idem |
+
+Deux pièges vérifiés, et ce sont eux qui dictent le code :
+
+1. **`thinking.type: "adaptive"` est refusé par les modèles antérieurs** avec un
+   `400` (`adaptive thinking is not supported on this model`), et
+   `thinking.type: "enabled"` est refusé par les modèles récents, qui renvoient
+   au couple `adaptive` + `output_config.effort`. Aucun mode n'est donc
+   universel : Oxyn n'envoie `thinking` **que** si l'appelant demande un budget,
+   et se contente de `output_config.effort` sinon.
+2. **`display` vaut `omitted` par défaut** sur la plupart des modèles : le bloc
+   de raisonnement revient alors avec un `thinking` vide mais **une signature**.
+   Il doit quand même être conservé et renvoyé, sinon le tour suivant échoue.
+
+Les blocs de raisonnement se renvoient **inchangés** : l'API vérifie leur
+signature, et une modification produit un `400` dont le message est
+`` `thinking` or `redacted_thinking` blocks in the latest assistant message
+cannot be modified ``. Les `redacted_thinking` comptent, y compris ceux dont le
+champ `thinking` est vide.
+
+#### Quels modèles acceptent un effort, et d'où Oxyn le sait
+
+**Le code ne contient aucune liste de modèles.** `ModelInfo::reasoning_efforts`
+est rempli à l'exécution, niveau par niveau, depuis
+`capabilities.effort.{low,medium,high,xhigh,max}.supported` de la réponse de
+`GET /v1/models` — un seul appelant,
+`crates/oxyn-llm/src/anthropic/wire.rs`. C'est ce qui fait qu'aucune valeur ne
+peut périmer : le fournisseur déclare, Oxyn relaie, et une liste **vide**
+signifie « non déclaré », jamais « aucun ».
+
+La liste ci-dessous est une **référence croisée** pour savoir à quoi s'attendre
+— elle n'alimente aucun chemin de code, et elle périmera. Relevée le
+2026-09-16 sur la page [Effort](https://platform.claude.com/docs/en/build-with-claude/effort),
+section « Supported models » :
+
+> `claude-fable-5-1`, `claude-mythos-5-1`, `claude-fable-5`, `claude-mythos-5`,
+> `claude-mythos-preview`, `claude-opus-5`, `claude-opus-4-8`,
+> `claude-opus-4-7`, `claude-opus-4-6`, `claude-opus-4-5-20251101`,
+> `claude-sonnet-5`, `claude-sonnet-4-6`.
+
+Deux réserves de la même page, et elles comptent pour l'interface :
+**`xhigh` n'est pas offert partout** (« Not every model that supports `max`
+supports `xhigh` »), et le défaut est `high` — « setting `effort` to `"high"`
+produces exactly the same behavior as omitting the `effort` parameter ». Un
+sélecteur qui afficherait les cinq niveaux pour tout modèle produirait donc un
+bouton `xhigh` qui échoue sur une partie du catalogue ; c'est exactement pour ça
+que la liste vient de l'API et non d'ici.
+
+Le point d'accès de liste déclare ces capacités par modèle :
+`capabilities.thinking.supported`, `capabilities.thinking.types.{adaptive,enabled}.supported`,
+et `capabilities.effort.{supported,low,medium,high,xhigh,max}.supported` — la
+documentation nomme d'ailleurs ce dernier « Effort (reasoning\_effort) support ».
+C'est ce qui alimente `ModelInfo::supports_reasoning` et
+`ModelInfo::reasoning_efforts`.
+
+### Cache de prompt
+
+| Fait | Valeur | Source |
+|---|---|---|
+| Marqueur | `"cache_control": {"type": "ephemeral"}` | [Prompt caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching) |
+| Durée | `ttl` `"5m"` (défaut) ou `"1h"`, **sans** en-tête bêta | idem |
+| Emplacements | blocs de `system`, blocs de contenu de `messages`, **dernier** outil de `tools` | idem |
+| Nombre maximal de marqueurs | **4** ; un cinquième fait échouer la requête | idem |
+| Longueur minimale mise en cache | 512 à 4096 jetons selon le modèle ; en dessous, aucun cache et **aucune erreur** | idem |
+| Consommation | `cache_creation_input_tokens` (écrit), `cache_read_input_tokens` (lu) | idem |
+
+Le total d'entrée vaut `input_tokens + cache_creation_input_tokens +
+cache_read_input_tokens` : `input_tokens` ne compte que ce qui suit le dernier
+marqueur. C'est pourquoi `ChatEvent::Usage` les porte séparément plutôt que de
+les additionner.
+
+Oxyn pose au plus quatre marqueurs et s'arrête avant la limite plutôt que de
+laisser arriver un `400` pour un réglage que l'utilisateur n'a pas conscience
+d'avoir posé.
+
+### Outils
+
+`input_schema` et non `parameters`. Un résultat d'outil est un bloc
+`{"type":"tool_result","tool_use_id":…,"content":…}` dans un message de rôle
+`user`, avec `is_error: true` quand l'exécution a échoué. Le flux à granularité
+fine s'active **par outil** avec `eager_input_streaming: true`, remplaçant
+l'en-tête bêta `fine-grained-tool-streaming-2025-05-14`
+([Fine-grained tool streaming](https://platform.claude.com/docs/en/agents-and-tools/tool-use/fine-grained-tool-streaming)) ;
+la documentation avertit alors que le JSON accumulé **peut être invalide**.
+Oxyn ne l'active pas, mais garde le parse protégé : un `max_tokens` atteint au
+milieu d'un paramètre produit le même JSON tronqué, sans aucune option.
+
+### Tarifs — délibérément absents
+
+`GET /v1/models` ne publie **aucun** tarif, et aucune des pages consultées n'en
+donne sous une forme lisible par un programme. `ModelInfo::cost` reste donc
+`None` pour ce fournisseur. Écrire une grille en dur serait exactement la valeur
+plausible et fausse qu'I-12 interdit ; OpenRouter, qui publie ses prix dans sa
+réponse, reste le seul fournisseur dont le coût est renseigné.
+
+### Côté OpenAI, pour la parité
+
+| Fait | Valeur | Source | Vérifié le |
+|---|---|---|---|
+| Effort de raisonnement | `reasoning_effort` au premier niveau (Chat Completions) ; `reasoning.effort` sur l'API Responses | [Reasoning](https://developers.openai.com/api/docs/guides/reasoning) | 2026-09-16 |
+| Valeurs | dépendantes du modèle, parmi `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, `max` | idem | 2026-09-16 |
+| Jetons en cache | `usage.prompt_tokens_details.cached_tokens` | [Chat object](https://developers.openai.com/api/docs/api-reference/chat/object) | 2026-09-16 |
+| Jetons de raisonnement | `usage.completion_tokens_details.reasoning_tokens` | idem | 2026-09-16 |
+| Refus | `delta.refusal`, champ distinct de `delta.content` | idem | 2026-09-16 |
+| Raisons d'arrêt | `stop`, `length`, `tool_calls`, `content_filter`, `function_call` (déprécié) | idem | 2026-09-16 |
+| Fin de flux | `finish_reason` renseigné sur le dernier fragment de contenu ; puis, avec `stream_options.include_usage`, un fragment à `choices` vide portant `usage` ; puis `data: [DONE]`. « If the stream is interrupted, you may not receive the final usage chunk » | [Create chat completion](https://developers.openai.com/api/docs/api-reference/chat/create) | 2026-09-16 |
+
+`ReasoningEffort` ne porte que les cinq niveaux communs aux deux fournisseurs.
+`none` et `minimal` sont propres à OpenAI ; l'énumération est `#[non_exhaustive]`
+et `ReasoningEffort::parse` rend `None` dessus plutôt que de les rabattre sur
+`low`, ce qui changerait la demande de l'utilisateur.
+
+### Fin de flux chez les serveurs locaux compatibles OpenAI
+
+Oxyn classe `StopReason::Interrupted` un flux fermé sans `finish_reason` ni
+`[DONE]`. Le risque mesuré : un serveur local qui n'enverrait jamais
+`finish_reason` verrait toutes ses réponses marquées interrompues. Relevé **dans
+les sources**, le 2026-09-16, sur les révisions nommées.
+
+| Serveur | Révision | `finish_reason` final | `[DONE]` | Limite de contexte | Erreur en plein flux |
+|---|---|---|---|---|---|
+| Ollama | [`a43fad18`](https://github.com/ollama/ollama/tree/a43fad18b088095de20fbd7a8f0de50824cf5d27) (`main`, 2026-09-15) | toujours, sur une trame dédiée : `FinishChunk` (`openai/openai.go`) vaut `DoneReason`, `stop` par défaut, `tool_calls` si un appel a été émis | oui, après la trame finale et l'éventuelle trame `usage` (`ChatWriter.writeResponse`, `middleware/openai.go`) | `length` : le moteur est `llama-server`, dont l'arrêt `limit` devient `DoneReasonLength` (`llm/llama_server.go`) ; une génération ouverte est bornée à plusieurs fenêtres de contexte (`boundedNumPredict`) | **ni `finish_reason` ni `[DONE]`**, et le message est perdu : `streamResponse` (`server/routes.go`) écrit `{"error":…}` après un `200`, que `ChatWriter.Write` relit comme une réponse vide. Oxyn : `Interrupted` |
+| llama.cpp | [`60199339`](https://github.com/ggml-org/llama.cpp/tree/60199339bcff9092dd7273d371b52308c85a92de) (`master`, 2026-09-16) | toujours, sur une trame dédiée : `to_json_oaicompat_chat_stream` (`tools/server/server-task.cpp`) vaut `stop` ou `tool_calls` sur fin de modèle ou mot d'arrêt, `length` sinon | oui, quand plus aucun résultat n'arrive (`tools/server/server-context.cpp`) | `length` : sans décalage de contexte, `STOP_TYPE_LIMIT` quand la fenêtre est pleine ; avec, la génération continue en décalant | `data: {"error":…}`, puis fermeture **sans** `[DONE]`. Oxyn : `ProviderError` |
+| LM Studio | — | **non mesuré** : logiciel fermé | non mesuré | non mesuré | non mesuré |
+
+Conclusion : la règle tient pour les deux serveurs ouverts. Un arrêt en limite
+de contexte y est un `MaxTokens`, pas une coupure. llama.cpp envoie en outre des
+commentaires SSE `:` de maintien de connexion, que le décodeur ignore. Les faits
+> ci-dessus viennent de `developers.openai.com`, qui sert la même
+> documentation — c'est aussi le domaine déjà utilisé plus haut dans ce fichier
+> pour la fiche de `gpt-6-astra`.
+
+## Bancs d'essai — vérification du 2026-09-10
+
+`criterion` est en **`0.8.2`**, relevée au registre par `cargo search criterion`
+le 2026-09-10. Elle est adoptée à cette date, en `[dev-dependencies]` du
+workspace, et n'entre dans le graphe que par les cibles `[[bench]]` de
+`oxyn-query` et `oxyn-driver-sqlite`.
+
+Fonctionnalités déclarées par la version publiée, relevées par
+`cargo add --dry-run --dev criterion` : `cargo_bench_support`, `plotters` et
+`rayon` sont actives par défaut ; `async`, `async_futures`, `async_smol`,
+`async_tokio`, `csv_output`, `html_reports`, `real_blackbox` et `stable` ne le
+sont pas. Aucune n'est activée en plus des défauts : les bancs qui ont besoin
+d'un exécuteur construisent leur propre `tokio::runtime` et appellent
+`block_on`, ce qui évite d'ajouter `async_tokio` — la crate n'a rien à savoir de
+notre exécuteur. `real_blackbox` est inutile depuis que `std::hint::black_box`
+est stable, et c'est celui que les bancs utilisent.
+
+Deux points d'usage vérifiés à l'exécution, et non déduits de la documentation :
+
+- un exécutable `criterion` lancé **sans** l'argument `--bench` se met en mode
+  test et n'imprime aucune mesure. Il ne signale rien d'autre que `Success` :
+  une campagne lancée ainsi paraît avoir tourné ;
+- `BenchmarkGroup::sample_size` **écrase** l'argument `--sample-size` de la
+  ligne de commande. Une valeur écrite dans le code n'est donc pas réglable à
+  l'invocation.
+
+La campagne de mesure elle-même, ses conditions et ses résultats sont dans
+[PERFORMANCE](PERFORMANCE.md#campagne-de-mesure-du-2026-09-10) : ce fichier-ci ne
+porte que les faits externes.

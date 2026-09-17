@@ -1,6 +1,6 @@
 # ADR-0019 — Un contexte de session déclaré, jamais posé en silence
 
-**Statut :** proposé · **Date :** 2026-09-10
+**Statut :** accepté · **Date :** 2026-09-10
 
 **Précise :** [ADR-0015](0015-consoles-independantes.md), sur ce qu'une session
 porte en plus de sa transaction.
@@ -126,6 +126,7 @@ Le contexte de session est une **opération déclarée**, pas un effet de bord.
   mesure montre que ce coût pèse, l'alternative est de porter `search_path`
   comme option de connexion et de recréer le bassin au changement — plus rapide,
   mais incapable de préserver une transaction ouverte.
+- **−** Après toute exécution inscriptible, le driver PostgreSQL remet `search_path` au défaut et `standard_conforming_strings` à `on`, qu'il impose aussi à l'ouverture (valeur que suppose le découpeur) : un `SET` tapé en console ne suit pas la connexion rendue au bassin, et le schéma d'une console ne passe que par ce contexte.
 
 **Coût de sortie :** retirer une commande, une capacité et deux méthodes de
 trait, plus le sélecteur. Rien n'est persisté dans un format de workspace tant

@@ -1,6 +1,6 @@
 # ADR-0003 — Modèle de capacités plutôt que dénominateur commun
 
-**Statut :** proposé · **Date :** 2026-09-05
+**Statut :** accepté · **Date :** 2026-09-05
 
 ## Contexte
 Redis n'a pas de schéma, Neo4j pas de tables, Elasticsearch pas de SQL, DynamoDB pas de

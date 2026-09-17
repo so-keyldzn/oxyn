@@ -1,6 +1,6 @@
 # ADR-0011 — Un workbench dense comme structure commune du workspace
 
-**Statut :** proposé · **Date :** 2026-09-07
+**Statut :** accepté · **Date :** 2026-09-07
 
 ## Contexte
 

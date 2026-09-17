@@ -1,6 +1,6 @@
 # ADR-0004 — Command bus unique et Policy gate
 
-**Statut :** proposé · **Date :** 2026-09-05
+**Statut :** accepté · **Date :** 2026-09-05
 
 ## Contexte
 Donner à des agents IA l'accès à des bases de données de production est le risque n° 1

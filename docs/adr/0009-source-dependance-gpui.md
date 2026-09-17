@@ -1,6 +1,6 @@
 # ADR-0009 — GPUI consommé depuis crates.io, non depuis le dépôt Zed
 
-**Statut :** proposé · **Date :** 2026-09-05
+**Statut :** accepté · **Date :** 2026-09-05
 **Précise :** [ADR-0001](0001-ui-toolkit.md), qui retenait GPUI « en épinglant un
 commit précis ». Ce point-là est remplacé ; le reste de l'ADR-0001 — le choix de
 GPUI et la règle d'isolation — reste en vigueur.

@@ -1,6 +1,6 @@
 # ADR-0018 — Le DDL inspecté reste une métadonnée, préparée séparément de son exécution
 
-**Statut :** proposé · **Date :** 2026-09-10
+**Statut :** accepté · **Date :** 2026-09-10
 
 ## Contexte
 

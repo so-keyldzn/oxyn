@@ -1,6 +1,6 @@
 # ADR-0006 — Niveaux de confidentialité IA, par connexion
 
-**Statut :** proposé · **Date :** 2026-09-05
+**Statut :** accepté · **Date :** 2026-09-05
 
 ## Contexte
 « Privacy first » et « AI when it adds value » entrent en tension dès qu'un schéma ou

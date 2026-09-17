@@ -1,6 +1,6 @@
 # ADR-0013 — Persister les préférences de lecture dans le workspace
 
-**Statut :** proposé · **Date :** 2026-09-10
+**Statut :** accepté · **Date :** 2026-09-10
 
 **Précise :** [ADR-0004](0004-command-bus.md), pour les réglages locaux.
 
@@ -17,7 +17,20 @@ réécrits dans le désordre par des tâches asynchrones.
 - `oxyn-core` porte `WorkspacePreferences`, `ReadingDensity` et
   `PreferencesSnapshot`, sans type GPUI. Le format JSON version 1 contient
   `appearance`, `reading_density`, `sidebar_collapsed`, `inspector_open`,
-  `inspector_width`, `null_text` et `group_thousands`.
+  `inspector_width`, `null_text`, `group_thousands` et `object_location` —
+  l'emplacement d'objet restauré, ajouté le 2026-09-10. Le 2026-09-15, pour
+  l'interface Tauri : `follow_system_appearance` (un booléen plutôt qu'une
+  variante `system` d'`appearance`, qu'un binaire antérieur refuserait au
+  démarrage), `binary_display` (une valeur inconnue se lit `hex`) et
+  `cell_max_chars` (64 à 16 384, jamais sans coupe).
+- **Un champ s'ajoute sans changer la version, et un champ inconnu est ignoré.**
+  La lecture des préférences se fait au **démarrage** de l'application : refuser
+  un champ inconnu empêcherait une version antérieure d'Oxyn de se lancer après
+  qu'une plus récente a écrit le même fichier — un retour en arrière est une
+  chose que les utilisateurs font. C'est `version` qui porte l'incompatibilité,
+  contrôlé explicitement, et lui seul. Le prix est qu'un nom de champ mal
+  orthographié se lit comme son défaut au lieu d'échouer ; c'est la moins chère
+  des deux erreurs pour un fichier qu'Oxyn écrit lui-même.
 - La migration SQLite 4 ajoute `workspace_preferences`, liée au workspace,
   avec `revision`, `payload` JSON et `updated_at`. Les migrations précédentes
   restent inchangées. Une ligne absente donne les valeurs par défaut.

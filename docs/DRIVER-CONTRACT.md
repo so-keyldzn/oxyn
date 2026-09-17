@@ -109,6 +109,18 @@ et le SQL arbitraire est la fonctionnalité. Le SQL qu'**Oxyn compose**
 suggestion IA — ne concatène jamais un nom reçu : il passe par la fonction de
 citation d'identifiant du driver, et les valeurs sont liées.
 
+**Une exception, et une seule** : le prédicat d'aperçu. L'utilisateur y écrit un
+fragment de `WHERE` que le driver insère dans un `SELECT` composé par Oxyn —
+donc du texte libre dans du SQL composé. C'est délibéré et argumenté dans
+[ADR-0020](adr/0020-apercu-trie-filtre-parcouru.md) : ce champ **est** du SQL
+que l'utilisateur écrit, et le relevé Figma `190:1618` le montre comme tel.
+Quatre barrières le bornent — reclassification du texte avant toute décision,
+session serveur en lecture seule, borne de lignes, et parenthésage
+`WHERE (…\n)` qui transforme un commentaire non terminé en erreur de syntaxe
+plutôt qu'en `LIMIT` avalé. Cette exception est nommée ici parce que
+[I-10](../CLAUDE.md#i-10) renvoie à ce paragraphe : sans elle, une relecture du
+code des aperçus conclurait à une violation d'invariant.
+
 **Panne concrète :** une table nommée `"users"; DROP TABLE audit; --` existe
 légalement dans PostgreSQL. Un aperçu construit par concaténation exécute la
 suppression au simple clic sur cette table dans l'arborescence. La distinction
@@ -129,7 +141,7 @@ base. La corruption est invisible et permanente.
 
 | Interdit | Pourquoi |
 |---|---|
-| Dépendre de `oxyn-core`, `oxyn-ui`, `oxyn-ai` ou d'un autre driver | inverse le sens des dépendances ([ARCHITECTURE](ARCHITECTURE.md#le-sens-des-dépendances)) |
+| Dépendre d'`oxyn-exec`, `oxyn-store`, `oxyn-app`, `oxyn-ui`, `oxyn-ai` ou d'un autre driver | inverse le sens des dépendances. `oxyn-core` **est** au contraire la dépendance attendue : c'est le vocabulaire commun — `ExecRequest`, `OxynError`, `PreviewShape` —, et les deux drivers livrés en dépendent ([ARCHITECTURE](ARCHITECTURE.md#le-sens-des-dépendances)) |
 | Exister en double pour deux produits parlant le même protocole | [ADR-0003](adr/0003-driver-capabilities.md) : Redshift ≡ PostgreSQL, MariaDB ≡ MySQL. La différence est une capacité, pas une crate |
 | Écrire dans un fichier, ouvrir une fenêtre, lire une variable d'environnement | un driver reçoit sa configuration, il ne va pas la chercher |
 | Journaliser une valeur de paramètre ou un identifiant de connexion | [I-03](../CLAUDE.md#i-03) |

@@ -1,9 +1,22 @@
-# ADR-0020 — Trier, filtrer et parcourir un aperçu sans composer de SQL dans l'interface
+# ADR-0020 — Aperçu : un tri qu'Oxyn compose, un prédicat que l'utilisateur écrit, une page déterministe
 
 **Statut :** proposé · **Date :** 2026-09-10
 
 **Précise :** [ADR-0012](0012-lecture-pages-resultats.md), sur ce qui distingue
 une page de résultat d'une page de table.
+
+> **Précisé par [ADR-0028](0028-pas-dordre-par-defaut-pas-de-page-sans-ordre-total.md)
+> sur un point, et il est important.** Le remède proposé ici — « sans tri
+> demandé, le driver ordonne par la clé primaire seule » — **n'a pas été mis en
+> œuvre**. L'argument qui le motive, lui, est retenu : un `OFFSET` sur un ordre
+> non garanti duplique et omet des lignes en silence. Ce que le code fait à la
+> place est **plus strict** — aucun ordre imposé, et aucune page offerte tant
+> que l'ordre n'est pas total.
+>
+> Lire ADR-0028 **avant** de « corriger » `pagination_from` ou de composer un
+> `ORDER BY` par défaut : les deux passages de cet ADR qui décrivent un tri
+> imposé sont périmés, et les suivre réintroduirait la panne silencieuse que cet
+> ADR existe pour empêcher.
 
 ## Contexte
 
@@ -39,25 +52,34 @@ rend une pagination honnête possible.
 
 ## Décision
 
-**Le tri et le filtre voyagent en structures fermées et typées, jamais en
-texte.** `Command::PreviewRelation` gagne `sort: Vec<PreviewSort>` et
-`filter: Vec<PreviewFilter>`, où `PreviewSort { column: String, descending: bool }`
-et `PreviewFilter { column: String, operator: PreviewOperator, value: ScalarValue }`.
-`column` est un **nom de colonne**, jamais une expression : accepter « une
-expression » ici rouvrirait la composition de SQL dans l'interface, du mauvais
-côté de la frontière.
+**Les deux moitiés de la demande ne se ressemblent pas, et c'est la maquette qui
+le dit.** Le relevé Figma du 2026-09-10 montre, sous la barre Data, une
+« Filter toolbar » (`190:1618`, 1272 × 32) faite d'un champ `272:10667` portant
+le préfixe littéral **`WHERE`**, une zone de saisie de 1048 px et un bouton
+`Apply`, puis d'un bouton `Sort` de 84 px. Le filtre est donc un **prédicat que
+l'utilisateur écrit**, pas un constructeur colonne/opérateur/valeur.
 
-**Le driver traduit, cite et lie.** `Session::preview_request` reçoit ces
-structures et produit l'`ExecRequest`. Les identifiants sont cités comme ils le
-sont déjà ; les **valeurs de filtre partent dans `ExecRequest::params`**, jamais
-concaténées ([I-10](../../CLAUDE.md#i-10)). Le driver refuse une colonne que la
-relation ne déclare pas, plutôt que de la transmettre au serveur.
+Ce n'est pas une entorse à [I-10](../../CLAUDE.md#i-10), c'est sa lettre : ce que
+l'invariant interdit, c'est qu'Oxyn **concatène un identifiant reçu** ; il dit
+aussi que « le SQL que *l'utilisateur écrit* part tel quel — c'est la
+fonctionnalité ». Un prédicat tapé par un professionnel appartient à la seconde
+catégorie, comme le texte d'une console.
 
-**Les opérateurs de recherche textuelle échappent leurs métacaractères.**
-`Contains` et `StartsWith` deviennent un `LIKE` dont la valeur est échappée par
-le driver — `%`, `_`, et le caractère d'échappement lui-même — avec une clause
-`ESCAPE` explicite. Sans cela, chercher `100%` remonterait tout, et personne ne
-verrait que le filtre ne fait pas ce qu'il annonce.
+**Le tri, lui, reste structuré.** `PreviewSort { column, descending }` : la
+colonne est un identifiant que le driver cite. C'est Oxyn qui compose ce
+fragment-là, donc c'est Oxyn qui répond de ce qu'il contient. Une colonne que la
+relation ne déclare pas est refusée plutôt que transmise au serveur.
+
+**`PreviewShape` porte les trois : `sort`, `predicate: Option<String>` et
+`offset`.** Un prédicat vide ou fait d'espaces vaut « aucun filtre » — composer
+un `WHERE` sans condition produirait une erreur de syntaxe là où l'utilisateur
+croit avoir tout effacé. C'est la seule normalisation appliquée à son texte.
+
+**Le prédicat n'est pas une porte ouverte pour autant.** Le texte final est
+reclassifié par `oxyn-query` et refusé s'il devient mutant — l'exécuteur le fait
+déjà pour tout aperçu —, la session est tenue en lecture seule **par le
+serveur**, et la borne de lignes s'applique. Un `;` suivi d'une écriture ne
+franchit aucun de ces trois-là.
 
 **Deux capacités, `PREVIEW_SORT` et `PREVIEW_FILTER`.** Un moteur qui ne les
 déclare pas n'affiche pas ces contrôles
@@ -86,8 +108,12 @@ résultat avec sa propre identité.
 
 - **+** Un aperçu devient utilisable sur une vraie table : trouver une ligne
   n'oblige plus à écrire du SQL dans la console.
-- **+** Aucun texte composé dans l'interface, donc aucune surface d'injection
-  ajoutée ; les valeurs sont liées comme celles d'une requête écrite à la main.
+- **+** Le prédicat est du SQL, donc il dit tout ce que le SQL dit :
+  `a IS NOT NULL AND (b > c)` s'écrit, là où trois menus ne l'auraient pas
+  exprimé.
+- **−** Ce prédicat est aussi du SQL que l'utilisateur peut écrire faux. Le
+  message d'erreur du serveur le lui dira — son public le lit — mais l'aperçu
+  n'a plus la propriété « ne peut pas échouer pour une raison de syntaxe ».
 - **+** La pagination ne ment pas : elle existe quand elle est correcte, et son
   absence est expliquée.
 - **−** Chaque page est une exécution : elle coûte au serveur, et les données
@@ -101,8 +127,8 @@ résultat avec sa propre identité.
   voit en premier par rapport à aujourd'hui. C'est un ordre arbitraire remplacé
   par un ordre déterministe, mais c'est un changement visible.
 
-**Coût de sortie :** retirer deux champs de commande, deux capacités et une
-traduction par driver. Rien n'est persisté dans un format de workspace — le tri
+**Coût de sortie :** retirer un champ de forme, deux capacités et une traduction
+par driver. Rien n'est persisté dans un format de workspace — le tri
 et le filtre d'un aperçu ne survivent pas à la fermeture de l'onglet, ce que cet
 ADR ne cherche pas à changer —, ce qui borne le coût à du code.
 
@@ -117,7 +143,8 @@ suppose exactement ce que la présente décision exige déjà : un ordre unique.
 | Alternative | Raison du rejet |
 |---|---|
 | Trier et filtrer dans la grille, en mémoire | Ne porterait que sur les lignes déjà lues : l'utilisateur croirait chercher dans la table et chercherait dans 200 lignes |
-| Laisser l'interface composer un fragment `WHERE` | Remet la composition de SQL du côté de l'interface, et une valeur concaténée exécute ce qu'elle contient ([I-10](../../CLAUDE.md#i-10)) |
+| Un constructeur de filtres structuré — colonne, opérateur, valeur liée | Plus sûr sur le papier, mais ce n'est pas ce que la maquette dessine, et le public d'Oxyn écrit du SQL toute la journée. Un constructeur l'obligerait à exprimer en trois menus ce qu'il tape en cinq secondes, et ne saurait pas dire `a IS NOT NULL AND (b > c)` |
+| Laisser Oxyn composer un `WHERE` à partir de valeurs qu'il concatène | Là, oui, l'invariant s'applique : ce serait du SQL composé par le produit à partir de données reçues ([I-10](../../CLAUDE.md#i-10)) |
 | Réutiliser `ReadResultPage` pour la page suivante | Elle relit un tampon déjà reçu ; elle ne contacte pas le serveur et ne peut donc pas rendre des lignes qui n'ont jamais été lues |
 | Paginer sans ordre déterministe | `OFFSET` sans `ORDER BY` stable duplique et omet des lignes sans rien signaler — un résultat faux qui a l'air juste |
 | Une seule capacité pour le tri et le filtre | Un moteur peut savoir ordonner sans savoir filtrer, et l'inverse ; un drapeau unique forcerait à refuser les deux pour n'en manquer qu'un |

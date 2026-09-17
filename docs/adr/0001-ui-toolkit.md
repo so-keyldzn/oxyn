@@ -1,6 +1,9 @@
 # ADR-0001 — Toolkit UI : GPUI, avec isolation stricte
 
-**Statut :** proposé · **Date :** 2026-09-05
+**Statut :** remplacé · **Date :** 2026-09-05
+**Remplacé par :** [ADR-0029](0029-interface-tauri-shadcn.md), le 2026-09-15. Ce
+qui suit est conservé tel qu'il a été décidé : c'est la raison pour laquelle GPUI
+paraissait le bon choix, et ce qui a changé depuis se lit dans l'ADR-0029.
 
 ## Contexte
 « Native first, blazing fast » exclut Electron et Tauri. En Rust pur, deux options

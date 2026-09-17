@@ -1,6 +1,6 @@
 # ADR-0012 — Lire les pages de résultats hors du rendu et borner leur cache en octets
 
-**Statut :** proposé · **Date :** 2026-09-10
+**Statut :** accepté · **Date :** 2026-09-10
 
 **Précise :** [ADR-0002](0002-arrow-result-model.md), sur la relecture et son
 budget ; [ADR-0004](0004-command-bus.md), sur la commande locale de lecture.

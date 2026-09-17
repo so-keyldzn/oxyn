@@ -1,10 +1,17 @@
 # Architecture d'Oxyn
 
-Statut : **phase 0 en cours** — le workspace décrit ici existe sur disque, compile, et
-franchit `make qualite`. Cible : application desktop 100 % Rust, sans webview.
+Statut : le workspace décrit ici existe sur disque, compile, et franchit
+`make qualite`. Cible : application desktop au backend Rust, dont l'interface
+est une application web servie par Tauri ([ADR-0029](adr/0029-interface-tauri-shadcn.md)).
+
+L'en-tête annonçait « phase 0 en cours » et un réalignement au 2026-09-06 : les
+deux avaient huit jours de retard sur le contenu de ce document, qui décrit
+depuis ADR-0018, ADR-0020 et ADR-0023. L'avancement se lit dans
+[IMPLEMENTATION-PLAN](IMPLEMENTATION-PLAN.md), qui est le seul document du reste
+à faire — le répéter ici garantissait de le laisser pourrir.
 
 Ce document décrit le découpage **réellement implémenté**, réaligné sur les sources le
-2026-09-06. En cas de contradiction avec le code, c'est un bug — de l'un ou de l'autre.
+2026-09-14. En cas de contradiction avec le code, c'est un bug — de l'un ou de l'autre.
 Les décisions sont justifiées dans les [ADR](adr/) ; ce document en dérive et ne les
 rejuge pas.
 
@@ -34,7 +41,14 @@ Le point 4 est la décision structurante la plus importante du document ; voir �
 
 ---
 
-## 2. Choix du toolkit UI : GPUI
+## 2. Choix du toolkit UI : GPUI, remplacé par Tauri
+
+> **Remplacé par [ADR-0029](adr/0029-interface-tauri-shadcn.md) le 2026-09-15.**
+> L'interface cible est `apps/desktop` — TanStack Start en mode SPA, shadcn/ui sur
+> Base UI, Storybook — servie par la crate `oxyn-desktop` (Tauri 2). `oxyn-ui` et
+> `oxyn-app` restent dans le workspace jusqu'à la parité, puis sont supprimées.
+> La section ci-dessous décrit l'interface GPUI tant qu'elle existe ; le pont IPC
+> est décrit au [§2 bis](#2-bis-linterface-tauri).
 
 Les deux candidats en Rust pur, GPU-accéléré, sans webview, étaient egui et GPUI.
 
@@ -74,9 +88,53 @@ Voir [ADR-0001](adr/0001-ui-toolkit.md).
 
 ---
 
+## 2 bis. L'interface Tauri
+
+```
+apps/desktop/                     # le front : pnpm, Vite, TanStack Start (SPA)
+├── src/lib/ipc/                  # le SEUL module qui appelle `invoke` ; types miroirs d'ipc.rs
+├── src/components/ui/            # généré par `shadcn add` (Base UI), jamais retouché à la main
+├── src/components/oxyn/          # composants Oxyn : grille, arbre, éditeur, approbation…
+│                                 #   chacun avec ses stories, qui sont aussi ses tests
+├── src/features/                 # écrans : connexion, workspace ; état de session
+└── .storybook/                   # atelier de composants ; addon-vitest + addon-a11y
+crates/oxyn-desktop/              # l'hôte Tauri
+├── src/commands.rs               # la surface IPC : parse, puis délègue au backend
+├── src/backend.rs                # assemblage de l'Executor ; toute action est une Command
+├── src/ipc.rs                    # ce qui traverse la frontière, plus étroit que le domaine
+├── src/catalog.rs                # arbre du catalogue et commande d'expansion
+├── capabilities/main.json        # permissions de la webview
+└── tauri.conf.json               # CSP de production ; tauri.dev.json5 la relâche en dev
+```
+
+**Le pont ne crée aucun chemin d'exécution.** Chaque commande Tauri de
+`commands.rs` parse ce qu'envoie la webview et appelle `Backend`, qui émet une
+`Command` portant `Actor::Human` vers l'`Executor` ([I-01](../CLAUDE.md#i-01)). La
+seule écriture hors bus — les secrets d'un brouillon de connexion — passe par
+`credentials.rs`, comme dans `oxyn-app`.
+
+**Les résultats traversent l'IPC par pages formatées.** `result_page` lit au plus
+2 000 lignes du `ResultBuffer` et les formate avec `oxyn_data::format_cell`. La
+grille (`ResultGrid`, TanStack Table + Virtual) ne demande que les pages visibles ;
+défiler jusqu'à la dernière ligne ne relit rien de ce qui précède, et ne relance
+jamais la requête ([I-06](../CLAUDE.md#i-06)).
+
+**L'annulation est adressée par l'identifiant que choisit le front.** Le front tire
+un UUID par commande ; `Backend` y associe le `CancelToken` du dispatch, et `cancel`
+l'atteint tant que la commande tourne.
+
+**Ce qui ne traverse pas.** Une configuration de connexion en attente d'accord reste
+dans le backend : le front ne tient que l'identifiant de la commande à approuver.
+Les paramètres et la référence de secret d'une connexion ne sont jamais sérialisés
+vers la webview ([I-03](../CLAUDE.md#i-03)) ; des tests d'`ipc.rs` le vérifient.
+
+---
+
+<a id="le-découpage"></a><a id="le-sens-des-dépendances"></a>
+
 ## 3. Le workspace Cargo
 
-15 crates, telles qu'elles existent :
+16 crates, telles qu'elles existent :
 
 ```
 oxyn/
@@ -99,7 +157,8 @@ oxyn/
 │   ├── oxyn-ui/                  # GPUI : grille, éditeur, arbre, barre d'état, approbation,
 │   │                             #   formulaire de connexion, thème, contrôles, icônes,
 │   │                             #   réglages d'affichage
-│   └── oxyn-app/                 # binaire `oxyn` : backend, vue racine, traduction, fenêtre
+│   ├── oxyn-app/                 # binaire `oxyn` : backend, vue racine, traduction, fenêtre
+│   └── oxyn-desktop/             # binaire `oxyn-desktop` : hôte Tauri et pont IPC (ADR-0029)
 ├── drivers/
 │   ├── oxyn-driver-sqlite/       # embarqué
 │   └── oxyn-driver-postgres/     # couvre aussi Redshift, TimescaleDB, pgvector
@@ -111,7 +170,7 @@ oxyn/
 └── docs/
 ```
 
-**`oxyn-app` tient en six sujets, et chacun a une raison d'exister à part.**
+**`oxyn-app` tient en huit sujets, et chacun a une raison d'exister à part.**
 L'espace de travail en occupe plusieurs fichiers — `workspace/` porte le
 catalogue, le contenu, la disposition, l'export et le conditionnement aux
 capacités — parce qu'un seul fichier y porterait cinq sujets ; le sujet, lui,
@@ -124,11 +183,26 @@ reste un.
 | `workspace.rs` + `workspace/` | l'espace de travail sur une connexion ouverte | c'est là qu'un `Cmd+Entrée` devient `Command::Execute` |
 | `picker.rs` | traduction `DriverMetadata` → `DriverChoice` | seule crate à connaître `oxyn-driver` **et** `oxyn-ui` ; sans elle l'une dépendrait de l'autre |
 | `credentials.rs` | le seul point qui lit ou écrit le trousseau | un appel au trousseau par driver serait six endroits à auditer au lieu d'un ([I-03](../CLAUDE.md#i-03)) |
+| `recovery.rs` + `recovery/` | l'écran de reprise après un arrêt anormal | il émet ses propres `Command` de lecture et d'écriture de documents, hors ligne ([ADR-0021](adr/0021-marqueur-d-arret.md)) |
+| `ai.rs` + `ai/` | la jonction entre le runtime d'agents et l'ordonnanceur | seule crate à dépendre d'`oxyn-ai` **et** d'`oxyn-exec` ; le trait `CommandSink` ne peut être implémenté que là ([ADR-0023](adr/0023-fournisseurs-declares-et-provenance.md)) |
 | `main.rs` | les traces et la fenêtre | rien d'autre |
 
-`root.rs` et `workspace/` sont **les seuls endroits du produit** où un
-événement d'interface devient une `Command` : un test d'`oxyn-ui` échoue si un
-composant mentionne seulement ce type.
+**Une `Command` ne naît que dans `oxyn-app`** : un test d'`oxyn-ui` échoue si un
+composant y mentionne seulement ce type — et depuis le 2026-09-14, un second test
+vérifie que **toutes** les sources compilées d'`oxyn-ui` sont bien couvertes par
+ce garde-fou, deux y ayant échappé.
+
+Quatre **zones** l'émettent — `root.rs`, `workspace/`, `recovery.rs` pour ses
+lectures hors ligne, et `ai/` qui relaie celles d'un agent — **plus `backend/`**,
+où naissent `Connect`, `CreateConnection`, les préférences, les documents et la
+liste des fournisseurs. Une rédaction antérieure disait « quatre endroits, et pas
+un de plus » en omettant `backend/` : une relecture d'[I-01](../CLAUDE.md#i-01)
+qui s'y serait fiée aurait sauté le fichier où naissent les connexions.
+
+Toutes passent par [`Executor::dispatch_as`](#4-la-couche-driver) : il n'existe
+pas de second chemin d'exécution. La liste à jour se retrouve par
+`grep -rl "Command::" crates/oxyn-app/src`, qui est la seule forme qui ne se
+périme pas.
 
 **Aucune connexion n'est ouverte d'office.** Le premier écran est le choix du
 type de base, alimenté par le registre de drivers et par lui seul : montrer un
@@ -304,8 +378,11 @@ s'utilise donc pas sur `Result<Box<dyn Cursor>>` ; les tests passent par un `mat
 ### 4.2 Les capacités, pas le dénominateur commun
 
 `Capabilities` est un `bitflags` sur 64 bits, dans `oxyn-core` pour que l'UI et l'IA
-le lisent sans dépendre des drivers. **48 drapeaux**, répartis en quatre plages qui
-laissent chacune de la place :
+le lisent sans dépendre des drivers. **53 drapeaux** au 2026-09-14, plus le masque
+`LANGUAGES`, répartis en quatre plages qui laissent chacune de la place. Le
+tableau ci-dessous est un **extrait** : il ne liste pas `INCOMING_FOREIGN_KEYS`,
+`OBJECT_DEFINITION`, `SESSION_CONTEXT`, `PREVIEW_SORT` ni `PREVIEW_FILTER`, que
+d'autres sections de ce document citent pourtant. `capabilities.rs` fait foi :
 
 | Plage | Drapeaux |
 |---|---|
@@ -559,6 +636,13 @@ Ce cache est aussi ce qui rend le workspace IA viable : le contexte d'un agent s
 Toute action possible dans Oxyn est une valeur typée. L'UI ne fait rien d'autre que
 construire des `Command` et les envoyer.
 
+Le bloc ci-dessous est un **extrait** — 16 variantes sur les **30** que
+`oxyn-core/src/command.rs` déclare au 2026-09-14. Y manquent notamment
+`PreviewRelation`, `SetSessionContext`, les commandes de documents et
+d'historique, et celles des fournisseurs IA, que d'autres sections de ce document
+citent pourtant. Un extrait présenté comme une énumération complète est ce qui a
+fait croire à cette contradiction interne : c'est le fichier qui fait foi.
+
 ```rust
 pub enum Command {
     Connect          { connection: ConnectionId },
@@ -711,8 +795,20 @@ fenêtre de contexte — la sélection des tables pertinentes est un vrai compos
 ### 7.5 Abstraction des fournisseurs
 
 Une seule implémentation (`OpenAiCompatibleProvider`) couvre Ollama, LM Studio, llama.cpp,
-OpenAI, Azure OpenAI, OpenRouter et toute API compatible. **Anthropic et Gemini** ont
-leurs propres implémentations. Bedrock n'en a pas encore.
+OpenAI, Azure OpenAI, OpenRouter et toute API compatible. **Anthropic** a la sienne
+(`anthropic/{mod,wire,decode}.rs`). **Gemini** est un refus typé : le fournisseur existe,
+valide sa configuration et refuse chaque appel — il n'envoie rien. Bedrock n'a rien.
+
+Ce que les deux protocoles implémentés **partagent** est le pilote de flux (`stream.rs`),
+pas le décodage : c'est lui qui garantit qu'un `ChatEvent::Done` est émis exactement une
+fois et en dernier — fermeture propre, fermeture brutale, rupture de transport, annulation,
+tampon dépassé. Chaque protocole n'y branche que sa lecture de trames, via un décodeur
+interne. Le pilote ne rapporte que des fins **constatées** ; seule la trame du protocole
+(`message_stop`, `finish_reason`) est une fin **annoncée**, et seul le décodeur la
+reconnaît. Une fermeture propre sans cette annonce — un mandataire qui coupe à sa limite
+de durée — vaut `StopReason::Interrupted`, et les appels d'outils non clos sont jetés. Un second pilote écrit en parallèle divergerait de cette garantie au premier ajout
+de variante, et c'est une garantie qui ne se voit pas échouer : elle se constate en
+relisant un seul endroit.
 
 Le classement local / distant se fait sur l'hôte **après résolution** (`reach.rs`),
 jamais sur la présence de `localhost` dans l'URL : un point d'accès compatible OpenAI
@@ -722,6 +818,8 @@ servi sur `localhost` peut être un proxy vers le nuage.
 workspace IA est absent de l'UI, et Oxyn reste un client de base de données complet.**
 
 ---
+
+<a id="les-frontières-externes"></a>
 
 ## 8. Sécurité et garde-fous
 
@@ -789,7 +887,13 @@ sur une ligne écrite avant la colonne, et ce sont ces lignes-là qui portent le
 
 **Bibliothèque locale.** Les commandes `ReadHistory` et `ListQueryDocuments`
 retournent des pages de résumés ; `ReadHistoryEntry` et `OpenDocument` ouvrent
-séparément un texte complet borné. Ces lectures et les écritures versionnées de
+séparément un texte complet borné. `ListHistoryConnections` retourne, lui, la page
+des connexions **telles que l'historique les a enregistrées**, de la plus récemment
+utilisée à la plus ancienne : c'est ce qui permet de filtrer par une connexion
+supprimée depuis, ou appartenant à un autre workspace — la liste des connexions
+vivantes ne les contient plus, et l'historique, lui, les garde. Chaque entrée dit si
+le workspace la possède encore, pour que l'interface le signale au lieu de laisser
+croire à une connexion ouvrable. Ces lectures et les écritures versionnées de
 documents utilisent le pool bloquant de Tokio. L'annulation observe les pas
 SQLite sous le verrou de l'opération, sans toucher une autre commande en attente.
 `query_history.result_id` référence éventuellement un tampon retenu dans cette
@@ -815,6 +919,8 @@ leur portée locale globale ; les documents sont filtrés par workspace.
 
 ---
 
+<a id="le-modèle-de-threads"></a>
+
 ## 9. Modèle d'exécution et de threads
 
 ```
@@ -831,6 +937,16 @@ leur portée locale globale ; les documents sont filtrés par workspace.
 │  Runtime Tokio multi-thread — drivers, réseau, LLM         │
 └──────────────────────────────────────────────────────────┘
 ```
+
+**Un second réacteur entre par les agents externes.** `agent-client-protocol`
+([ADR-0026](adr/0026-agents-externes-acp.md)) tire `async-io` et `blocking` en
+dépendances normales : le premier démarre un fil de réacteur, le second son
+propre pool, à côté de Tokio. Ce n'est pas un runtime complet — `smol` et les
+exécuteurs globaux ne sont pas dans le graphe, vérifié par
+`cargo tree --edges normal` — mais le schéma ci-dessus n'est plus exhaustif dès
+qu'un agent externe est déclaré, et [I-05](../CLAUDE.md#i-05) vaut pour les deux
+réacteurs. Détail et mesure dans
+[RESEARCH-NOTES](RESEARCH-NOTES.md#agent-client-protocol--vérification-du-2026-09-14).
 
 * **Le thread UI ne fait aucune I/O et n'attend jamais un verrou tenu par une tâche.**
   L'état partagé se lit via `Arc<ResultBuffer>`.
@@ -862,18 +978,32 @@ permissions n'accorde rien. Voir [ADR-0005](adr/0005-wasm-plugins.md).
 
 **Phase 0 — Le squelette porteur.** `oxyn-core`, traits driver, buffers Arrow, Command bus,
 Policy gate. Deux drivers : **PostgreSQL** et **SQLite**. Grille virtualisée, éditeur SQL,
-arbre de catalogue. *Critère de sortie : `SELECT` de 10 M de lignes, premier affichage sous
-100 ms, mémoire stable, `Échap` annule vraiment.*
+arbre de catalogue. *Critère de sortie : `SELECT` de 10 M de lignes, premier affichage dans
+le budget de [PERFORMANCE](PERFORMANCE.md#les-budgets), mémoire stable, `Échap` annule
+vraiment.*
+
+> **Ce document ne chiffre plus ce seuil**, et c'est une correction du
+> 2026-09-15. Il portait « sous 100 ms » quand
+> [PERFORMANCE](PERFORMANCE.md#les-budgets) pose **300 ms après la première
+> réponse du serveur**. Deux valeurs pour un même seuil rendent toute régression
+> inarbitrable : à 150 ms, l'un dit défaut, l'autre dit conforme.
+> [CLAUDE.md](../CLAUDE.md#la-documentation-fait-autorité) donne l'autorité sur
+> les budgets chiffrés à PERFORMANCE ; ce document renvoie désormais, au lieu de
+> concurrencer.
 
 > **Où on en est.** Les quinze crates existent, compilent, et `make qualite` passe :
 > format, `clippy -D warnings`, la suite de tests, `cargo doc -D warnings`. `make app`
 > produit `Oxyn.app`, la fenêtre s'ouvre, et `Cmd+Entrée` exécute réellement à travers
 > le command bus contre la session choisie dans le formulaire de connexion.
 >
-> **Le critère de sortie n'est pas atteint et n'a pas été mesuré.** Le catalogue
-> est branché par paliers sur le command bus. Il reste à produire les
-> mesures : les 10 M de lignes, les 100 ms de premier affichage et la stabilité
-> mémoire sont des chiffres à produire, pas des propriétés à supposer. La coloration
+> **Le critère de sortie est partiellement mesuré.** Le catalogue est branché par
+> paliers sur le command bus. Ce qui est **mesuré** depuis, et consigné dans
+> [PERFORMANCE](PERFORMANCE.md#confrontation-aux-budgets) : le premier lot arrive
+> en 2,6 ms quelle que soit la taille de la table, et la stabilité mémoire est
+> établie à la valeur réelle du budget — 2 Gio traversent un tampon de 256 Mo
+> pour 195 Mio de croissance RSS. Ce qui **reste à produire** : le `SELECT` de
+> 10 M de lignes de bout en bout, et le défilement d'une grille peuplée sous
+> instrument. La coloration
 > syntaxique, la complétion et les curseurs multiples de l'éditeur restent le plus
 > gros poste de travail du projet.
 

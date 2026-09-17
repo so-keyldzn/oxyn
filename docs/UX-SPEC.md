@@ -19,6 +19,28 @@ et c'est le premier que voit un nouvel utilisateur.
 | Vide | résultat légitimement vide ; se distingue visiblement d'une erreur |
 | Erreur | ce qui a échoué, si c'est retentable, et l'action suivante |
 
+## Ce qui se met à jour tout seul
+
+Une vue qui montre des données périmées sans le dire est un défaut silencieux :
+l'utilisateur lit un état d'avant et ne le sait pas. Après une exécution **qui a
+réussi**, sur la connexion concernée :
+
+- un DDL fait relire l'explorateur de catalogue ;
+- un DDL ou une écriture fait relire l'**aperçu visible**, en conservant le
+  prédicat, le tri et la page demandés — la relecture montre les mêmes lignes à
+  jour, pas un retour au début ;
+- toute exécution fait relire la bibliothèque, si elle est ouverte.
+
+Rien ne se relit après une **erreur** : une relecture qui suit un échec masque
+l'échec. Rien ne se relit sur une autre connexion, ni sur un onglet qui n'est pas
+à l'écran — il se relira quand on y reviendra. Et l'instruction de l'utilisateur
+n'est **jamais** rejouée : ce qui est réémis est la lecture d'aperçu qu'Oxyn
+compose, bornée et en lecture seule.
+
+`Refresh` reste, et garde son sens : forcer une relecture même quand rien n'a
+changé du côté d'Oxyn — par exemple quand quelqu'un d'autre a écrit dans la base
+([ADR-0022](adr/0022-rafraichissement-automatique.md)).
+
 ## Ce qui n'est jamais optimiste
 
 L'affichage optimiste — montrer le résultat avant confirmation du serveur — est
@@ -105,6 +127,17 @@ redémarrage est écrit dans un format ouvert et documenté
 ([I-11](../CLAUDE.md#i-11)), lisible sans Oxyn.
 
 ## Restauration après un arrêt brutal
+
+**Un arrêt anormal se constate, il ne se devine pas.** Oxyn inscrit sa fermeture
+quand elle est propre, et laisse un battement pendant qu'il travaille. Au
+lancement suivant, une session laissée sans fermeture et dont le battement a
+vieilli est un arrêt anormal ; tout le reste n'en est pas un
+([ADR-0021](adr/0021-marqueur-d-arret.md)).
+
+L'écran de reprise n'apparaît donc **pas** après une fermeture ordinaire, même
+s'il reste des copies de travail : celles-ci se retrouvent dans la bibliothèque.
+Un écran montré à chaque démarrage cesse d'être lu, et c'est le jour où une
+écriture a réellement été interrompue qu'il faut qu'il le soit.
 
 Au redémarrage après un arrêt anormal, Oxyn présente les onglets et brouillons
 locaux récupérables. L'utilisateur choisit les éléments à restaurer ou démarre
@@ -302,7 +335,45 @@ brouillon SQL ni les résultats de l'éditeur. Une nouvelle sélection annule
 l'aperçu précédent ; ses réponses tardives sont ignorées. **Refresh data**
 relit explicitement les lignes ; aucun rafraîchissement automatique ne suit une
 erreur. Le chargement, le résultat vide, l'échec et l'annulation sont distincts.
-L'ordre des lignes n'est pas garanti et l'aperçu ne compte pas la table entière.
+Sans tri demandé, l'ordre des lignes n'est pas garanti, et l'aperçu ne compte
+jamais la table entière.
+
+### Filtrer, trier, parcourir
+
+La barre sous les actions de données porte un champ précédé de `WHERE` et un
+bouton `Apply`, puis un bouton `Sort` (Figma `190:1618`). Ces contrôles
+n'existent que pour une source qui déclare savoir filtrer ou ordonner un
+aperçu ; ailleurs ils sont absents, pas désactivés.
+
+Le champ `WHERE` reçoit un **prédicat que l'utilisateur écrit**, transmis tel
+quel : ni analysé, ni réécrit, ni complété. Un champ vide ne filtre rien.
+
+Un prédicat invalide échoue de deux façons, et l'aperçu ne les confond pas. Un
+prédicat qu'Oxyn ne parvient pas à lire comme une condition — `id >< 3` — est
+refusé **avant tout envoi** : ce qui n'est pas classé compte pour une écriture,
+et cette prudence est ce qui protège. Le message le dit alors en ces termes, et
+renvoie vers la syntaxe du prédicat ; l'annoncer comme un défaut de lecture
+seule enverrait chercher un droit manquant là où il y a une faute de frappe. Un
+prédicat bien formé mais faux pour cette table — une colonne qui n'existe pas —
+part au serveur et revient avec **son** message, code compris.
+
+L'aperçu peut donc désormais échouer pour une raison de syntaxe, ce qui n'était
+pas le cas avant. Il ne peut en revanche rien écrire : le texte final est
+reclassifié, la session est tenue en lecture seule par le serveur, et la borne
+de lignes s'applique.
+
+`Sort` choisit des colonnes, pas une expression : c'est Oxyn qui compose cette
+partie de la requête, donc il en répond. Une colonne inconnue de la relation est
+refusée avant l'envoi.
+
+La page suivante est une **nouvelle exécution**, pas un défilement : faire
+défiler les lignes déjà reçues ne déclenche jamais de requête. Elle n'est
+offerte que si l'ordre est total — le tri demandé, complété par une clé unique
+que le catalogue déclare. Sans clé connue, l'aperçu reste à sa première page et
+dit pourquoi : un `OFFSET` sur un ordre incertain montrerait deux fois la même
+ligne et en omettrait une autre, sans rien signaler. Entre deux pages, les
+données du serveur ont pu changer ; l'aperçu ne prétend pas être un instantané
+([ADR-0020](adr/0020-apercu-trie-filtre-parcouru.md)).
 
 Dans cet aperçu en lecture seule, `Edit rows…` est désactivé. Une infobulle,
 également accessible au clavier par son déclencheur d'aide, explique que
@@ -509,9 +580,12 @@ originale reprend le document ; une autre produit une copie et conserve le
 document initial. Le raccordement ne lance pas le SQL et conserve l'entité de
 l'éditeur. Annuler le choix de connexion laisse le brouillon hors ligne.
 
-L'écran ne prétend pas détecter un arrêt anormal en l'absence d'un marqueur
-fiable. Il rappelle conditionnellement qu'une écriture interrompue exige une
-inspection du serveur, et ne rejoue rien pour effectuer cette inspection.
+L'écran **dit ce qu'il a constaté**. Quand le marqueur d'arrêt révèle une
+session abandonnée, il annonce qu'Oxyn ne s'est pas fermé normalement ; ouvert à
+la demande depuis la bibliothèque, il ne l'annonce pas — ce serait affirmer un
+plantage qui n'a pas eu lieu ([ADR-0021](adr/0021-marqueur-d-arret.md)). Il
+rappelle conditionnellement qu'une écriture interrompue exige une inspection du
+serveur, et ne rejoue rien pour effectuer cette inspection.
 
 
 ## Résultats conservés
@@ -527,3 +601,124 @@ bibliothèque ne coupe pas un export engagé ; un résultat en cours d'export do
 être terminé ou annulé avant remplacement ou fermeture de sa vue. La rétention
 sans lecteur est bornée par ADR-0017, et n'implique pas une conservation entre
 redémarrages. Aucun résultat évincé n'est recréé par rejeu de la requête.
+
+## Le workspace IA n'existe que s'il a été configuré
+
+Tant qu'aucun fournisseur n'est déclaré, `Ask AI` **n'est pas affiché**, aucun
+badge de confidentialité n'apparaît, et rien ne suggère qu'une fonction manque.
+Oxyn est un client complet sans IA (ADR-0006). L'accès à la configuration passe
+par les réglages, jamais par un appel à l'action dans la barre de connexion : un
+bouton grisé qui invite à configurer est une publicité, pas une fonctionnalité.
+
+Le premier fournisseur enregistré fait apparaître l'entrée **sans redémarrage**,
+et le dernier supprimé la fait disparaître — en fermant le panneau s'il était
+ouvert. Cela se fait **sans nouvelle variante du bus d'exécution** : la vue qui
+écrit la déclaration connaît le sort de son écriture et recharge la liste
+elle-même. Y publier un événement ferait ce qu'[ADR-0022](adr/0022-rafraichissement-automatique.md)
+refuse — un second endroit où penser à publier
+([ADR-0023](adr/0023-fournisseurs-declares-et-provenance.md)).
+
+### Le niveau se lit avant de parler, pas après
+
+Le badge de confidentialité et `Ask AI` sont voisins dans la barre de connexion
+et se lisent ensemble. Le badge annonce le niveau de **la connexion courante** —
+jamais un réglage d'application — et il change quand on change de connexion,
+même conversation ouverte.
+
+Sur une connexion en `Local` dont aucun fournisseur déclaré n'est local,
+`Ask AI` reste **visible et désactivé**, avec la raison : « ce niveau interdit
+un fournisseur distant ». Faire disparaître l'entrée se lirait comme un défaut,
+et ADR-0006 demande qu'une fonctionnalité indisponible s'explique.
+
+Un point d'accès qu'Oxyn n'a pas su résoudre compte comme distant. La
+configuration l'affiche comme « non résolu », pas comme « local » : le doute ne
+profite pas à l'envoi.
+
+### Le panneau montre ce qui se passe, y compris quand rien n'arrive
+
+Le panneau suit les cinq états d'une vue. Ce qui les distingue ici :
+
+* **en cours** : la réponse s'écrit au fil du flux, et l'annulation reste offerte
+  pendant tout ce temps — pas seulement entre deux tours ;
+* **appel d'outil** : chaque commande demandée par l'agent est montrée **avant**
+  son résultat, avec son nom et la connexion visée. Un agent qui travaille en
+  silence pendant huit tours est indistinguable d'un agent bloqué ;
+* **erreur** : ce que l'utilisateur lit est le message entier du serveur ; ce que
+  le modèle a reçu peut être moins, selon le niveau, et le panneau le dit quand
+  les deux diffèrent. Cacher l'écart ferait passer une réponse mal informée pour
+  une réponse fausse ;
+* **réponse coupée** : une réponse arrêtée par le plafond de jetons du
+  fournisseur le dit à sa dernière ligne. Une réponse tronquée qui ne l'annonce
+  pas se lit comme une réponse fausse, et l'utilisateur corrige un modèle qui
+  n'avait pas fini de parler ;
+* **plafond de tours atteint** : dit comme tel, avec le nombre de tours. Ce n'est
+  ni un succès ni une panne.
+
+**Ce que « l'annulation reste offerte » veut dire exactement.** Le bouton reste
+actif et la demande est prise en compte immédiatement ; son *effet* dépend du
+fournisseur. La boucle relit la demande entre deux événements du flux et
+n'interrompt jamais une lecture en cours : un futur abandonné au milieu d'une
+trame laisserait le décodeur désynchronisé, et le dépôt refuse ce risque
+(`.claude/rules/rust.md`, § Async). Si le fournisseur se tait, l'annulation
+attend qu'il reparle. C'est le contrat de `LlmProvider` qui la rend effective —
+tout fournisseur honore le jeton d'annulation dans son flux — et un fournisseur
+qui ne le ferait pas rendrait l'annulation inopérante sans que rien d'autre ne
+le signale.
+
+Une conversation appartient à sa connexion. Fermer la connexion ferme la
+conversation ; elle n'est pas persistée et ne réapparaît pas au lancement
+suivant.
+
+### Une proposition n'est jamais exécutée par le fait de l'être
+
+Une requête proposée par un agent arrive dans une console comme du **texte**, et
+rien de plus. Elle est exécutée par l'utilisateur, avec le même bouton et le même
+chemin que ce qu'il écrit lui-même. Il n'y a pas de mode « exécution
+automatique », et `Explain` sur une proposition suit la même règle : `EXPLAIN
+ANALYZE` exécute réellement ce qu'il analyse.
+
+Quand un agent soumet lui-même une commande, elle traverse le `PolicyGate` avec
+`Actor::Agent`. Une écriture sur une connexion `production` lui est **refusée**,
+pas soumise à confirmation : une confirmation finit par être cliquée (I-02).
+L'utilisateur voit le refus dans la conversation, avec son motif.
+
+### Ce qu'un agent a écrit reste marqué
+
+Un document dont le texte vient d'une proposition d'agent porte sa provenance :
+l'agent, le modèle et la date. La marque est visible sur l'onglet et dans la
+bibliothèque.
+
+Deux règles la gouvernent, et la seconde est celle qu'on casse sans s'en
+apercevoir :
+
+* **elle apparaît dès qu'un agent écrit**, y compris dans un document que
+  l'utilisateur avait commencé lui-même ;
+* **elle ne disparaît plus ensuite.** Réécrire tout le texte à la main ne
+  l'efface pas, et une autosauvegarde ordinaire — qui ne sait rien de l'origine
+  du texte — ne l'efface pas non plus. Une provenance absente veut dire « rien
+  de neuf à écrire », jamais « personne ».
+
+Ce que la marque affirme est donc « un agent a écrit ce texte », pas « il l'a
+écrit en entier » ni « il est le dernier à l'avoir touché ». Prétendre la
+seconde chose demanderait de suivre chaque frappe, ce qu'Oxyn ne fait pas et
+n'a pas à faire.
+
+Elle ne suit pas un copier-coller : le presse-papiers ne porte pas de
+métadonnée. Un texte recopié à la main dans un autre document y arrive donc sans
+marque, et c'est une limite assumée d'ADR-0023, pas un défaut à contourner.
+
+### Configuration des fournisseurs
+
+Un fournisseur se déclare par sa famille, son point d'accès, son modèle et, si
+le point d'accès l'exige, une clé. La clé va au trousseau du système ; elle
+n'est ni réaffichée, ni recopiée dans un message d'erreur, ni exportée avec le
+workspace (I-03). Ce que l'écran remontre après enregistrement, c'est
+« configurée » ou « absente », jamais la valeur.
+
+L'écran affiche le classement local/distant **avec l'instant de sa mesure**,
+parce qu'il est recalculé et jamais persisté : un point d'accès classé local
+hier peut résoudre ailleurs aujourd'hui. Une URL portant des identifiants dans
+son autorité est refusée à la saisie, pas nettoyée en silence.
+
+Les fournisseurs sont communs à tous les workspaces ; le niveau de
+confidentialité, lui, reste attaché à chaque connexion (ADR-0023).
