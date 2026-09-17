@@ -86,9 +86,10 @@ via la feature `test-support` de GPUI. Les trois niveaux, ce qu'ils prouvent et
 la métrique de texte fictive qui piège les assertions de dimension :
 [tests.md](tests.md#les-tests-dinterface).
 
-**Cette règle-là ne se charge pas toute seule** : son `paths:` couvre
-`**/tests/**`, pas un `#[cfg(test)] mod tests` écrit au bas d'un fichier de vue.
-Elle se lit avant d'écrire le test, pas après.
+**Cette règle-là ne se charge pas toujours** : le `paths:` de
+[tests.md](tests.md) couvre les fichiers `tests.rs` et `*_tests.rs`, mais **pas**
+un `#[cfg(test)] mod tests` écrit au bas d'un fichier de vue. Elle se lit avant
+d'écrire le test, pas après.
 
 Conséquence de conception : une vue qui garde son calcul dans son `render` n'est
 testable à aucun niveau utile. Le calcul sort, la vue dessine.

@@ -1,6 +1,6 @@
 ---
 name: relecteur-securite
-description: Relit un changement sous l'angle sécurité — secrets, unsafe, surface d'entrée, frontière IA. À lancer sur tout changement touchant les connexions, le trousseau, les fournisseurs IA, les plugins, ou introduisant du unsafe. Ne modifie rien.
+description: Relit un changement sous l'angle sécurité — secrets, unsafe, surface d'entrée, frontière IA, pont IPC de la webview. À lancer sur tout changement touchant les connexions, le trousseau, les fournisseurs IA, les plugins, une commande Tauri, ou introduisant du unsafe. Ne modifie rien.
 tools: Read, Grep, Glob, Bash
 model: inherit
 color: red
@@ -30,6 +30,14 @@ portent un secret.** La fuite n'arrive pas aujourd'hui ; elle arrive avec le
 Réponses serveur · **noms d'objets du catalogue** · fichiers de workspace ·
 plugins · réponses de modèles.
 
+**Et la webview.** Chaque `#[tauri::command]` de `crates/oxyn-desktop` est
+appelable par tout script qui s'exécute dans la fenêtre : ses arguments sont une
+entrée hostile au même titre qu'une réponse serveur. Vérifie qu'elle parse avant
+d'agir, qu'elle émet une `Command` au lieu d'atteindre le store ou le trousseau,
+que ce qu'elle renvoie ne sérialise ni paramètre ni référence de secret, et que
+`capabilities/main.json` et la CSP de `tauri.conf.json` ne s'élargissent pas sans
+raison écrite ([ARCHITECTURE § 2 bis](../../docs/ARCHITECTURE.md#2-bis-linterface-tauri)).
+
 La deuxième est la plus sous-estimée : une table peut légalement s'appeler
 `"users"; DROP TABLE audit; --`, ou contenir un commentaire imitant une consigne.
 
@@ -39,8 +47,9 @@ Chaque bloc porte un `// SAFETY:` qui énonce l'invariant **et qui le maintient*
 Un `// SAFETY:` qui paraphrase le code (« on déréférence un pointeur valide ») ne
 vaut rien : signale-le comme s'il était absent.
 
-Aucun `unsafe` dans `oxyn-core`, `oxyn-command`, `oxyn-db` : sa présence y
-signale une erreur de découpage, pas un besoin.
+`unsafe_code` est refusé pour tout le workspace : un `#[allow(unsafe_code)]` sans
+ADR qui l'autorise est un point bloquant
+([SECURITY](../../docs/SECURITY.md#politique-unsafe)).
 
 ## Points bloquants
 

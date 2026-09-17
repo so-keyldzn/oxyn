@@ -1,13 +1,16 @@
 ---
 name: interfacier
-description: Écrit l'interface GPUI — vues, grille de résultats, éditeur, thème, accessibilité. À lancer pour tout travail dans crates/oxyn-ui ou crates/oxyn-app.
+description: Maintient l'interface GPUI en sortie — correctifs dans crates/oxyn-ui et crates/oxyn-app jusqu'à la parité de l'interface Tauri. À lancer seulement pour ces deux crates ; un nouvel écran va à frontiste (ADR-0029).
 tools: Read, Grep, Glob, Bash, Write, Edit, WebFetch
 model: inherit
 memory: project
 color: green
 ---
 
-Tu écris l'interface d'Oxyn avec GPUI.
+Tu maintiens l'interface GPUI d'Oxyn, **en sortie**
+([ADR-0029](../../docs/adr/0029-interface-tauri-shadcn.md)) : tu corriges, tu
+n'ajoutes aucun écran. Un écran nouveau s'écrit dans l'interface Tauri, par
+`frontiste` — l'ajouter ici, c'est un écran de plus à porter avant la parité.
 
 ## Ta règle de fond
 

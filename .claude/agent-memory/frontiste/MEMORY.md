@@ -1,0 +1,16 @@
+- [cn supprime les tailles de thème](cn-supprime-les-tailles-de-theme.md) — `text-caption` est lu comme une couleur et avalé : écrire `text-[length:var(--reading-caption)]`
+- [Stories instables sous charge](stories-instables-sous-charge.md) — un échec de story sur une animation Base UI se relance avant d'être pris pour une régression
+- [TabsList line : soulignement coupé](tabslist-line-souligne-coupe.md) — `variant="line"` avec `overflow-x-auto` perd le soulignement de l'onglet actif, et un `h-*` en `className` ne gagne pas contre le défaut
+- [userEvent Escape n'atteint pas un trigger Base UI](userevent-escape-nattend-pas-un-trigger-base-ui.md) — dans un `play`, `{Escape}` sur un `TooltipTrigger` ne déclenche aucun `onKeyDown`, là où une vraie touche marche
+- [Écritures par le shell](outillage-ecritures-par-le-shell.md) — `cat > … <<EOF` déclenche l'arbitrage du hook : utiliser Write/Edit
+- [Éprouver un schéma hors du dépôt](eprouver-un-schema-hors-du-depot.md) — un script Node dans le scratchpad ne résout pas `zod` : importer par chemin absolu depuis `.pnpm`
+- [z.discriminatedUnion veut un tuple](zod-discriminated-union-veut-un-tuple.md) — un `.map()` sur `.options` échoue au typecheck (TS2345)
+- [Région défilante sans focus](axe-region-defilante-sans-focus.md) — `overflow-*` sans contrôle dedans fait échouer axe en mode `error` ; `tabIndex={0}`
+- [Vérifier un nom d'icône Hugeicons](verifier-un-nom-dicone-hugeicons.md) — `require()` rend tout « manquant » ; grepper `dist/types/index.d.ts`
+- [Pièges de la porte front](pieges-de-la-porte-front.md) — ordre prettier → tsc → eslint → vitest ; gardes de focus Base UI, Tooltip qui remonte, `InputGroup` terni
+- [Un non argumenté plutôt qu'un composant de plus](non-argumente-plutot-que-composant-de-plus.md) — refuser un doublon de geste, et ne jamais dessiner une prop sans source vérifiée
+- [Mémoire à la racine du dépôt](memoire-a-la-racine-du-depot.md) — l'écrire sous `apps/desktop` la soumet à prettier et fait échouer `make qualite`
+- [axe ne teste pas le contraste non textuel](axe-ne-teste-pas-le-contraste-non-textuel.md) — garde dans `theme-contrast.stories.tsx` ; mesurer par canvas, jamais par regex sur `rgba()`
+- [Passe visuelle sans serveur](passe-visuelle-sans-serveur.md) — build statique + Playwright qui s'arrête seul ; le clair et les largeurs échappent aux stories
+- [wrap-anywhere dans une grille](wrap-anywhere-dans-une-grille.md) — `break-words` n'abaisse pas la min-content : un long identifiant élargit la page
+- [prettier écrit un octet NUL](prettier-ecrit-un-octet-nul.md) — `"\u0000"` dans une chaîne TS devient un NUL réel dans le source

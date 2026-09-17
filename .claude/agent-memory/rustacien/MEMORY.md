@@ -1,1 +1,7 @@
 - [Piège chrono FromStr](piege_chrono_fromstr_separateur.md) — vérifier au scratchpad ce que FromStr accepte réellement (T vs espace, offset requis) avant de le documenter
+- [Piège cargo fmt et périmètre](piege_cargo_fmt_portee_crate.md) — `-p` reformate toute la crate, y compris les fichiers d'un autre agent ; attendre ses compilations plutôt que corriger
+- [Piège hook code_interdit](piege_hook_code_interdit_diff.md) — le hook lit le texte de l'édition, pas le fichier : `blocking_recv` refusé alors qu'il existe déjà juste au-dessus
+- [Piège socle et liens de mémoire](piege_socle_liens_dans_les_memoires.md) — un lien Markdown dans un .md de .claude/ doit pointer un fichier réel, sinon make qualite s'arrête sur socle
+- [Piège scan des littéraux français](piege_scan_litteraux_francais.md) — un grep par ligne rate les chaînes à continuation `\` et les messages français sans accent
+- [Piège hook NOM_SECRET](piege_hook_nom_secret_token.md) — `derive(Debug)` refusé sur tout type nommé `…Token…`, `…Dsn…` : renommer plutôt que contourner
+- [Piège PG jetable](piege_pg_jetable_scratchpad.md) — socket Unix trop long dans le scratchpad (TCP seul) ; psql découpe au `;`, écrire un client filaire pour le protocole étendu

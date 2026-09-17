@@ -49,7 +49,8 @@ Contrôle mécanique le plus rentable :
 
 - [ ] Chaque bloc porte un `// SAFETY:` qui énonce l'invariant **et qui le
       maintient** — une paraphrase du code ne vaut rien
-- [ ] Aucun `unsafe` dans `oxyn-core`, `oxyn-command`, `oxyn-db`
+- [ ] Tout `#[allow(unsafe_code)]` renvoie à l'ADR qui l'autorise
+      ([SECURITY](../../docs/SECURITY.md#politique-unsafe))
 - [ ] Relu par `relecteur-securite`
 
 ## Frontière IA

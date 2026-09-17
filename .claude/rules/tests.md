@@ -1,8 +1,9 @@
 ---
 paths:
-  - "**/tests/**"
+  - "**/*_tests.rs"
+  - "**/tests.rs"
   - "**/benches/**"
-  - "**/*_test.rs"
+  - "**/tests/**"
 ---
 
 # Tests et bancs d'essai — conventions

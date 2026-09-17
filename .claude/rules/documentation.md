@@ -34,7 +34,7 @@ politique du `PolicyGate` vit dans
 ## Un document d'autorité est spécifique et chiffré
 
 « La pagination est cohérente » ne fait autorité sur rien. « `ResultBuffer` :
-budget 256 Mo, débordement en Arrow IPC mappé, le défilement ne relance jamais
+budget 256 Mo, débordement en Arrow IPC, le défilement ne relance jamais
 la requête » fait autorité.
 
 Un document d'autorité décrit **ce qui est décidé**, pas ce qui reste à faire :

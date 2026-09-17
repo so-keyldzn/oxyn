@@ -93,7 +93,8 @@ Enfin, lancer l'agent `relecteur-invariants` sur le résultat.
 
 ## Rappels
 
-- un driver ne dépend que de `oxyn-db`, `oxyn-result` et `oxyn-core` ;
+- un driver ne dépend que d'`oxyn-core`, `oxyn-driver`, `oxyn-data` et
+  `oxyn-catalog` ;
 - un driver ne retente jamais tout seul : la politique de reprise appartient à
   l'appelant, seul à savoir si l'opération est rejouable ;
 - ne pas savoir faire est une réponse acceptable, la déclarer en capacité ;

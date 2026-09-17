@@ -55,7 +55,7 @@ def _etat_code(racine: Path) -> list[str]:
             "- Code : **aucun**. Pas de `Cargo.toml`, pas de `crates/`.",
             "  → Les règles `.claude/rules/` à `paths:` ne se déclencheront pas :"
             " aucun fichier ne leur correspond. Utiliser les commandes"
-            " (`/driver`, `/commande`, `/vue`) qui chargent la procédure"
+            " (`/driver`, `/commande`, `/ecran`) qui chargent la procédure"
             " explicitement.",
             "  → La prochaine étape est la phase 0 de docs/IMPLEMENTATION-PLAN.md.",
         ]

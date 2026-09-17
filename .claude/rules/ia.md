@@ -1,6 +1,7 @@
 ---
 paths:
   - "crates/oxyn-ai/**"
+  - "crates/oxyn-llm/**"
 ---
 
 # Workspace IA — conventions
@@ -48,6 +49,13 @@ Le classement se fait sur l'hôte réel **après résolution**, jamais sur la
 présence de `localhost` dans l'URL : un point d'accès compatible OpenAI sur
 `localhost` peut être un proxy vers le nuage. Il se re-vérifie à chaque
 changement de configuration.
+
+**Un agent externe échappe à ce classement** : c'est un processus opaque, et rien
+dans le protocole ne permet de lui demander où va son modèle. Il vaut donc
+`Reach::Unresolved` — toujours —, ce qui le ferme à une connexion `Local`. Le
+refus tombe **avant le lancement**, pas avant l'envoi : démarrer l'agent peut
+suffire à lui faire contacter son service
+([ADR-0026](../../docs/adr/0026-agents-externes-acp.md)).
 
 ## Sans fournisseur
 

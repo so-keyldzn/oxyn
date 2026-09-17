@@ -1,0 +1,68 @@
+# Ce que le graphe de dépendances a le droit de contenir.
+#
+# `docs/SECURITY.md` § Dépendances fait de ce contrôle une partie de la porte de
+# qualité. Il porte sur deux choses qu'aucune autre étape ne regarde : les avis
+# de sécurité publiés (RUSTSEC) et les licences.
+#
+# La cible `make deny` avertit sans bloquer quand `cargo-deny` n'est pas
+# installé. Une porte qui échoue sur un outil absent finit par être contournée,
+# et c'est alors tout le contrôle qui disparaît.
+
+[advisories]
+# Un avis publié sur une dépendance est une erreur : c'est l'objet du contrôle.
+# `unmaintained` avertit plutôt que de bloquer — une crate non maintenue sur une
+# frontière externe est « un risque à documenter, pas à ignorer » (SECURITY),
+# et la bloquer d'office ferait échouer la porte sur une décision qui demande un
+# arbitrage humain.
+yanked = "deny"
+unmaintained = "workspace"
+
+[licenses]
+# Les licences permissives que ce dépôt accepte sans discussion. Toute autre
+# demande un arbitrage explicite : une dépendance sous copyleft fort change les
+# obligations du produit entier, et cela ne se découvre pas à la publication.
+allow = [
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "MIT",
+    "MIT-0",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Zlib",
+    "Unicode-3.0",
+    "CC0-1.0",
+    "MPL-2.0",
+    "BSL-1.0",
+    # `libfuzzer-sys`, sous la licence de l'université de l'Illinois. Permissive,
+    # approuvée OSI et reconnue libre par la FSF.
+    "NCSA",
+    # `webpki-root-certs` et `webpki-roots` : la liste des autorités de
+    # certification, publiée sous une licence de **données** permissive.
+    "CDLA-Permissive-2.0",
+]
+confidence-threshold = 0.9
+
+[bans]
+# Deux versions d'une même crate dans le graphe sont tolérées — l'écosystème en
+# impose —, sauf là où ADR-0010 l'interdit explicitement.
+multiple-versions = "allow"
+
+# Ce que ce fichier **ne** vérifie **pas**, et où c'est vérifié :
+# l'unicité de `libsqlite3-sys` dans le graphe (ADR-0010). Deux versions y
+# feraient cohabiter deux bibliothèques SQLite natives, avec deux états globaux,
+# dans le même processus. `cargo-deny` ne sait l'exprimer que par un
+# `multiple-versions = "deny"` **global**, qui échouerait sur les doublons
+# ordinaires de l'écosystème ; et `[[bans.deny]]` interdirait la crate entière,
+# ce qui casserait le driver SQLite.
+#
+# La contrainte est donc tenue ailleurs, et elle l'est : par la résolution de
+# versions du workspace (voir le commentaire de `Cargo.toml` sur `sqlx` et
+# `rusqlite`) et par le fait qu'`oxyn-store` et le driver déclarent la même.
+
+[sources]
+# Rien ne vient d'ailleurs que du registre public. Une dépendance git non
+# épinglée est une porte ouverte sur un dépôt tiers, et ADR-0009 a écarté cette
+# voie pour GPUI en connaissance de cause.
+unknown-registry = "deny"
+unknown-git = "deny"

@@ -82,9 +82,12 @@ la condition est vraie ici et **qui** la maintiendra vraie.
 Les conventions vivent dans [tests.md](tests.md) : ce qui se teste, les entrées
 hostiles, les trois niveaux de test d'interface, les bancs d'essai.
 
-Le renvoi est nécessaire parce que le `paths:` de cette règle-là ne couvre que
-`**/tests/**` et `**/benches/**` : un `#[cfg(test)] mod tests` écrit au bas d'un
-fichier source ne la déclenche pas. C'est pourtant la forme majoritaire ici.
+Le renvoi reste nécessaire, mais pas pour la raison qu'on lisait ici : le
+`paths:` de [tests.md](tests.md) couvre désormais `**/*_tests.rs` et
+`**/tests.rs` en plus des répertoires. Ce qu'il ne couvre toujours pas, c'est un
+`#[cfg(test)] mod tests` écrit **au bas d'un fichier source** — et c'est la forme
+majoritaire ici. La conclusion tenait ; l'exemple qui la justifiait avait
+vieilli.
 
 ## Vérifier
 

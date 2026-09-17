@@ -1,0 +1,1 @@
+- [Vérifier avant de corriger](feedback_verifier_avant_corriger.md) — re-vérifier tout constat dans le code ; signaler sans trancher ce qui oppose deux documents d'autorité

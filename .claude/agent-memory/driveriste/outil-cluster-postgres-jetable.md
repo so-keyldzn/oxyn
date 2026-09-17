@@ -1,30 +1,33 @@
 ---
 name: outil-cluster-postgres-jetable
-description: Le cluster PostgreSQL jetable des tests `#[ignore]` — comment le démarrer/arrêter, et le test du dépôt qui échoue dessus pour une raison qui n'est pas une régression
+description: Monter, utiliser et arrêter un cluster PostgreSQL jetable pour les tests `#[ignore]` du driver, et les deux tests du dépôt qui y échouent sans être des régressions
 metadata:
   type: reference
 ---
 
 Les tests `#[ignore]` de `oxyn-driver-postgres` demandent `OXYN_PG_TEST_URL`.
-Un cluster jetable local existe : son répertoire est écrit dans le fichier
-`/tmp/oxyn-constraints-pg-location` (sous-dossier `data`, port dans `port`).
-`pg_ctl` vient de `Postgres.app` (`/Applications/Postgres.app/Contents/Versions/latest/bin`).
+**Ne pas compter sur un cluster existant** : celui de `/tmp` a été vidé entre deux
+sessions (constaté le 2026-09-16). En recréer un dans le scratchpad de session.
 
-Protocole vérifié le 2026-09-10 (PostgreSQL 17.11) :
+Protocole vérifié le 2026-09-16 (PostgreSQL 17.11, Postgres.app) :
 
 ```sh
-DIR=$(cat /tmp/oxyn-constraints-pg-location); PORT=$(cat "$DIR/port")
-pg_ctl -D "$DIR/data" status   # avant tout start
-pg_ctl -D "$DIR/data" -l "$DIR/server.log" -o "-p $PORT -k $DIR -h 127.0.0.1" start -w
-env OXYN_PG_TEST_URL="postgres://oxyn_test@127.0.0.1:$PORT/postgres" \
+export PATH=/Applications/Postgres.app/Contents/Versions/latest/bin:$PATH
+initdb -D "$SP/pg/data" -U oxyn_test --auth=trust -E UTF8 --no-locale
+pg_ctl -D "$SP/pg/data" -l "$SP/pg/server.log" -o "-p 55439 -h 127.0.0.1 -k ''" start -w
+env OXYN_PG_TEST_URL="postgres://oxyn_test@127.0.0.1:55439/postgres" \
   cargo test -p oxyn-driver-postgres -- --ignored --test-threads=1
-pg_ctl -D "$DIR/data" stop -m fast -w   # dans tous les cas
+pg_ctl -D "$SP/pg/data" stop -m fast -w   # dans tous les cas
 ```
 
-Le rôle est **`oxyn_test`**, pas `postgres`, et `trust` local.
+`-k ''` désactive la socket Unix : le chemin du scratchpad dépasse la longueur
+maximale d'un chemin de socket. Rôle `oxyn_test` en `trust`, aucun mot de passe.
 
-**Le piège** : `integration::previews_handle_system_types_and_preserve_native_columns`
-échoue sur ce cluster avec `role "postgres" does not exist` — sa fixture écrit
-un littéral `'=r/postgres'::aclitem`. Ce n'est **pas** une régression, et son
-échec laisse derrière lui `oxyn_preview_types` et le domaine `oxyn_preview_acl`
-à supprimer à la main (les autres tests nettoient les leurs).
+**Tests rouges qui ne sont pas des régressions** (au 2026-09-16) :
+`la_lecture_seule_est_imposee_par_le_serveur` et
+`un_contexte_declare_ne_desarme_pas_la_lecture_seule` cherchent « lecture
+seule » alors que le message est passé en anglais. Autrefois aussi
+`previews_handle_system_types_and_preserve_native_columns` (littéral
+`'=r/postgres'::aclitem`, rôle absent) ; il passe sur un cluster neuf.
+
+Voir [[piege-bassin-postgres-et-cache-sqlx]] et [[piege-annulation-fenetre-deterministe]].

@@ -25,6 +25,10 @@ CLAUDE_MD = RACINE / "CLAUDE.md"
 # exactement le cas qu'elle prétend couvrir.
 REPERTOIRES_UI = {"oxyn-ui", "oxyn-app"}
 
+# I-08 : la seule crate qui a le droit de connaître Tauri (ADR-0029). Le préfixe
+# couvre `tauri-build` et les `tauri-plugin-*`, qui tirent `tauri` avec eux.
+REPERTOIRE_TAURI = "oxyn-desktop"
+
 # Les invariants sont ancrés dans CLAUDE.md par <a id="i-NN"></a>.
 MOTIF_ANCRE = re.compile(r'<a id="(i-\d+)"></a>')
 MOTIF_LIEN = re.compile(r"\[[^\]]+\]\(([^)#]+)(#[^)]+)?\)")
@@ -172,9 +176,9 @@ def controler_graphe_dependances() -> list[str]:
     passent, clippy se tait, et le coût n'apparaît qu'au moment où il est trop
     tard pour l'annuler.
 
-    - un `gpui` hors de `oxyn-ui`/`oxyn-app` ferme définitivement la CLI, les
-      tests sans écran, et la sortie de GPUI que l'ADR-0001 veut garder
-      ouverte ;
+    - un `gpui` hors de `oxyn-ui`/`oxyn-app`, ou un `tauri*` hors de
+      `oxyn-desktop`, ferme définitivement la CLI, les tests sans écran, et le
+      changement d'interface que l'ADR-0029 vient justement de faire ;
     - un manifeste sans `[lints] workspace = true` retire à sa crate TOUS les
       lints du dépôt, `unsafe_code = "deny"` compris ;
     - une dépendance déclarée avec sa propre version fait entrer deux copies de
@@ -216,6 +220,11 @@ def controler_graphe_dependances() -> list[str]:
                     f"I-08 : {rel} dépend de `gpui` en [{section}]. Seules "
                     f"{' et '.join(sorted(REPERTOIRES_UI))} le peuvent "
                     "(ADR-0001)"
+                )
+            if nom.startswith("tauri") and repertoire != REPERTOIRE_TAURI:
+                erreurs.append(
+                    f"I-08 : {rel} dépend de `{nom}` en [{section}]. Seule "
+                    f"{REPERTOIRE_TAURI} le peut (ADR-0029)"
                 )
             herite = isinstance(declaration, dict) and declaration.get("workspace")
             if not herite:

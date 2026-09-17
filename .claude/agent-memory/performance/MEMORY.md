@@ -1,0 +1,2 @@
+- [Mesurer sur cette machine](mesurer-sur-cette-machine.md) — la charge moyenne ment ; criterion sans `--bench` ne mesure rien ; échantillonnage plat au-delà de 100 ms/itération
+- [Périmètre de cargo fmt](perimetre-cargo-fmt.md) — `cargo fmt -p`, jamais `--all` : d'autres agents éditent le dépôt en même temps

@@ -11,7 +11,7 @@ correspond à une panne qui ne se verra pas en test.
 - [ ] C'est bien un **protocole** nouveau, et non un produit parlant un protocole
       déjà implémenté (Redshift ≡ PostgreSQL, MariaDB ≡ MySQL, OpenSearch ≡
       Elasticsearch)
-- [ ] La crate ne dépend que de `oxyn-db`, `oxyn-result` et `oxyn-core`
+- [ ] La crate ne dépend que d'`oxyn-core`, `oxyn-driver`, `oxyn-data` et `oxyn-catalog`
 - [ ] Aucune dépendance vers un autre driver
 
 ## Robustesse

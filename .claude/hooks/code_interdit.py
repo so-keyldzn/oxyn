@@ -23,6 +23,16 @@ EVENEMENT = "PreToolUse"
 # Les seules crates autorisées à dépendre de GPUI (I-08 / ADR-0001).
 CRATES_UI = ("crates/oxyn-ui/", "crates/oxyn-app/")
 
+# La seule crate autorisée à dépendre de Tauri (I-08 / ADR-0029).
+CRATE_TAURI = "crates/oxyn-desktop/"
+
+# Le seul module du front qui appelle `invoke` (I-01, rules/front.md).
+CLIENT_IPC = "apps/desktop/src/lib/ipc/client.ts"
+
+# Généré par `shadcn add`, jamais retouché : ses constructions ne sont pas les
+# nôtres, et un refus y bloquerait un `--overwrite` sans rien protéger.
+COMPOSANTS_GENERES = "apps/desktop/src/components/ui/"
+
 # Noms fourre-tout interdits (CLAUDE.md § organisation du code).
 FOURRE_TOUT = ("utils", "util", "common", "helpers", "misc", "divers", "shared")
 
@@ -60,6 +70,38 @@ def verifier_rust(rel: str, texte: str) -> None:
                     "écran et fige le choix du toolkit. Définir le type dans "
                     "`oxyn-core` et le convertir dans `oxyn-ui`.",
                 )
+
+    # I-08 — Tauri hors de l'hôte desktop.
+    if (rel.startswith("crates/") or rel.startswith("drivers/")) and not rel.startswith(CRATE_TAURI):
+        for numero, ligne in lignes:
+            if re.search(r"\buse\s+tauri\w*\b|\btauri\w*\s*::", ligne):
+                p.refuser(
+                    EVENEMENT,
+                    f"I-08 : {rel}:{numero} importe Tauri, mais seule "
+                    "`crates/oxyn-desktop/` a le droit d'en dépendre (ADR-0029). "
+                    "Un type Tauri dans le cœur supprime la CLI, les tests sans "
+                    "fenêtre et le prochain changement d'interface. Définir le "
+                    "type dans `oxyn-core` et le convertir dans `oxyn-desktop`.",
+                )
+
+    # I-05 — une commande Tauri synchrone tourne sur le thread principal.
+    # Vérifié le 2026-09-15 (docs/RESEARCH-NOTES.md § interface Tauri) : sans
+    # `async` ni `#[tauri::command(async)]`, la fenêtre attend la fin du corps.
+    # `ask` et non `deny` : une commande qui ne fait que lire un état en mémoire
+    # peut rester synchrone, et seul un humain sait ce que le corps appelle.
+    if rel.startswith(CRATE_TAURI):
+        for bloc in re.finditer(
+            r"#\[tauri::command\]\s*(?:#\[[^\]]*\]\s*)*(?:pub(?:\([^)]*\))?\s+)?fn\s+(\w+)",
+            texte,
+        ):
+            p.demander(
+                EVENEMENT,
+                f"I-05 : `{bloc.group(1)}` dans {rel} est une commande Tauri "
+                "synchrone : Tauri 2 l'exécute sur le thread principal. Une "
+                "lecture du store, du trousseau ou d'un lot débordé sur disque y "
+                "fige la fenêtre. Écrire `async fn`, ou `#[tauri::command(async)]` "
+                "— sauf si le corps ne touche qu'un état en mémoire.",
+            )
 
     # I-05 — blocage sur le thread UI.
     if rel.startswith(CRATES_UI):
@@ -128,9 +170,19 @@ def verifier_rust(rel: str, texte: str) -> None:
 
 def verifier_manifeste(rel: str, texte: str) -> None:
     """I-08 au niveau du manifeste : la dépendance avant l'import."""
-    if not rel.startswith("crates/") or rel.startswith(CRATES_UI):
+    if not (rel.startswith("crates/") or rel.startswith("drivers/")):
         return
     for numero, ligne in _lignes_de_code(texte):
+        if not rel.startswith(CRATE_TAURI) and re.match(r"\s*tauri[\w-]*\s*(?:=|\.)", ligne):
+            p.refuser(
+                EVENEMENT,
+                f"I-08 : {rel}:{numero} ajoute une dépendance Tauri hors de "
+                "`crates/oxyn-desktop/` (ADR-0029). Le toolkit d'interface "
+                "entrerait dans le cœur, et c'est précisément ce qui a rendu "
+                "possible la sortie de GPUI.",
+            )
+        if rel.startswith(CRATES_UI):
+            continue
         if re.match(r"\s*gpui\s*(?:=|\.)", ligne):
             p.refuser(
                 EVENEMENT,
@@ -154,6 +206,47 @@ EXTENSIONS_CODE = (".rs", ".toml", ".py", ".wit", ".sql")
 # quand elle arrive. Si l'une des deux définitions bouge, l'autre doit suivre —
 # sinon le hook refuse ce que la porte de qualité accepte.
 MOTIF_ECHEANCE = r"TODO\s*\(\s*(?:\d{4}-\d{2}-\d{2}|phase\s+\d+)"
+
+
+def verifier_front(rel: str, texte: str) -> None:
+    """Le front de la webview : ce qui s'y écrit compile, passe les stories, et
+    ouvre pourtant un chemin qu'un script injecté emprunterait."""
+    if not rel.startswith("apps/desktop/src/") or not rel.endswith((".ts", ".tsx")):
+        return
+    lignes = _lignes_de_code(texte)
+
+    # I-01 — un second appelant d'`invoke`. Sur le texte entier, pas ligne par
+    # ligne : un import sur plusieurs lignes est la forme que Prettier produit.
+    # `Channel` ou `isTauri` importés du même module restent permis.
+    if rel != CLIENT_IPC:
+        code = "\n".join(ligne for _, ligne in lignes)
+        espace = re.search(r"""import\s*\*\s*as\s+(\w+)\s+from\s*["']@tauri-apps/api/core["']""", code)
+        if (
+            re.search(r"""import\s*\{[^}]*\binvoke\b[^}]*\}\s*from\s*["']@tauri-apps/api/core["']""", code)
+            or (espace and re.search(rf"\b{espace.group(1)}\s*\.\s*invoke\b", code))
+            or "__TAURI_INTERNALS__" in code
+        ):
+            p.refuser(
+                EVENEMENT,
+                f"I-01 : {rel} appelle `invoke` hors de `{CLIENT_IPC}`. Chaque "
+                "appelant d'`invoke` est un chemin vers le backend qu'on "
+                "n'audite pas avec les autres — et c'est celui qu'une XSS "
+                "emprunterait. Passer par `call` depuis "
+                "`src/lib/ipc/<domaine>.ts` (.claude/rules/front.md).",
+            )
+
+    # Surface d'entrée — HTML brut injecté.
+    if not rel.startswith(COMPOSANTS_GENERES):
+        for numero, ligne in lignes:
+            if "dangerouslySetInnerHTML" in ligne:
+                p.refuser(
+                    EVENEMENT,
+                    f"{rel}:{numero} utilise `dangerouslySetInnerHTML`. Une "
+                    "cellule, un nom de table ou une réponse de modèle sont des "
+                    "entrées hostiles ; rendus en HTML dans la webview, ils "
+                    "atteignent `invoke` et donc le backend "
+                    "(docs/SECURITY.md § surface d'entrée). Rendre du texte React.",
+                )
 
 
 def verifier_code(rel: str, texte: str) -> None:
@@ -185,6 +278,7 @@ def principal() -> None:
         verifier_rust(rel, texte)
     if rel.endswith("Cargo.toml"):
         verifier_manifeste(rel, texte)
+    verifier_front(rel, texte)
     verifier_code(rel, texte)
     p.laisser_passer()
 

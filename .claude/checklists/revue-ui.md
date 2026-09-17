@@ -8,6 +8,17 @@ Comportements dans `docs/UX-SPEC.md`, budgets dans `docs/PERFORMANCE.md`.
       attendant »
 - [ ] Aucun `block_on`, `blocking_*`, ni I/O sur le thread UI
 
+## Interface Tauri
+
+Conventions dans [front.md](../rules/front.md), geste dans
+[`/ecran`](../commands/ecran.md).
+
+- [ ] `invoke` n'apparaît que dans `src/lib/ipc/client.ts`
+- [ ] Chaque commande Tauri nouvelle est `async` ou ne lit qu'un état en mémoire
+- [ ] Le miroir TypeScript a changé dans le même commit que `src/ipc`
+- [ ] Une story par état, et `make front` les passe, axe compris
+- [ ] Une commande Tauri ajoutée a été relue par `relecteur-securite`
+
 ## Les cinq états
 
 - [ ] Initial — explique quoi faire
@@ -39,7 +50,8 @@ Comportements dans `docs/UX-SPEC.md`, budgets dans `docs/PERFORMANCE.md`.
 
 ## Grille et résultats
 
-- [ ] Lecture directe des `RecordBatch`, sans conversion en lignes
+- [ ] GPUI : lecture directe des `RecordBatch`, sans conversion en lignes ·
+      Tauri : pages bornées de `result_page`, pour la seule fenêtre visible
 - [ ] Le défilement au-delà du budget mémoire lit une page disque et **ne relance
       jamais la requête**
 - [ ] Aucun décodage de gros lot sur le thread UI

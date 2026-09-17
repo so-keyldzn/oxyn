@@ -47,7 +47,7 @@ le secret.
 ## Plugins
 
 `docs/PLUGIN-CONTRACT.md` § ce que ce contrat impose aux traits d'aujourd'hui.
-Un trait de `oxyn-db` qui ne peut pas franchir la frontière WASM ferme la porte
+Un trait d'`oxyn-driver` qui ne peut pas franchir la frontière WASM ferme la porte
 à l'ADR-0005 sans que personne ne s'en aperçoive avant la phase 4 : générique non
 résoluble, rappel synchrone hors WIT, état partagé implicite, panique traversant
 la frontière.

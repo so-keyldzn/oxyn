@@ -1,10 +1,15 @@
 ---
-description: Ajouter ou modifier une vue GPUI
+description: Corriger une vue GPUI existante (interface en sortie)
 argument-hint: "<la vue, ex. grille de résultats>"
 allowed-tools: Bash, Read, Write, Edit, Grep, Glob, WebFetch
 ---
 
-Objet : ajouter ou modifier la vue **$ARGUMENTS**.
+Objet : corriger la vue GPUI **$ARGUMENTS**.
+
+> **GPUI est en sortie** ([ADR-0029](../../docs/adr/0029-interface-tauri-shadcn.md)).
+> Si la demande est un écran ou un comportement **nouveau**, arrêter ici et
+> passer par [`/ecran`](ecran.md) : un écran ajouté à GPUI est un écran de plus
+> à porter avant la parité, puis à supprimer.
 
 ## Avant d'écrire
 

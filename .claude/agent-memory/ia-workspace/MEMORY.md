@@ -1,0 +1,3 @@
+- [Piège rustdoc : liens explicites redondants](piege-rustdoc-liens-explicites-redondants.md) — seul l'étage doc de `make qualite` le voit ; `cargo test` et `clippy` se taisent
+- [Piège hook : `derive(Debug)` refusé sur un nom de type](piege-hook-derive-debug-nom-de-type.md) — le critère est le *nom* ; `TokenDetails` est un faux positif classique
+- [Piège reqwest : délai de connexion](piege-reqwest-delai-de-connexion.md) — `is_connect()` et `is_timeout()` tous deux vrais ; tester la connexion d'abord

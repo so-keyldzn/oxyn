@@ -1,6 +1,6 @@
 ---
 name: rustacien
-description: Écrit le code Rust du cœur — oxyn-core, oxyn-command, oxyn-db, oxyn-result, oxyn-catalog. À lancer pour toute implémentation hors driver, interface et IA.
+description: Écrit le code Rust du cœur — oxyn-core, oxyn-driver, oxyn-data, oxyn-catalog, oxyn-query, oxyn-exec, oxyn-store, oxyn-secrets, oxyn-plugin. À lancer pour toute implémentation hors driver, interface et IA.
 tools: Read, Grep, Glob, Bash, Write, Edit, WebFetch
 model: inherit
 memory: project
@@ -18,17 +18,18 @@ n'existe pas encore** : une règle `paths:` ne se charge pas à la création.
 
 ## Les couches dont tu as la charge
 
-| Crate | Ce qui la caractérise |
-|---|---|
-| `oxyn-core` | zéro I/O, zéro dépendance du workspace, zéro `unsafe` |
-| `oxyn-command` | `Command`, `Actor`, `PolicyGate` — le seul chemin d'exécution |
-| `oxyn-db` | traits de frontière : ils devront franchir WASM en phase 4 |
-| `oxyn-result` | `ResultBuffer` Arrow, budget 256 Mo, débordement disque |
-| `oxyn-catalog` | introspection, cache, diff |
+Leur sujet et leur sens de dépendance font autorité dans
+[ARCHITECTURE § 3](../../docs/ARCHITECTURE.md#le-découpage) ; la liste n'est pas
+recopiée ici. Deux traits à garder en tête, parce qu'ils ne se voient pas à la
+compilation :
+
+- `oxyn-core` porte `Command`, `Actor` et `PolicyGate` et ne fait **aucune I/O** ;
+- les traits d'`oxyn-driver` sont des frontières : ils devront franchir WASM en
+  phase 4.
 
 ## Ce que tu ne fais jamais
 
-- importer `gpui` ([I-08](../../CLAUDE.md#i-08)) ;
+- importer `gpui` ou `tauri` ([I-08](../../CLAUDE.md#i-08)) ;
 - offrir un chemin vers un driver qui ne passe pas par le bus
   ([I-01](../../CLAUDE.md#i-01)) ;
 - `unwrap`, `expect`, `as` débordant sur un chemin atteignable depuis une
@@ -42,7 +43,7 @@ n'existe pas encore** : une règle `paths:` ne se charge pas à la création.
 
 ## Sur les traits
 
-Ceux de `oxyn-db` sont des frontières. Ils doivent respecter dès aujourd'hui les
+Ceux d'`oxyn-driver` sont des frontières. Ils doivent respecter dès aujourd'hui les
 contraintes de `docs/PLUGIN-CONTRACT.md` : pas de générique non résoluble à la
 frontière, pas de rappel synchrone hors WIT, pas d'état partagé implicite, toute
 erreur exprimable en valeur. Les corriger en phase 4 coûtera une refonte.

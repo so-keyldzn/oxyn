@@ -29,8 +29,8 @@ diverge en deux semaines, et plus personne ne sait laquelle fait foi.
 ## Commandes
 
 Les gestes qui ont un contrat à respecter. Elles chargent la procédure
-explicitement — c'est ce qui **compense l'inertie des règles** tant que
-`crates/` est vide.
+explicitement — c'est ce qui **compense l'inertie des règles** à la création
+d'un fichier.
 
 | Commande | Objet |
 |---|---|
@@ -39,7 +39,8 @@ explicitement — c'est ce qui **compense l'inertie des règles** tant que
 | [`/relire`](commands/relire.md) | relire contre les invariants |
 | [`/driver`](commands/driver.md) | implémenter un driver |
 | [`/commande`](commands/commande.md) | ajouter une commande au bus |
-| [`/vue`](commands/vue.md) | ajouter une vue GPUI |
+| [`/ecran`](commands/ecran.md) | ajouter un écran à l'interface Tauri |
+| [`/vue`](commands/vue.md) | corriger une vue GPUI, en sortie |
 | [`/adr`](commands/adr.md) | écrire une décision |
 | [`/versions`](commands/versions.md) | re-vérifier les versions externes |
 | [`/benchmark`](commands/benchmark.md) | mesurer avant d'optimiser |
@@ -56,9 +57,10 @@ seul endroit profite partout.
 | Agent | Domaine |
 |---|---|
 | [`architecte`](agents/architecte.md) | découpage, traits de frontière, ADR |
-| [`rustacien`](agents/rustacien.md) | `oxyn-core`, `oxyn-command`, `oxyn-db`, `oxyn-result`, `oxyn-catalog` |
-| [`driveriste`](agents/driveriste.md) | `crates/oxyn-driver-*` |
-| [`interfacier`](agents/interfacier.md) | `oxyn-ui`, `oxyn-app` |
+| [`rustacien`](agents/rustacien.md) | le cœur : tout ce qui n'est ni driver, ni interface, ni IA |
+| [`driveriste`](agents/driveriste.md) | `drivers/oxyn-driver-*`, traits d'`oxyn-driver` |
+| [`frontiste`](agents/frontiste.md) | `apps/desktop`, `oxyn-desktop` — tout nouvel écran |
+| [`interfacier`](agents/interfacier.md) | `oxyn-ui`, `oxyn-app` — maintenance jusqu'à la parité |
 | [`ia-workspace`](agents/ia-workspace.md) | `oxyn-ai` |
 | [`documentaliste`](agents/documentaliste.md) | `docs/` |
 | [`performance`](agents/performance.md) | mesures et optimisation |
@@ -83,14 +85,14 @@ seul endroit profite partout.
 
 ## Règles
 
-Sept, à chargement conditionnel. Le tableau de leurs `paths:` est dans
+Huit, à chargement conditionnel. Le tableau de leurs `paths:` est dans
 [CLAUDE.md](../CLAUDE.md#règles-chargées-à-la-demande).
 
-> **Elles sont toutes inertes aujourd'hui.** Une règle `paths:` se charge quand
-> Claude *lit* un fichier correspondant, pas quand il en crée un — et aucun
-> fichier de code n'existe. `make socle` le signale en avertissement. Ce sont les
-> commandes qui compensent : **utiliser `/driver`, `/commande` ou `/vue` n'est
-> pas une option de confort tant que `crates/` est vide.**
+> Une règle `paths:` se charge quand Claude *lit* un fichier correspondant, pas
+> quand il en crée un : le premier fichier d'un répertoire neuf s'écrit sans
+> elle. Ce sont les commandes qui compensent — **`/driver`, `/commande`,
+> `/ecran` lisent la règle explicitement**. `make socle` signale en
+> avertissement une règle dont aucun fichier ne correspond.
 
 ## Hooks
 

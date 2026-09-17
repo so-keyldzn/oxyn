@@ -23,10 +23,11 @@ Commence par lire `CLAUDE.md` § invariants. Puis, pour chaque fichier touché :
 | I-02 | une écriture atteignant une connexion sans vérification d'environnement |
 | I-03 | `#[derive(...Debug...)]` sur un type portant un secret ; une valeur liée journalisée |
 | I-04 | du contexte rejoignant une invite hors du point de passage unique |
-| I-05 | `block_on`, `blocking_*`, un I/O dans `crates/oxyn-ui/` |
+| I-05 | `block_on`, `blocking_*`, un I/O dans `crates/oxyn-ui/` ; une `#[tauri::command]` sans `async` qui lit le store, le trousseau ou le disque |
 | I-06 | un `Vec` de lignes accumulé, un lot borné en nombre de lignes |
 | I-07 | une sortie de modèle exécutée sans passer par le `PolicyGate` |
-| I-08 | `use gpui` ou `gpui::` hors de `oxyn-ui` et `oxyn-app` |
+| I-08 | `gpui` hors de `oxyn-ui` et `oxyn-app` ; `tauri` hors de `oxyn-desktop` |
+| I-01 (front) | un `invoke` hors de `apps/desktop/src/lib/ipc/client.ts` ; une commande Tauri qui atteint le store ou un driver sans `Command` |
 | I-09 | `unwrap`, `expect`, indexation de tranche, `as` sur un chemin réseau |
 | I-10 | `format!` construisant du SQL avec un nom d'objet |
 | I-11 | une sérialisation dans un format non documenté |

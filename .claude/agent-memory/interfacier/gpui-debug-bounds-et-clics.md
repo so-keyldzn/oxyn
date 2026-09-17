@@ -1,6 +1,6 @@
 ---
 name: gpui-debug-bounds-et-clics
-description: Piège GPUI 0.2.2 — debug_bounds rend des bornes hors fenêtre pour un élément débordant, et simulate_click y échoue en silence ; il faut aussi cx.notify() pour obtenir une trame
+description: Piège GPUI 0.2.2 — debug_bounds rend des bornes hors fenêtre pour un élément débordant, ignore un élément qui n'a que .id(), et exige cx.notify() pour obtenir une trame
 metadata:
   type: feedback
 ---
@@ -29,3 +29,11 @@ où elles côtoient la phrase qui les explique.
 `entity.update(cx, |view, cx| { … })` sans `cx.notify()`, `run_until_parked()`
 ne produit aucune trame et `debug_bounds` renvoie l'état précédent. Il faut
 `cx.notify()` explicitement dans la fermeture, puis `run_until_parked()`.
+
+**3. `.id("x")` ne suffit pas : `debug_bounds` lit `debug_selector`.** Un
+élément construit avec un identifiant mais sans `.debug_selector(|| "x".into())`
+est invisible au harnais — `debug_bounds` rend `None`, et l'assertion échoue sur
+« l'élément n'existe pas » alors qu'il est bien dessiné. Le cas qui piège :
+`oxyn_ui::control(…)` pose `.id(…)` et **rien d'autre**, donc tout bouton bâti
+avec lui doit se voir ajouter son `debug_selector` par l'appelant. Vérifier avant
+de soupçonner la condition d'affichage : `grep debug_selector` sur le composant.
