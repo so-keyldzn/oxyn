@@ -111,6 +111,12 @@ impl Drop for ApiKey {
     }
 }
 
+/// Ce qui remplace la clé dans un texte expurgé.
+///
+/// En anglais : cette mention finit dans un message d'erreur affiché, et c'est
+/// la langue du code source (CLAUDE.md § Langue).
+pub(crate) const REDACTED: &str = "<redacted API key>";
+
 /// Remplace toute occurrence littérale de la clé par une mention neutre.
 ///
 /// Certains fournisseurs recopient la clé reçue dans leur message d'erreur.
@@ -121,7 +127,7 @@ impl Drop for ApiKey {
 #[must_use]
 pub(crate) fn redact_key(texte: &str, cle: Option<&ApiKey>) -> String {
     match cle {
-        Some(cle) if !cle.is_blank() => texte.replace(cle.expose(), "<clé masquée>"),
+        Some(cle) if !cle.is_blank() => texte.replace(cle.expose(), REDACTED),
         _ => texte.to_owned(),
     }
 }
@@ -161,7 +167,7 @@ mod tests {
         let corps = r#"{"error":{"message":"Incorrect API key provided: sk-abcdef"}}"#;
         let filtre = redact_key(corps, Some(&cle));
         assert!(!filtre.contains("sk-abcdef"), "{filtre}");
-        assert!(filtre.contains("<clé masquée>"), "{filtre}");
+        assert!(filtre.contains(REDACTED), "{filtre}");
     }
 
     #[test]

@@ -19,7 +19,11 @@
 //! # Ce que ce module fait déjà
 //!
 //! La construction de la requête est écrite et testée. L'envoi et le décodage du
-//! flux sont marqués `todo!("phase 2")`.
+//! flux **refusent** explicitement
+//! ([`LlmError::NotImplemented`]) : un chemin
+//! inachevé qui panique tue l'application le jour où quelqu'un configure ce
+//! fournisseur ([I-09](../../../CLAUDE.md#i-09)), là où un refus se lit,
+//! s'affiche et se contourne en changeant de fournisseur.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -76,11 +80,11 @@ impl GeminiProvider {
         let id = ProviderId::gemini();
         let analysee = Url::parse(base_url).map_err(|err| LlmError::Config {
             provider: id.clone(),
-            detail: format!("URL de base illisible : {err}"),
+            detail: format!("cannot parse the base URL: {err}"),
         })?;
         let client = Client::builder().build().map_err(|err| LlmError::Config {
             provider: id,
-            detail: format!("client HTTP inconstructible : {err}"),
+            detail: format!("cannot build the HTTP client: {err}"),
         })?;
         Ok(Self {
             base_url: provider::normalize_base_url(analysee),
@@ -113,23 +117,22 @@ impl GeminiProvider {
         };
         let modele = model.trim();
         if modele.is_empty() {
-            return Err(invalide("aucun modèle demandé").into());
+            return Err(invalide("no model requested").into());
         }
         if !modele
             .chars()
             .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
         {
-            return Err(invalide(
-                "nom de modèle : caractères autorisés A-Z, a-z, 0-9, `-`, `_`, `.`",
-            )
-            .into());
+            return Err(
+                invalide("the model name accepts only A-Z, a-z, 0-9, `-`, `_` and `.`").into(),
+            );
         }
 
         let chemin = format!("{}/models/{modele}:streamGenerateContent", self.api_version);
         let mut url = self
             .base_url
             .join(&chemin)
-            .map_err(|err| invalide(&format!("chemin inutilisable : {err}")))?;
+            .map_err(|err| invalide(&format!("cannot build the request path: {err}")))?;
         // `alt=sse` : sans lui, l'API rend un tableau JSON entier plutôt qu'un
         // flux — ce qui reviendrait à attendre la fin avant d'afficher quoi que
         // ce soit, et c'est précisément ce qu'Oxyn refuse.
@@ -146,7 +149,7 @@ impl GeminiProvider {
         if contenus.is_empty() {
             return Err(LlmError::Config {
                 provider: ProviderId::gemini(),
-                detail: "aucun message à envoyer".to_owned(),
+                detail: "no message to send".to_owned(),
             }
             .into());
         }
@@ -208,7 +211,8 @@ impl GeminiProvider {
         let mut cle =
             HeaderValue::from_str(self.api_key.expose()).map_err(|_| LlmError::Config {
                 provider: ProviderId::gemini(),
-                detail: "la clé contient un caractère interdit dans un en-tête HTTP".to_owned(),
+                detail: "the API key contains a character that is not valid in an HTTP header"
+                    .to_owned(),
             })?;
         cle.set_sensitive(true);
         Ok(self
@@ -325,7 +329,14 @@ impl LlmProvider for GeminiProvider {
     }
 
     async fn models(&self) -> Result<Vec<ModelInfo>> {
-        todo!("phase 2 : lister les modèles Gemini, chemin et schéma vérifiés au registre")
+        // Ni le chemin ni le schéma de la liste ne sont vérifiés au registre
+        // (I-12) : une liste écrite de mémoire serait plausible et fausse.
+        Err(LlmError::NotImplemented {
+            provider: ProviderId::gemini(),
+            operation: "listing models (endpoint path and response shape still unverified)"
+                .to_owned(),
+        }
+        .into())
     }
 
     async fn stream(
@@ -333,22 +344,64 @@ impl LlmProvider for GeminiProvider {
         request: ChatRequest,
         _cancel: &CancelToken,
     ) -> Result<BoxStream<'static, ChatEvent>> {
+        // La requête est construite et validée avant le refus : une requête mal
+        // formée doit se signaler comme telle plutôt que d'être masquée par
+        // l'absence d'envoi.
         let corps = self.wire_request(&request)?;
         let _requete = self.prepared_request(&request.model)?.json(&corps);
-        todo!(
-            "phase 2 : envoyer la génération en flux et décoder les trames SSE de Gemini \
-             (candidates[].content.parts, functionCall, usageMetadata, finishReason)"
-        )
+        // Ce qui manque est l'envoi et le décodage des trames SSE de Gemini
+        // (`candidates[].content.parts`, `functionCall`, `usageMetadata`,
+        // `finishReason`).
+        Err(LlmError::NotImplemented {
+            provider: ProviderId::gemini(),
+            operation: "streaming a generation (streamGenerateContent)".to_owned(),
+        }
+        .into())
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use oxyn_core::OxynError;
+
     use super::*;
     use crate::types::{ToolCall, ToolSpec};
 
     fn fournisseur() -> GeminiProvider {
         GeminiProvider::new("clé-de-test").expect("construction")
+    }
+
+    #[test]
+    fn un_echange_non_implemente_refuse_au_lieu_de_paniquer() {
+        // I-09 : une panique tue l'application. Un fournisseur configuré mais
+        // dont le protocole n'est pas écrit doit donner un message.
+        let f = fournisseur();
+        let liste = futures::executor::block_on(f.models()).expect_err("pas encore implémenté");
+        assert!(matches!(&liste, OxynError::NotSupported { .. }), "{liste}");
+        assert!(!liste.is_retryable(), "retenter n'écrira pas le code");
+
+        let requete = ChatRequest::new("gemini-2.0-flash", vec![ChatMessage::user("bonjour")]);
+        let flux = futures::executor::block_on(f.stream(requete, &CancelToken::new()))
+            .err()
+            .expect("pas encore implémenté");
+        let rendu = flux.to_string();
+        assert!(rendu.contains("gemini"), "{rendu}");
+        assert!(
+            rendu.contains("Oxyn does not implement"),
+            "le message doit désigner Oxyn, pas le fournisseur : {rendu}"
+        );
+    }
+
+    #[test]
+    fn une_requete_invalide_se_signale_avant_le_refus() {
+        // L'ordre compte : sinon le refus masquerait un défaut de la requête,
+        // et la validation cesserait d'être éprouvée d'ici la phase 2.
+        let f = fournisseur();
+        let requete = ChatRequest::new("  ", vec![ChatMessage::user("bonjour")]);
+        let err = futures::executor::block_on(f.stream(requete, &CancelToken::new()))
+            .err()
+            .expect("modèle vide");
+        assert!(matches!(&err, OxynError::Config(_)), "{err}");
     }
 
     #[test]

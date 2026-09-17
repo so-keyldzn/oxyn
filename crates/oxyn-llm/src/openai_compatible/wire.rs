@@ -11,6 +11,8 @@
 //! (I-09), et la moitié des points d'accès « compatibles OpenAI » ne le sont
 //! qu'approximativement.
 
+use std::fmt;
+
 use serde::{Deserialize, Serialize};
 
 use crate::types::{ChatRequest, Cost, ModelInfo, Support, ToolCall};
@@ -40,6 +42,14 @@ pub(crate) struct ChatCompletionRequest {
     stream: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     stream_options: Option<StreamOptions>,
+    /// Effort de raisonnement, **seulement** quand l'appelant en demande un et
+    /// que le fournisseur est réputé le comprendre.
+    ///
+    /// Omis partout ailleurs : un serveur local strict rejette la requête
+    /// entière sur un champ inconnu, et c'est exactement le genre de régression
+    /// qui ne se voit qu'une fois chez l'utilisateur.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    reasoning_effort: Option<&'static str>,
 }
 
 /// Options de diffusion. Seul OpenAI et ses passerelles les comprennent ; les
@@ -96,7 +106,15 @@ impl ChatCompletionRequest {
     ///
     /// `stream` est forcé à `true` : le seul chemin d'appel de cette crate est
     /// diffusé. Voir la note de [`ChatRequest::stream`].
-    pub(crate) fn from_request(request: &ChatRequest, include_usage: bool) -> Self {
+    ///
+    /// `reasoning` dit si le fournisseur comprend `reasoning_effort`. Faux pour
+    /// un point d'accès générique : le champ est alors **omis**, jamais envoyé
+    /// à l'aveugle.
+    pub(crate) fn from_request(
+        request: &ChatRequest,
+        include_usage: bool,
+        reasoning: bool,
+    ) -> Self {
         let messages = request
             .messages
             .iter()
@@ -150,6 +168,11 @@ impl ChatCompletionRequest {
             stream_options: include_usage.then_some(StreamOptions {
                 include_usage: true,
             }),
+            // L'effort demandé, et seulement si ce point d'accès le comprend.
+            reasoning_effort: request
+                .reasoning_effort
+                .filter(|_| reasoning)
+                .map(|effort| effort.as_str()),
         }
     }
 }
@@ -196,6 +219,10 @@ pub(crate) struct ChunkChoice {
 pub(crate) struct Delta {
     #[serde(default)]
     pub(crate) content: Option<String>,
+    /// Refus du modèle. Champ distinct de `content` dans ce protocole, et c'est
+    /// une bonne chose : un refus n'est pas une réponse.
+    #[serde(default)]
+    pub(crate) refusal: Option<String>,
     #[serde(default)]
     pub(crate) tool_calls: Vec<DeltaToolCall>,
 }
@@ -231,6 +258,40 @@ pub(crate) struct WireUsage {
     prompt_tokens: Option<i64>,
     #[serde(default)]
     completion_tokens: Option<i64>,
+    /// Détail de l'entrée. Absent chez les serveurs locaux.
+    #[serde(default)]
+    prompt_tokens_details: Option<TokenDetails>,
+    /// Détail de la sortie. Absent chez les serveurs locaux.
+    #[serde(default)]
+    completion_tokens_details: Option<TokenDetails>,
+}
+
+/// Détail d'un compte de jetons.
+///
+/// Un seul type pour l'entrée et la sortie : les deux objets ne portent qu'un
+/// champ qui nous intéresse, et ils ne se chevauchent pas. En dédoubler la
+/// définition n'ajouterait qu'un endroit où se tromper.
+///
+/// `Debug` est écrit à la main : c'est la règle de ce dépôt pour un type qui
+/// traverse la frontière réseau, et elle vaut même quand la structure ne porte
+/// que des compteurs — c'est l'exception qui rend la règle inapplicable.
+#[derive(Default, Deserialize)]
+struct TokenDetails {
+    /// Jetons d'entrée servis depuis le cache.
+    #[serde(default)]
+    cached_tokens: Option<i64>,
+    /// Jetons de sortie dépensés à raisonner.
+    #[serde(default)]
+    reasoning_tokens: Option<i64>,
+}
+
+impl fmt::Debug for TokenDetails {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("TokenDetails")
+            .field("cached_tokens", &self.cached_tokens)
+            .field("reasoning_tokens", &self.reasoning_tokens)
+            .finish()
+    }
 }
 
 impl WireUsage {
@@ -242,6 +303,22 @@ impl WireUsage {
     /// Jetons produits, ramenés dans le domaine du possible.
     pub(crate) fn completion(&self) -> u32 {
         clamp_tokens(self.completion_tokens)
+    }
+
+    /// Jetons lus dans le cache, **seulement si le serveur le déclare**.
+    ///
+    /// `None` et non `0` : la plupart des points d'accès compatibles n'ont
+    /// aucun cache et ne disent rien. Afficher « 0 jeton lu en cache » ferait
+    /// croire à un cache qui ne fonctionne pas.
+    pub(crate) fn cache_read(&self) -> Option<u32> {
+        let brut = self.prompt_tokens_details.as_ref()?.cached_tokens?;
+        Some(clamp_tokens(Some(brut)))
+    }
+
+    /// Jetons de raisonnement, même règle.
+    pub(crate) fn reasoning(&self) -> Option<u32> {
+        let brut = self.completion_tokens_details.as_ref()?.reasoning_tokens?;
+        Some(clamp_tokens(Some(brut)))
     }
 }
 
@@ -272,7 +349,7 @@ impl WireError {
             }
             (Some(message), _) if !message.is_empty() => message.clone(),
             (_, Some(code)) => format!("code {code}"),
-            _ => "erreur sans détail".to_owned(),
+            _ => "no details given".to_owned(),
         }
     }
 }
@@ -336,6 +413,17 @@ impl From<WireModel> for ModelInfo {
             Some(parametres) => Support::known(parametres.iter().any(|p| p == "tools")),
             None => Support::Unknown,
         };
+        // Même règle pour le raisonnement : la passerelle qui publie la liste
+        // de ses paramètres y fait figurer `reasoning_effort` quand le modèle
+        // l'accepte.
+        let raisonnement = match &brut.supported_parameters {
+            Some(parametres) => Support::known(
+                parametres
+                    .iter()
+                    .any(|p| p == "reasoning_effort" || p == "reasoning"),
+            ),
+            None => Support::Unknown,
+        };
 
         let mut fiche = Self::new(brut.id);
         if let Some(nom) = brut.name {
@@ -344,7 +432,9 @@ impl From<WireModel> for ModelInfo {
         if let Some(fenetre) = contexte {
             fiche = fiche.with_context_window(fenetre);
         }
-        fiche = fiche.with_tool_support(outils);
+        fiche = fiche
+            .with_tool_support(outils)
+            .with_reasoning_support(raisonnement);
         if let Some(cout) = brut.pricing.and_then(|p| p.into_cost()) {
             fiche = fiche.with_cost(cout);
         }
@@ -414,7 +504,7 @@ pub(crate) fn build_tool_call(
     match serde_json::from_str::<serde_json::Value>(brut) {
         Ok(valeur) => Ok(ToolCall::new(id, name, valeur)),
         Err(err) => Err(format!(
-            "arguments de l'outil `{name}` illisibles : {} (ligne {}, colonne {})",
+            "cannot read the arguments of tool `{name}`: {} (line {}, column {})",
             classify_label(&err),
             err.line(),
             err.column()
@@ -448,7 +538,7 @@ mod tests {
     #[test]
     fn une_requete_minimale_ne_porte_que_le_necessaire() {
         let req = ChatRequest::new("llama3.2", vec![ChatMessage::user("bonjour")]);
-        let corps = serialise(&ChatCompletionRequest::from_request(&req, false));
+        let corps = serialise(&ChatCompletionRequest::from_request(&req, false, false));
 
         assert_eq!(corps["model"], "llama3.2");
         assert_eq!(corps["stream"], true);
@@ -469,7 +559,7 @@ mod tests {
     #[test]
     fn la_demande_de_consommation_est_explicite() {
         let req = ChatRequest::new("gpt-4o-mini", vec![ChatMessage::user("a")]);
-        let corps = serialise(&ChatCompletionRequest::from_request(&req, true));
+        let corps = serialise(&ChatCompletionRequest::from_request(&req, true, false));
         assert_eq!(corps["stream_options"]["include_usage"], true);
     }
 
@@ -481,7 +571,7 @@ mod tests {
                 "exécute une requête",
                 serde_json::json!({"type": "object", "properties": {}}),
             )]);
-        let corps = serialise(&ChatCompletionRequest::from_request(&req, false));
+        let corps = serialise(&ChatCompletionRequest::from_request(&req, false, false));
         assert_eq!(corps["tools"][0]["type"], "function");
         assert_eq!(corps["tools"][0]["function"]["name"], "execute_query");
         assert_eq!(
@@ -498,7 +588,7 @@ mod tests {
             "m",
             vec![ChatMessage::assistant("").with_tool_calls(vec![appel])],
         );
-        let corps = serialise(&ChatCompletionRequest::from_request(&req, false));
+        let corps = serialise(&ChatCompletionRequest::from_request(&req, false, false));
         let arguments = &corps["messages"][0]["tool_calls"][0]["function"]["arguments"];
         assert!(arguments.is_string(), "{arguments}");
         assert_eq!(arguments.as_str(), Some(r#"{"sql":"SELECT 1"}"#));
@@ -511,14 +601,14 @@ mod tests {
             "m",
             vec![ChatMessage::assistant("").with_tool_calls(vec![appel])],
         );
-        let corps = serialise(&ChatCompletionRequest::from_request(&req, false));
+        let corps = serialise(&ChatCompletionRequest::from_request(&req, false, false));
         assert!(corps["messages"][0].get("content").is_none());
     }
 
     #[test]
     fn un_message_d_outil_porte_son_identifiant() {
         let req = ChatRequest::new("m", vec![ChatMessage::tool_result("call_1", "42 lignes")]);
-        let corps = serialise(&ChatCompletionRequest::from_request(&req, false));
+        let corps = serialise(&ChatCompletionRequest::from_request(&req, false, false));
         assert_eq!(corps["messages"][0]["role"], "tool");
         assert_eq!(corps["messages"][0]["tool_call_id"], "call_1");
         assert_eq!(corps["messages"][0]["content"], "42 lignes");
@@ -649,6 +739,6 @@ mod tests {
             code: Some(serde_json::json!(429)),
         };
         assert_eq!(err.describe(), "rate limited (code 429)");
-        assert_eq!(WireError::default().describe(), "erreur sans détail");
+        assert_eq!(WireError::default().describe(), "no details given");
     }
 }

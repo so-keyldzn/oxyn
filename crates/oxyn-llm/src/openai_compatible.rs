@@ -123,6 +123,14 @@ pub struct OpenAiCompatibleProvider {
     /// l'ignorent, mais quelques implémentations strictes rejettent les champs
     /// inconnus. D'où un drapeau plutôt qu'un envoi systématique.
     include_usage: bool,
+    /// Le point d'accès comprend-il `reasoning_effort` ?
+    ///
+    /// Même raison que [`include_usage`](Self::include_usage), avec une
+    /// conséquence plus visible : un serveur local strict qui reçoit ce champ
+    /// rejette la requête **entière**, et l'utilisateur voit son assistant
+    /// tomber en panne sans rapport apparent avec le réglage qu'il vient de
+    /// changer.
+    reasoning_effort: bool,
 }
 
 impl OpenAiCompatibleProvider {
@@ -137,7 +145,7 @@ impl OpenAiCompatibleProvider {
     pub fn new(id: ProviderId, base_url: &str) -> Result<Self> {
         let analysee = Url::parse(base_url).map_err(|err| LlmError::Config {
             provider: id.clone(),
-            detail: format!("URL de base illisible : {err}"),
+            detail: format!("cannot parse the base URL: {err}"),
         })?;
         let client = build_client(&id)?;
         Ok(Self {
@@ -149,6 +157,7 @@ impl OpenAiCompatibleProvider {
             extra_headers: Vec::new(),
             requires_key: false,
             include_usage: false,
+            reasoning_effort: false,
             id,
         })
     }
@@ -188,7 +197,8 @@ impl OpenAiCompatibleProvider {
         Ok(Self::new(ProviderId::openai(), OPENAI_BASE_URL)?
             .with_api_key(api_key.into())
             .requiring_api_key()
-            .with_usage_reporting(true))
+            .with_usage_reporting(true)
+            .supporting_reasoning_effort())
     }
 
     /// OpenRouter.
@@ -199,7 +209,8 @@ impl OpenAiCompatibleProvider {
         Ok(Self::new(ProviderId::openrouter(), OPENROUTER_BASE_URL)?
             .with_api_key(api_key.into())
             .requiring_api_key()
-            .with_usage_reporting(true))
+            .with_usage_reporting(true)
+            .supporting_reasoning_effort())
     }
 
     /// Azure OpenAI Service.
@@ -221,7 +232,8 @@ impl OpenAiCompatibleProvider {
         let mut fournisseur = Self::new(id, endpoint)?
             .with_api_key(api_key.into())
             .requiring_api_key()
-            .with_usage_reporting(true);
+            .with_usage_reporting(true)
+            .supporting_reasoning_effort();
         fournisseur.auth = AuthStyle::ApiKeyHeader;
         fournisseur.route = Route::AzureDeployment {
             deployment,
@@ -258,6 +270,17 @@ impl OpenAiCompatibleProvider {
         self
     }
 
+    /// Déclare que ce point d'accès comprend `reasoning_effort`.
+    ///
+    /// À n'activer que pour un point d'accès dont c'est documenté. Sans cela le
+    /// champ est **omis** : une omission dégrade la réponse, un champ inconnu
+    /// fait échouer la requête entière.
+    #[must_use]
+    pub const fn supporting_reasoning_effort(mut self) -> Self {
+        self.reasoning_effort = true;
+        self
+    }
+
     /// Fixe la version d'API d'Azure.
     ///
     /// Sans effet sur un fournisseur qui n'est pas un déploiement Azure.
@@ -281,11 +304,11 @@ impl OpenAiCompatibleProvider {
     pub fn with_header(mut self, name: &str, value: &str) -> Result<Self> {
         let nom = HeaderName::from_bytes(name.as_bytes()).map_err(|_| LlmError::Config {
             provider: self.id.clone(),
-            detail: format!("nom d'en-tête invalide : `{name}`"),
+            detail: format!("`{name}` is not a valid HTTP header name"),
         })?;
         let mut valeur = HeaderValue::from_str(value).map_err(|_| LlmError::Config {
             provider: self.id.clone(),
-            detail: format!("valeur invalide pour l'en-tête `{name}`"),
+            detail: format!("the value given for header `{name}` is not valid in an HTTP header"),
         })?;
         valeur.set_sensitive(true);
         self.extra_headers.push((nom, valeur));
@@ -342,7 +365,7 @@ impl OpenAiCompatibleProvider {
     fn join(&self, chemin: &str) -> std::result::Result<Url, LlmError> {
         self.base_url.join(chemin).map_err(|err| LlmError::Config {
             provider: self.id.clone(),
-            detail: format!("chemin `{chemin}` inutilisable : {err}"),
+            detail: format!("cannot append path `{chemin}` to the base URL: {err}"),
         })
     }
 
@@ -376,28 +399,48 @@ impl OpenAiCompatibleProvider {
         };
         let mut valeur = HeaderValue::from_str(&brut).map_err(|_| LlmError::Config {
             provider: self.id.clone(),
-            detail: "la clé contient un caractère interdit dans un en-tête HTTP".to_owned(),
+            detail: "the API key contains a character that is not valid in an HTTP header"
+                .to_owned(),
         })?;
         // Marquée sensible : la pile HTTP ne la rendra pas dans ses traces.
         valeur.set_sensitive(true);
         Ok(builder.header(nom, valeur))
     }
 
+    /// Refuse une demande de raisonnement que ce protocole ne sait pas porter.
+    ///
+    /// Deux cas, et l'asymétrie est voulue :
+    ///
+    /// * **le budget de réflexion n'a aucun équivalent ici**, chez aucun
+    ///   fournisseur de cette famille. Il est refusé partout ;
+    /// * **l'effort n'existe que sur les points d'accès qui le documentent.**
+    ///   Il est refusé sur les autres.
+    ///
+    /// Refuser plutôt qu'omettre parce que le silence coûte plus cher que
+    /// l'échec : une réponse produite sans le réglage demandé est facturée, et
+    /// rien ne dit à l'utilisateur qu'il n'a pas eu ce qu'il demandait. Rien ne
+    /// régresse pour autant — une requête qui ne demande pas de raisonnement ne
+    /// rencontre jamais ce chemin.
+    fn check_reasoning(&self, request: &ChatRequest) -> std::result::Result<(), LlmError> {
+        let refus = |capability: &str| LlmError::Unsupported {
+            provider: self.id.clone(),
+            capability: capability.to_owned(),
+        };
+        if request.reasoning_budget_tokens.is_some() {
+            return Err(refus(
+                "a thinking budget in tokens; this protocol has no such setting",
+            ));
+        }
+        if request.reasoning_effort.is_some() && !self.reasoning_effort {
+            return Err(refus("a reasoning effort (`reasoning_effort`)"));
+        }
+        Ok(())
+    }
+
     /// Classe une erreur de transport, sans jamais recopier la clé.
     fn transport(&self, err: &reqwest::Error) -> LlmError {
-        let detail = if err.is_timeout() {
-            "délai de connexion dépassé".to_owned()
-        } else if err.is_connect() {
-            "connexion refusée ou hôte injoignable".to_owned()
-        } else if err.is_body() || err.is_decode() {
-            "flux interrompu par le fournisseur".to_owned()
-        } else {
-            redact_key(&err.to_string(), self.api_key.as_ref())
-        };
-        LlmError::Transport {
-            provider: self.id.clone(),
-            detail,
-        }
+        // Aucun délai de réponse n'est configuré (voir `CONNECT_TIMEOUT`).
+        LlmError::from_transport(self.id.clone(), err, None)
     }
 
     /// Transforme une réponse d'échec en erreur, corps expurgé.
@@ -419,7 +462,7 @@ fn build_client(id: &ProviderId) -> Result<Client> {
         .map_err(|err| {
             OxynError::from(LlmError::Config {
                 provider: id.clone(),
-                detail: format!("client HTTP inconstructible : {err}"),
+                detail: format!("cannot build the HTTP client: {err}"),
             })
         })
 }
@@ -438,17 +481,17 @@ fn validate_deployment(id: &ProviderId, deployment: &str) -> Result<String> {
         })
     };
     if deployment.is_empty() {
-        return Err(invalide("nom de déploiement vide"));
+        return Err(invalide("the deployment name is empty"));
     }
     if deployment.len() > 64 {
-        return Err(invalide("nom de déploiement de plus de 64 caractères"));
+        return Err(invalide("the deployment name is longer than 64 characters"));
     }
     if !deployment
         .chars()
         .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_' || c == '.')
     {
         return Err(invalide(
-            "nom de déploiement : caractères autorisés A-Z, a-z, 0-9, `-`, `_`, `.`",
+            "the deployment name accepts only A-Z, a-z, 0-9, `-`, `_` and `.`",
         ));
     }
     Ok(deployment.to_owned())
@@ -517,13 +560,19 @@ impl LlmProvider for OpenAiCompatibleProvider {
         if request.model.trim().is_empty() {
             return Err(LlmError::Config {
                 provider: self.id.clone(),
-                detail: "aucun modèle demandé".to_owned(),
+                detail: "no model requested".to_owned(),
             }
             .into());
         }
 
+        self.check_reasoning(&request)?;
+
         let url = self.chat_url()?;
-        let corps = wire::ChatCompletionRequest::from_request(&request, self.include_usage);
+        let corps = wire::ChatCompletionRequest::from_request(
+            &request,
+            self.include_usage,
+            self.reasoning_effort,
+        );
         let requete = self.apply_auth(self.client.post(url).json(&corps))?;
 
         // L'envoi lui-même doit céder à l'annulation : un point d'accès qui ne
@@ -545,8 +594,8 @@ impl LlmProvider for OpenAiCompatibleProvider {
 
         let octets = reponse
             .bytes_stream()
-            .map(|resultat| resultat.map_err(|err| stream::describe_stream_error(&err)));
-        Ok(stream::events_stream(Box::pin(octets), cancel.clone()))
+            .map(|resultat| resultat.map_err(|err| crate::stream::describe_stream_error(&err)));
+        Ok(stream::openai_events(Box::pin(octets), cancel.clone()))
     }
 }
 

@@ -40,7 +40,7 @@ pub(crate) struct SseFrame {
 
 /// Le tampon a dépassé sa borne sans qu'une trame se termine.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
-#[error("trame SSE de plus de {limit} octets sans fin de ligne")]
+#[error("SSE frame exceeded {limit} bytes without a line break")]
 pub(crate) struct SseOverflow {
     /// Borne dépassée, en octets.
     pub(crate) limit: usize,

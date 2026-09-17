@@ -20,10 +20,31 @@
 //! donc la raison, on clôt les appels d'outils, et on n'émet `Done` qu'à la
 //! sentinelle `[DONE]` ou à la fermeture du flux. `Done` est émis exactement une
 //! fois.
+//!
+//! # Une fin constatée n'est pas une fin annoncée
+//!
+//! Ce protocole a **deux** annonces de fin, et elles ne disent pas la même
+//! chose : `finish_reason` sur le dernier fragment de contenu dit que la
+//! génération est finie ; `data: [DONE]` dit que le flux l'est. OpenAI
+//! documente les deux ([RESEARCH-NOTES](../../../../docs/RESEARCH-NOTES.md)),
+//! mais un serveur compatible peut omettre la sentinelle.
+//!
+//! La règle retenue ne dépend donc pas de la sentinelle :
+//!
+//! * **`finish_reason` reçu, puis fermeture** : la génération a été annoncée
+//!   finie, le contenu est entier ; seule la trame de consommation a pu se
+//!   perdre. La raison annoncée est conservée ;
+//! * **ni `finish_reason` ni `[DONE]`, puis fermeture** — propre ou non : c'est
+//!   une coupure, [`StopReason::Interrupted`], et les appels d'outils en cours
+//!   sont **jetés**. Un mandataire qui ferme proprement en pleine génération ne
+//!   produit aucune erreur de transport, et des arguments qui se lisent par
+//!   chance ne sont pas des arguments que le modèle a fini d'écrire.
 
 use std::collections::BTreeMap;
 
 use super::wire::{self, ChatChunk, DeltaToolCall};
+use crate::sse::SseFrame;
+use crate::stream::EventDecoder;
 use crate::types::{ChatEvent, StopReason};
 
 /// Sentinelle de fin des protocoles compatibles OpenAI.
@@ -87,13 +108,13 @@ impl ChunkDecoder {
                 // point d'accès tiers y met.
                 self.errors += 1;
                 out.push(ChatEvent::Error(format!(
-                    "trame illisible du flux ({}, ligne {}, colonne {})",
+                    "unreadable stream frame ({}, line {}, column {})",
                     wire::classify_label(&err),
                     err.line(),
                     err.column()
                 )));
                 if self.errors >= MAX_DECODE_ERRORS {
-                    self.stop = Some(StopReason::Other("flux illisible".to_owned()));
+                    self.stop = Some(StopReason::Interrupted);
                     self.emit_done(out);
                 }
                 return;
@@ -104,8 +125,10 @@ impl ChunkDecoder {
         // produira plus rien après.
         if let Some(erreur) = &chunk.error {
             out.push(ChatEvent::Error(erreur.describe()));
-            self.stop = Some(StopReason::Other("erreur du fournisseur".to_owned()));
-            self.flush_calls(out);
+            self.stop = Some(StopReason::ProviderError);
+            // Jetés, pas clos : un appel interrompu par une erreur n'est pas une
+            // proposition d'action.
+            self.discard_calls(out);
             self.emit_done(out);
             return;
         }
@@ -114,6 +137,13 @@ impl ChunkDecoder {
             out.push(ChatEvent::Usage {
                 prompt_tokens: usage.prompt(),
                 completion_tokens: usage.completion(),
+                // Ce protocole ne distingue pas l'écriture de cache : il ne
+                // rapporte que les jetons **lus**. Déclarer `Some(0)` en
+                // écriture laisserait croire qu'aucun préfixe n'a été mis en
+                // cache, alors qu'on n'en sait rien.
+                cache_write_tokens: None,
+                cache_read_tokens: usage.cache_read(),
+                reasoning_tokens: usage.reasoning(),
             });
         }
 
@@ -123,20 +153,45 @@ impl ChunkDecoder {
             {
                 out.push(ChatEvent::TextDelta(texte));
             }
+            // Un refus est une réponse, pas une erreur : la requête a abouti et
+            // le modèle a dit qu'il ne répondrait pas. Le confondre avec du
+            // texte le ferait présenter comme une réponse.
+            if let Some(refus) = choix.delta.refusal
+                && !refus.is_empty()
+            {
+                out.push(ChatEvent::RefusalDelta(refus));
+            }
             for appel in choix.delta.tool_calls {
                 self.accumulate(appel, out);
             }
             if let Some(raison) = choix.finish_reason {
                 // La génération est finie ; le flux, pas forcément.
-                self.stop = Some(StopReason::from_openai(&raison));
+                self.stop = Some(stop_reason(&raison));
                 self.flush_calls(out);
             }
         }
     }
 
-    /// Signale la fermeture du flux par le serveur.
+    /// Signale la fermeture du flux par le serveur, sans `[DONE]`.
+    ///
+    /// Voir la note du module : seul un `finish_reason` déjà reçu fait de cette
+    /// fermeture une fin ordinaire.
     pub(crate) fn finish(&mut self, out: &mut Vec<ChatEvent>) {
-        self.flush_calls(out);
+        if self.done {
+            return;
+        }
+        if self.stop.is_some() {
+            // Les appels ont été clos au `finish_reason` ; un fragment arrivé
+            // après n'a pas d'annonce de fin.
+            self.discard_calls(out);
+            self.emit_done(out);
+            return;
+        }
+        out.push(ChatEvent::Error(
+            "the stream ended before the provider announced the end of the generation".to_owned(),
+        ));
+        self.discard_calls(out);
+        self.stop = Some(StopReason::Interrupted);
         self.emit_done(out);
     }
 
@@ -158,7 +213,7 @@ impl ChunkDecoder {
         }
         out.push(ChatEvent::Error(detail));
         self.calls.clear();
-        self.stop = Some(StopReason::Other("flux interrompu".to_owned()));
+        self.stop = Some(StopReason::Interrupted);
         self.emit_done(out);
     }
 
@@ -210,12 +265,26 @@ impl ChunkDecoder {
         }
     }
 
-    /// Clôt tous les appels d'outils rassemblés.
+    /// Jette les appels d'outils sans annonce de fin, en le signalant.
+    ///
+    /// Un appel qui disparaît en silence laisserait l'utilisateur croire que le
+    /// modèle n'a rien demandé.
+    fn discard_calls(&mut self, out: &mut Vec<ChatEvent>) {
+        for (index, partiel) in std::mem::take(&mut self.calls) {
+            if !partiel.name.is_empty() || !partiel.arguments.is_empty() {
+                out.push(ChatEvent::Error(format!(
+                    "tool call #{index} was not finished by the provider and was dropped"
+                )));
+            }
+        }
+    }
+
+    /// Clôt tous les appels d'outils rassemblés, sur une annonce de fin.
     fn flush_calls(&mut self, out: &mut Vec<ChatEvent>) {
         for (index, partiel) in std::mem::take(&mut self.calls) {
             if partiel.name.is_empty() {
                 out.push(ChatEvent::Error(format!(
-                    "appel d'outil n°{index} sans nom : ignoré"
+                    "tool call #{index} has no name and was dropped"
                 )));
                 continue;
             }
@@ -235,6 +304,46 @@ impl ChunkDecoder {
     }
 }
 
+impl EventDecoder for ChunkDecoder {
+    /// Ce protocole ne nomme pas ses trames : seul le champ `data` compte, et
+    /// un éventuel champ `event` est ignoré plutôt que d'inventer un sens.
+    fn on_frame(&mut self, frame: &SseFrame, out: &mut Vec<ChatEvent>) {
+        self.on_data(&frame.data, out);
+    }
+
+    fn is_done(&self) -> bool {
+        Self::is_done(self)
+    }
+
+    fn finish(&mut self, out: &mut Vec<ChatEvent>) {
+        Self::finish(self, out);
+    }
+
+    fn cancel(&mut self, out: &mut Vec<ChatEvent>) {
+        Self::cancel(self, out);
+    }
+
+    fn transport_error(&mut self, detail: String, out: &mut Vec<ChatEvent>) {
+        Self::transport_error(self, detail, out);
+    }
+}
+
+/// Traduit le `finish_reason` des protocoles compatibles OpenAI.
+///
+/// Fonction de ce module et non méthode de [`StopReason`] : le type vit dans
+/// `oxyn-core`, qui ne connaît aucun protocole. Une raison inconnue se
+/// **conserve** plutôt que d'être rabattue sur `EndTurn`, qui ferait passer une
+/// réponse incomplète pour une réponse finie.
+pub(crate) fn stop_reason(raw: &str) -> StopReason {
+    match raw {
+        "stop" => StopReason::EndTurn,
+        "length" => StopReason::MaxTokens,
+        "tool_calls" | "function_call" => StopReason::ToolCalls,
+        "content_filter" => StopReason::ContentFilter,
+        autre => StopReason::Other(autre.to_owned()),
+    }
+}
+
 /// Fabrique un identifiant d'appel quand le serveur n'en donne pas.
 ///
 /// Ollama et `llama.cpp` omettent régulièrement `id`. Sans identifiant, le tour
@@ -248,6 +357,20 @@ fn synthetic_id(index: u32) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn les_raisons_d_arret_d_openai_sont_traduites() {
+        assert_eq!(stop_reason("stop"), StopReason::EndTurn);
+        assert_eq!(stop_reason("length"), StopReason::MaxTokens);
+        assert_eq!(stop_reason("tool_calls"), StopReason::ToolCalls);
+        assert_eq!(stop_reason("function_call"), StopReason::ToolCalls);
+        assert_eq!(stop_reason("content_filter"), StopReason::ContentFilter);
+        assert_eq!(
+            stop_reason("guardrail_intervened"),
+            StopReason::Other("guardrail_intervened".to_owned()),
+            "une raison inconnue se conserve, elle ne se rabat pas sur EndTurn"
+        );
+    }
 
     /// Joue une suite de champs `data` et rend tous les événements produits.
     fn jouer(trames: &[&str]) -> Vec<ChatEvent> {
@@ -327,7 +450,10 @@ mod tests {
         assert!(
             evenements.contains(&ChatEvent::Usage {
                 prompt_tokens: 120,
-                completion_tokens: 8
+                completion_tokens: 8,
+                cache_write_tokens: None,
+                cache_read_tokens: None,
+                reasoning_tokens: None,
             }),
             "{evenements:?}"
         );
@@ -430,15 +556,86 @@ mod tests {
     }
 
     #[test]
-    fn un_flux_ferme_sans_sentinelle_se_termine_quand_meme() {
-        // Plusieurs serveurs locaux ferment sans envoyer `[DONE]`.
-        let evenements = jouer(&[r#"{"choices":[{"delta":{"content":"a"}}]}"#]);
+    fn un_flux_ferme_apres_finish_reason_sans_sentinelle_est_complet() {
+        // La génération a été annoncée finie : l'absence de `[DONE]` ne coûte
+        // que la trame de consommation.
+        let evenements = jouer(&[
+            r#"{"choices":[{"delta":{"content":"a"}}]}"#,
+            r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
+        ]);
+        assert_eq!(textes(&evenements), "a");
+        assert!(
+            !evenements.iter().any(|e| matches!(e, ChatEvent::Error(_))),
+            "{evenements:?}"
+        );
         assert_eq!(
             evenements.last(),
             Some(&ChatEvent::Done {
-                stop_reason: StopReason::Unspecified
-            }),
+                stop_reason: StopReason::EndTurn
+            })
+        );
+    }
+
+    #[test]
+    fn un_flux_ferme_proprement_sans_aucune_annonce_est_interrompu() {
+        // Ni `finish_reason` ni `[DONE]` : un mandataire a fermé en pleine
+        // génération. Rien n'a échoué côté transport, et pourtant la réponse
+        // est coupée.
+        let evenements = jouer(&[r#"{"choices":[{"delta":{"content":"a"}}]}"#]);
+        let Some(ChatEvent::Done { stop_reason }) = evenements.last() else {
+            panic!("le flux doit se terminer : {evenements:?}");
+        };
+        assert_eq!(*stop_reason, StopReason::Interrupted);
+        assert!(stop_reason.is_ambiguous());
+        assert!(
+            evenements.iter().any(|e| matches!(e, ChatEvent::Error(_))),
+            "la coupure doit se voir : {evenements:?}"
+        );
+    }
+
+    #[test]
+    fn un_appel_d_outil_lisible_mais_sans_annonce_de_fin_n_est_jamais_propose() {
+        let evenements = jouer(&[
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"execute","arguments":""}}]}}]}"#,
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"sql\":\"DELETE FROM t\"}"}}]}}]}"#,
+        ]);
+        assert!(
+            !evenements
+                .iter()
+                .any(|e| matches!(e, ChatEvent::ToolCallComplete(_))),
             "{evenements:?}"
+        );
+        assert!(
+            evenements
+                .iter()
+                .any(|e| matches!(e, ChatEvent::Error(m) if m.contains("tool call #0"))),
+            "{evenements:?}"
+        );
+        assert_eq!(
+            evenements.last(),
+            Some(&ChatEvent::Done {
+                stop_reason: StopReason::Interrupted
+            })
+        );
+    }
+
+    #[test]
+    fn une_erreur_dans_le_flux_jette_les_appels_en_cours() {
+        let evenements = jouer(&[
+            r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"execute","arguments":"{}"}}]}}]}"#,
+            r#"{"error":{"message":"overloaded"}}"#,
+        ]);
+        assert!(
+            !evenements
+                .iter()
+                .any(|e| matches!(e, ChatEvent::ToolCallComplete(_))),
+            "{evenements:?}"
+        );
+        assert_eq!(
+            evenements.last(),
+            Some(&ChatEvent::Done {
+                stop_reason: StopReason::ProviderError
+            })
         );
     }
 

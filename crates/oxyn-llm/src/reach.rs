@@ -52,12 +52,19 @@ impl Reach {
     }
 
     /// Nom stable, pour l'affichage et l'audit.
+    ///
+    /// **En anglais**, comme tout ce qui traverse la frontière du code source
+    /// (CLAUDE.md) : cette valeur est montrée telle quelle par l'écran de
+    /// configuration des fournisseurs, et le reste de l'interface d'Oxyn est en
+    /// anglais. Un libellé de domaine dans une autre langue que l'écran qui
+    /// l'affiche oblige chaque appelant à le retraduire — donc à réinventer une
+    /// correspondance par variante, qui divergera.
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
             Self::Local => "local",
-            Self::Remote => "distant",
-            Self::Unresolved => "non résolu",
+            Self::Remote => "remote",
+            Self::Unresolved => "unresolved",
         }
     }
 }
@@ -133,6 +140,33 @@ pub fn resolve_reach(url: &Url) -> Reach {
         }
     }
     if vu { Reach::Local } else { Reach::Unresolved }
+}
+
+/// Classe un point d'accès donné sous forme de chaîne.
+///
+/// C'est la porte d'entrée pour un appelant qui tient une
+/// [`AiProviderConfig::base_url`](oxyn_core::AiProviderConfig) — une `String` —
+/// et n'a aucune raison de dépendre du client HTTP pour analyser une URL.
+///
+/// Une URL **illisible rend [`Reach::Unresolved`]**, jamais une erreur : un
+/// point d'accès qu'on ne sait pas classer compte comme distant partout où une
+/// décision se prend ([`Reach::leaves_machine`] répond déjà `true` dessus).
+/// Rendre un `Result` obligerait chaque appelant à choisir un défaut, et le
+/// mauvais défaut — « local » — est silencieux.
+///
+/// # Bloquant
+///
+/// La résolution DNS de la bibliothèque standard est **bloquante**. Comme
+/// [`resolve_reach`], cette fonction ne doit jamais être appelée depuis le fil
+/// d'interface (I-05), ni depuis une tâche asynchrone sans passer par un pool
+/// bloquant. Elle est faite pour être appelée à l'enregistrement d'un
+/// fournisseur et à chaque ouverture de runtime, pas à chaque requête.
+#[must_use]
+pub fn endpoint_reach(base_url: &str) -> Reach {
+    match Url::parse(base_url) {
+        Ok(url) => resolve_reach(&url),
+        Err(_) => Reach::Unresolved,
+    }
 }
 
 /// Rend une URL montrable, débarrassée de ses identifiants.
@@ -214,6 +248,22 @@ mod tests {
             Reach::Local
         );
         assert_eq!(resolve_reach(&url("https://8.8.8.8/")), Reach::Remote);
+    }
+
+    #[test]
+    fn une_chaine_illisible_ne_beneficie_pas_du_doute() {
+        // Le mauvais défaut serait « local », et il serait silencieux.
+        for brut in ["", "pas une url", "://", "mailto:quelquun@example.com"] {
+            assert_eq!(endpoint_reach(brut), Reach::Unresolved, "{brut}");
+            assert!(endpoint_reach(brut).leaves_machine(), "{brut}");
+        }
+    }
+
+    #[test]
+    fn une_chaine_litterale_se_classe_sans_reseau() {
+        assert_eq!(endpoint_reach("http://127.0.0.1:11434"), Reach::Local);
+        assert_eq!(endpoint_reach("http://[::1]:1234/v1"), Reach::Local);
+        assert_eq!(endpoint_reach("https://93.184.216.34/v1"), Reach::Remote);
     }
 
     #[test]

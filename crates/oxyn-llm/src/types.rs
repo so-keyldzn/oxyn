@@ -32,44 +32,18 @@ use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-/// Qui parle dans un tour de conversation.
+use crate::reasoning::{ReasoningBlock, ReasoningEffort};
+
+/// Qui parle, et pourquoi un flux s'est arrêté.
 ///
-/// L'énumération est **fermée** : ces quatre rôles sont le vocabulaire commun
-/// des trois familles de protocoles supportées, et chaque traduction vers un
-/// protocole doit les couvrir toutes. Ajouter un rôle doit casser la
-/// compilation de chaque fournisseur, pas être silencieusement ignoré.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-#[serde(rename_all = "lowercase")]
-pub enum Role {
-    /// Consigne de cadrage, posée par Oxyn et jamais par l'utilisateur.
-    System,
-    /// Tour de l'utilisateur — ou du contexte qu'Oxyn assemble pour lui.
-    User,
-    /// Tour du modèle.
-    Assistant,
-    /// Résultat de l'exécution d'un outil, renvoyé au modèle.
-    Tool,
-}
-
-impl Role {
-    /// Nom stable, celui qui part sur le fil pour les protocoles compatibles
-    /// OpenAI.
-    #[must_use]
-    pub const fn as_str(&self) -> &'static str {
-        match self {
-            Self::System => "system",
-            Self::User => "user",
-            Self::Assistant => "assistant",
-            Self::Tool => "tool",
-        }
-    }
-}
-
-impl fmt::Display for Role {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
+/// Définis dans [`oxyn_core::ai`] et ré-exportés ici : ils sont **persistés**
+/// avec la conversation, et la persistance ne doit pas dépendre d'un client
+/// HTTP pour les lire. Une seule définition dans le dépôt, comme
+/// [`ProviderId`](crate::provider::ProviderId).
+///
+/// La traduction depuis une chaîne de protocole, elle, reste chez chaque
+/// fournisseur : le cœur ne connaît aucun protocole.
+pub use oxyn_core::ai::{Role, StopReason};
 
 /// Un tour de conversation.
 ///
@@ -90,6 +64,38 @@ pub struct ChatMessage {
     /// [`Role::Tool`], absent partout ailleurs.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
+    /// Blocs de raisonnement produits par le modèle pendant ce tour.
+    ///
+    /// Toujours vide hors [`Role::Assistant`]. Ils sont conservés **tels
+    /// quels** et renvoyés au tour suivant : c'est ce que les protocoles
+    /// exigent quand un tour de raisonnement précède un appel d'outil, et un
+    /// bloc reconstruit fait refuser la requête
+    /// ([`crate::reasoning`]).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub reasoning: Vec<ReasoningBlock>,
+    /// Ce message termine-t-il un préfixe **stable** de la conversation ?
+    ///
+    /// C'est une indication de mise en cache, pas un ordre : un fournisseur qui
+    /// sait réutiliser un préfixe pose sa marque ici, les autres l'ignorent.
+    /// La cible naturelle est le contexte assemblé par `oxyn-ai`, qui ne change
+    /// pas d'un tour à l'autre alors que la question de l'utilisateur, si.
+    ///
+    /// Marquer un message qui **change** à chaque tour n'est pas une erreur,
+    /// c'est simplement inutile : le préfixe ne sera jamais retrouvé.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub cache_breakpoint: bool,
+}
+
+/// Prédicat de sérialisation : omet un drapeau faux.
+///
+/// `bool::then` ne convient pas ici — `skip_serializing_if` veut une fonction
+/// nommée prenant une référence.
+#[expect(
+    clippy::trivially_copy_pass_by_ref,
+    reason = "signature imposée par serde's skip_serializing_if"
+)]
+const fn is_false(value: &bool) -> bool {
+    !*value
 }
 
 impl ChatMessage {
@@ -101,6 +107,8 @@ impl ChatMessage {
             content: content.into(),
             tool_calls: Vec::new(),
             tool_call_id: None,
+            reasoning: Vec::new(),
+            cache_breakpoint: false,
         }
     }
 
@@ -133,6 +141,8 @@ impl ChatMessage {
             content: content.into(),
             tool_calls: Vec::new(),
             tool_call_id: Some(call_id.into()),
+            reasoning: Vec::new(),
+            cache_breakpoint: false,
         }
     }
 
@@ -140,6 +150,26 @@ impl ChatMessage {
     #[must_use]
     pub fn with_tool_calls(mut self, calls: Vec<ToolCall>) -> Self {
         self.tool_calls = calls;
+        self
+    }
+
+    /// Attache les blocs de raisonnement d'un tour d'assistant.
+    ///
+    /// À passer **tels qu'ils ont été reçus**, dans l'ordre : c'est la
+    /// condition pour que le tour suivant soit accepté
+    /// ([`crate::reasoning`]).
+    #[must_use]
+    pub fn with_reasoning(mut self, blocks: Vec<ReasoningBlock>) -> Self {
+        self.reasoning = blocks;
+        self
+    }
+
+    /// Marque ce message comme fin d'un préfixe stable.
+    ///
+    /// Voir [`ChatMessage::cache_breakpoint`].
+    #[must_use]
+    pub const fn cached(mut self) -> Self {
+        self.cache_breakpoint = true;
         self
     }
 }
@@ -151,6 +181,11 @@ impl fmt::Debug for ChatMessage {
             .field("content", &Masked(self.content.len()))
             .field("tool_calls", &self.tool_calls.len())
             .field("tool_call_id", &self.tool_call_id)
+            // Compté et non rendu : un bloc de raisonnement reprend le contexte
+            // qu'on a donné au modèle, et ce message sort d'une conversation
+            // dont le contenu est masqué juste au-dessus.
+            .field("reasoning", &self.reasoning.len())
+            .field("cache_breakpoint", &self.cache_breakpoint)
             .finish()
     }
 }
@@ -254,6 +289,31 @@ pub struct ChatRequest {
     /// Il ne désactive rien.
     #[serde(default = "vrai")]
     pub stream: bool,
+    /// Combien de travail on demande au modèle. `None` laisse le défaut du
+    /// fournisseur, qui n'est pas le même partout.
+    ///
+    /// Un fournisseur qui ne connaît pas ce réglage **l'omet** ; un modèle qui
+    /// le refuse explicitement produit un
+    /// [`LlmError::Unsupported`](crate::error::LlmError::Unsupported). Ce qui
+    /// n'arrive jamais, c'est qu'il parte à l'aveugle : plusieurs points
+    /// d'accès rejettent la requête entière sur un champ inconnu.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_effort: Option<ReasoningEffort>,
+    /// Plafond de jetons que le modèle peut dépenser à réfléchir.
+    ///
+    /// Distinct de [`max_tokens`](Self::max_tokens), qui borne **toute** la
+    /// production — réflexion comprise chez les fournisseurs qui facturent la
+    /// réflexion comme de la sortie. Un budget supérieur au plafond global est
+    /// une contradiction que le fournisseur signale.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reasoning_budget_tokens: Option<u32>,
+    /// Les définitions d'outils sont-elles un préfixe stable ?
+    ///
+    /// Même nature que [`ChatMessage::cache_breakpoint`] : une indication, pas
+    /// un ordre. Les outils d'Oxyn viennent du bus de commandes et ne changent
+    /// pas d'un tour à l'autre, ce qui en fait une cible évidente.
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub cache_tools: bool,
 }
 
 /// Valeur par défaut de [`ChatRequest::stream`] à la désérialisation.
@@ -272,6 +332,9 @@ impl ChatRequest {
             temperature: None,
             max_tokens: None,
             stream: true,
+            reasoning_effort: None,
+            reasoning_budget_tokens: None,
+            cache_tools: false,
         }
     }
 
@@ -294,6 +357,37 @@ impl ChatRequest {
     pub fn with_max_tokens(mut self, max_tokens: u32) -> Self {
         self.max_tokens = Some(max_tokens);
         self
+    }
+
+    /// Fixe l'effort de raisonnement.
+    #[must_use]
+    pub const fn with_reasoning_effort(mut self, effort: ReasoningEffort) -> Self {
+        self.reasoning_effort = Some(effort);
+        self
+    }
+
+    /// Fixe le budget de réflexion, en jetons.
+    #[must_use]
+    pub const fn with_reasoning_budget_tokens(mut self, tokens: u32) -> Self {
+        self.reasoning_budget_tokens = Some(tokens);
+        self
+    }
+
+    /// Déclare les définitions d'outils comme préfixe stable.
+    #[must_use]
+    pub const fn with_cached_tools(mut self) -> Self {
+        self.cache_tools = true;
+        self
+    }
+
+    /// L'appelant demande-t-il du raisonnement, d'une façon ou d'une autre ?
+    ///
+    /// Sert aux fournisseurs qui doivent refuser plutôt qu'omettre : un effort
+    /// demandé et silencieusement ignoré fait payer une réponse qui n'est pas
+    /// celle qu'on a demandée.
+    #[must_use]
+    pub const fn wants_reasoning(&self) -> bool {
+        self.reasoning_effort.is_some() || self.reasoning_budget_tokens.is_some()
     }
 
     /// Nombre total d'octets de contenu envoyés.
@@ -320,54 +414,10 @@ impl fmt::Debug for ChatRequest {
             .field("temperature", &self.temperature)
             .field("max_tokens", &self.max_tokens)
             .field("stream", &self.stream)
+            .field("reasoning_effort", &self.reasoning_effort)
+            .field("reasoning_budget_tokens", &self.reasoning_budget_tokens)
+            .field("cache_tools", &self.cache_tools)
             .finish()
-    }
-}
-
-/// Raison pour laquelle un flux s'est arrêté.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[non_exhaustive]
-pub enum StopReason {
-    /// Le modèle a terminé son tour.
-    EndTurn,
-    /// Le plafond de jetons a été atteint : la réponse est **tronquée**.
-    MaxTokens,
-    /// Le modèle demande l'exécution d'outils avant de continuer.
-    ToolCalls,
-    /// Le fournisseur a interrompu pour cause de filtrage de contenu.
-    ContentFilter,
-    /// L'appelant a annulé via le `CancelToken`.
-    Cancelled,
-    /// Le flux s'est terminé sans que le fournisseur en donne la raison.
-    Unspecified,
-    /// Raison propre au fournisseur, conservée telle quelle plutôt que
-    /// rabattue sur une variante voisine.
-    Other(String),
-}
-
-impl StopReason {
-    /// Traduit le `finish_reason` des protocoles compatibles OpenAI.
-    #[must_use]
-    pub fn from_openai(raw: &str) -> Self {
-        match raw {
-            "stop" => Self::EndTurn,
-            "length" => Self::MaxTokens,
-            "tool_calls" | "function_call" => Self::ToolCalls,
-            "content_filter" => Self::ContentFilter,
-            autre => Self::Other(autre.to_owned()),
-        }
-    }
-
-    /// La réponse est-elle incomplète du fait de l'arrêt ?
-    ///
-    /// À montrer dans l'interface : une réponse coupée au plafond de jetons qui
-    /// ne le dit pas ressemble à une réponse fausse.
-    #[must_use]
-    pub const fn is_truncated(&self) -> bool {
-        matches!(
-            self,
-            Self::MaxTokens | Self::ContentFilter | Self::Cancelled
-        )
     }
 }
 
@@ -401,12 +451,53 @@ pub enum ChatEvent {
     },
     /// Un appel d'outil est complet et ses arguments sont analysés.
     ToolCallComplete(ToolCall),
+    /// Fragment de raisonnement **rédigé**, à concaténer.
+    ///
+    /// N'arrive que si le fournisseur accepte de montrer le raisonnement. Un
+    /// bloc chiffré ne produit aucun fragment : il n'y a rien à montrer.
+    ReasoningDelta {
+        /// Position du bloc dans le tour. Deux blocs de raisonnement peuvent
+        /// se succéder autour d'un appel d'outil.
+        index: u32,
+        /// Morceau de texte, brut.
+        text: String,
+    },
+    /// Un bloc de raisonnement est complet.
+    ///
+    /// À **conserver tel quel** et à replacer dans le tour d'assistant
+    /// ([`ChatMessage::reasoning`]) : sans lui, le tour suivant est refusé par
+    /// les fournisseurs qui signent leurs blocs.
+    ReasoningComplete {
+        /// Position du bloc dans le tour.
+        index: u32,
+        /// Le bloc, à transporter sans le modifier.
+        block: ReasoningBlock,
+    },
+    /// Fragment d'un refus du modèle, à concaténer.
+    ///
+    /// Un refus n'est pas une erreur : la requête a abouti, le modèle a
+    /// répondu qu'il ne répondrait pas. Le distinguer d'un
+    /// [`TextDelta`](Self::TextDelta) permet à l'interface de ne pas le
+    /// présenter comme une réponse.
+    RefusalDelta(String),
     /// Consommation déclarée par le fournisseur.
+    ///
+    /// Les quatre derniers champs sont `Option` et non `0` : « non déclaré »
+    /// et « zéro » sont deux faits différents, et afficher « 0 jeton lu en
+    /// cache » là où le fournisseur n'a rien dit ferait croire à un cache qui
+    /// ne fonctionne pas.
     Usage {
-        /// Jetons d'entrée facturés.
+        /// Jetons d'entrée facturés, hors cache.
         prompt_tokens: u32,
         /// Jetons produits.
         completion_tokens: u32,
+        /// Jetons **écrits** dans le cache de préfixe.
+        cache_write_tokens: Option<u32>,
+        /// Jetons **lus** dans le cache de préfixe. Ils ne sont pas dans
+        /// `prompt_tokens` : le total d'entrée est la somme des trois.
+        cache_read_tokens: Option<u32>,
+        /// Jetons dépensés à réfléchir, quand le fournisseur les isole.
+        reasoning_tokens: Option<u32>,
     },
     /// Fin du flux. Émis **exactement une fois**, en dernier.
     Done {
@@ -534,6 +625,18 @@ pub struct ModelInfo {
     pub supports_tools: Support,
     /// Le modèle accepte-t-il la diffusion incrémentale ?
     pub supports_streaming: Support,
+    /// Le modèle sait-il raisonner — effort, budget, ou les deux ?
+    ///
+    /// `Unknown` est le cas courant : la plupart des points d'accès listent
+    /// leurs modèles sans rien déclarer. C'est ce qui décide si un
+    /// [`ChatRequest::reasoning_effort`] est omis ou refusé.
+    pub supports_reasoning: Support,
+    /// Niveaux d'effort que le modèle accepte, quand le fournisseur les
+    /// publie. Vide signifie « non déclaré », jamais « aucun ».
+    ///
+    /// Ordonné et sans doublon : c'est une liste montrée à l'utilisateur, et
+    /// elle ne doit pas se réordonner d'une ouverture à l'autre.
+    pub reasoning_efforts: Vec<ReasoningEffort>,
     /// Tarif déclaré par le fournisseur, s'il en publie un.
     pub cost: Option<Cost>,
 }
@@ -549,6 +652,8 @@ impl ModelInfo {
             context_window: None,
             supports_tools: Support::Unknown,
             supports_streaming: Support::Unknown,
+            supports_reasoning: Support::Unknown,
+            reasoning_efforts: Vec::new(),
             cost: None,
         }
     }
@@ -578,6 +683,24 @@ impl ModelInfo {
     #[must_use]
     pub fn with_streaming_support(mut self, support: Support) -> Self {
         self.supports_streaming = support;
+        self
+    }
+
+    /// Déclare la prise en charge du raisonnement.
+    #[must_use]
+    pub fn with_reasoning_support(mut self, support: Support) -> Self {
+        self.supports_reasoning = support;
+        self
+    }
+
+    /// Déclare les niveaux d'effort acceptés.
+    ///
+    /// La liste est triée et dédoublonnée : elle est montrée telle quelle.
+    #[must_use]
+    pub fn with_reasoning_efforts(mut self, mut efforts: Vec<ReasoningEffort>) -> Self {
+        efforts.sort_unstable();
+        efforts.dedup();
+        self.reasoning_efforts = efforts;
         self
     }
 
@@ -638,34 +761,6 @@ mod tests {
     }
 
     #[test]
-    fn les_raisons_d_arret_d_openai_sont_traduites() {
-        assert_eq!(StopReason::from_openai("stop"), StopReason::EndTurn);
-        assert_eq!(StopReason::from_openai("length"), StopReason::MaxTokens);
-        assert_eq!(StopReason::from_openai("tool_calls"), StopReason::ToolCalls);
-        assert_eq!(
-            StopReason::from_openai("function_call"),
-            StopReason::ToolCalls
-        );
-        assert_eq!(
-            StopReason::from_openai("content_filter"),
-            StopReason::ContentFilter
-        );
-        assert_eq!(
-            StopReason::from_openai("guardrail_intervened"),
-            StopReason::Other("guardrail_intervened".to_owned()),
-            "une raison inconnue se conserve, elle ne se rabat pas sur EndTurn"
-        );
-    }
-
-    #[test]
-    fn une_reponse_coupee_se_signale() {
-        assert!(StopReason::MaxTokens.is_truncated());
-        assert!(StopReason::Cancelled.is_truncated());
-        assert!(!StopReason::EndTurn.is_truncated());
-        assert!(!StopReason::ToolCalls.is_truncated());
-    }
-
-    #[test]
     fn une_capacite_inconnue_ne_promet_ni_ne_masque() {
         let inconnue = Support::default();
         assert_eq!(inconnue, Support::Unknown);
@@ -705,5 +800,130 @@ mod tests {
         let json = serde_json::to_string(&req).expect("sérialisation");
         let relue: ChatRequest = serde_json::from_str(&json).expect("désérialisation");
         assert_eq!(relue, req);
+    }
+
+    #[test]
+    fn une_requete_neuve_ne_demande_ni_effort_ni_budget() {
+        // Le défaut doit rester « ce que le fournisseur fait d'habitude » :
+        // imposer un effort ferait payer un raisonnement que personne n'a
+        // demandé.
+        let req = ChatRequest::new("m", vec![ChatMessage::user("a")]);
+        assert_eq!(req.reasoning_effort, None);
+        assert_eq!(req.reasoning_budget_tokens, None);
+        assert!(!req.wants_reasoning());
+        assert!(!req.cache_tools);
+    }
+
+    #[test]
+    fn les_reglages_de_raisonnement_survivent_a_un_aller_retour() {
+        let req = ChatRequest::new("m", vec![ChatMessage::user("a")])
+            .with_reasoning_effort(ReasoningEffort::XHigh)
+            .with_reasoning_budget_tokens(8192)
+            .with_cached_tools();
+        assert!(req.wants_reasoning());
+
+        let json = serde_json::to_value(&req).expect("sérialisation");
+        assert_eq!(json["reasoning_effort"], "xhigh");
+        assert_eq!(json["reasoning_budget_tokens"], 8192);
+        assert_eq!(json["cache_tools"], true);
+
+        let relue: ChatRequest = serde_json::from_value(json).expect("désérialisation");
+        assert_eq!(relue, req);
+    }
+
+    #[test]
+    fn un_reglage_absent_ne_part_pas_sur_le_fil() {
+        // Plusieurs points d'accès rejettent la requête entière sur un champ
+        // inconnu : un `null` n'est pas une omission.
+        let req = ChatRequest::new("m", vec![ChatMessage::user("a")]);
+        let json = serde_json::to_value(&req).expect("sérialisation");
+        assert!(json.get("reasoning_effort").is_none(), "{json}");
+        assert!(json.get("reasoning_budget_tokens").is_none(), "{json}");
+        assert!(json.get("cache_tools").is_none(), "{json}");
+    }
+
+    #[test]
+    fn un_bloc_de_raisonnement_se_rattache_au_tour_d_assistant() {
+        let blocs = vec![
+            ReasoningBlock::summarized("je compte", Some("sig".to_owned())),
+            ReasoningBlock::redacted("chiffre"),
+        ];
+        let msg = ChatMessage::assistant("42").with_reasoning(blocs.clone());
+        assert_eq!(msg.reasoning, blocs);
+
+        // Le tour se sérialise et se relit à l'identique : c'est la condition
+        // pour que le tour suivant soit accepté.
+        let json = serde_json::to_string(&msg).expect("sérialisation");
+        let relu: ChatMessage = serde_json::from_str(&json).expect("désérialisation");
+        assert_eq!(relu.reasoning, blocs);
+    }
+
+    #[test]
+    fn le_debug_d_un_message_ne_montre_pas_le_raisonnement() {
+        // Un bloc de raisonnement reprend ce qu'on a donné au modèle — au
+        // niveau `Sampled`, des lignes de la base (I-03).
+        let msg = ChatMessage::assistant("ok").with_reasoning(vec![ReasoningBlock::summarized(
+            "la table patients a une colonne hiv_status",
+            None,
+        )]);
+        let rendu = format!("{msg:?}");
+        assert!(!rendu.contains("hiv_status"), "{rendu}");
+        assert!(rendu.contains("reasoning"), "{rendu}");
+    }
+
+    #[test]
+    fn un_message_marque_comme_stable_le_reste_apres_serialisation() {
+        let msg = ChatMessage::system("contexte du schéma").cached();
+        assert!(msg.cache_breakpoint);
+        let json = serde_json::to_value(&msg).expect("sérialisation");
+        assert_eq!(json["cache_breakpoint"], true);
+
+        let ordinaire = ChatMessage::user("et les doublons ?");
+        let json = serde_json::to_value(&ordinaire).expect("sérialisation");
+        assert!(
+            json.get("cache_breakpoint").is_none(),
+            "un drapeau faux ne part pas : {json}"
+        );
+    }
+
+    #[test]
+    fn une_fiche_de_modele_n_affirme_rien_sur_le_raisonnement_par_defaut() {
+        let fiche = ModelInfo::new("llama3.2");
+        assert_eq!(fiche.supports_reasoning, Support::Unknown);
+        assert!(fiche.reasoning_efforts.is_empty());
+
+        let declaree = ModelInfo::new("m")
+            .with_reasoning_support(Support::Yes)
+            .with_reasoning_efforts(vec![
+                ReasoningEffort::High,
+                ReasoningEffort::Low,
+                ReasoningEffort::High,
+            ]);
+        assert_eq!(
+            declaree.reasoning_efforts,
+            vec![ReasoningEffort::Low, ReasoningEffort::High],
+            "la liste est triée et dédoublonnée : elle est montrée telle quelle"
+        );
+    }
+
+    #[test]
+    fn une_consommation_non_declaree_se_distingue_d_un_zero() {
+        let evenement = ChatEvent::Usage {
+            prompt_tokens: 10,
+            completion_tokens: 2,
+            cache_write_tokens: None,
+            cache_read_tokens: Some(0),
+            reasoning_tokens: None,
+        };
+        let ChatEvent::Usage {
+            cache_write_tokens,
+            cache_read_tokens,
+            ..
+        } = evenement
+        else {
+            panic!("variante inattendue");
+        };
+        assert_eq!(cache_write_tokens, None, "le fournisseur n'a rien dit");
+        assert_eq!(cache_read_tokens, Some(0), "le fournisseur a dit zéro");
     }
 }

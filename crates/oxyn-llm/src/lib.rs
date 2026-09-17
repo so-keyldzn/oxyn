@@ -15,7 +15,9 @@
 //! | [`types`] | le vocabulaire d'un échange : messages, outils, événements, modèles |
 //! | [`provider`] | le trait [`LlmProvider`] et le [`ProviderRegistry`] |
 //! | [`openai_compatible`] | **une** implémentation pour sept fournisseurs |
-//! | [`anthropic`], [`gemini`] | protocoles propres — requête écrite, envoi en phase 2 |
+//! | [`anthropic`] | le protocole `/v1/messages`, complet |
+//! | [`gemini`] | protocole propre — requête écrite, envoi à faire |
+//! | [`reasoning`] | effort, budget, et les blocs qu'on renvoie tels quels |
 //! | [`error`] | [`LlmError`] et sa projection sur le domaine |
 //! | [`secret`] | [`ApiKey`], qui ne s'affiche jamais |
 //! | [`reach`] | local ou distant, décidé après résolution et non sur le nom |
@@ -36,6 +38,11 @@
 //! protocoles diffèrent là où Oxyn a besoin qu'ils soient exacts — les appels
 //! d'outils — et un adaptateur commun y serait faux
 //! ([`ARCHITECTURE` §7.5](../../docs/ARCHITECTURE.md)).
+//!
+//! Ce qu'ils partagent est **le pilote de flux**, pas le décodage : la garantie
+//! « exactement un [`ChatEvent::Done`], en dernier, quelle que soit la sortie »
+//! est tenue à un seul endroit, et chaque protocole n'y branche que sa lecture
+//! de trames. Deux pilotes en parallèle divergeraient au premier ajout.
 //!
 //! **Ce qui sort ne s'affiche pas.** [`ApiKey`] masque son `Debug` et n'a pas de
 //! `Display` ; [`ChatMessage`] et [`ChatRequest`] masquent leur contenu, parce
@@ -91,6 +98,7 @@ pub mod gemini;
 pub mod openai_compatible;
 pub mod provider;
 pub mod reach;
+pub mod reasoning;
 pub mod secret;
 pub mod types;
 
@@ -99,6 +107,13 @@ pub mod types;
 /// Interne : c'est un détail de transport, et l'exposer inviterait à écrire un
 /// fournisseur qui court-circuite [`LlmProvider`].
 mod sse;
+
+/// Le pilote de flux annulable, partagé lui aussi.
+///
+/// Interne pour la même raison que [`sse`] : c'est lui qui garantit qu'un
+/// `Done` est émis exactement une fois, et cette garantie ne vaut que parce
+/// qu'aucun fournisseur ne peut assembler son flux autrement.
+mod stream;
 
 /// Ré-exporté depuis `oxyn-core` : le jeton apparaît dans la signature de
 /// [`LlmProvider::stream`], et un appelant ne devrait pas avoir à dépendre du
@@ -109,8 +124,9 @@ pub use anthropic::AnthropicProvider;
 pub use error::LlmError;
 pub use gemini::GeminiProvider;
 pub use openai_compatible::{AuthStyle, OpenAiCompatibleProvider};
-pub use provider::{LlmProvider, ProviderId, ProviderRegistry};
-pub use reach::Reach;
+pub use provider::{LlmProvider, ProviderId, ProviderRegistry, build_provider};
+pub use reach::{Reach, endpoint_reach};
+pub use reasoning::{ReasoningBlock, ReasoningEffort};
 pub use secret::ApiKey;
 pub use types::{
     ChatEvent, ChatMessage, ChatRequest, Cost, ModelInfo, Role, StopReason, Support, ToolCall,
@@ -127,8 +143,9 @@ pub mod prelude {
 
     pub use crate::error::LlmError;
     pub use crate::openai_compatible::OpenAiCompatibleProvider;
-    pub use crate::provider::{LlmProvider, ProviderId, ProviderRegistry};
-    pub use crate::reach::Reach;
+    pub use crate::provider::{LlmProvider, ProviderId, ProviderRegistry, build_provider};
+    pub use crate::reach::{Reach, endpoint_reach};
+    pub use crate::reasoning::{ReasoningBlock, ReasoningEffort};
     pub use crate::secret::ApiKey;
     pub use crate::types::{
         ChatEvent, ChatMessage, ChatRequest, Cost, ModelInfo, Role, StopReason, Support, ToolCall,

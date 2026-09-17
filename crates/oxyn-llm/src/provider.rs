@@ -10,6 +10,20 @@
 //! d'environnement au démarrage, ni ne « détecte » un Ollama qui tournerait sur
 //! la machine. Un fournisseur existe parce que l'utilisateur l'a inscrit.
 //!
+//! # `ProviderId` vit dans `oxyn-core`, et c'est le sujet
+//!
+//! [`ProviderId`] est défini dans [`oxyn_core::ai`] et ré-exporté ici. Il n'y a
+//! **qu'une** définition dans le dépôt, pour la même raison que
+//! [`PrivacyTier`](oxyn_core::PrivacyTier) : une
+//! [`Command`](oxyn_core::Command) porte l'identité d'un fournisseur — c'est le
+//! bus qui le déclare, le liste et le retire —, et `oxyn-core` ne peut pas
+//! dépendre d'`oxyn-llm`
+//! ([ADR-0023](../../../docs/adr/0023-fournisseurs-declares-et-provenance.md)).
+//!
+//! Ce module ne garde donc que ce qui a besoin d'un transport : le trait, le
+//! registre, et la fabrique qui traduit une
+//! [`oxyn_core::AiProviderKind`] en implémentation concrète.
+//!
 //! # Pourquoi un trait
 //!
 //! Trois familles de protocoles incompatibles (compatible OpenAI, Anthropic,
@@ -19,182 +33,18 @@
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::str::FromStr;
 use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
 use async_trait::async_trait;
 use futures::stream::BoxStream;
-use oxyn_core::{CancelToken, IdParseError, Result};
+use oxyn_core::{AiProviderKind, CancelToken, Result};
 use reqwest::Url;
-use serde::{Deserialize, Serialize};
 
+use crate::error::LlmError;
+use crate::secret::ApiKey;
 use crate::types::{ChatEvent, ChatRequest, ModelInfo};
 
-/// Identifiant stable d'un fournisseur de modèles.
-///
-/// Mêmes contraintes que `DriverId` et pour la même raison : cette valeur finit
-/// dans un fichier de workspace et dans une clé de trousseau. Minuscules ASCII,
-/// chiffres, `-` et `_`, première lettre alphabétique, 32 caractères au plus.
-///
-/// L'identifiant nomme une **configuration**, pas un protocole : `ollama`,
-/// `lm-studio` et `openai` partagent la même implémentation, et ce sont
-/// pourtant trois fournisseurs distincts pour l'utilisateur — trois points
-/// d'accès, trois niveaux de sortie de données.
-#[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
-#[serde(try_from = "String", into = "String")]
-pub struct ProviderId(Arc<str>);
-
-impl ProviderId {
-    /// Ollama, en local.
-    pub const OLLAMA: &'static str = "ollama";
-    /// LM Studio, en local.
-    pub const LM_STUDIO: &'static str = "lm-studio";
-    /// `llama.cpp` et son serveur HTTP, en local.
-    pub const LLAMA_CPP: &'static str = "llama-cpp";
-    /// L'API d'OpenAI.
-    pub const OPENAI: &'static str = "openai";
-    /// Azure OpenAI Service.
-    pub const AZURE_OPENAI: &'static str = "azure-openai";
-    /// OpenRouter, passerelle multi-fournisseurs.
-    pub const OPENROUTER: &'static str = "openrouter";
-    /// L'API d'Anthropic (protocole propre, cf. [`crate::anthropic`]).
-    pub const ANTHROPIC: &'static str = "anthropic";
-    /// L'API Gemini de Google (protocole propre, cf. [`crate::gemini`]).
-    pub const GEMINI: &'static str = "gemini";
-
-    /// Construit un identifiant après validation.
-    ///
-    /// # Erreurs
-    /// Renvoie [`IdParseError`] si la chaîne est vide, dépasse 32 caractères,
-    /// ne commence pas par une lettre minuscule ASCII, ou contient un caractère
-    /// hors `[a-z0-9_-]`. La valeur fautive n'est jamais reprise dans le
-    /// message.
-    pub fn new(name: impl AsRef<str>) -> std::result::Result<Self, IdParseError> {
-        let name = name.as_ref();
-        if name.is_empty() {
-            return Err(IdParseError::new("ProviderId", "la chaîne est vide"));
-        }
-        if name.len() > 32 {
-            return Err(IdParseError::new("ProviderId", "plus de 32 caractères"));
-        }
-        if !name.starts_with(|c: char| c.is_ascii_lowercase()) {
-            return Err(IdParseError::new(
-                "ProviderId",
-                "doit commencer par une lettre minuscule ASCII",
-            ));
-        }
-        if !name
-            .chars()
-            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-' || c == '_')
-        {
-            return Err(IdParseError::new(
-                "ProviderId",
-                "caractères autorisés : a-z, 0-9, `-`, `_`",
-            ));
-        }
-        Ok(Self(Arc::from(name)))
-    }
-
-    /// Construit un identifiant dont la validité est garantie par ce module.
-    fn known(name: &'static str) -> Self {
-        debug_assert!(Self::new(name).is_ok(), "constante de fournisseur invalide");
-        Self(Arc::from(name))
-    }
-
-    /// Identifiant d'Ollama.
-    #[must_use]
-    pub fn ollama() -> Self {
-        Self::known(Self::OLLAMA)
-    }
-
-    /// Identifiant de LM Studio.
-    #[must_use]
-    pub fn lm_studio() -> Self {
-        Self::known(Self::LM_STUDIO)
-    }
-
-    /// Identifiant de `llama.cpp`.
-    #[must_use]
-    pub fn llama_cpp() -> Self {
-        Self::known(Self::LLAMA_CPP)
-    }
-
-    /// Identifiant d'OpenAI.
-    #[must_use]
-    pub fn openai() -> Self {
-        Self::known(Self::OPENAI)
-    }
-
-    /// Identifiant d'Azure OpenAI.
-    #[must_use]
-    pub fn azure_openai() -> Self {
-        Self::known(Self::AZURE_OPENAI)
-    }
-
-    /// Identifiant d'OpenRouter.
-    #[must_use]
-    pub fn openrouter() -> Self {
-        Self::known(Self::OPENROUTER)
-    }
-
-    /// Identifiant d'Anthropic.
-    #[must_use]
-    pub fn anthropic() -> Self {
-        Self::known(Self::ANTHROPIC)
-    }
-
-    /// Identifiant de Gemini.
-    #[must_use]
-    pub fn gemini() -> Self {
-        Self::known(Self::GEMINI)
-    }
-
-    /// Vue empruntée de l'identifiant.
-    #[must_use]
-    pub fn as_str(&self) -> &str {
-        &self.0
-    }
-}
-
-impl fmt::Debug for ProviderId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "ProviderId({:?})", self.as_str())
-    }
-}
-
-impl fmt::Display for ProviderId {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
-}
-
-impl AsRef<str> for ProviderId {
-    fn as_ref(&self) -> &str {
-        self.as_str()
-    }
-}
-
-impl FromStr for ProviderId {
-    type Err = IdParseError;
-
-    fn from_str(s: &str) -> std::result::Result<Self, Self::Err> {
-        Self::new(s)
-    }
-}
-
-impl TryFrom<String> for ProviderId {
-    type Error = IdParseError;
-
-    fn try_from(value: String) -> std::result::Result<Self, Self::Error> {
-        Self::new(value)
-    }
-}
-
-impl From<ProviderId> for String {
-    fn from(id: ProviderId) -> Self {
-        id.as_str().to_owned()
-    }
-}
+pub use oxyn_core::ai::ProviderId;
 
 /// Normalise une URL de base pour que [`Url::join`] **ajoute** au lieu de
 /// remplacer.
@@ -243,6 +93,27 @@ pub trait LlmProvider: fmt::Debug + Send + Sync {
     /// transitoire, et c'est ce qui permet à l'interface de proposer « réessayer »
     /// plutôt que « reconfigurer ».
     async fn models(&self) -> Result<Vec<ModelInfo>>;
+
+    /// Compte les jetons d'entrée d'une requête, si le fournisseur sait le
+    /// faire.
+    ///
+    /// Rend `Ok(None)` par défaut, et c'est la réponse de la plupart des
+    /// fournisseurs : **aucun** point d'accès compatible OpenAI n'expose ce
+    /// service. `None` signifie « je ne sais pas compter », jamais « zéro » —
+    /// un appelant qui traiterait les deux pareil afficherait une invite vide.
+    ///
+    /// Le compte est une **estimation** du fournisseur, pas une facture : il
+    /// peut différer de ce qui sera réellement décompté, et il dépend du
+    /// modèle visé.
+    ///
+    /// # Erreurs
+    /// Les mêmes qu'un échange ordinaire : réseau, statut d'échec, réponse
+    /// illisible. Un fournisseur qui ne sait pas compter ne produit **pas**
+    /// d'erreur — il rend `None`.
+    async fn count_tokens(&self, request: &ChatRequest) -> Result<Option<u32>> {
+        let _ = request;
+        Ok(None)
+    }
 
     /// Lance une génération et rend le flux d'événements.
     ///
@@ -364,6 +235,109 @@ impl ProviderRegistry {
     }
 }
 
+/// Construit le transport d'une déclaration de fournisseur.
+///
+/// C'est le seul endroit du dépôt qui traduit une
+/// [`AiProviderKind`] en implémentation concrète : `oxyn-llm` est la seule
+/// crate qui connaît [`AnthropicProvider`](crate::AnthropicProvider),
+/// [`GeminiProvider`](crate::GeminiProvider) et
+/// [`OpenAiCompatibleProvider`](crate::OpenAiCompatibleProvider), et ranger
+/// cette traduction dans le câblage y
+/// ferait descendre une règle de domaine.
+///
+/// # Une clé absente n'est pas toujours une erreur
+///
+/// Ollama, LM Studio et `llama.cpp` n'en demandent pas : sous
+/// [`OpenAiCompatible`](AiProviderKind::OpenAiCompatible), `key` peut être
+/// `None` et la requête part sans en-tête d'authentification. Les trois autres
+/// familles l'exigent, et le manque est signalé **ici**, localement, plutôt que
+/// par un `401` que l'utilisateur lirait comme un problème de compte
+/// ([`LlmError::MissingApiKey`]).
+///
+/// # Elle ne classe rien
+///
+/// Aucune résolution DNS, aucun appel à [`resolve_reach`](crate::reach::resolve_reach) :
+/// le classement local/distant se recalcule ailleurs, à chaque ouverture de
+/// runtime, et ne se persiste jamais
+/// ([ADR-0023](../../../docs/adr/0023-fournisseurs-declares-et-provenance.md)).
+/// [`OpenAiCompatible`](AiProviderKind::OpenAiCompatible) couvre aussi bien un
+/// Ollama sur la boucle locale qu'une passerelle dans le nuage ; la fabrique ne
+/// peut pas les distinguer et n'essaie pas.
+///
+/// # Identité du fournisseur construit
+///
+/// [`LlmProvider::id`] rend l'identifiant **de la famille**, pas celui de la
+/// déclaration : deux déclarations d'une même famille inscrites dans un même
+/// [`ProviderRegistry`] se remplacent donc. Le chemin nominal n'en passe pas
+/// par là — un [`AgentRuntime`](../../oxyn_ai/runtime/struct.AgentRuntime.html)
+/// reçoit **un** `Arc<dyn LlmProvider>`, celui que l'utilisateur a choisi.
+///
+/// # Erreurs
+/// [`LlmError::MissingApiKey`] si la famille exige une clé et n'en reçoit pas ;
+/// [`LlmError::Config`] si l'URL de base est illisible ou si le client HTTP ne
+/// se construit pas ; [`LlmError::Unsupported`] pour une famille que ce binaire
+/// ne sait pas instancier — le `match` porte sur une énumération
+/// `#[non_exhaustive]`, et refuser vaut mieux qu'instancier un transport
+/// approchant.
+pub fn build_provider(
+    kind: AiProviderKind,
+    base_url: &str,
+    key: Option<ApiKey>,
+) -> Result<Arc<dyn LlmProvider>> {
+    match kind {
+        AiProviderKind::Anthropic => {
+            let key = require_key(&ProviderId::anthropic(), key)?;
+            Ok(Arc::new(
+                crate::anthropic::AnthropicProvider::with_base_url(key, base_url)?,
+            ))
+        }
+        AiProviderKind::Gemini => {
+            let key = require_key(&ProviderId::gemini(), key)?;
+            Ok(Arc::new(crate::gemini::GeminiProvider::with_base_url(
+                key, base_url,
+            )?))
+        }
+        AiProviderKind::OpenAi => {
+            let id = ProviderId::openai();
+            let key = require_key(&id, key)?;
+            Ok(Arc::new(
+                crate::openai_compatible::OpenAiCompatibleProvider::new(id, base_url)?
+                    .with_api_key(key)
+                    .requiring_api_key()
+                    .with_usage_reporting(true)
+                    .supporting_reasoning_effort(),
+            ))
+        }
+        AiProviderKind::OpenAiCompatible => {
+            let fournisseur = crate::openai_compatible::OpenAiCompatibleProvider::new(
+                ProviderId::openai_compatible(),
+                base_url,
+            )?;
+            // Une clé donnée est présentée ; son absence n'est pas exigible —
+            // c'est le cas d'un modèle local.
+            Ok(Arc::new(match key {
+                Some(key) => fournisseur.with_api_key(key),
+                None => fournisseur,
+            }))
+        }
+        autre => Err(LlmError::Unsupported {
+            provider: ProviderId::openai_compatible(),
+            capability: format!("provider family `{autre}`"),
+        }
+        .into()),
+    }
+}
+
+/// Exige la clé d'une famille qui ne fonctionne pas sans.
+fn require_key(id: &ProviderId, key: Option<ApiKey>) -> Result<ApiKey> {
+    key.ok_or_else(|| {
+        LlmError::MissingApiKey {
+            provider: id.clone(),
+        }
+        .into()
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -450,49 +424,85 @@ mod tests {
     }
 
     #[test]
-    fn les_identifiants_invalides_sont_refuses() {
-        assert!(ProviderId::new("").is_err());
-        assert!(ProviderId::new("OpenAI").is_err(), "majuscules");
-        assert!(ProviderId::new("1ollama").is_err(), "chiffre en tête");
-        assert!(ProviderId::new("open ai").is_err(), "espace");
-        assert!(ProviderId::new("open.ai").is_err(), "point");
-        assert!(ProviderId::new("a".repeat(33)).is_err(), "trop long");
-        assert!(ProviderId::new("a").is_ok());
-        assert!(ProviderId::new("lm-studio").is_ok());
-        assert!(ProviderId::new("openai_v2").is_ok());
+    fn une_famille_locale_se_construit_sans_cle() {
+        // Ollama, LM Studio, `llama.cpp` : une clé absente est l'état nominal,
+        // pas une panne de configuration.
+        let fournisseur = build_provider(
+            AiProviderKind::OpenAiCompatible,
+            "http://localhost:11434/v1",
+            None,
+        )
+        .expect("un point d'accès local se construit sans clé");
+        assert_eq!(fournisseur.id(), ProviderId::openai_compatible());
+        assert_eq!(
+            fournisseur.endpoint().map(reqwest::Url::as_str),
+            Some("http://localhost:11434/v1/"),
+            "l'URL est normalisée, et rien n'a été résolu"
+        );
     }
 
     #[test]
-    fn l_erreur_ne_recopie_pas_la_valeur_fautive() {
-        // Un identifiant de fournisseur mal formé peut être une clé collée dans
-        // le mauvais champ (I-03).
-        let err = ProviderId::new("sk-proj-CECINEDOITPASFUIR").expect_err("invalide");
-        let rendu = err.to_string();
-        assert!(!rendu.contains("CECINEDOITPASFUIR"), "{rendu}");
-    }
-
-    #[test]
-    fn les_constantes_sont_des_identifiants_valides() {
-        for nom in [
-            ProviderId::OLLAMA,
-            ProviderId::LM_STUDIO,
-            ProviderId::LLAMA_CPP,
-            ProviderId::OPENAI,
-            ProviderId::AZURE_OPENAI,
-            ProviderId::OPENROUTER,
-            ProviderId::ANTHROPIC,
-            ProviderId::GEMINI,
+    fn une_famille_distante_sans_cle_est_refusee_localement() {
+        // Le manque se dit ici, pas par un `401` que l'utilisateur lirait comme
+        // un problème de compte.
+        for (kind, base_url) in [
+            (AiProviderKind::Anthropic, "https://api.anthropic.com"),
+            (AiProviderKind::OpenAi, "https://api.openai.com/v1"),
+            (
+                AiProviderKind::Gemini,
+                "https://generativelanguage.googleapis.com",
+            ),
         ] {
-            assert!(ProviderId::new(nom).is_ok(), "{nom}");
+            let erreur = build_provider(kind, base_url, None)
+                .expect_err("une famille distante exige une clé");
+            assert!(
+                matches!(erreur, oxyn_core::OxynError::Authentication(_)),
+                "{kind} : {erreur:?}"
+            );
+            let message = erreur.to_string();
+            assert!(message.contains("API key"), "{message}");
+
+            // Avec une clé, la même déclaration se construit.
+            let fournisseur = build_provider(kind, base_url, Some(ApiKey::new("sk-test")))
+                .expect("une famille distante se construit avec sa clé");
+            let rendu = format!("{fournisseur:?}");
+            assert!(!rendu.contains("sk-test"), "clé fuitée : {rendu}");
         }
     }
 
     #[test]
-    fn un_identifiant_se_serialise_en_chaine_nue() {
-        let json = serde_json::to_string(&ProviderId::openai()).expect("sérialisation");
-        assert_eq!(json, "\"openai\"");
-        let relu: ProviderId = serde_json::from_str(&json).expect("désérialisation");
-        assert_eq!(relu, ProviderId::openai());
-        assert!(serde_json::from_str::<ProviderId>("\"OPENAI\"").is_err());
+    fn la_fabrique_ne_classe_pas_le_point_d_acces() {
+        // ADR-0023 : le classement se recalcule ailleurs. Un nom qui contient
+        // `localhost` ne prouve rien, et la fabrique ne résout rien — elle
+        // accepte donc les deux sans les distinguer.
+        for base_url in [
+            "http://localhost:11434/v1",
+            "https://localhost.mon-nuage.example/v1",
+        ] {
+            assert!(
+                build_provider(AiProviderKind::OpenAiCompatible, base_url, None).is_ok(),
+                "{base_url}"
+            );
+        }
+    }
+
+    #[test]
+    fn une_url_illisible_est_refusee_par_la_fabrique() {
+        let erreur = build_provider(AiProviderKind::OpenAiCompatible, "pas une url", None)
+            .expect_err("URL illisible");
+        assert!(
+            matches!(erreur, oxyn_core::OxynError::Config(_)),
+            "{erreur}"
+        );
+    }
+
+    #[test]
+    fn la_validation_de_l_identifiant_reste_celle_du_domaine() {
+        // Le type vit dans `oxyn-core` et y est éprouvé ; ce test ne garde que
+        // le lien : le ré-export ne doit pas devenir une seconde définition
+        // plus permissive.
+        assert!(ProviderId::new("OpenAI").is_err(), "majuscules");
+        assert!(ProviderId::new("lm-studio").is_ok());
+        assert_eq!(ProviderId::ollama().as_str(), ProviderId::OLLAMA);
     }
 }
