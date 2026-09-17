@@ -2,8 +2,88 @@
 
 use super::*;
 use oxyn_core::{
-    CancelToken, HistoryFilter, HistoryStatusFilter, MAX_QUERY_DOCUMENT_BYTES, ResultId,
+    CancelToken, ConnectionConfig, DriverId, HistoryConnectionFilter, HistoryFilter,
+    HistoryStatusFilter, MAX_QUERY_DOCUMENT_BYTES, ResultId,
 };
+
+#[test]
+fn history_connections_are_paged_and_say_which_ones_the_workspace_still_has() {
+    let store = Store::open_in_memory().expect("store");
+    let cancel = CancelToken::new();
+    let mine = store.workspaces().create("Mine").expect("workspace");
+    let other = store.workspaces().create("Other").expect("other workspace");
+    let live = ConnectionConfig::new("Live", DriverId::sqlite());
+    let elsewhere = ConnectionConfig::new("Elsewhere", DriverId::sqlite());
+    store
+        .connections()
+        .save(mine.id, &live)
+        .expect("saved connection");
+    store
+        .connections()
+        .save(other.id, &elsewhere)
+        .expect("connection of another workspace");
+    let gone = ConnectionId::new();
+    let record = |connection, name: &str| {
+        HistoryRecord::new(&Actor::Human, QueryLanguage::SQL, "SELECT 1")
+            .on_connection(connection, name)
+    };
+    for entry in [
+        record(live.id, "Live"),
+        record(elsewhere.id, "Elsewhere"),
+        record(gone, "Deleted"),
+        // Renamed since: the menu must offer the name in use, not the oldest.
+        record(live.id, "Renamed live"),
+        // No connection at all: nothing to filter on, so nothing to offer.
+        HistoryRecord::new(&Actor::Human, QueryLanguage::SQL, "SELECT 2"),
+    ] {
+        store.history().record(&entry).expect("recorded");
+    }
+    let mut filter = HistoryConnectionFilter {
+        before: None,
+        limit: 2,
+    };
+    let first = store
+        .history()
+        .connections(mine.id, &filter, &cancel)
+        .expect("first page");
+    assert_eq!(
+        first.entries.len(),
+        2,
+        "a history naming many connections is read one bounded page at a time"
+    );
+    assert_eq!(first.entries[0].connection, live.id);
+    assert_eq!(first.entries[0].name.as_deref(), Some("Renamed live"));
+    assert!(first.entries[0].in_workspace);
+    assert_eq!(first.entries[1].connection, gone);
+    assert!(!first.entries[1].in_workspace);
+    assert!(first.next.is_some(), "a cursor for the less recent page");
+    filter.before = first.next;
+    let second = store
+        .history()
+        .connections(mine.id, &filter, &cancel)
+        .expect("second page");
+    assert_eq!(second.entries.len(), 1);
+    assert_eq!(second.entries[0].connection, elsewhere.id);
+    assert!(
+        !second.entries[0].in_workspace,
+        "a connection of another workspace is not one this one still has"
+    );
+    assert!(second.next.is_none());
+    assert!(
+        store
+            .history()
+            .connections(
+                mine.id,
+                &HistoryConnectionFilter {
+                    before: None,
+                    limit: 0
+                },
+                &cancel
+            )
+            .is_err(),
+        "an out-of-bounds page size is refused, not silently clamped"
+    );
+}
 
 #[test]
 fn history_pages_keep_literal_filters_and_result_identity() {

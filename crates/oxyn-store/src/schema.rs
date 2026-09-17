@@ -21,6 +21,12 @@
 //! | `catalog_cache` | l'introspection mise en cache, par connexion | oui |
 //! | `documents` | onglets et requêtes sauvegardés | oui |
 //! | `workspace_preferences` | versioned display preferences | yes |
+//! | `app_sessions` | ce qui distingue un arrêt propre d'un plantage | oui |
+//! | `ai_providers` | les fournisseurs déclarés — **par machine** | oui |
+//! | `external_agents` | les agents externes déclarés — **par machine**, sans secret | oui |
+//! | `ai_conversations` | les fils de l'assistant, par connexion | oui, élagage et suppression |
+//! | `ai_conversation_turns` | leur transcription, **jamais** une valeur de la base | oui, avec leur fil |
+//! | `ai_egress` | ce qui est parti vers un destinataire IA — noms, jamais valeurs — **append-only** | **non** |
 //!
 //! # Pourquoi `STRICT`
 //!
@@ -218,6 +224,317 @@ ALTER TABLE query_history ADD COLUMN result_id TEXT;
 CREATE INDEX documents_by_open ON documents(workspace_id, is_open, id);
 ";
 
+/// Ce qui distingue un arrêt propre d'un arrêt anormal.
+///
+/// `closed_at` n'est renseigné que par une fermeture ordinaire, **après** que
+/// les écritures locales ont été vidées ; `heartbeat_at` vieillit tant qu'une
+/// instance travaille. Une session sans fermeture dont le battement a vieilli
+/// est un plantage ; une session sans fermeture au battement récent est une
+/// autre instance, bien vivante
+/// ([ADR-0021](../../../docs/adr/0021-marqueur-d-arret.md)).
+///
+/// Le pid n'y figure pas : le vérifier demanderait ce que la politique `unsafe`
+/// du dépôt refuse, et un pid réutilisé ferait mentir le test.
+const M0006_APP_SESSIONS: &str = "CREATE TABLE app_sessions (
+    id           TEXT PRIMARY KEY NOT NULL,
+    workspace_id TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    started_at   TEXT NOT NULL,
+    heartbeat_at TEXT NOT NULL,
+    closed_at    TEXT
+) STRICT;
+CREATE INDEX app_sessions_open ON app_sessions(workspace_id, closed_at, heartbeat_at);
+";
+
+/// Un fournisseur de modèles se déclare **par machine**, et un texte écrit par
+/// un agent porte son origine.
+///
+/// `ai_providers` n'a **pas** de `workspace_id`, et c'est la décision, pas un
+/// oubli : un Ollama qui écoute sur la machine sert tous les workspaces, et le
+/// dupliquer par workspace créerait autant d'endroits où sa configuration peut
+/// diverger. Ce qui reste par connexion, c'est le niveau de confidentialité —
+/// un fournisseur commun ne fait pas un niveau commun
+/// ([ADR-0023](../../../docs/adr/0023-fournisseurs-declares-et-provenance.md),
+/// [ADR-0006](../../../docs/adr/0006-ai-privacy-tiers.md)).
+///
+/// Conséquence directe : la table n'a aucune clé étrangère, donc supprimer un
+/// workspace ne fait pas disparaître les fournisseurs de l'utilisateur.
+///
+/// Aucune clé n'y est écrite : `secret_ref` désigne une entrée du trousseau du
+/// système, comme pour `connections` (I-03). `reach` n'a **pas** de colonne :
+/// le classement local/distant se recalcule à chaque ouverture, parce qu'une
+/// valeur en base serait une réponse DNS d'hier appliquée à un envoi
+/// d'aujourd'hui.
+///
+/// `documents.provenance` est un JSON borné à 512 octets, `NULL` par défaut.
+/// `NULL` veut dire « écrit par l'utilisateur » — c'est le cas de toutes les
+/// lignes existantes, et c'est vrai. Le `CHECK` reprend la forme de
+/// `workspace_preferences.payload` : sans lui, cette métadonnée deviendrait
+/// l'endroit où l'on range « juste un peu de contexte », c'est-à-dire des
+/// invites et des réponses de modèle dans le fichier de workspace.
+const M0007_AI_PROVIDERS: &str = "CREATE TABLE ai_providers (
+    id         TEXT PRIMARY KEY NOT NULL,
+    kind       TEXT NOT NULL,
+    label      TEXT NOT NULL,
+    base_url   TEXT NOT NULL,
+    model      TEXT NOT NULL,
+    secret_ref TEXT,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+) STRICT;
+CREATE INDEX ai_providers_by_label ON ai_providers (label, id);
+ALTER TABLE documents ADD COLUMN provenance TEXT
+    CHECK(provenance IS NULL OR length(CAST(provenance AS BLOB)) <= 512);
+";
+
+/// Migration 8 — le niveau de confidentialité, là où il appartient.
+///
+/// [ADR-0006](../../../docs/adr/0006-ai-privacy-tiers.md) attache le niveau à
+/// la **connexion**, et `ConnectionConfig` le porte depuis le début. Il n'était
+/// écrit nulle part : toute connexion relue repartait à la valeur par défaut,
+/// ce qui rendait `Local` inatteignable d'une session à l'autre — un réglage
+/// pris sur une base client était perdu à la fermeture, sans message.
+///
+/// `NULL` sur les lignes antérieures, et c'est **exact** : elles ont été
+/// écrites par un binaire qui ne connaissait pas ce réglage, donc l'utilisateur
+/// n'en a jamais choisi. La lecture y applique le défaut d'ADR-0006,
+/// `Metadata`. Une valeur **illisible**, elle, n'est pas une absence : la
+/// lecture retombe alors sur le niveau le plus contraignant, `Local`, parce
+/// qu'une base dont on ne sait plus ce qu'elle autorisait ne doit pas obtenir
+/// le bénéfice du doute.
+const M0008_CONNECTION_PRIVACY: &str = "ALTER TABLE connections ADD COLUMN privacy_tier TEXT;";
+
+/// Migration 9 — les agents externes déclarés.
+///
+/// [ADR-0026](../../../docs/adr/0026-agents-externes-acp.md) ajoute un second
+/// mode de destination : un programme déjà installé chez l'utilisateur, lancé en
+/// sous-processus. Table séparée d'`ai_providers`, et non colonnes ajoutées :
+/// un agent n'a ni point d'accès, ni modèle, ni **référence de secret**, et les
+/// faire cohabiter aurait produit une table dont la moitié des colonnes ne veut
+/// rien dire selon la ligne.
+///
+/// **Aucune colonne de secret, et c'est le sujet.** Un agent porte sa propre
+/// authentification ; Oxyn n'en détient aucune. La seule façon certaine de ne
+/// pas divulguer une clé est de ne pas l'avoir ([I-03](../../../CLAUDE.md#i-03)).
+///
+/// Pas de `workspace_id` non plus, pour la raison d'`ai_providers` : un agent
+/// installé sur la machine sert tous les workspaces.
+///
+/// `args` et `env` sont des JSON bornés — même forme de `CHECK` que
+/// `documents.provenance`. Sans la borne, un fichier d'état écrit par un tiers
+/// ferait allouer à l'ouverture ce qu'il veut. `env` **ne doit pas** porter de
+/// secret : ce qui est là part dans l'environnement d'un processus, visible de
+/// la table des processus sur certains systèmes.
+///
+/// Pas de colonne de portée, et cette fois ce n'est pas parce qu'elle serait
+/// périmée comme pour un fournisseur : la portée d'un agent externe est
+/// **inconnaissable**, donc il n'y a rien à écrire.
+const M0009_EXTERNAL_AGENTS: &str = "CREATE TABLE external_agents (
+    id         TEXT PRIMARY KEY NOT NULL,
+    label      TEXT NOT NULL,
+    command    TEXT NOT NULL,
+    args       TEXT NOT NULL
+        CHECK(length(CAST(args AS BLOB)) <= 4096),
+    env        TEXT NOT NULL
+        CHECK(length(CAST(env AS BLOB)) <= 4096),
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL
+) STRICT;
+CREATE INDEX external_agents_by_label ON external_agents (label, id);
+";
+
+/// Migration 10 — les conversations de l'assistant, et leurs tours.
+///
+/// Deux tables et non une : une conversation a une identité, un titre et une
+/// destination qui ne changent pas à chaque tour, et les recopier sur chaque
+/// ligne de transcription ferait d'un renommage une réécriture de tout le fil.
+///
+/// # Ce qui n'a **pas** de clé étrangère, et ce qui en a une
+///
+/// `ai_conversation_turns.conversation_id` en a une, avec `ON DELETE CASCADE`,
+/// et c'est le mécanisme qui tient la promesse de l'élagage : supprimer une
+/// conversation emporte ses tours **dans la même transaction**, donc il n'existe
+/// pas d'état où la moitié d'un transcript subsiste. Une transcription tronquée
+/// par le milieu est un transcript qui ment.
+///
+/// `connection_id` et `destination_id` n'en ont pas, exactement comme
+/// `query_history.connection_id` : supprimer une connexion ou retirer un
+/// fournisseur n'efface pas ce que l'utilisateur a demandé avec lui. Le nom de
+/// connexion et le libellé de destination sont recopiés pour que le fil reste
+/// lisible après cette suppression.
+///
+/// # Le niveau de confidentialité est sur le **tour**
+///
+/// Pas sur la conversation : un utilisateur peut changer le niveau d'une
+/// connexion en cours de fil, et un niveau rangé en tête dirait alors faux de
+/// tous les tours antérieurs. Une relecture d'audit demande sous quel régime
+/// **ce tour-là** a eu lieu ([I-04](../../../CLAUDE.md#i-04),
+/// [ADR-0006](../../../docs/adr/0006-ai-privacy-tiers.md)).
+///
+/// # Ce qui est borné dans le fichier, et pourquoi là
+///
+/// `text`, `reasoning` et `tool_calls` portent un `CHECK` de taille — même
+/// forme que `documents.provenance` et `workspace_preferences.payload`. Les
+/// deux derniers sont remplis par un **fournisseur** : sans borne, une charge
+/// de raisonnement emballée ferait allouer à l'ouverture ce qu'un tiers veut.
+/// La borne vit dans le fichier et non seulement dans le code, donc elle est
+/// opposable au `sqlite3` autant qu'à Oxyn.
+///
+/// # Ce qu'il n'y a pas de colonne pour écrire
+///
+/// Ni les arguments d'un appel d'outil, ni le résultat d'une requête, ni une
+/// valeur liée, ni une clé. `tool_calls` porte un **rendu** : nom de l'outil,
+/// instruction, issue. C'est la même méthode qu'`external_agents`, qui n'a pas
+/// de colonne de secret : la façon certaine de ne pas écrire une valeur est de
+/// ne pas avoir d'endroit où la mettre ([I-03](../../../CLAUDE.md#i-03)).
+const M0010_AI_CONVERSATIONS: &str = "CREATE TABLE ai_conversations (
+    id                TEXT PRIMARY KEY NOT NULL,
+    workspace_id      TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    connection_id     TEXT,
+    connection_name   TEXT,
+    destination_kind  TEXT NOT NULL,
+    destination_id    TEXT,
+    destination_label TEXT NOT NULL,
+    model             TEXT,
+    title             TEXT NOT NULL
+        CHECK(length(CAST(title AS BLOB)) <= 512),
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT NOT NULL
+) STRICT;
+CREATE INDEX ai_conversations_by_connection ON ai_conversations (connection_id, updated_at DESC);
+CREATE INDEX ai_conversations_by_workspace ON ai_conversations (workspace_id, updated_at DESC);
+
+CREATE TABLE ai_conversation_turns (
+    conversation_id    TEXT NOT NULL REFERENCES ai_conversations(id) ON DELETE CASCADE,
+    ordinal            INTEGER NOT NULL,
+    ts                 TEXT NOT NULL,
+    role               TEXT NOT NULL,
+    privacy_tier       TEXT NOT NULL,
+    agent_session_id   TEXT,
+    text               TEXT NOT NULL
+        CHECK(length(CAST(text AS BLOB)) <= 1048576),
+    reasoning          TEXT
+        CHECK(reasoning IS NULL OR length(CAST(reasoning AS BLOB)) <= 262144),
+    tool_calls         TEXT
+        CHECK(tool_calls IS NULL OR length(CAST(tool_calls AS BLOB)) <= 65536),
+    stop_reason        TEXT,
+    prompt_tokens      INTEGER,
+    completion_tokens  INTEGER,
+    cache_write_tokens INTEGER,
+    cache_read_tokens  INTEGER,
+    reasoning_tokens   INTEGER,
+    PRIMARY KEY (conversation_id, ordinal)
+) STRICT;
+";
+
+/// Migration 11 — les deux bornes que la migration 10 n'avait pas mises dans le
+/// fichier : le nombre de tours d'un fil, et la taille de `stop_reason`.
+///
+/// Sans elles, la relecture d'un fil n'était bornée que par le code qui écrit :
+/// un `StopReason::Other` de la taille d'une trame SSE, ou des tours écrits par
+/// `sqlite3` au-delà de la borne, et l'ouverture d'un fil allouait ce qu'un
+/// tiers voulait ([I-06](../../../CLAUDE.md#i-06)).
+///
+/// # Des déclencheurs, et non un `CHECK`
+///
+/// SQLite n'ajoute pas de `CHECK` à une table existante : il faudrait la
+/// reconstruire en recopiant ses lignes. Et une ligne déjà sur le disque qui
+/// dépasserait la nouvelle borne n'aurait alors que deux issues, toutes deux
+/// fausses : faire échouer la migration — donc l'ouverture de l'état local —,
+/// ou réécrire la donnée de l'utilisateur pendant la copie.
+///
+/// Un déclencheur `BEFORE INSERT` / `BEFORE UPDATE` borne les **écritures**,
+/// y compris celles d'un `sqlite3`, sans toucher à ce qui existe. Ce qui existe
+/// se relit selon la règle de `encoding.rs` : une valeur trop grande de
+/// `stop_reason` n'est jamais chargée et se relit `Unspecified`, et les tours
+/// en surnombre sont lus par pages bornées comme les autres. C'est la forme du
+/// déclencheur d'inviolabilité d'`audit_journal`, pour la même raison : la
+/// garantie tient au fichier, pas au code Rust.
+///
+/// Les deux nombres sont ceux de `MAX_TURNS_PER_CONVERSATION` et de
+/// `MAX_STOP_REASON_BYTES` ; un test vérifie qu'ils ne divergent pas.
+const M0011_AI_CONVERSATION_BOUNDS: &str = "CREATE TRIGGER ai_conversation_turns_bounds_insert
+BEFORE INSERT ON ai_conversation_turns
+WHEN NEW.ordinal < 0 OR NEW.ordinal >= 512
+  OR (NEW.stop_reason IS NOT NULL AND length(CAST(NEW.stop_reason AS BLOB)) > 256)
+BEGIN
+    SELECT RAISE(ABORT, 'ai_conversation_turns: ordinal or stop_reason exceeds its bound');
+END;
+CREATE TRIGGER ai_conversation_turns_bounds_update
+BEFORE UPDATE OF ordinal, stop_reason ON ai_conversation_turns
+WHEN NEW.ordinal < 0 OR NEW.ordinal >= 512
+  OR (NEW.stop_reason IS NOT NULL AND length(CAST(NEW.stop_reason AS BLOB)) > 256)
+BEGIN
+    SELECT RAISE(ABORT, 'ai_conversation_turns: ordinal or stop_reason exceeds its bound');
+END;
+";
+
+/// Migration 12 — le journal des sorties de données vers un destinataire IA.
+///
+/// Une table à part, et non des colonnes ajoutées à `audit_journal` : ses
+/// colonnes — `command_kind`, la triade du `PolicyGate`, `statement`,
+/// `rows_affected` — ont un autre sens, et les détourner rendrait illisibles les
+/// deux questions. La lecture de l'échantillon reste journalisée là-bas comme le
+/// `PreviewRelation` qu'elle est ; `command_id` relie les deux.
+///
+/// # La rétention du journal d'audit, c'est-à-dire aucune
+///
+/// Mêmes déclencheurs d'inviolabilité qu'`audit_journal`, mêmes absences de clé
+/// étrangère : l'entrée survit à la suppression de la connexion, du fournisseur
+/// et de la conversation qu'elle nomme. Une sortie qu'on pourrait effacer
+/// répondrait « rien n'est sorti » à la seule question pour laquelle elle
+/// existe.
+///
+/// # Aucune valeur, et ce que le fichier refuse pour le garantir
+///
+/// Il n'y a pas de colonne pour une valeur. Ce qui pourrait en faire passer une
+/// est `columns`, une liste JSON de **noms** : le `CHECK` exige un tableau borné,
+/// et le déclencheur refuse tout élément qui n'est pas une chaîne, qui est vide
+/// ou qui dépasse la longueur d'un identifiant. Un nombre, un objet, une ligne
+/// collée ne s'y rangent pas. Les bornes sont celles de `oxyn-store::egress`,
+/// et un test vérifie qu'elles ne divergent pas.
+const M0012_AI_EGRESS: &str = "CREATE TABLE ai_egress (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    ts              TEXT NOT NULL,
+    connection_id   TEXT NOT NULL,
+    command_id      TEXT,
+    source          TEXT NOT NULL
+        CHECK(length(CAST(source AS BLOB)) BETWEEN 1 AND 1024),
+    columns         TEXT NOT NULL
+        -- json_array_length rend 0 pour tout ce qui n'est pas un tableau :
+        -- `BETWEEN 1` exige donc un tableau non vide, sans clause json_type.
+        CHECK(json_valid(columns)
+              AND json_array_length(columns) BETWEEN 1 AND 256
+              AND length(CAST(columns AS BLOB)) <= 131072),
+    row_count       INTEGER NOT NULL CHECK(row_count BETWEEN 0 AND 1000),
+    recipient_id    TEXT NOT NULL CHECK(length(CAST(recipient_id AS BLOB)) <= 64),
+    model           TEXT CHECK(model IS NULL OR length(CAST(model AS BLOB)) <= 128),
+    reach           TEXT NOT NULL CHECK(length(CAST(reach AS BLOB)) <= 16),
+    conversation_id TEXT,
+    node            INTEGER CHECK(node IS NULL OR node >= 0)
+) STRICT;
+CREATE INDEX ai_egress_by_connection ON ai_egress (connection_id, id DESC);
+
+CREATE TRIGGER ai_egress_column_names_only
+BEFORE INSERT ON ai_egress
+WHEN EXISTS (SELECT 1 FROM json_each(NEW.columns)
+              WHERE type <> 'text' OR length(CAST(value AS BLOB)) NOT BETWEEN 1 AND 256)
+BEGIN
+    SELECT RAISE(ABORT, 'ai_egress.columns holds column names only');
+END;
+
+CREATE TRIGGER ai_egress_forbid_update
+BEFORE UPDATE ON ai_egress
+BEGIN
+    SELECT RAISE(ABORT, 'ai_egress is append-only: UPDATE is forbidden');
+END;
+
+CREATE TRIGGER ai_egress_forbid_delete
+BEFORE DELETE ON ai_egress
+BEGIN
+    SELECT RAISE(ABORT, 'ai_egress is append-only: DELETE is forbidden');
+END;
+";
+
 /// Toutes les migrations, dans l'ordre d'application.
 pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -244,6 +561,41 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 5,
         name: "query_library",
         sql: M0005_QUERY_LIBRARY,
+    },
+    Migration {
+        version: 6,
+        name: "app_sessions",
+        sql: M0006_APP_SESSIONS,
+    },
+    Migration {
+        version: 7,
+        name: "ai_providers",
+        sql: M0007_AI_PROVIDERS,
+    },
+    Migration {
+        version: 8,
+        name: "connection_privacy_tier",
+        sql: M0008_CONNECTION_PRIVACY,
+    },
+    Migration {
+        version: 9,
+        name: "external_agents",
+        sql: M0009_EXTERNAL_AGENTS,
+    },
+    Migration {
+        version: 10,
+        name: "ai_conversations",
+        sql: M0010_AI_CONVERSATIONS,
+    },
+    Migration {
+        version: 11,
+        name: "ai_conversation_bounds",
+        sql: M0011_AI_CONVERSATION_BOUNDS,
+    },
+    Migration {
+        version: 12,
+        name: "ai_egress",
+        sql: M0012_AI_EGRESS,
     },
 ];
 
@@ -478,6 +830,127 @@ mod tests {
         );
     }
 
+    /// Un document écrit avant la migration 7 n'a **pas** de provenance, et
+    /// c'est vrai : c'est l'utilisateur qui l'a écrit.
+    ///
+    /// Le test tient aussi la seconde moitié de la décision — la borne de 512
+    /// octets est dans le fichier, donc opposable à `sqlite3` autant qu'à
+    /// Oxyn : sans elle, la colonne deviendrait un endroit où archiver la
+    /// conversation.
+    #[test]
+    fn une_provenance_absente_veut_dire_ecrite_par_l_utilisateur() {
+        let mut conn = Connection::open_in_memory().expect("base en mémoire");
+        conn.execute_batch(SCHEMA_VERSION_TABLE).expect("suivi");
+        for migration in MIGRATIONS.iter().filter(|migration| migration.version < 7) {
+            conn.execute_batch(migration.sql).expect("schéma antérieur");
+            conn.execute(
+                "INSERT INTO schema_version(version,name,applied_at) VALUES(?1,?2,?3)",
+                rusqlite::params![migration.version, migration.name, chrono::Utc::now()],
+            )
+            .expect("inscription");
+        }
+        conn.execute_batch(
+            "INSERT INTO workspaces VALUES('workspace','Atelier','2026-09-10','2026-09-10');
+             INSERT INTO documents (id,workspace_id,title,language,content,created_at,updated_at)
+             VALUES('document','workspace','Rapport','\"sql\"','SELECT 1','2026-09-10','2026-09-10');",
+        )
+        .expect("document écrit par la version précédente");
+
+        migrate(&mut conn).expect("montée jusqu'à la version courante");
+
+        let (contenu, provenance): (String, Option<String>) = conn
+            .query_row("SELECT content, provenance FROM documents", [], |row| {
+                Ok((row.get(0)?, row.get(1)?))
+            })
+            .expect("le document a survécu");
+        assert_eq!(contenu, "SELECT 1");
+        assert_eq!(
+            provenance, None,
+            "une ligne antérieure n'appartient à aucun agent"
+        );
+
+        let trop_gros = format!("{{\"model\":\"{}\"}}", "x".repeat(512));
+        let refus = conn.execute(
+            "UPDATE documents SET provenance = ?1 WHERE id = 'document'",
+            rusqlite::params![trop_gros],
+        );
+        assert!(
+            refus.is_err(),
+            "le budget de 512 octets doit tenir dans le fichier, pas seulement dans le code"
+        );
+    }
+
+    /// Un état local écrit par la version précédente s'ouvre sans rien perdre.
+    ///
+    /// C'est le seul cas qui existe chez un utilisateur : `migrer_est_idempotent`
+    /// part de zéro et n'en prouve rien. Ce test pose un fichier **en v9 avec
+    /// des lignes** — un workspace, une connexion, un document, une entrée
+    /// d'historique, une trace d'audit —, applique la migration 10, et vérifie
+    /// que tout est encore là, les deux tables neuves comprises et vides.
+    ///
+    /// Vides, et c'est exact : personne n'a jamais eu de conversation persistée
+    /// avant cette migration. Une table neuve qui se peuplerait toute seule
+    /// inventerait de l'historique.
+    #[test]
+    fn un_etat_local_en_v9_s_ouvre_sans_perdre_ses_lignes() {
+        let mut conn = Connection::open_in_memory().expect("base en mémoire");
+        conn.execute_batch(SCHEMA_VERSION_TABLE).expect("suivi");
+        for migration in MIGRATIONS.iter().filter(|migration| migration.version < 10) {
+            conn.execute_batch(migration.sql).expect("schéma antérieur");
+            conn.execute(
+                "INSERT INTO schema_version(version,name,applied_at) VALUES(?1,?2,?3)",
+                rusqlite::params![migration.version, migration.name, chrono::Utc::now()],
+            )
+            .expect("inscription");
+        }
+        conn.execute_batch(
+            "INSERT INTO workspaces VALUES('workspace','Atelier','2026-09-10','2026-09-10');
+             INSERT INTO connections (id,workspace_id,name,driver,environment,params,read_only,
+                                      created_at,updated_at)
+             VALUES('connexion','workspace','base client','postgres','production','{}',0,
+                    '2026-09-10','2026-09-10');
+             INSERT INTO documents (id,workspace_id,title,language,content,created_at,updated_at)
+             VALUES('document','workspace','Rapport','\"sql\"','SELECT 1','2026-09-10','2026-09-10');
+             INSERT INTO query_history (ts,actor_kind,language,statement,intent,status)
+             VALUES('2026-09-10','human','\"sql\"','SELECT 1','read','succeeded');
+             INSERT INTO audit_journal (ts,actor_kind,command_kind,intent,risk,policy_decision)
+             VALUES('2026-09-10','agent','Execute','read','\"none\"','allow');",
+        )
+        .expect("des lignes écrites par la version précédente");
+
+        migrate(&mut conn).expect("montée jusqu'à la version courante");
+        assert_eq!(current_version(&conn).expect("version"), latest_version());
+
+        for (table, attendu) in [
+            ("workspaces", 1),
+            ("connections", 1),
+            ("documents", 1),
+            ("query_history", 1),
+            ("audit_journal", 1),
+            // Neuves, donc vides : rien n'invente de conversation passée.
+            ("ai_conversations", 0),
+            ("ai_conversation_turns", 0),
+        ] {
+            let lignes: i64 = conn
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .expect("comptage");
+            assert_eq!(lignes, attendu, "table `{table}`");
+        }
+
+        // Et la table neuve est utilisable dans la foulée, clé étrangère vers le
+        // workspace existant comprise.
+        conn.execute(
+            "INSERT INTO ai_conversations
+                 (id, workspace_id, destination_kind, destination_label, title,
+                  created_at, updated_at)
+             VALUES ('fil','workspace','provider','Anthropic','Un fil','2026-09-16','2026-09-16')",
+            [],
+        )
+        .expect("le fil s'écrit dans le schéma migré");
+    }
+
     #[test]
     fn un_schema_venu_du_futur_est_refuse() {
         let mut conn = base_migree();
@@ -505,6 +978,11 @@ mod tests {
             "catalog_cache",
             "documents",
             "workspace_preferences",
+            "app_sessions",
+            "ai_providers",
+            "ai_conversations",
+            "ai_conversation_turns",
+            "ai_egress",
             "schema_version",
         ] {
             let presente: i64 = conn
@@ -529,6 +1007,10 @@ mod tests {
             "audit_journal",
             "catalog_cache",
             "documents",
+            "ai_providers",
+            "ai_conversations",
+            "ai_conversation_turns",
+            "ai_egress",
         ] {
             let sql: String = conn
                 .query_row(

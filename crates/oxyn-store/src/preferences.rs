@@ -90,7 +90,10 @@ fn read(connection: &rusqlite::Connection, workspace: WorkspaceId) -> Result<Pre
 #[cfg(test)]
 mod tests {
     use super::*;
-    use oxyn_core::{Appearance, ReadingDensity};
+    use oxyn_core::{
+        Appearance, ConnectionId, ObjectLocation, ObjectSection, ReadingDensity,
+        WorkspacePreferences,
+    };
 
     #[test]
     fn preferences_survive_reopening_and_old_writes_cannot_replace_newer_ones() {
@@ -140,6 +143,45 @@ mod tests {
             .delete(workspace)
             .expect("delete workspace");
         assert!(reopened.preferences().load(workspace).is_err());
+    }
+
+    #[test]
+    fn the_longest_storable_location_still_fits_under_the_payload_cap() {
+        let store = Store::open_in_memory().expect("store");
+        let workspace = store
+            .workspaces()
+            .create("preferences")
+            .expect("workspace")
+            .id;
+        // The payload cap is a CHECK: a location that passes validation must
+        // never be the reason an unrelated preference fails to save.
+        let path = format!(
+            "db.public.{}",
+            "n".repeat(ObjectLocation::MAX_PATH_BYTES - 11)
+        );
+        let snapshot = PreferencesSnapshot {
+            revision: 1,
+            preferences: WorkspacePreferences {
+                null_text: "x".repeat(64),
+                object_location: ObjectLocation::new(
+                    ConnectionId::new(),
+                    path,
+                    ObjectSection::Constraints,
+                ),
+                ..Default::default()
+            },
+        };
+        assert_eq!(
+            store
+                .preferences()
+                .save(workspace, &snapshot)
+                .expect("saved location"),
+            snapshot
+        );
+        assert_eq!(
+            store.preferences().load(workspace).expect("reloaded"),
+            snapshot
+        );
     }
 
     #[test]

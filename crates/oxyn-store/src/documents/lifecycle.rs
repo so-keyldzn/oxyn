@@ -33,6 +33,11 @@ impl Documents<'_> {
         let revision =
             i64::try_from(update.revision).map_err(|_| invalid("revision out of range"))?;
         let language = tag_to_json(&update.language)?;
+        // Une provenance absente ne dit pas « personne » : elle dit « rien de
+        // neuf à écrire ». `coalesce` la laisse donc en place, exactement comme
+        // dans `Documents::save`, pour qu'il n'existe qu'une règle de
+        // provenance dans le dépôt et non deux qui divergeront (ADR-0023).
+        let provenance = super::provenance_to_column(update.provenance.as_ref())?;
         self.store.with_connection_cancellable(cancel, |connection| {
             let transaction = connection.unchecked_transaction()?;
             if let Some(connection_id) = update.connection {
@@ -54,15 +59,15 @@ impl Documents<'_> {
                     return Err(invalid("saved revision conflict; reopen before saving"));
                 }
                 if update.revision > current.revision {
-                    transaction.execute("UPDATE documents SET title=?2, content=?3, revision=?4, is_open=?5, updated_at=?6 WHERE id=?1", params![update.document.to_string(), update.title, update.text, revision, update.is_open, Utc::now()])?;
+                    transaction.execute("UPDATE documents SET title=?2, content=?3, revision=?4, is_open=?5, updated_at=?6, provenance=coalesce(?7, provenance) WHERE id=?1", params![update.document.to_string(), update.title, update.text, revision, update.is_open, Utc::now(), provenance])?;
                 }
                 if update.save_named && update.revision > current.saved_revision {
                     transaction.execute("UPDATE documents SET saved_content=?2, saved_title=?3, saved_revision=?4, is_saved=1, updated_at=?5 WHERE id=?1", params![update.document.to_string(), update.text, update.title, revision, Utc::now()])?;
                 }
             } else {
                 if update.expected_revision.is_some_and(|expected| expected != 0) { return Err(invalid("document disappeared; preserve a new copy")); }
-                transaction.execute("INSERT INTO documents (id,workspace_id,title,language,content,connection_id,created_at,updated_at,revision,saved_revision,is_saved,is_open,saved_content,saved_title)
-                    VALUES (?1,?2,?3,?4,?5,?6,?7,?7,?8,?9,?10,?11,?12,?13)", params![update.document.to_string(), workspace.to_string(), update.title, language, update.text, update.connection.map(|id| id.to_string()), Utc::now(), revision, if update.save_named { revision } else { 0 }, update.save_named, update.is_open, update.save_named.then_some(&update.text), update.save_named.then_some(&update.title)])?;
+                transaction.execute("INSERT INTO documents (id,workspace_id,title,language,content,connection_id,created_at,updated_at,revision,saved_revision,is_saved,is_open,saved_content,saved_title,provenance)
+                    VALUES (?1,?2,?3,?4,?5,?6,?7,?7,?8,?9,?10,?11,?12,?13,?14)", params![update.document.to_string(), workspace.to_string(), update.title, language, update.text, update.connection.map(|id| id.to_string()), Utc::now(), revision, if update.save_named { revision } else { 0 }, update.save_named, update.is_open, update.save_named.then_some(&update.text), update.save_named.then_some(&update.title), provenance])?;
             }
             let document = transaction.query_row(&format!("{SELECT_COLONNES} WHERE id=?1"), [update.document.to_string()], |row| Ok(depuis_ligne(row)))??;
             transaction.commit()?;

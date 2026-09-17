@@ -24,7 +24,7 @@
 //! et une ligne dont la connexion n'existe plus reste lisible.
 
 mod listing;
-pub use listing::{HistoryPage, HistorySummary};
+pub use listing::{HistoryConnectionPage, HistoryConnectionSummary, HistoryPage, HistorySummary};
 
 use chrono::{DateTime, Utc};
 use oxyn_core::{

@@ -32,7 +32,7 @@ use chrono::{DateTime, Utc};
 use oxyn_core::{ConnectionConfig, ConnectionId, DriverId, WorkspaceId};
 use rusqlite::{OptionalExtension, Row, params};
 
-use crate::encoding::{environment_from_text, parse_id};
+use crate::encoding::{environment_from_text, parse_id, privacy_tier_from_column};
 use crate::error::{Result, StoreError};
 use crate::store::Store;
 
@@ -89,8 +89,9 @@ impl<'a> Connections<'a> {
             conn.execute(
                 "INSERT INTO connections
                      (id, workspace_id, name, driver, environment,
-                      params, secret_ref, read_only, created_at, updated_at)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                      params, secret_ref, read_only, created_at, updated_at,
+                      privacy_tier)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
                  ON CONFLICT(id) DO UPDATE SET
                      workspace_id = excluded.workspace_id,
                      name         = excluded.name,
@@ -99,6 +100,7 @@ impl<'a> Connections<'a> {
                      params       = excluded.params,
                      secret_ref   = excluded.secret_ref,
                      read_only    = excluded.read_only,
+                     privacy_tier = excluded.privacy_tier,
                      updated_at   = excluded.updated_at",
                 params![
                     config.id.to_string(),
@@ -111,6 +113,7 @@ impl<'a> Connections<'a> {
                     config.read_only,
                     maintenant,
                     maintenant,
+                    config.privacy_tier.as_str(),
                 ],
             )?;
             Ok(())
@@ -125,7 +128,8 @@ impl<'a> Connections<'a> {
     pub fn get(&self, id: ConnectionId) -> Result<Option<ConnectionConfig>> {
         self.store.with_connection(|conn| {
             conn.query_row(
-                "SELECT id, name, driver, environment, params, secret_ref, read_only
+                "SELECT id, name, driver, environment, params, secret_ref, read_only,
+                        privacy_tier
                  FROM connections WHERE id = ?1",
                 params![id.to_string()],
                 |row| Ok(depuis_ligne(row)),
@@ -143,7 +147,8 @@ impl<'a> Connections<'a> {
     pub fn list(&self, workspace: WorkspaceId) -> Result<Vec<ConnectionConfig>> {
         self.store.with_connection(|conn| {
             let mut requete = conn.prepare(
-                "SELECT id, name, driver, environment, params, secret_ref, read_only
+                "SELECT id, name, driver, environment, params, secret_ref, read_only,
+                        privacy_tier
                  FROM connections WHERE workspace_id = ?1 ORDER BY name, id",
             )?;
             let lignes = requete.query_and_then(params![workspace.to_string()], depuis_ligne)?;
@@ -261,6 +266,8 @@ fn depuis_ligne(row: &Row<'_>) -> Result<ConnectionConfig> {
     config.params = serde_json::from_str(&params_json)?;
     config.secret_ref = row.get("secret_ref")?;
     config.read_only = row.get("read_only")?;
+    let niveau: Option<String> = row.get("privacy_tier")?;
+    config.privacy_tier = privacy_tier_from_column(niveau.as_deref());
 
     signale_les_cles_suspectes(&config);
     Ok(config)
@@ -571,5 +578,94 @@ mod tests {
         let rendu = format!("{relu:?}");
         assert!(!rendu.contains("db-secret.interne"), "{rendu}");
         assert!(!rendu.contains("keychain://oxyn/prod"), "{rendu}");
+    }
+
+    /// ADR-0006 : le niveau appartient à la connexion, donc il lui survit.
+    ///
+    /// Le défaut que ce test ferme était silencieux et permissif : sans
+    /// colonne, toute connexion relue repartait à `Metadata`. Un utilisateur
+    /// réglant `Local` sur une base client, fermant Oxyn et la rouvrant voyait
+    /// le DDL et les noms de colonnes repartir chez un fournisseur distant,
+    /// sans message nulle part.
+    #[test]
+    fn le_niveau_de_confidentialite_survit_a_la_fermeture() {
+        let (store, workspace) = store_avec_workspace();
+        let mut config =
+            ConnectionConfig::new("base client", DriverId::new("postgres").expect("driver"));
+        config.privacy_tier = oxyn_core::PrivacyTier::Local;
+        store
+            .connections()
+            .save(workspace, &config)
+            .expect("écriture");
+
+        let relu = store
+            .connections()
+            .get(config.id)
+            .expect("lecture")
+            .expect("présente");
+        assert_eq!(
+            relu.privacy_tier,
+            oxyn_core::PrivacyTier::Local,
+            "le niveau appartient à la connexion, pas à la session"
+        );
+    }
+
+    /// Une absence et une valeur illisible ne veulent pas dire la même chose.
+    ///
+    /// Absente, la colonne dit « ce binaire est plus ancien que ce réglage » :
+    /// l'utilisateur n'en a jamais choisi, et le défaut d'ADR-0006 s'applique.
+    /// Illisible, elle dit « un réglage existait et son sens s'est perdu » : le
+    /// plus contraignant s'applique, parce qu'une base dont on ne sait plus ce
+    /// qu'elle autorisait n'obtient pas le bénéfice du doute.
+    #[test]
+    fn une_valeur_illisible_nest_pas_une_absence() {
+        let (store, workspace) = store_avec_workspace();
+        let config = ConnectionConfig::new("héritée", DriverId::new("sqlite").expect("driver"));
+        store
+            .connections()
+            .save(workspace, &config)
+            .expect("écriture");
+
+        // Le cas de la ligne antérieure à la migration.
+        store
+            .with_connection(|conn| {
+                conn.execute(
+                    "UPDATE connections SET privacy_tier = NULL WHERE id = ?1",
+                    params![config.id.to_string()],
+                )?;
+                Ok(())
+            })
+            .expect("mise à zéro");
+        assert_eq!(
+            store
+                .connections()
+                .get(config.id)
+                .expect("lecture")
+                .expect("présente")
+                .privacy_tier,
+            oxyn_core::PrivacyTier::Metadata,
+            "aucune valeur écrite : le défaut d'ADR-0006 s'applique"
+        );
+
+        // Le cas de la valeur qu'on ne sait plus lire.
+        store
+            .with_connection(|conn| {
+                conn.execute(
+                    "UPDATE connections SET privacy_tier = 'confidentiel' WHERE id = ?1",
+                    params![config.id.to_string()],
+                )?;
+                Ok(())
+            })
+            .expect("valeur inconnue");
+        assert_eq!(
+            store
+                .connections()
+                .get(config.id)
+                .expect("lecture")
+                .expect("présente")
+                .privacy_tier,
+            oxyn_core::PrivacyTier::Local,
+            "un réglage dont le sens s'est perdu retombe sur le plus contraignant"
+        );
     }
 }

@@ -180,10 +180,46 @@ impl Store {
         crate::preferences::Preferences::new(self)
     }
 
+    /// Les sessions d'application : ce qui distingue un arrêt propre d'un
+    /// plantage. Ne jamais appeler depuis le thread d'interface.
+    #[must_use]
+    pub fn sessions(&self) -> crate::sessions::Sessions<'_> {
+        crate::sessions::Sessions::new(self)
+    }
+
     /// Les documents du workspace.
     #[must_use]
     pub fn documents(&self) -> Documents<'_> {
         Documents::new(self)
+    }
+
+    /// Le journal des sorties de données vers un destinataire IA, en ajout
+    /// seul. Ne jamais appeler depuis le thread d'interface.
+    #[must_use]
+    pub fn egress(&self) -> crate::egress::Egress<'_> {
+        crate::egress::Egress::new(self)
+    }
+
+    /// Les conversations de l'assistant et leur transcription. Ne jamais
+    /// appeler depuis le thread d'interface.
+    #[must_use]
+    pub fn conversations(&self) -> crate::conversations::Conversations<'_> {
+        crate::conversations::Conversations::new(self)
+    }
+
+    /// Les fournisseurs de modèles déclarés — **par machine**, pas par
+    /// workspace (ADR-0023). Ne jamais appeler depuis le thread d'interface.
+    #[must_use]
+    pub fn providers(&self) -> crate::providers::Providers<'_> {
+        crate::providers::Providers::new(self)
+    }
+
+    /// Les agents externes déclarés — **par machine**, et **sans secret**
+    /// ([ADR-0026](../../../docs/adr/0026-agents-externes-acp.md)). Ne jamais
+    /// appeler depuis le thread d'interface.
+    #[must_use]
+    pub fn external_agents(&self) -> crate::agents::ExternalAgents<'_> {
+        crate::agents::ExternalAgents::new(self)
     }
 
     /// Le cache d'introspection, par connexion.
@@ -261,7 +297,7 @@ impl fmt::Debug for Store {
                 &self
                     .path
                     .as_deref()
-                    .map_or("<mémoire>", |p| p.to_str().unwrap_or("<chemin non-UTF-8>")),
+                    .map_or("<in memory>", |p| p.to_str().unwrap_or("<non-UTF-8 path>")),
             )
             .finish_non_exhaustive()
     }

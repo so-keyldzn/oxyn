@@ -29,7 +29,7 @@
 use std::str::FromStr;
 use std::time::Duration;
 
-use oxyn_core::{Environment, ErrorClass, IdParseError, StatementIntent};
+use oxyn_core::{Environment, ErrorClass, IdParseError, PrivacyTier, StatementIntent};
 use serde::Serialize;
 use serde::de::DeserializeOwned;
 
@@ -112,11 +112,17 @@ pub(crate) fn intent_from_text(raw: &str) -> StatementIntent {
 /// Une valeur inconnue rend [`ErrorClass::Ambiguous`], et c'est le sens de
 /// I-13 appliqué jusqu'à la relecture : une erreur dont on ne sait plus dire
 /// si le serveur a appliqué l'écriture ne se retente pas.
+///
+/// Les trois codes français sont ceux qu'écrivaient les versions antérieures
+/// au 2026-09-16. Ils sont relus tels quels : sans eux, une piste d'audit déjà
+/// sur le disque verrait ses erreurs permanentes et transitoires retomber
+/// toutes les trois sur « ambiguë », c'est-à-dire perdre l'information que la
+/// colonne existe pour porter.
 pub(crate) fn error_class_from_text(raw: &str) -> ErrorClass {
     match raw {
-        "transitoire" => ErrorClass::Transient,
-        "permanente" => ErrorClass::Permanent,
-        "ambiguë" => ErrorClass::Ambiguous,
+        "transient" | "transitoire" => ErrorClass::Transient,
+        "permanent" | "permanente" => ErrorClass::Permanent,
+        "ambiguous" | "ambiguë" => ErrorClass::Ambiguous,
         _ => {
             tracing::warn!(
                 column = "error_class",
@@ -139,6 +145,33 @@ pub(crate) fn environment_from_text(raw: &str) -> Environment {
             "unknown environment in local state, falling back to `production`"
         );
         Environment::Production
+    })
+}
+
+/// Relit le niveau de confidentialité d'une connexion.
+///
+/// Deux replis, et la distinction est la décision :
+///
+/// * **`None`** — la ligne a été écrite avant la migration 8, par un binaire
+///   qui ne connaissait pas ce réglage. L'utilisateur n'en a donc jamais
+///   choisi, et le défaut d'[ADR-0006](../../../docs/adr/0006-ai-privacy-tiers.md),
+///   `Metadata`, est la bonne réponse ;
+/// * **valeur illisible** — quelqu'un a écrit quelque chose que ce binaire ne
+///   sait pas lire. Ce n'est **pas** une absence : c'est un réglage dont on a
+///   perdu le sens, et il retombe sur le plus contraignant, `Local`. Une base
+///   dont on ne sait plus ce qu'elle autorisait n'obtient pas le bénéfice du
+///   doute — c'est la même logique qui fait valoir `production` à une connexion
+///   sans environnement renseigné ([I-02](../../../CLAUDE.md#i-02)).
+pub(crate) fn privacy_tier_from_column(raw: Option<&str>) -> PrivacyTier {
+    let Some(raw) = raw else {
+        return PrivacyTier::default();
+    };
+    PrivacyTier::from_str(raw).unwrap_or_else(|_| {
+        tracing::warn!(
+            column = "privacy_tier",
+            "unknown privacy tier in local state, falling back to `local`"
+        );
+        PrivacyTier::Local
     })
 }
 
@@ -238,6 +271,32 @@ mod tests {
             inconnue.is_mutating(),
             "une intention illisible ne doit jamais passer pour une lecture"
         );
+    }
+
+    #[test]
+    fn une_famille_derreur_se_relit_dans_les_deux_langues() {
+        // Ce qu'écrit la version courante.
+        for famille in [
+            ErrorClass::Transient,
+            ErrorClass::Permanent,
+            ErrorClass::Ambiguous,
+        ] {
+            assert_eq!(error_class_from_text(famille.as_str()), famille);
+        }
+
+        // Ce qu'ont écrit les versions antérieures au 2026-09-16. Sans ces
+        // trois bras, une piste d'audit déjà sur le disque perdrait la
+        // distinction que la colonne existe pour porter.
+        assert_eq!(error_class_from_text("transitoire"), ErrorClass::Transient);
+        assert_eq!(error_class_from_text("permanente"), ErrorClass::Permanent);
+        assert_eq!(error_class_from_text("ambiguë"), ErrorClass::Ambiguous);
+
+        assert_eq!(
+            error_class_from_text("vaporisée"),
+            ErrorClass::Ambiguous,
+            "I-13 jusqu'à la relecture : ce qu'on ne sait pas lire ne se retente pas"
+        );
+        assert!(!error_class_from_text("vaporisée").is_retryable());
     }
 
     #[test]

@@ -18,6 +18,9 @@
 //! | [`journal`] | `audit_journal` | ARCHITECTURE §8 — **append-only** |
 //! | [`catalog`] | `catalog_cache` | ARCHITECTURE §6 |
 //! | [`documents`] | `documents` | — |
+//! | [`providers`] | `ai_providers` | ADR-0023 — par machine, jamais de clé |
+//! | [`egress`] | `ai_egress` | SECURITY — **append-only**, des noms de colonnes, jamais de valeur |
+//! | [`conversations`] | `ai_conversations`, `ai_conversation_turns` | AI-PROVIDERS — le niveau est noté sur le **tour** |
 //!
 //! # Les trois choix qui gouvernent cette crate
 //!
@@ -40,6 +43,13 @@
 //! la relecture d'un fichier qu'un tiers a pu modifier.
 //!
 //! # Ce que cette crate n'est pas
+//!
+//! **La croissance est bornée, et elle l'est par un appel.** `query_history` se
+//! purge, `ai_conversations` s'élague ([`Conversations::prune`]) : aucune des
+//! deux ne se borne toute seule, parce qu'une table qui effacerait du travail
+//! de l'utilisateur sans qu'un appelant l'ait demandé serait une perte de
+//! données déguisée en rangement. Le journal d'audit, lui, ne s'élague pas du
+//! tout.
 //!
 //! Elle est **synchrone** et prend un verrou. Aucune de ses méthodes ne doit
 //! être appelée depuis le thread UI (I-05) : c'est à `oxyn-exec` de les porter
@@ -90,23 +100,38 @@
 
 pub mod catalog;
 pub mod connections;
+pub mod conversations;
 pub mod documents;
+pub mod egress;
 pub mod error;
 pub mod history;
 pub mod journal;
 pub mod store;
 pub mod workspaces;
 
+pub mod agents;
 mod encoding;
 pub mod preferences;
+pub mod providers;
 mod schema;
+#[cfg(test)]
+mod sentinel_tests;
+pub mod sessions;
 
+pub use agents::ExternalAgents;
 pub use catalog::{CatalogCache, CatalogSnapshot};
 pub use connections::Connections;
+pub use conversations::{
+    Conversation, ConversationSummary, Conversations, Destination, DestinationKind, PruneReport,
+    RetentionPolicy, ToolCallRecord, ToolCallStatus, Turn, TurnPage, TurnRecord, TurnRole,
+    TurnUsage,
+};
 pub use documents::{Document, Documents};
+pub use egress::{Egress, EgressEntry, EgressPage, EgressReach, EgressRecord};
 pub use error::{Result, StoreError};
 pub use history::{History, HistoryEntry, HistoryRecord, HistoryStatus};
 pub use journal::{ActorKind, Journal, JournalEntry, JournalRecord, PolicyOutcome};
+pub use providers::Providers;
 pub use schema::latest_version as latest_schema_version;
 pub use store::{DATABASE_FILE_NAME, Store};
 pub use workspaces::{Workspace, Workspaces};
@@ -207,10 +232,16 @@ mod tests {
         assert_eq!(
             tables,
             [
+                "ai_conversation_turns",
+                "ai_conversations",
+                "ai_egress",
+                "ai_providers",
+                "app_sessions",
                 "audit_journal",
                 "catalog_cache",
                 "connections",
                 "documents",
+                "external_agents",
                 "query_history",
                 "schema_version",
                 "workspace_preferences",

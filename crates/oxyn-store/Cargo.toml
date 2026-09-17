@@ -10,7 +10,19 @@ repository.workspace = true
 [lints]
 workspace = true
 
+# Ce que les crates voisines allument pour leurs tests seulement : de quoi
+# vieillir un battement de session sans attendre le seuil d'abandon. Absent
+# d'une compilation ordinaire, donc absent du binaire livré.
+[features]
+test-support = []
+
 [dependencies]
+# `ReasoningBlock` et `StopReason` sont persistés **tels quels**, et ils viennent
+# d'ici, pas d'`oxyn-llm` : un fournisseur exige de les recevoir à l'identique au
+# tour suivant, donc les recopier ferait deux définitions, et leur
+# `#[non_exhaustive]` obligerait la conversion à un bras `_ =>` qui perdrait en
+# silence un bloc ajouté plus tard. Les déclarer dans `oxyn-core` évite les deux,
+# sans faire entrer un client HTTP dans `oxyn-store` ni dans `oxyn-exec`.
 oxyn-core.workspace = true
 chrono.workspace = true
 directories.workspace = true

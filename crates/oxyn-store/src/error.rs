@@ -26,21 +26,21 @@ pub enum StoreError {
     #[error("local operation cancelled")]
     Cancelled,
     /// Le système n'expose pas de répertoire de données utilisateur exploitable.
-    #[error("répertoire de données du système introuvable")]
+    #[error("no usable system data directory")]
     DataDirUnavailable,
 
     /// SQLite a refusé l'opération : base verrouillée, contrainte violée,
     /// journal d'audit protégé par son déclencheur.
-    #[error("état local : {0}")]
+    #[error("local state: {0}")]
     Sqlite(#[from] rusqlite::Error),
 
     /// Échec d'entrée-sortie sur le fichier ou son répertoire.
-    #[error("entrée-sortie sur l'état local : {0}")]
+    #[error("I/O on the local state: {0}")]
     Io(#[from] std::io::Error),
 
     /// Une migration n'a pas pu être appliquée. La transaction a été annulée :
     /// le schéma est resté dans son état antérieur.
-    #[error("migration {version} (`{name}`) : {source}")]
+    #[error("migration {version} (`{name}`): {source}")]
     Migration {
         /// Numéro de la migration fautive.
         version: u32,
@@ -56,9 +56,7 @@ pub enum StoreError {
     /// On refuse d'ouvrir plutôt que de deviner : une version antérieure qui
     /// écrirait dans un schéma qu'elle ne comprend pas corromprait la piste
     /// d'audit.
-    #[error(
-        "état local écrit par une version plus récente (schéma {found}, connu jusqu'à {supported})"
-    )]
+    #[error("local state written by a newer version (schema {found}, supported up to {supported})")]
     SchemaTooRecent {
         /// Version trouvée dans le fichier.
         found: u32,
@@ -69,7 +67,7 @@ pub enum StoreError {
     /// Une colonne contient une valeur que le domaine ne sait pas relire.
     ///
     /// Le message nomme la colonne et la raison, **jamais** la valeur.
-    #[error("colonne `{field}` illisible : {detail}")]
+    #[error("column `{field}` is unreadable: {detail}")]
     Corrupted {
         /// Nom de la colonne.
         field: &'static str,
@@ -83,17 +81,34 @@ pub enum StoreError {
     /// mot de passe d'atteindre le disque en clair (I-03). Seule la clé est
     /// nommée ; la valeur ne remonte nulle part.
     #[error(
-        "le paramètre `{key}` porte un nom de secret : \
-         seule une référence de secret (`secret_ref`) est persistée"
+        "parameter `{key}` is named like a secret: \
+         only a secret reference (`secret_ref`) is persisted"
     )]
     SecretInParams {
         /// Le nom du paramètre refusé.
         key: String,
     },
 
+    /// Une écriture dépasse une borne de l'état local.
+    ///
+    /// Refus **à l'écriture**, et jamais une troncature : ce qu'on écrirait à
+    /// moitié — un tour de conversation, un transcript — se relirait comme un
+    /// texte complet qui ment. L'appelant est le seul à pouvoir dire à
+    /// l'utilisateur qu'il faut ouvrir un nouveau fil, d'où l'erreur plutôt
+    /// qu'un `warn`.
+    ///
+    /// Le message nomme la colonne et la borne, jamais la valeur (I-03).
+    #[error("`{field}` exceeds its local-state limit of {limit}")]
+    TooLarge {
+        /// Nom de la colonne ou de la borne dépassée.
+        field: &'static str,
+        /// La borne, dans l'unité de la colonne — octets ou nombre d'éléments.
+        limit: u64,
+    },
+
     /// Un encodage ou un décodage JSON a échoué (paramètres de connexion,
     /// étiquette d'énumération, instantané de catalogue).
-    #[error("JSON de l'état local : {0}")]
+    #[error("local state JSON: {0}")]
     Json(#[from] serde_json::Error),
 }
 
@@ -109,9 +124,13 @@ impl From<StoreError> for OxynError {
         match err {
             StoreError::Cancelled => Self::Cancelled,
             StoreError::Io(io) => Self::Io(io),
+            // `TooLarge` est du côté de l'utilisateur : ce qu'il peut faire —
+            // ouvrir un nouveau fil, raccourcir une requête — est une action,
+            // pas un rapport de bogue. Retenter à l'identique ne change rien.
             StoreError::DataDirUnavailable
             | StoreError::SchemaTooRecent { .. }
-            | StoreError::SecretInParams { .. } => Self::Config(message),
+            | StoreError::SecretInParams { .. }
+            | StoreError::TooLarge { .. } => Self::Config(message),
             StoreError::Corrupted { .. } | StoreError::Json(_) => Self::Serialization(message),
             StoreError::Sqlite(_) | StoreError::Migration { .. } => Self::Internal(message),
         }
