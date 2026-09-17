@@ -470,6 +470,44 @@ mod tests {
         }
     }
 
+    /// Le changement de schéma n'est pas un outil, et ne doit pas le devenir.
+    ///
+    /// [ADR-0025](../../../docs/adr/0025-proposition-de-changement-de-schema.md)
+    /// écrit que `Propose change…` est **indisponible** pour un `Actor::Agent`,
+    /// et non « confirmable » — c'est [I-02](../../../CLAUDE.md#i-02) au mot,
+    /// qui nomme la confirmation renforcée comme insuffisante.
+    ///
+    /// Cette garantie tenait par **absence de chemin** : aucun outil n'atteint
+    /// le geste. C'est plus fort qu'un refus, mais rien ne l'aurait maintenue
+    /// vraie — un relevé de divergences l'a signalé le 2026-09-14. Ce test la
+    /// tient : le jour où quelqu'un expose un outil de structure, il échoue et
+    /// oblige à rouvrir l'ADR plutôt qu'à le contredire en silence.
+    #[test]
+    fn le_changement_de_schema_n_est_pas_un_outil() {
+        let registre = ToolRegistry::builtin();
+        for interdit in [
+            "propose_change",
+            "alter_table",
+            "create_table",
+            "drop_table",
+            "apply_ddl",
+        ] {
+            assert!(!registre.contains(interdit), "{interdit}");
+        }
+        // Et par la commande produite, pour que renommer l'outil ne suffise pas
+        // à passer au travers.
+        for outil in &registre.tools {
+            for marque in ["Ddl", "Alter", "Schema", "Propose"] {
+                assert!(
+                    !outil.command().contains(marque),
+                    "{} produit {}, qui touche au schéma",
+                    outil.name(),
+                    outil.command()
+                );
+            }
+        }
+    }
+
     #[test]
     fn un_outil_hors_liste_blanche_est_refuse() {
         let registre = ToolRegistry::builtin();

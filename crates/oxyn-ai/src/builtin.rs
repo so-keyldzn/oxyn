@@ -108,7 +108,7 @@ pub fn sql_agent() -> AgentSpec {
          When you answer, give the query and one sentence on what it does. Explain longer \
          only when asked.",
     )
-    .with_description("Écrit, corrige et explique des requêtes sur la connexion ouverte.")
+    .with_description("Writes, fixes and explains queries on the open connection.")
     .with_tools([EXECUTE_QUERY])
     .with_max_turns(8)
 }
@@ -143,7 +143,7 @@ pub fn schema_agent() -> AgentSpec {
          Prefer a short structured answer — a list of relations, a list of problems — to \
          prose.",
     )
-    .with_description("Explique la structure d'une base et repère ses incohérences.")
+    .with_description("Explains the structure of a database and spots its inconsistencies.")
     .with_tools([EXECUTE_QUERY, REFRESH_CATALOG])
     .with_context(ContextPolicy {
         // Comprendre une structure demande de la voir en entier ; écrire une

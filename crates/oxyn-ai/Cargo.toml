@@ -11,16 +11,33 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+agent-client-protocol.workspace = true
 oxyn-core.workspace = true
 oxyn-catalog.workspace = true
 oxyn-llm.workspace = true
 oxyn-query.workspace = true
+async-process.workspace = true
 async-trait.workspace = true
 futures.workspace = true
+http-body-util.workspace = true
+hyper.workspace = true
+hyper-util.workspace = true
 indexmap.workspace = true
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
+# `net` et `rt` pour l'écoute MCP sur la boucle locale : sans les nommer ici, la
+# crate ne compile que grâce à l'unification des fonctionnalités d'un voisin.
+tokio = { workspace = true, features = ["net", "rt"] }
 tracing.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+# Monter un journal en `debug` et vérifier ce qui n'y apparaît pas (I-03).
+tracing-subscriber.workspace = true
+
+# Tuer le **groupe** de processus d'un agent lancé derrière `npx` : sans cela,
+# l'agent réel se ré-attache à pid 1 et survit à la fin de la conversation.
+[target.'cfg(unix)'.dependencies]
+rustix.workspace = true

@@ -10,12 +10,14 @@
 //!
 //! | Module | Sujet | Autorité |
 //! |---|---|---|
-//! | [`privacy`] | les trois niveaux, par connexion | ADR-0006 |
+//! | [`privacy`] | le niveau d'une connexion face à un point d'accès | ADR-0006 |
+//! | [`failure`] | ce qu'un échec laisse sortir sous chaque niveau | ADR-0006, I-04 |
 //! | [`untrusted`] | encadrer ce qui vient de la base | SECURITY, I-07 |
 //! | [`context`] | **le point de passage unique**, et la compaction | AI-PROVIDERS, I-04 |
 //! | [`tools`] | la traduction appel d'outil → `Command` | ADR-0004, I-01 |
 //! | [`spec`] | la déclaration d'un agent, sérialisable | ARCHITECTURE §7.3 |
 //! | [`runtime`] | la boucle, et le [`CommandSink`] de l'appelant | ADR-0004 |
+//! | [`observer`] | ce qu'une conversation laisse voir en se déroulant | UX-SPEC |
 //! | [`builtin`] | les agents SQL et Schema | IMPLEMENTATION-PLAN, phase 2 |
 //! | [`error`] | ce que la frontière modèle → bus sait refuser | — |
 //!
@@ -31,7 +33,17 @@
 //! **Il y a une seule porte pour le contexte.** [`ContextBuilder::build`] est la
 //! seule fonction qui fabrique un [`AgentContext`], et [`AgentSession::new`] est
 //! la seule façon d'entamer une conversation. Le point de passage unique d'I-04
-//! est donc vérifié par le compilateur, pas par la relecture.
+//! est donc vérifié par le compilateur, pas par la relecture. Le retour d'un
+//! appel d'outil emprunte la même porte : un [`FailureReport`] ne se construit
+//! qu'avec le niveau de la connexion sous la main (voir [`failure`]).
+//!
+//! **La seconde destination a désormais la même garantie.**
+//! [`external::turn::run_turn`] ne prend plus l'invite en `&str` mais un
+//! [`external::prompt::AgentPrompt`], dont le seul constructeur exige le niveau
+//! de la connexion ([ADR-0027](../../../docs/adr/0027-porte-unique-pour-les-deux-destinations.md)).
+//! Le raccourci que `.claude/rules/ia.md` nomme — « juste le schéma, c'est du
+//! `Metadata` de toute façon » — ne s'écrit plus en un `format!` : il faudrait
+//! ajouter un constructeur à ce type, et c'est visible en relecture.
 //!
 //! **`oxyn-ai` ne parle jamais à un driver.** Le contexte se construit à partir
 //! du [`CatalogCache`](oxyn_catalog::CatalogCache) local. Un agent qui irait
@@ -75,6 +87,9 @@
 pub mod builtin;
 pub mod context;
 pub mod error;
+pub mod external;
+pub mod failure;
+pub mod observer;
 pub mod privacy;
 pub mod runtime;
 pub mod spec;
@@ -89,8 +104,14 @@ pub use oxyn_core::CancelToken;
 pub use builtin::{REMAINING_AGENTS, builtin_agents, schema_agent, sql_agent};
 pub use context::{AgentContext, ContextBuilder, ContextPolicy, RowSample, estimate_tokens};
 pub use error::AiError;
+pub use failure::FailureReport;
+pub use observer::{
+    AgentEvent, AgentObserver, ExternalToolStatus, PlanPriority, PlanStatus, PlanStep, TokenUsage,
+};
 pub use privacy::PrivacyTier;
-pub use runtime::{AgentOutcome, AgentRuntime, AgentSession, CommandSink, ToolOutcome};
+pub use runtime::{
+    AgentOutcome, AgentRuntime, AgentSession, CommandSink, DispatchOutcome, ToolOutcome,
+};
 pub use spec::AgentSpec;
 pub use tools::{ToolDefinition, ToolRegistry, ToolScope};
 
@@ -105,8 +126,12 @@ pub mod prelude {
     pub use crate::builtin::{builtin_agents, schema_agent, sql_agent};
     pub use crate::context::{AgentContext, ContextBuilder, ContextPolicy, RowSample};
     pub use crate::error::AiError;
+    pub use crate::failure::FailureReport;
+    pub use crate::observer::{AgentEvent, AgentObserver};
     pub use crate::privacy::PrivacyTier;
-    pub use crate::runtime::{AgentOutcome, AgentRuntime, AgentSession, CommandSink, ToolOutcome};
+    pub use crate::runtime::{
+        AgentOutcome, AgentRuntime, AgentSession, CommandSink, DispatchOutcome, ToolOutcome,
+    };
     pub use crate::spec::AgentSpec;
     pub use crate::tools::{ToolRegistry, ToolScope};
 }

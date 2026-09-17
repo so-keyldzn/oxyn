@@ -247,7 +247,7 @@ impl fmt::Debug for AgentContext {
             .field("omitted_relations", &self.omitted_relations)
             .field(
                 "body",
-                &format_args!("<masqué, {} octets>", self.block.len()),
+                &format_args!("<redacted, {} bytes>", self.block.len()),
             )
             .finish()
     }
@@ -898,7 +898,7 @@ mod tests {
         let contexte = ContextBuilder::new(&cache, PrivacyTier::Metadata).build();
         let rendu = format!("{contexte:?}");
         assert!(!rendu.contains("clients"), "{rendu}");
-        assert!(rendu.contains("masqué"), "{rendu}");
+        assert!(rendu.contains("redacted"), "{rendu}");
         assert!(
             rendu.contains("Metadata"),
             "le niveau reste diagnostiquable"

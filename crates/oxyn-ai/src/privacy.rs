@@ -1,21 +1,19 @@
-//! Les trois niveaux de confidentialité, choisis **par connexion**.
+//! Le niveau de confidentialité d'une connexion, appliqué à un point d'accès.
 //!
 //! Autorité : [ADR-0006](../../../docs/adr/0006-ai-privacy-tiers.md). Le tableau
-//! des niveaux y vit et n'est pas recopié ici ; ce module porte ce que l'ADR ne
-//! dit pas : les conséquences dans le code.
+//! des niveaux y vit et n'est pas recopié ici.
 //!
-//! # Pourquoi par connexion, et jamais globalement
+//! # Le type vit dans `oxyn-core`, et c'est le sujet
 //!
-//! La panne visée par [AI-PROVIDERS](../../../docs/AI-PROVIDERS.md) : l'utilisateur
-//! règle le niveau sur `Sampled` pour sa base de bac à sable, l'oublie, puis
-//! ouvre trois jours plus tard la base client de son employeur. Si le niveau
-//! était global, des lignes réelles partiraient chez un fournisseur tiers.
-//! Techniquement rien n'a échoué ; contractuellement, c'est irréversible.
+//! [`PrivacyTier`] est défini dans
+//! [`oxyn_core::connection`] et ré-exporté ici. Il n'y a
+//! **qu'une** définition dans le dépôt, et elle se trouve à côté de la
+//! [`ConnectionConfig`](oxyn_core::ConnectionConfig) qui la porte : un niveau
+//! rangé dans la crate d'IA serait un niveau attaché au workspace IA, donc un
+//! réglage global sous un autre nom — exactement ce qu'ADR-0006 refuse.
 //!
-//! Conséquence de conception : ce type ne porte **aucun** constructeur qui le
-//! dérive d'un fournisseur, d'une session ou d'un réglage d'application. Il
-//! vient de la [`ConnectionConfig`](oxyn_core::ConnectionConfig) et de rien
-//! d'autre.
+//! Ce module ne porte donc que ce qui a besoin d'`oxyn-llm` : la confrontation
+//! du niveau avec le classement d'un point d'accès.
 //!
 //! # `Local` est une garantie, pas une préférence
 //!
@@ -24,190 +22,122 @@
 //! d'assembler quoi que ce soit : il n'existe pas de chemin qui envoie une
 //! invite hors de la machine sous ce niveau. La vérification a lieu sur la
 //! **session**, parce que c'est le seul endroit où le niveau de la connexion
-//! est connu. Le classement local/distant se fait sur l'hôte réel
-//! **après résolution** ([`Reach`]), jamais sur la présence de `localhost` dans
-//! une URL — un point d'accès compatible OpenAI en écoute sur la boucle locale
-//! peut être un proxy vers le nuage.
+//! est connu.
 //!
-//! # `Metadata` par défaut n'est pas « rien ne sort »
+//! # Le piège du mandataire sur `localhost`
 //!
-//! Le DDL, les noms, les types, les index et les cardinalités **sortent** dès
-//! qu'un fournisseur distant est configuré. Une table `patients` avec une
-//! colonne `hiv_status` révèle l'essentiel sans qu'une seule ligne ne sorte.
-//! C'est un compromis délibéré, et l'interface doit le montrer en permanence.
-
-use std::fmt;
+//! Le classement local/distant se fait sur l'hôte réel **après résolution**
+//! ([`Reach`]), jamais sur la présence de `localhost` dans une URL : un point
+//! d'accès compatible OpenAI en écoute sur la boucle locale peut être un
+//! mandataire qui réémet vers le nuage. Il se re-vérifie à chaque changement de
+//! configuration, parce que le nom qui résolvait vers `127.0.0.1` hier peut
+//! résoudre ailleurs aujourd'hui.
 
 use oxyn_llm::Reach;
-use serde::{Deserialize, Serialize};
 
-/// Ce qui a le droit de quitter la machine pour une connexion donnée.
+pub use oxyn_core::PrivacyTier;
+
+/// Ce point d'accès est-il utilisable sous ce niveau ?
 ///
-/// L'énumération est **fermée**, contrairement à la convention du dépôt sur les
-/// énumérations publiques : la triade d'ADR-0006 est un contrat, et un
-/// quatrième niveau serait une décision d'ADR, pas une variante ajoutée au fil
-/// de l'eau. Un `_ =>` dans l'interface qui avalerait un niveau inconnu
-/// choisirait silencieusement le mauvais comportement.
+/// [`Reach::Unresolved`] est traité comme distant : un point d'accès qu'on n'a
+/// pas su classer n'obtient pas le bénéfice du doute
+/// ([`Reach::leaves_machine`]).
 ///
-/// L'ordre est celui de la **divulgation croissante** : `Local < Metadata <
-/// Sampled`. C'est ce qui rend [`most_restrictive`](Self::most_restrictive)
-/// écrivable, et donc composable quand deux niveaux s'appliquent au même envoi.
-#[derive(
-    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize,
-)]
-#[serde(rename_all = "snake_case")]
-pub enum PrivacyTier {
-    /// Rien ne quitte la machine. Modèle local uniquement.
-    Local,
-    /// DDL, noms, types, index, cardinalités, plans d'exécution.
-    /// **Aucune valeur de ligne.** C'est le défaut.
-    #[default]
-    Metadata,
-    /// Idem, plus un échantillon de lignes explicitement approuvé, colonne par
-    /// colonne.
-    Sampled,
+/// Fonction libre plutôt que méthode : le classement d'un point d'accès vit
+/// dans `oxyn-llm`, dont `oxyn-core` ne dépend pas — et ne doit pas dépendre.
+#[must_use]
+pub const fn allows_endpoint(tier: PrivacyTier, reach: Reach) -> bool {
+    !reach.leaves_machine() || tier.allows_remote_provider()
 }
 
-impl PrivacyTier {
-    /// Des valeurs de lignes peuvent-elles rejoindre une invite ?
-    ///
-    /// Seul [`Sampled`](Self::Sampled) répond `true`, et même alors les valeurs
-    /// doivent avoir été approuvées colonne par colonne en amont : ce prédicat
-    /// est une condition nécessaire, pas suffisante.
-    #[must_use]
-    pub const fn allows_row_values(&self) -> bool {
-        matches!(self, Self::Sampled)
-    }
-
-    /// Un fournisseur dont les données quittent la machine est-il utilisable ?
-    ///
-    /// `false` pour [`Local`](Self::Local). Ce n'est pas une valeur par défaut
-    /// qu'un réglage renverse : c'est la promesse du niveau.
-    #[must_use]
-    pub const fn allows_remote_provider(&self) -> bool {
-        !matches!(self, Self::Local)
-    }
-
-    /// Ce point d'accès est-il utilisable sous ce niveau ?
-    ///
-    /// [`Reach::Unresolved`] est traité comme distant : un point d'accès qu'on
-    /// n'a pas su classer n'obtient pas le bénéfice du doute
-    /// ([`Reach::leaves_machine`]).
-    #[must_use]
-    pub const fn allows_endpoint(&self, reach: Reach) -> bool {
-        !reach.leaves_machine() || self.allows_remote_provider()
-    }
-
-    /// Le plus contraignant des deux niveaux.
-    ///
-    /// Sert partout où deux niveaux se rencontrent — une conversation qui
-    /// touche deux connexions, un contexte assemblé avant que l'utilisateur ne
-    /// change de connexion. Le résultat ne divulgue jamais plus que le plus
-    /// prudent des deux.
-    #[must_use]
-    pub fn most_restrictive(self, other: Self) -> Self {
-        self.min(other)
-    }
-
-    /// Nom stable, pour l'affichage, la persistance et l'audit.
-    #[must_use]
-    pub const fn as_str(&self) -> &'static str {
-        match self {
-            Self::Local => "local",
-            Self::Metadata => "metadata",
-            Self::Sampled => "sampled",
-        }
-    }
-
-    /// Ce qui sort de la machine sous ce niveau, en une phrase montrable.
-    ///
-    /// L'interface doit afficher le niveau effectif **en permanence** et non
-    /// dans un panneau de réglages : un utilisateur qui ne peut pas dire d'un
-    /// coup d'œil où part sa requête ne donne pas un consentement éclairé
-    /// (AI-PROVIDERS).
-    #[must_use]
-    pub const fn describe(&self) -> &'static str {
-        match self {
-            Self::Local => "nothing leaves this machine; local model only",
-            Self::Metadata => "schema only: names, types, indexes, cardinalities — no row values",
-            Self::Sampled => "schema, plus row samples you approved column by column",
-        }
-    }
+/// La portée d'un agent externe : **inconnaissable**, donc [`Reach::Unresolved`].
+///
+/// Ce n'est pas la même chose qu'un point d'accès mal résolu. Un fournisseur
+/// déclaré a une URL qu'on peut résoudre, et dont la résolution peut être
+/// périmée ([ADR-0023](../../../docs/adr/0023-fournisseurs-declares-et-provenance.md)).
+/// Un agent externe est un **processus opaque** : il peut parler à un modèle
+/// local, à un service distant, ou changer entre deux tours, et rien dans le
+/// protocole ne permet de le lui demander
+/// ([ADR-0026](../../../docs/adr/0026-agents-externes-acp.md)).
+///
+/// La fonction prend la déclaration pour que l'appelant ne puisse pas se
+/// tromper de valeur, et rend une constante parce qu'il n'y a rien à calculer :
+/// c'est l'absence d'information qui est modélisée, pas une mesure ratée.
+#[must_use]
+pub const fn agent_reach(_agent: &oxyn_core::ExternalAgentConfig) -> Reach {
+    Reach::Unresolved
 }
 
-impl fmt::Display for PrivacyTier {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(self.as_str())
-    }
+/// Cet agent externe est-il utilisable sous ce niveau ?
+///
+/// Conséquence directe d'[`agent_reach`] : **non sous `Local`**, oui sous
+/// `Metadata` et `Sampled`. Un utilisateur dont l'agent tourne réellement
+/// contre un modèle local trouvera la restriction excessive, et il aura raison
+/// sur le fond — mais la lever demanderait de le croire sur parole, et `Local`
+/// promet « rien ne sort de la machine ». Une promesse assortie d'une case à
+/// cocher n'est plus une promesse.
+#[must_use]
+pub const fn allows_external_agent(
+    tier: PrivacyTier,
+    agent: &oxyn_core::ExternalAgentConfig,
+) -> bool {
+    allows_endpoint(tier, agent_reach(agent))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// Un agent externe ne sert jamais une connexion `Local`.
+    ///
+    /// C'est la conséquence qui compte d'ADR-0026, et elle ne tient à aucune
+    /// mécanique nouvelle : un agent est `Unresolved`, et « dans le doute, on
+    /// protège » était déjà la règle.
     #[test]
-    fn le_defaut_est_metadata() {
-        // ADR-0006 : le défaut est sûr, et envoyer des valeurs est un acte
-        // délibéré.
-        assert_eq!(PrivacyTier::default(), PrivacyTier::Metadata);
-        assert!(!PrivacyTier::default().allows_row_values());
-    }
+    fn un_agent_externe_ne_sert_jamais_une_connexion_locale() {
+        use oxyn_core::{ExternalAgentConfig, ProviderId};
 
-    #[test]
-    fn seul_sampled_laisse_sortir_des_valeurs() {
-        assert!(!PrivacyTier::Local.allows_row_values());
-        assert!(!PrivacyTier::Metadata.allows_row_values());
-        assert!(PrivacyTier::Sampled.allows_row_values());
-    }
+        let agent = ExternalAgentConfig::new(
+            ProviderId::new("agent-local").expect("un identifiant valide"),
+            "Claude Code",
+            "claude",
+        )
+        .with_args(["--acp"]);
 
-    #[test]
-    fn local_interdit_tout_fournisseur_distant() {
-        assert!(!PrivacyTier::Local.allows_remote_provider());
-        assert!(PrivacyTier::Metadata.allows_remote_provider());
-        assert!(PrivacyTier::Sampled.allows_remote_provider());
+        assert_eq!(
+            agent_reach(&agent),
+            Reach::Unresolved,
+            "un processus opaque n'a pas de portée connaissable"
+        );
+        assert!(
+            !allows_external_agent(PrivacyTier::Local, &agent),
+            "`Local` promet que rien ne sort : un agent dont on ne voit pas la sortie ne peut pas le tenir"
+        );
+        // Les deux autres niveaux l'acceptent, sans quoi le mode n'existerait
+        // pour personne.
+        assert!(allows_external_agent(PrivacyTier::Metadata, &agent));
+        assert!(allows_external_agent(PrivacyTier::Sampled, &agent));
     }
 
     #[test]
     fn un_point_d_acces_non_resolu_est_traite_comme_distant() {
-        // Le piège d'AI-PROVIDERS : un proxy en écoute sur localhost. Le
+        // Le piège d'AI-PROVIDERS : un mandataire en écoute sur localhost. Le
         // classement vient de `Reach`, jamais de la forme de l'URL.
-        assert!(PrivacyTier::Local.allows_endpoint(Reach::Local));
-        assert!(!PrivacyTier::Local.allows_endpoint(Reach::Remote));
+        assert!(allows_endpoint(PrivacyTier::Local, Reach::Local));
+        assert!(!allows_endpoint(PrivacyTier::Local, Reach::Remote));
         assert!(
-            !PrivacyTier::Local.allows_endpoint(Reach::Unresolved),
+            !allows_endpoint(PrivacyTier::Local, Reach::Unresolved),
             "dans le doute, on protège"
         );
-        assert!(PrivacyTier::Metadata.allows_endpoint(Reach::Unresolved));
+        assert!(allows_endpoint(PrivacyTier::Metadata, Reach::Unresolved));
     }
 
     #[test]
-    fn le_plus_contraignant_gagne() {
-        assert_eq!(
-            PrivacyTier::Sampled.most_restrictive(PrivacyTier::Metadata),
-            PrivacyTier::Metadata
-        );
-        assert_eq!(
-            PrivacyTier::Metadata.most_restrictive(PrivacyTier::Local),
-            PrivacyTier::Local
-        );
-        assert_eq!(
-            PrivacyTier::Local.most_restrictive(PrivacyTier::Local),
-            PrivacyTier::Local
-        );
-    }
-
-    #[test]
-    fn un_niveau_se_relit_apres_serialisation() {
-        // Le niveau est persisté avec la connexion : l'aller-retour doit être
-        // exact, sinon un workspace relu dégraderait la protection.
-        for niveau in [
-            PrivacyTier::Local,
-            PrivacyTier::Metadata,
-            PrivacyTier::Sampled,
-        ] {
-            let json = serde_json::to_string(&niveau).expect("sérialisation");
-            let relu: PrivacyTier = serde_json::from_str(&json).expect("désérialisation");
-            assert_eq!(relu, niveau, "{json}");
-        }
+    fn le_niveau_rendu_ici_est_bien_celui_du_domaine() {
+        // Une seule définition dans le dépôt : si quelqu'un en réintroduisait
+        // une locale, cette égalité de types ne compilerait plus.
+        let du_domaine: oxyn_core::PrivacyTier = oxyn_core::PrivacyTier::Metadata;
+        let reexporte: PrivacyTier = du_domaine;
+        assert_eq!(reexporte, PrivacyTier::default());
     }
 }
