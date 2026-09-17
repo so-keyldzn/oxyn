@@ -133,6 +133,54 @@ impl QueryLibrary {
             .child(div().flex_1().min_h_0().child(self.reader.clone())).into_any_element()
     }
 }
+impl QueryLibrary {
+    /// Le bandeau d'[I-13](../../../../CLAUDE.md#i-13) de la planche Historique.
+    ///
+    /// # Pourquoi un bandeau, et pas la phrase qui existait déjà
+    ///
+    /// Le texte était là — « … · ambiguous writes are never replayed », en fin
+    /// d'une ligne grise, après deux autres mentions. Relevé `268:36866` : la
+    /// maquette en fait un bloc encadré, avec un titre en couleur de danger et
+    /// son explication. La différence n'est pas décorative.
+    ///
+    /// Ce que cette garantie permet, c'est de **parcourir son historique sans
+    /// crainte** : un utilisateur qui ignore qu'Oxyn ne rejoue jamais hésite à
+    /// cliquer sur une écriture dont l'issue est inconnue — exactement l'entrée
+    /// qu'il a le plus besoin d'inspecter. Une note de bas de ligne ne porte pas
+    /// cela.
+    ///
+    /// Réservé à l'onglet Historique : c'est le seul qui liste des exécutions
+    /// réelles. Sur les requêtes enregistrées ou les résultats retenus, rien n'a
+    /// jamais été écrit, et l'avertissement inquiéterait sans objet.
+    pub(super) fn ambiguous_writes_banner(&self, cx: &Context<'_, Self>) -> Option<AnyElement> {
+        if self.tab != Tab::History {
+            return None;
+        }
+        let theme = Theme::of(cx);
+        Some(
+            div()
+                .flex_none()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .p_3()
+                .border_1()
+                .border_color(theme.colors.danger)
+                .rounded(theme.radii.control)
+                .child(
+                    div()
+                        .text_color(theme.colors.danger)
+                        .child("Ambiguous writes are never replayed"),
+                )
+                .child(div().text_color(theme.colors.text_muted).child(
+                    "An expired write may have reached the server. History offers inspection \
+                     and reconciliation, never a retry action.",
+                ))
+                .into_any_element(),
+        )
+    }
+}
+
 impl Render for QueryLibrary {
     fn render(&mut self, window: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
         if self.show_retained {
@@ -166,7 +214,7 @@ impl Render for QueryLibrary {
                     .child(div().text_size(theme.typography.small_size).text_color(theme.colors.text_muted).child("Search"))
                     .child(self.search.clone()))
                 .when(self.tab != Tab::Saved, |el| el.child(div().h(px(74.)).flex().flex_col().gap_2()
-                        .child(div().text_size(theme.typography.small_size).text_color(theme.colors.text_muted).child("Connection"))
+                        .child(div().text_size(theme.typography.small_size).text_color(theme.colors.text_muted).child(self.connections_notice.unwrap_or("Connection")))
                         .child(div().w(px(200.)).child(self.connection_select.clone())))
                     .child(div().h(px(74.)).flex().flex_col().gap_2()
                         .child(div().text_size(theme.typography.small_size).text_color(theme.colors.text_muted).child("Period and status"))
@@ -174,8 +222,9 @@ impl Render for QueryLibrary {
                 .child(self.button("library-refresh", "Refresh", Action::Refresh, cx))
                 .when(loading, |el| el.child(self.button("library-cancel", "Cancel loading", Action::Cancel, cx))))
             .child(div().flex_none().text_size(theme.typography.small_size).text_color(theme.colors.text_muted)
-                .child(if self.tab == Tab::Saved { "Search saved titles and queries · this workspace" } else if self.tab == Tab::Results { "Recorded results · buffers from previous runs may have expired · local history across workspaces" } else { "Search query text · local history across workspaces · ambiguous writes are never replayed" }))
+                .child(if self.tab == Tab::Saved { "Search saved titles and queries · this workspace" } else if self.tab == Tab::Results { "Recorded results · buffers from previous runs may have expired · local history across workspaces" } else { "Search query text · local history across workspaces" }))
             .child(div().flex_1().min_h_0().flex().gap_3().flex_col()
-                .child(self.list_panel(cx)).child(self.detail_panel(cx))).into_any_element()
+                .child(self.list_panel(cx)).child(self.detail_panel(cx)))
+            .children(self.ambiguous_writes_banner(cx)).into_any_element()
     }
 }

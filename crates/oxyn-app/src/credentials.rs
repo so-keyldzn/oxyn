@@ -15,10 +15,11 @@
 
 use std::sync::Arc;
 
-use oxyn_core::{ConnectionConfig, OxynError};
+use oxyn_core::{AiProviderConfig, ConnectionConfig, OxynError, ProviderId};
 use oxyn_driver::Credentials;
 use oxyn_exec::CredentialResolver;
-use oxyn_secrets::{CredentialBundle, SecretRef, SecretStore};
+use oxyn_llm::ApiKey;
+use oxyn_secrets::{CredentialBundle, ExposeSecret, SecretRef, SecretStore, SecretString};
 
 /// Resolves a connection's credentials from the platform keyring.
 ///
@@ -77,6 +78,81 @@ impl KeyringCredentials {
             })?;
 
         Ok(reference)
+    }
+
+    /// Writes a model provider's API key, replacing whatever was there.
+    ///
+    /// Returns the reference to persist alongside the declaration — the
+    /// declaration itself never carries the key
+    /// ([ADR-0023](../../../docs/adr/0023-fournisseurs-declares-et-provenance.md),
+    /// [I-03](../../../CLAUDE.md#i-03)).
+    ///
+    /// # Blocking
+    /// Reaches the platform keyring. Never call it from the UI thread
+    /// ([I-05](../../../CLAUDE.md#i-05)).
+    ///
+    /// # Errors
+    /// [`OxynError::Config`] if the identifier is not a usable keyring name, or
+    /// if the keyring refuses the write.
+    pub fn store_provider_key(
+        &self,
+        provider: &ProviderId,
+        key: &str,
+    ) -> Result<SecretRef, OxynError> {
+        let reference = SecretRef::for_provider(provider.as_str())
+            .map_err(|erreur| OxynError::Config(format!("provider secret reference: {erreur}")))?;
+        self.store
+            .put(&reference, SecretString::from(key.to_owned()))
+            .map_err(|erreur| OxynError::Config(format!("writing the provider key: {erreur}")))?;
+        Ok(reference)
+    }
+
+    /// Reads a declared provider's API key, if it has one.
+    ///
+    /// `Ok(None)` covers the two cases that are **not** failures: a declaration
+    /// without a reference — a local endpoint asks for no key — and a reference
+    /// whose keyring entry is gone. The second is reported to the caller as an
+    /// absent key rather than as an incident, because that is what it is: the
+    /// user removed it, and the endpoint will say so itself.
+    ///
+    /// # Blocking
+    /// Reaches the platform keyring. Never call it from the UI thread
+    /// ([I-05](../../../CLAUDE.md#i-05)).
+    ///
+    /// # Errors
+    /// [`OxynError::Config`] if the stored reference cannot be parsed, or if
+    /// the keyring refuses the read. Neither message quotes a secret.
+    pub fn provider_key(&self, config: &AiProviderConfig) -> Result<Option<ApiKey>, OxynError> {
+        let Some(reference) = config.secret_ref.as_deref() else {
+            return Ok(None);
+        };
+        let reference = SecretRef::parse(reference)
+            .map_err(|erreur| OxynError::Config(format!("provider secret reference: {erreur}")))?;
+        let secret = self
+            .store
+            .get(&reference)
+            .map_err(|erreur| OxynError::Config(format!("reading the provider key: {erreur}")))?;
+        Ok(secret.map(|value| ApiKey::new(value.expose_secret())))
+    }
+
+    /// Forgets a provider's key.
+    ///
+    /// Called when a declaration is removed. A failure here leaves an orphan
+    /// entry, which is harmless — an unreferenced secret is unreachable — so it
+    /// must never prevent the removal from being reported as done.
+    ///
+    /// # Blocking
+    /// Reaches the platform keyring. Never call it from the UI thread.
+    ///
+    /// # Errors
+    /// [`OxynError::Config`] if the reference cannot be parsed or the keyring
+    /// refuses the deletion.
+    pub fn forget_provider_key(&self, reference: &str) -> Result<(), OxynError> {
+        let reference = SecretRef::parse(reference)
+            .map_err(|erreur| OxynError::Config(format!("provider secret reference: {erreur}")))?;
+        self.store
+            .delete(&reference)
+            .map_err(|erreur| OxynError::Config(format!("forgetting the provider key: {erreur}")))
     }
 }
 

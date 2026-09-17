@@ -27,11 +27,48 @@
 //! branchent leur `on_click` ([I-01](../../../CLAUDE.md#i-01)).
 
 use gpui::{
-    App, BoxShadow, ClickEvent, Div, ElementId, InteractiveElement, Stateful,
-    StatefulInteractiveElement, Styled, Window, div, point, px,
+    App, BoxShadow, ClickEvent, Context, Div, ElementId, InteractiveElement, KeyDownEvent,
+    Stateful, StatefulInteractiveElement, Styled, Window, div, point, px,
 };
 
 use crate::theme::Theme;
+
+/// Rend un contrôle activable au clavier, en plus de la souris.
+///
+/// # Pourquoi ce n'est pas dans [`control`] lui-même
+///
+/// Parce que ce serait faux pour au moins un contrôle du dépôt. Le dialogue
+/// d'approbation d'une écriture en production **ne doit pas** être approuvable
+/// à la touche Entrée : une confirmation finit par être cliquée, et une
+/// confirmation qu'on valide sans la lire ne confirme rien
+/// ([I-02](../../../CLAUDE.md#i-02)). Son test
+/// `production_focus_stays_inside_review_and_enter_never_approves` tient
+/// exactement cela.
+///
+/// L'activation est donc **déclarée par la vue**, contrôle par contrôle. Ce qui
+/// n'est pas déclaré n'est pas activable — et le vérifier est le geste que la
+/// [liste de contrôle](../../../.claude/checklists/revue-ui.md) rend bloquant.
+///
+/// # Ce que `control` fait, et ne fait pas
+///
+/// Il pose `tab_stop`, donc l'**atteignabilité**. GPUI n'active rien au clavier
+/// de lui-même : un contrôle focalisé n'appelle pas son `on_click` sur Entrée
+/// ni sur Espace, ce que fige le test
+/// `un_controle_focalise_nest_pas_active_par_le_clavier`. Un commentaire de ce
+/// fichier a affirmé le contraire, et s'y fier a laissé trois boutons
+/// atteignables au Tab et inertes.
+pub fn activable<V: 'static>(
+    element: Stateful<Div>,
+    action: impl Fn(&mut V, &mut Window, &mut Context<'_, V>) + 'static,
+    cx: &Context<'_, V>,
+) -> Stateful<Div> {
+    element.on_key_down(cx.listener(move |vue, event: &KeyDownEvent, window, cx| {
+        if matches!(event.keystroke.key.as_str(), "enter" | "space") {
+            action(vue, window, cx);
+            cx.stop_propagation();
+        }
+    }))
+}
 
 /// Ce qu'un contrôle laisse faire.
 ///
@@ -164,10 +201,16 @@ pub fn control(
             colors.text_faint
         });
 
-    // `tab_stop` porte aussi l'activation : GPUI déclenche `on_click` avec un
-    // `ClickEvent::Keyboard` sur Entrée et Espace pour l'élément qui a le
-    // focus. Un contrôle désactivé doit donc en sortir explicitement, sinon il
-    // reste atteignable **et** activable au clavier tout en paraissant inerte.
+    // `tab_stop` ne porte **que** l'atteignabilité. GPUI n'active rien au
+    // clavier : un contrôle focalisé n'appelle pas son `on_click` sur Entrée
+    // ni sur Espace, et une vue qui en construit un doit accrocher son propre
+    // `on_key_down` — c'est ce que font `ApprovalDialog` et `ConnectionForm`.
+    // Le test `un_controle_focalise_nest_pas_active_par_le_clavier` fige ce
+    // fait, parce que l'inverse a été écrit ici et que s'y fier laisse des
+    // boutons inutilisables au clavier.
+    //
+    // Un contrôle désactivé sort quand même du parcours : atteindre par Tab un
+    // élément inerte n'apprend rien et fait perdre le fil.
     let base = if state.is_focusable() {
         base.tab_index(0).tab_stop(true)
     } else {
@@ -280,5 +323,93 @@ mod tests {
         for theme in [Theme::dark(), Theme::light()] {
             assert_eq!(focus_ring(&theme).color, theme.colors.border_focus);
         }
+    }
+
+    /// Ce que `control` **ne** fait **pas**, et qu'il faut compenser.
+    ///
+    /// Un contrôle atteignable au clavier mais qui n'obéit qu'à la souris est
+    /// inutilisable, et c'est un point bloquant de la liste de contrôle. Ce
+    /// test existe parce que l'inverse a été affirmé ici pendant un temps : il
+    /// fige le comportement réel de GPUI, pour qu'une vue qui construit un
+    /// `control()` sache qu'elle doit accrocher son propre `on_key_down` —
+    /// comme `ApprovalDialog` et `ConnectionForm` le font déjà.
+    ///
+    /// Il rougirait aussi le jour où GPUI se mettrait à activer sur Entrée :
+    /// ce serait alors une **régression de sécurité** à traiter, pas une bonne
+    /// nouvelle. Un bouton d'approbation d'écriture en production activable
+    /// par la touche Entrée est exactement ce qu'[I-02](../../../CLAUDE.md#i-02)
+    /// interdit, et ce que `production_focus_stays_inside_review_and_enter_never_approves`
+    /// tient dans `approval.rs`.
+    #[gpui::test]
+    fn un_controle_focalise_nest_pas_active_par_le_clavier(cx: &mut gpui::TestAppContext) {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        struct Sonde {
+            focus: gpui::FocusHandle,
+            activations: Rc<Cell<usize>>,
+            touches: Rc<Cell<usize>>,
+        }
+
+        impl gpui::Render for Sonde {
+            fn render(
+                &mut self,
+                _: &mut gpui::Window,
+                cx: &mut gpui::Context<'_, Self>,
+            ) -> impl gpui::IntoElement {
+                let compteur = Rc::clone(&self.activations);
+                control(
+                    "sonde",
+                    ControlState::Enabled,
+                    ControlTone::Neutral,
+                    &Theme::dark(),
+                    move |_, _, _| compteur.set(compteur.get() + 1),
+                )
+                .track_focus(&self.focus)
+                // Compte les touches **reçues**, sans agir. Sans ce témoin, un
+                // zéro d'activations se lirait aussi bien comme « GPUI n'active
+                // pas » que comme « les touches ne sont jamais arrivées » — et
+                // le test passerait pour la mauvaise raison.
+                .on_key_down(cx.listener(|sonde, _, _, _| {
+                    sonde.touches.set(sonde.touches.get() + 1);
+                }))
+            }
+        }
+
+        let activations = Rc::new(Cell::new(0));
+        let touches = Rc::new(Cell::new(0));
+        let (compteur, recues) = (Rc::clone(&activations), Rc::clone(&touches));
+        let (sonde, cx) = cx.add_window_view(|_, cx| Sonde {
+            focus: cx.focus_handle(),
+            activations: compteur,
+            touches: recues,
+        });
+        cx.run_until_parked();
+
+        cx.update(|window, cx| window.focus(&sonde.read(cx).focus.clone()));
+        cx.run_until_parked();
+        cx.update(|window, cx| {
+            assert!(
+                sonde.read(cx).focus.is_focused(window),
+                "la sonde doit tenir le focus pour que le test mesure ce qu'il prétend"
+            );
+        });
+
+        cx.simulate_keystrokes("enter");
+        cx.simulate_keystrokes("space");
+        cx.run_until_parked();
+
+        assert_eq!(
+            touches.get(),
+            2,
+            "les deux touches doivent atteindre le contrôle focalisé, sinon ce \
+             test ne mesure rien"
+        );
+        assert_eq!(
+            activations.get(),
+            0,
+            "`control` n'active rien au clavier : une vue qui en construit un \
+             accroche son propre `on_key_down`"
+        );
     }
 }

@@ -5,6 +5,16 @@ use super::*;
 use gpui::{AnyElement, div, px, uniform_list};
 use oxyn_ui::Theme;
 
+/// Pourquoi `Edit rows…` est inerte.
+///
+/// Une seule constante pour les **deux** chemins qu'[UX-SPEC](../../../docs/UX-SPEC.md)
+/// demande : l'infobulle, pour qui pointe, et le panneau de `Why unavailable?`,
+/// pour qui tabule. Deux textes finiraient par diverger, et c'est le genre
+/// d'écart que rien ne signale.
+const EDIT_UNAVAILABLE: &str = "Editing requires an editable view, a writable session and \
+     appropriate driver capabilities. This preview is read only. Production writes require a \
+     review naming the connection and showing the exact SQL.";
+
 impl Workspace {
     pub(super) fn object_details(&self, cx: &Context<'_, Self>) -> AnyElement {
         let theme = Theme::of(cx);
@@ -30,22 +40,45 @@ impl Workspace {
                         .when(self.compact_layout, |el| el.child(self.control("preview-actions", "Actions", Control::ResultActions, false, cx)))
                         .when(self.compact_layout || !self.inspector_open, |el| el.child(self.control("preview-inspect-row", "Inspect row", Control::Inspector, false, cx)))
                         .child(div().flex_1().whitespace_nowrap().text_size(theme.typography.small_size).text_color(theme.colors.text_muted).child("Read-only preview"))
-                        .child(div().h(px(32.)).px_3().flex().items_center().border_1().border_color(theme.colors.border).rounded(theme.radii.control).opacity(0.5).child("Edit rows…"))
+                        // L'infobulle qu'UX-SPEC demande, et qui manquait : le
+                        // panneau de `Why unavailable?` ne sert qu'à qui tabule.
+                        .child(div().id("preview-edit-rows").h(px(32.)).px_3().flex().items_center().border_1().border_color(theme.colors.border).rounded(theme.radii.control).opacity(0.5).child("Edit rows…")
+                            .tooltip(|_, cx| cx.new(|_| super::controls::WorkspaceTooltip(EDIT_UNAVAILABLE.into())).into()))
                         .child(self.control("preview-edit-help", "Why unavailable?", Control::ObjectHelp, false, cx)))
                     .when(self.compact_layout && self.result_actions_open, |el| el.child(div().flex().gap_2().flex_none()
                         .child(self.control("preview-columns-menu", self.columns_label(ResultSource::Preview, cx), Control::Columns, false, cx))
                         .child(self.control("preview-export-menu", "Export preview…", Control::PreviewExport, false, cx))))
+                    // Figma `190:1618`: the filter bar sits under the Data bar,
+                    // and exists only for a session that can act on it.
+                    .children(self.preview_filter_bar(cx))
+                    .children(self.preview_sort_panel(cx))
                     .when(self.columns_open, |el| el.child(self.column_manager(ResultSource::Preview, cx)))
-                    .when(self.object_help_open, |el| el.child(div().p_3().border_1().border_color(theme.colors.border).rounded(theme.radii.control).child("Editing requires an editable view, a writable session and appropriate driver capabilities. This preview is read only. Production writes require a review naming the connection and showing the exact SQL.")))
+                    .when(self.object_help_open, |el| el.child(div().p_3().border_1().border_color(theme.colors.border).rounded(theme.radii.control).child(EDIT_UNAVAILABLE)))
                     .when(self.preview_export_open, |el| el.child(self.preview_export.clone()))
                     .child(self.result_area(ResultSource::Preview, cx))
-                    .child(div().flex().items_center().justify_between().text_size(theme.typography.small_size).text_color(theme.colors.text_muted)
-                        .child(self.preview_notice.clone())
+                    .child(div().flex().items_center().gap_3().text_size(theme.typography.small_size).text_color(theme.colors.text_muted)
+                        .child(div().flex_none().child(self.preview_notice.clone()))
+                        // The mock draws no page control (`190:1860` counts rows
+                        // and nothing else); they join the count because that is
+                        // the sentence that explains them, see FIGMA-HANDOFF.
+                        .children(self.preview_pages(cx))
+                        .child(div().flex_1().min_w_0())
                         .child(self.control("preview-text-size", self.reading_label(cx), Control::ToggleReading, false, cx)))
+                    .children(self.preview_shape_notice(cx))
                     .child(div().text_size(theme.typography.small_size).text_color(theme.colors.text_muted).child("Preview is limited to 200 rows. Refresh data starts a new read. Export includes only these preview rows."))
                     .into_any_element()
             } else {
-                div().p_4().text_color(theme.colors.text_muted).child("This object does not support a SQL data preview. Its metadata is available in Structure.").into_any_element()
+                div().p_4().text_color(theme.colors.text_muted).child(
+                    // A restored location has not been looked up yet: saying the
+                    // object "does not support" a preview would state as a fact
+                    // something nobody has checked. Restoration reads nothing on
+                    // purpose ([ADR-0021]), so the honest word is "not yet".
+                    if self.location_unconfirmed {
+                        "This location was restored and not read yet. Open its container in the explorer, or use Refresh data."
+                    } else {
+                        "This object does not support a SQL data preview. Its metadata is available in Structure."
+                    },
+                ).into_any_element()
             })
             .into_any_element()
     }

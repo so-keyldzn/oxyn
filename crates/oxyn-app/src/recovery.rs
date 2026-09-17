@@ -38,6 +38,11 @@ enum Action {
 
 pub(crate) struct Recovery {
     backend: Backend,
+    /// Le lancement précédent s'est-il terminé anormalement ?
+    ///
+    /// Constaté à l'ouverture et jamais relu : c'est ce qui autorise l'écran à
+    /// l'**affirmer**, et ce qui l'en empêche quand il est ouvert à la demande.
+    abnormal: bool,
     rows: Vec<DocumentSummary>,
     selected: BTreeMap<DocumentId, DocumentSummary>,
     restored: Vec<DocumentSummary>,
@@ -73,7 +78,11 @@ impl Focusable for Recovery {
 }
 impl Recovery {
     pub(crate) fn new(backend: Backend, cx: &mut Context<'_, Self>) -> Self {
+        // Ce que le lancement a **constaté**, lu une fois : le relire plus tard
+        // verrait cette session-ci (ADR-0021).
+        let abnormal = backend.previous_shutdown().needs_recovery();
         let mut this = Self {
+            abnormal,
             backend,
             rows: Vec::new(),
             selected: BTreeMap::new(),
@@ -97,6 +106,31 @@ impl Recovery {
         };
         this.load_page(true, cx);
         this
+    }
+
+    /// Ce que l'écran a le droit d'affirmer sur le lancement précédent.
+    ///
+    /// [ADR-0021](../../../docs/adr/0021-marqueur-d-arret.md) pose que « ce
+    /// qu'Oxyn affiche est ce qu'il a constaté » : quand une session abandonnée
+    /// est trouvée, l'écran **dit** qu'Oxyn ne s'est pas fermé normalement. Il
+    /// ne le disait pas — le coût de la migration 6 était payé, le bénéfice
+    /// annoncé ne l'était pas.
+    ///
+    /// La distinction compte dans l'autre sens aussi : le même écran s'ouvre à
+    /// la demande, depuis « Saved working copies ». Y annoncer un plantage qui
+    /// n'a pas eu lieu serait un mensonge de plus, symétrique du silence.
+    fn opening_notice(&self, empty: bool) -> &'static str {
+        match (self.abnormal, empty) {
+            (true, true) => {
+                "Oxyn did not close normally. No saved working copies were found on this page."
+            }
+            (true, false) => {
+                "Oxyn did not close normally. Choose the working copies to restore. \
+                 Connections remain closed."
+            }
+            (false, true) => "No saved working copies on this page.",
+            (false, false) => "Choose the working copies to restore. Connections remain closed.",
+        }
     }
     fn stop_read(&mut self) {
         if let Some((_, cancel)) = self.request.take() {
@@ -143,12 +177,7 @@ impl Recovery {
                         }
                         this.next = page.next;
                         this.row = 0;
-                        this.notice = if this.rows.is_empty() {
-                            "No saved working copies on this page."
-                        } else {
-                            "Choose the working copies to restore. Connections remain closed."
-                        }
-                        .into();
+                        this.notice = this.opening_notice(this.rows.is_empty()).into();
                         if startup && this.rows.is_empty() {
                             cx.emit(RecoveryEvent::Empty);
                         }
@@ -487,6 +516,14 @@ impl Render for Recovery {
                             }
                             this.scroll.scroll_to_item(this.row, gpui::ScrollStrategy::Top); cx.notify(); cx.stop_propagation();
                         })))
+                    // Relevé `232:9100` : la maquette titre cet avertissement
+                    // avant de le détailler, et c'est le seul titre de cette
+                    // planche. La raison n'est pas typographique — c'est la
+                    // phrase qui porte I-13, et noyée entre une table et une
+                    // rangée de boutons elle se lit comme une note de bas de
+                    // page. Un utilisateur qui la saute relance une écriture
+                    // dont le serveur a peut-être déjà appliqué la première.
+                    .child(div().font_weight(gpui::FontWeight::MEDIUM).child("A write may have an unknown outcome"))
                     .child("If a write was interrupted, inspect the server state before deciding what to do. Recovery never retries it.")
                     .child(div().flex().flex_wrap().gap_2()
                         .when(!self.selected.is_empty(), |el| el.child(self.button("restore-selected", format!("Restore {} selected items", self.selected.len()), Action::Restore, cx)))

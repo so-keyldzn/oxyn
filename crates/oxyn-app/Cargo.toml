@@ -16,18 +16,22 @@ path = "src/main.rs"
 
 [dependencies]
 oxyn-core.workspace = true
+oxyn-ai.workspace = true
 oxyn-catalog.workspace = true
 oxyn-data.workspace = true
 oxyn-driver.workspace = true
 oxyn-driver-postgres.workspace = true
 oxyn-driver-sqlite.workspace = true
 oxyn-exec.workspace = true
+oxyn-llm.workspace = true
 oxyn-query.workspace = true
 oxyn-secrets.workspace = true
 oxyn-store.workspace = true
 oxyn-ui.workspace = true
 anyhow.workspace = true
 arrow.workspace = true
+async-trait.workspace = true
+chrono.workspace = true
 directories.workspace = true
 gpui.workspace = true
 parking_lot.workspace = true
@@ -36,4 +40,5 @@ tracing.workspace = true
 tracing-subscriber.workspace = true
 
 [dev-dependencies]
+oxyn-store = { workspace = true, features = ["test-support"] }
 gpui = { workspace = true, features = ["test-support"] }

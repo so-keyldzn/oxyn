@@ -357,18 +357,22 @@ impl Render for ParameterEditor {
             );
         }
         body.child(
-            control(
-                "parameter-add",
-                if self.rows.len() < MAX_PARAMETERS {
-                    ControlState::Enabled
-                } else {
-                    ControlState::Disabled
-                },
-                ControlTone::Primary,
-                &theme,
-                cx.listener(|this, _, _, cx| {
-                    this.add_parameter(cx);
-                }),
+            crate::controls::activable(
+                control(
+                    "parameter-add",
+                    if self.rows.len() < MAX_PARAMETERS {
+                        ControlState::Enabled
+                    } else {
+                        ControlState::Disabled
+                    },
+                    ControlTone::Primary,
+                    &theme,
+                    cx.listener(|this, _, _, cx| {
+                        this.add_parameter(cx);
+                    }),
+                ),
+                |this, _, cx| this.add_parameter(cx),
+                cx,
             )
             .child("Add"),
         )

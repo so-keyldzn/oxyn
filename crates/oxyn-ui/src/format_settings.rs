@@ -88,13 +88,13 @@ const GROUPEMENTS: [Segment; 2] = [
     Segment {
         mode: NumberGrouping::None,
         id: "oxyn-format-grouping-none",
-        label: "Aucun",
+        label: "None",
         preview: "4823917",
     },
     Segment {
         mode: NumberGrouping::Thousands,
         id: "oxyn-format-grouping-thousands",
-        label: "Milliers",
+        label: "Thousands",
         preview: "4\u{a0}823\u{a0}917",
     },
 ];
@@ -214,11 +214,11 @@ impl FormatSettings {
             .flex()
             .flex_col()
             .gap(theme.spacing.tiny)
-            .child(label("Indicateur de valeur absente", theme).child(
+            .child(label("Missing value marker", theme).child(
                 // La règle du module `oxyn_data::cell` en une phrase : une
                 // colonne texte peut contenir littéralement « NULL », et
                 // l'écran doit rester capable de distinguer les deux.
-                hint("dessiné en italique, distinct d'une chaîne", theme),
+                hint("drawn in italics, distinct from a text value", theme),
             ))
             // Le champ porte sa propre hauteur ; la largeur est celle du
             // conteneur, bornée. Emprunter ici `metrics.sidebar_width` aurait
@@ -237,25 +237,28 @@ impl FormatSettings {
             .flex_col()
             .gap(theme.spacing.tiny)
             .child(
-                label("Format des nombres", theme)
-                    .child(hint("n'affecte pas les fichiers exportés", theme)),
+                label("Number format", theme).child(hint("does not affect exported files", theme)),
             )
             .child(div().flex().flex_row().gap(theme.spacing.small).children(
                 GROUPEMENTS.iter().map(|segment| {
                     let mode = segment.mode;
                     let retenu = mode == actif;
-                    control(
-                        segment.id,
-                        state,
-                        if retenu {
-                            ControlTone::Primary
-                        } else {
-                            ControlTone::Neutral
-                        },
-                        theme,
-                        cx.listener(move |ecran, _, _, cx| {
-                            ecran.choose_grouping(mode, cx);
-                        }),
+                    crate::controls::activable(
+                        control(
+                            segment.id,
+                            state,
+                            if retenu {
+                                ControlTone::Primary
+                            } else {
+                                ControlTone::Neutral
+                            },
+                            theme,
+                            cx.listener(move |ecran, _, _, cx| {
+                                ecran.choose_grouping(mode, cx);
+                            }),
+                        ),
+                        move |ecran, _, cx| ecran.choose_grouping(mode, cx),
+                        cx,
                     )
                     .h(theme.metrics.control_height)
                     .px(theme.spacing.medium)

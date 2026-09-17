@@ -1059,7 +1059,7 @@ impl QueryEditor {
                 element.child(
                     div()
                         .text_color(theme.colors.warning)
-                        .child("exécution en cours — Échap annule"),
+                        .child("running — Esc cancels"),
                 )
             })
             .into_any_element()

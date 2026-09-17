@@ -5,6 +5,42 @@ use super::*;
 use gpui::{AnyElement, FontWeight, div, px};
 use oxyn_ui::{NEVER_EMULATED, Theme, surfaces};
 
+/// Prefixes a title with the agent mark, when an agent wrote the text.
+///
+/// # Pourquoi la marque est un **préfixe**
+///
+/// [ADR-0023](../../../docs/adr/0023-fournisseurs-declares-et-provenance.md) et
+/// [UX-SPEC](../../../docs/UX-SPEC.md#ce-quun-agent-a-écrit-reste-marqué) posent
+/// qu'un texte écrit par un agent porte sa provenance, et qu'elle est visible
+/// sur l'onglet. Elle était **écrite en base et montrée nulle part** : la
+/// garantie annoncée était invérifiable par celui qu'elle protège.
+///
+/// Elle précède le titre parce qu'un onglet se tronque par la fin : un suffixe
+/// serait le premier à disparaître, et disparaîtrait d'autant plus vite que le
+/// titre est long. Les états, eux, restent en suffixe — ils sont transitoires,
+/// la marque ne l'est pas.
+///
+/// Partagée avec la bibliothèque plutôt que recopiée : la marque doit se lire
+/// **pareil** aux deux endroits qu'UX-SPEC nomme — l'onglet et la bibliothèque
+/// —, et deux formulations finiraient par diverger sans que rien n'échoue.
+pub(super) fn agent_marked(title: &str, from_agent: bool) -> String {
+    if from_agent {
+        format!("AI · {title}")
+    } else {
+        title.to_owned()
+    }
+}
+
+/// Le libellé d'un onglet de console : son titre, sa marque, son état.
+fn tab_label(title: &str, from_agent: bool, state: Option<&str>) -> String {
+    let mut label = agent_marked(title, from_agent);
+    if let Some(state) = state {
+        label.push_str(" · ");
+        label.push_str(state);
+    }
+    label
+}
+
 impl Workspace {
     pub(super) fn document_tabs(&self, cx: &Context<'_, Self>) -> AnyElement {
         let theme = Theme::of(cx);
@@ -43,21 +79,23 @@ impl Workspace {
                     } else {
                         &view.title
                     };
-                    let label = if view.document_closing {
-                        format!("{} · closing", title)
-                    } else if view.save_active.is_some() {
-                        format!("{} · saving", title)
-                    } else if view.awaiting_approval {
-                        format!("{} · approval", title)
-                    } else if view.active.is_some() {
-                        format!("{} · running", title)
-                    } else {
-                        if view.dirty {
-                            format!("{} · unsaved", title)
+                    let label = tab_label(
+                        title,
+                        view.provenance.is_some(),
+                        if view.document_closing {
+                            Some("closing")
+                        } else if view.save_active.is_some() {
+                            Some("saving")
+                        } else if view.awaiting_approval {
+                            Some("approval")
+                        } else if view.active.is_some() {
+                            Some("running")
+                        } else if view.dirty {
+                            Some("unsaved")
                         } else {
-                            title.to_owned()
-                        }
-                    };
+                            None
+                        },
+                    );
                     let click_target = console.clone();
                     let key_target = console.clone();
                     let close_target = console.clone();
@@ -106,11 +144,48 @@ impl Workspace {
                         .child(
                             div()
                                 .id(("close-console", console.entity_id()))
+                                // Atteignable au clavier, et actionnable : sans
+                                // ces deux lignes, ce bouton était visible,
+                                // cliquable et inutilisable autrement qu'à la
+                                // souris — le point bloquant de
+                                // `.claude/checklists/revue-ui.md`.
+                                //
+                                // `⌘W` ne le remplace pas : il ferme la console
+                                // **active**, et seulement dans le panneau SQL.
+                                // Fermer un autre onglet imposait donc de l'aller
+                                // sélectionner d'abord, ou de prendre la souris.
+                                //
+                                // Sans test automatique, et c'est assumé : le
+                                // vérifier demanderait d'atteindre ce bouton par
+                                // tabulations depuis un point connu, or leur
+                                // nombre dépend des onglets ouverts et des
+                                // contrôles qui précèdent. Un test qui pose le
+                                // focus par un clic, ou qui appelle
+                                // `request_close_console` en direct, serait vert
+                                // sans rien prouver de l'atteignabilité — le
+                                // piège que `.claude/rules/tests.md` nomme. Cela
+                                // relève de la recette clavier.
+                                .tab_index(0)
+                                .focus(|el| el.border_color(theme.colors.border_focus))
                                 .ml_2()
                                 .px_1()
                                 .cursor_pointer()
                                 .text_size(theme.typography.small_size)
                                 .child("Close")
+                                .on_key_down(cx.listener({
+                                    let key_close = close_target.clone();
+                                    move |this, event: &gpui::KeyDownEvent, window, cx| {
+                                        if matches!(event.keystroke.key.as_str(), "enter" | "space")
+                                        {
+                                            this.request_close_console(
+                                                key_close.clone(),
+                                                window,
+                                                cx,
+                                            );
+                                            cx.stop_propagation();
+                                        }
+                                    }
+                                }))
                                 .on_click(cx.listener(move |this, _, window, cx| {
                                     this.request_close_console(close_target.clone(), window, cx);
                                     cx.stop_propagation();
@@ -214,6 +289,21 @@ impl Workspace {
                             false,
                             cx,
                         ))
+                        // Le relevé `191:1521` place cette mention après
+                        // `Parameters`. Elle dit une chose que rien d'autre ne
+                        // dit dans la console : la **connexion** est en lecture
+                        // seule, donc `Run` refusera une écriture avant même de
+                        // l'envoyer. Sans elle, l'utilisateur écrit son `UPDATE`
+                        // et découvre le refus à l'exécution.
+                        .when(self.read_only, |el| {
+                            el.child(
+                                div()
+                                    .flex_none()
+                                    .text_size(theme.typography.small_size)
+                                    .text_color(theme.colors.text_muted)
+                                    .child("Read-only console"),
+                            )
+                        })
                         .child(self.control(
                             "query-columns",
                             self.columns_label(ResultSource::Query, cx),
@@ -314,6 +404,7 @@ impl Workspace {
                         .child(self.export.clone()),
                 )
                 .into_any_element(),
+            WorkspacePanel::Assistant => self.assistant_panel(cx),
             WorkspacePanel::Object => self.object_details(cx),
             WorkspacePanel::Preferences => self.preferences_panel(cx),
             WorkspacePanel::Library => div().flex_1().min_h_0().flex().child(self.library.clone()).into_any_element(),
@@ -413,5 +504,60 @@ impl Workspace {
                     )
             }))
             .into_any_element()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{super::preview::preview_notice, tab_label};
+
+    /// Le pied d'un aperçu dit que le total n'a **pas** été demandé.
+    ///
+    /// Relevé `190:1163`. Sans cette mention, un aperçu de 200 lignes sur une
+    /// table qui en contient cinquante millions ressemble en tout point à un
+    /// aperçu de 200 lignes sur une table qui en contient 200 — et Oxyn ne
+    /// compte jamais les lignes pour l'afficher, parce qu'un `COUNT(*)` sur
+    /// cinquante millions de lignes est une requête que personne n'a demandée.
+    #[test]
+    fn le_pied_d_un_apercu_ne_laisse_pas_croire_a_un_total() {
+        let pied = preview_notice(200, std::time::Duration::from_millis(284));
+        assert!(pied.contains("200 rows shown"), "{pied}");
+        assert!(
+            pied.contains("Total count not requested"),
+            "le nombre affiché n'est pas celui de la table, et il faut le dire : {pied}"
+        );
+        // La durée vient de la maquette (`190:1860`) et manquait : elle
+        // distingue une base lente d'un aperçu qui n'a rien trouvé.
+        assert!(pied.contains("284 ms"), "{pied}");
+        // Et elle ne redit pas la lecture seule : la barre Data la porte déjà,
+        // quarante pixels plus haut. La maquette ne l'écrit qu'une fois.
+        assert!(
+            !pied.contains("Read only"),
+            "mention dupliquée avec la barre Data : {pied}"
+        );
+    }
+
+    /// La marque d'un agent se voit, et elle survit à un onglet tronqué.
+    ///
+    /// Trouvé par la relecture des divergences : la provenance était écrite en
+    /// base, protégée par un `coalesce`, testée dans le store — et **montrée
+    /// nulle part**. ADR-0023 existe pour qu'on sache six mois plus tard qu'un
+    /// agent a écrit ce `SELECT` ; la donnée était là, illisible depuis Oxyn.
+    #[test]
+    fn un_onglet_dit_quand_un_agent_a_ecrit_son_texte() {
+        assert_eq!(tab_label("rapport.sql", false, None), "rapport.sql");
+        assert_eq!(tab_label("rapport.sql", true, None), "AI · rapport.sql");
+
+        // Les états restent en suffixe, la marque en préfixe : un onglet se
+        // tronque par la fin, et c'est l'état qui doit céder en premier — il
+        // est transitoire, la provenance ne l'est pas.
+        assert_eq!(
+            tab_label("rapport.sql", true, Some("running")),
+            "AI · rapport.sql · running"
+        );
+        assert_eq!(
+            tab_label("rapport.sql", false, Some("unsaved")),
+            "rapport.sql · unsaved"
+        );
     }
 }

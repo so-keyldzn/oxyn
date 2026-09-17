@@ -51,6 +51,28 @@ pub struct ConnectionDisplay {
     pub environment: Environment,
     /// Whether writes are refused on it.
     pub read_only: bool,
+    /// What may leave the machine about this connection when an agent speaks.
+    ///
+    /// Carried here rather than read again when needed: the tier belongs to the
+    /// connection and to nothing else, and a view that fetched it from anywhere
+    /// but the open connection would eventually show the tier of a different
+    /// one ([I-04](../../../CLAUDE.md#i-04)).
+    ///
+    /// # Le piège du jour où une connexion deviendra modifiable
+    ///
+    /// Cette valeur est une **copie**, prise à l'ouverture, et le `display` d'un
+    /// workspace n'est jamais réassigné. Aujourd'hui c'est sans conséquence :
+    /// `Command::UpdateConnection` existe et l'exécuteur la traite, mais
+    /// **aucune vue ne l'émet** — vérifié le 2026-09-15 sur tout le dépôt. Rien
+    /// ne peut donc changer le niveau d'une connexion déjà ouverte.
+    ///
+    /// Le jour où un écran de modification sera écrit, cette copie devra être
+    /// rafraîchie, **sinon I-04 tombe exactement comme son énoncé le décrit** :
+    /// l'utilisateur qui reconnaît une base client et durcit son niveau
+    /// continuerait de parler à l'IA sous l'ancien, dans la fenêtre déjà
+    /// ouverte — celle où il travaille. Le durcissement serait accepté,
+    /// affiché ailleurs, et sans effet là où il compte.
+    pub privacy_tier: oxyn_core::PrivacyTier,
 }
 
 impl ConnectionDisplay {
@@ -61,6 +83,7 @@ impl ConnectionDisplay {
             driver: config.driver.to_string(),
             environment: config.environment,
             read_only: config.read_only,
+            privacy_tier: config.privacy_tier,
         }
     }
 }
@@ -114,7 +137,11 @@ pub struct Backend {
 }
 
 struct Inner {
-    executor: Executor,
+    /// Partagé par `Arc` plutôt que possédé : un puits d'agent en retient une
+    /// poignée pour la durée d'une conversation, et c'est le même ordonnanceur
+    /// que celui de l'interface — il n'en existe pas un second
+    /// ([ADR-0004](../../../docs/adr/0004-command-bus.md)).
+    executor: Arc<Executor>,
     /// Held for the connection screen: the registry is the only authority on
     /// which database types exist ([ADR-0003](../../../docs/adr/0003-driver-capabilities.md)).
     drivers: Arc<DriverRegistry>,
@@ -126,6 +153,13 @@ struct Inner {
     saved: Vec<(ConnectionId, SavedConnection)>,
     preferences: oxyn_core::PreferencesSnapshot,
     pending_local_writes: Arc<PendingLocalWrites>,
+    /// Ce lancement, et ce que le précédent a laissé derrière lui.
+    ///
+    /// Le constat est fait une fois, à l'ouverture, avant que quoi que ce soit
+    /// n'ait pu écrire : le relire plus tard verrait cette session-ci
+    /// ([ADR-0021](../../../docs/adr/0021-marqueur-d-arret.md)).
+    session: oxyn_core::AppSessionId,
+    previous_shutdown: oxyn_store::sessions::PreviousShutdown,
 }
 
 #[derive(Default)]
@@ -187,6 +221,44 @@ impl Backend {
             Arc::new(Store::open_in_memory()?),
             Arc::new(oxyn_secrets::MemorySecretStore::new()),
             bytes,
+        )
+    }
+
+    /// Un backend dont le store porte déjà une session laissée ouverte et
+    /// muette : ce que le lancement suivant lit après un plantage.
+    ///
+    /// Le vieillissement est écrit directement dans la table plutôt que d'être
+    /// attendu : le seuil d'abandon est de deux minutes, et un test qui les
+    /// attendrait ne serait plus un test.
+    #[cfg(test)]
+    pub(crate) fn temporary_with_abandoned_session() -> Result<Self> {
+        let store = Arc::new(Store::open_in_memory()?);
+        let atelier = atelier_courant(&store)?;
+        let (abandonnee, _) = store.sessions().begin(atelier)?;
+        store.mark_session_stale_for_tests(abandonnee)?;
+        // Un plantage laisse un brouillon derrière lui : sans copie à reprendre,
+        // l'écran de reprise n'aurait rien à annoncer et se refermerait, ce qui
+        // ne prouverait rien du constat.
+        store.documents().update_query(
+            atelier,
+            &oxyn_core::QueryDocumentUpdate {
+                document: oxyn_core::DocumentId::new(),
+                revision: 1,
+                expected_revision: None,
+                title: "interrupted draft".to_owned(),
+                language: oxyn_core::QueryLanguage::Sql(SqlDialect::Sqlite),
+                text: "SELECT 'work in progress'".to_owned(),
+                connection: None,
+                save_named: false,
+                is_open: true,
+                provenance: None,
+            },
+            &CancelToken::new(),
+        )?;
+        Self::assemble(
+            store,
+            Arc::new(oxyn_secrets::MemorySecretStore::new()),
+            oxyn_data::DEFAULT_MEMORY_BUDGET,
         )
     }
 
@@ -254,15 +326,20 @@ impl Backend {
         }
         tracing::info!(connections = known, "saved connections registered");
 
+        // Constaté puis inscrit avant tout le reste : une session ouverte plus
+        // tard se compterait elle-même.
+        let (session, previous_shutdown) = executor.store().sessions().begin(atelier)?;
         let backend = Self {
             inner: Arc::new(Inner {
-                executor,
+                executor: Arc::new(executor),
                 drivers,
                 policy,
                 credentials,
                 saved,
                 preferences,
                 pending_local_writes: Arc::new(PendingLocalWrites::default()),
+                session,
+                previous_shutdown,
             }),
             runtime: Arc::new(runtime),
         };
@@ -274,7 +351,38 @@ impl Backend {
                 let Some(inner) = weak.upgrade() else {
                     break;
                 };
-                let _ = tokio::task::spawn_blocking(move || inner.executor.prune_results()).await;
+                // Même battement pour journaliser l'issue des commandes
+                // abandonnées par leur appelant : sans lui, elles n'ont jamais
+                // d'issue dans le journal d'audit.
+                let _ = tokio::task::spawn_blocking(move || {
+                    inner.executor.prune_results();
+                    inner.executor.journal_abandoned();
+                })
+                .await;
+            }
+        });
+        // Le battement dit « cette instance travaille ». Il part sur le pool
+        // bloquant : c'est une écriture SQLite, et le thread d'interface n'en
+        // fait aucune ([I-05](../../../CLAUDE.md#i-05)).
+        let battant = Arc::downgrade(&backend.inner);
+        backend.runtime.spawn(async move {
+            let mut interval = tokio::time::interval(
+                oxyn_store::sessions::HEARTBEAT_INTERVAL
+                    .to_std()
+                    .unwrap_or(std::time::Duration::from_secs(30)),
+            );
+            loop {
+                interval.tick().await;
+                let Some(inner) = battant.upgrade() else {
+                    break;
+                };
+                let _ = tokio::task::spawn_blocking(move || {
+                    // Un battement manqué ne vaut pas la peine d'être signalé à
+                    // l'utilisateur : le suivant arrive dans trente secondes, et
+                    // le seuil d'abandon en laisse passer quatre.
+                    let _ = inner.executor.store().sessions().heartbeat(inner.session);
+                })
+                .await;
             }
         });
         Ok(backend)
@@ -288,6 +396,35 @@ impl Backend {
     /// Workspace owning local documents and preferences.
     pub fn workspace_id(&self) -> oxyn_core::WorkspaceId {
         self.inner.executor.workspace()
+    }
+
+    /// Comment le lancement précédent s'est terminé.
+    ///
+    /// Constaté à l'ouverture, avant toute écriture ; aucune I/O ici.
+    #[must_use]
+    pub fn previous_shutdown(&self) -> oxyn_store::sessions::PreviousShutdown {
+        self.inner.previous_shutdown
+    }
+
+    /// Inscrit la fermeture ordinaire de cette session, **après** avoir attendu
+    /// les écritures locales.
+    ///
+    /// L'ordre est le fond de la chose : inscrite avant, la fermeture
+    /// marquerait un arrêt propre sur du travail non encore écrit, c'est-à-dire
+    /// exactement le cas où la reprise doit se déclencher
+    /// ([ADR-0021](../../../docs/adr/0021-marqueur-d-arret.md)). Un échec
+    /// d'écriture n'est pas propagé : il ne reste plus personne pour le lire, et
+    /// une session sans fermeture sera simplement traitée comme abandonnée — le
+    /// sens prudent.
+    pub async fn close_session_after_local_writes(&self) {
+        self.wait_for_local_writes().await;
+        let inner = Arc::clone(&self.inner);
+        let _ = tokio::task::spawn_blocking(move || {
+            if let Err(erreur) = inner.executor.store().sessions().close(inner.session) {
+                tracing::warn!(%erreur, "la fermeture de session n'a pas pu être inscrite");
+            }
+        })
+        .await;
     }
 
     /// Waits for already submitted preference and document writes, even after their views close.
@@ -494,6 +631,14 @@ impl Backend {
                 }
                 | Command::DeleteQueryDocument { .. }
                 | Command::WriteDocument { .. }
+                // Une déclaration de fournisseur est une écriture locale comme
+                // les autres. Sans elle ici, un ⌘Q dans la seconde qui suit un
+                // « Save » inscrit une fermeture **propre** sur un travail
+                // perdu : au redémarrage, pas de fournisseur, pas d'entrée
+                // `Ask AI`, une clé orpheline dans le trousseau, et rien nulle
+                // part qui l'explique ([ADR-0021](../../../docs/adr/0021-marqueur-d-arret.md)).
+                | Command::SaveAiProvider { .. }
+                | Command::RemoveAiProvider { .. }
         ) {
             self.inner
                 .pending_local_writes
@@ -787,15 +932,22 @@ mod tests {
             .with_drivers(drivers.clone())
             .with_credentials(credentials.clone())
             .build();
+        let (session, previous_shutdown) = executor
+            .store()
+            .sessions()
+            .begin(workspace)
+            .expect("a fresh in-memory workspace accepts its first session");
         Backend {
             inner: Arc::new(Inner {
-                executor,
+                executor: Arc::new(executor),
                 drivers,
                 policy,
                 credentials,
                 saved: Vec::new(),
                 preferences: oxyn_core::PreferencesSnapshot::default(),
                 pending_local_writes: Arc::new(PendingLocalWrites::default()),
+                session,
+                previous_shutdown,
             }),
             runtime: Arc::new(
                 tokio::runtime::Builder::new_multi_thread()
@@ -906,6 +1058,25 @@ mod tests {
         assert!(run(&backend, &open, "SELECT * FROM approved").is_ok());
     }
 
+    /// L'annulation venue de l'interface remonte comme telle, et la session
+    /// reste utilisable après.
+    ///
+    /// # Ce que ce test ne prouve pas, et pourquoi c'est écrit ici
+    ///
+    /// Il ne prouve **pas** qu'un `sqlite3_interrupt` part vers le moteur : les
+    /// deux sites qui l'émettent — `worker.rs` sur le jeton, `cursor.rs` au
+    /// `Drop` — ont été neutralisés tous les deux, et ce test est resté vert
+    /// (2026-09-15). La raison tient à la forme de la requête : elle rend un lot
+    /// de 8 192 lignes, et l'annulation est vue **entre** deux lots, alors que
+    /// le thread porteur n'est pas dans `sqlite3_step`. Il n'y a donc rien à
+    /// interrompre.
+    ///
+    /// L'interruption sert au cas que ce test n'atteint pas — un lot long à
+    /// produire, une agrégation —, et ce cas reste sans test. La règle de
+    /// `.claude/rules/tests.md` le dit : une annulation se vérifie côté moteur,
+    /// pas au retour de la fonction. Le nom de ce test promet plus qu'il ne
+    /// tient ; il est conservé tel quel pour ne pas rompre une référence, mais
+    /// ce paragraphe fait foi sur sa portée.
     #[test]
     fn ui_cancel_reaches_sqlite_and_session_can_be_reused() {
         let backend = test_backend();
@@ -913,8 +1084,21 @@ mod tests {
         let cancel = CancelToken::new();
         let mut events = backend.subscribe();
         let id = CommandId::new();
-        let command = crate::workspace::execution_command(open.connection, open.session, false, open.dialect,
+        let mut command = crate::workspace::execution_command(open.connection, open.session, false, open.dialect,
             "WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<1000000000) SELECT x FROM n".into(), Vec::new());
+        // Le défaut borne à 10 000 lignes et le driver rend des lots de 8 192 :
+        // le **deuxième** lot terminait donc la requête en `SinkOutcome::RowLimit`
+        // avant que l'annulation ne soit vue. Ce test était une course à un lot
+        // près, et il l'a perdue une fois sous charge le 2026-09-14.
+        //
+        // La borne relevée laisse 366 lots au lieu d'un seul : l'annulation
+        // devient la seule fin possible dans la fenêtre. Elle reste bornée —
+        // 3 millions d'entiers, soit quelques dizaines de mégaoctets — pour que
+        // la panne d'annulation se solde par un échec, jamais par un disque
+        // plein.
+        if let Command::Execute { request, .. } = &mut command {
+            request.limits.max_rows = Some(3_000_000);
+        }
         let receiver = backend.dispatch(id, command, cancel.clone());
         backend.runtime.block_on(async {
             tokio::time::timeout(std::time::Duration::from_secs(10), async {
@@ -934,13 +1118,19 @@ mod tests {
                 .await
                 .expect("cancellation deadline")
                 .expect("response");
-            assert!(matches!(
-                outcome,
-                Ok(Outcome::Executed {
-                    sink: oxyn_data::SinkOutcome::Cancelled,
-                    ..
-                }) | Err(OxynError::Cancelled)
-            ));
+            assert!(
+                matches!(
+                    outcome,
+                    Ok(Outcome::Executed {
+                        sink: oxyn_data::SinkOutcome::Cancelled,
+                        ..
+                    }) | Err(OxynError::Cancelled)
+                ),
+                // Le message nomme ce qui est arrivé : un `matches!` nu laisse
+                // un échec indiagnosticable, et celui-ci dépend du temps que met
+                // l'annulation à rejoindre SQLite.
+                "l'annulation devait remonter telle quelle, et non {outcome:?}"
+            );
         });
         assert!(run(&backend, &open, "SELECT 1").is_ok());
     }
@@ -1035,6 +1225,9 @@ mod preference_lifecycle_tests {
 
 #[cfg(test)]
 mod console_tests;
+
+mod assistant;
+pub(crate) use assistant::{ClassifiedProvider, ConversationRequest};
 
 mod documents;
 pub(crate) use documents::DocumentWriter;

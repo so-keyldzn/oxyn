@@ -294,6 +294,7 @@ mod tests {
             connection: None,
             save_named: named,
             is_open: true,
+            provenance: None,
         }
     }
 

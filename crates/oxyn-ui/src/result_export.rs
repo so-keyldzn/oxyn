@@ -181,6 +181,17 @@ pub struct ResultExport {
     /// True while the format list is unfolded.
     picking: bool,
     preview_rows: Option<usize>,
+    /// How many grid columns the user has hidden, and the export writes anyway.
+    ///
+    /// The export carries a result id, not a projection: hiding a column is a
+    /// reading convenience and never reaches the file. Saying so is not a
+    /// preference — someone who hides `email` before sending a CSV needs to
+    /// learn it here rather than from the recipient.
+    ///
+    /// Whether the export *should* follow the grid instead is an open product
+    /// question (`docs/IMPLEMENTATION-PLAN.md`, « les colonnes masquées »). This
+    /// caveat is true under either answer, so it settles nothing.
+    hidden_columns: usize,
 }
 
 impl EventEmitter<ExportEvent> for ResultExport {}
@@ -200,6 +211,7 @@ impl ResultExport {
             blocked: Some(NotExportable::NoResult),
             picking: false,
             preview_rows: None,
+            hidden_columns: 0,
         }
     }
 
@@ -213,6 +225,24 @@ impl ResultExport {
     pub fn set_preview_rows(&mut self, rows: usize, cx: &mut Context<'_, Self>) {
         self.preview_rows = Some(rows);
         cx.notify();
+    }
+
+    /// Declares how many grid columns are hidden from view.
+    ///
+    /// Called whenever the visibility of a column changes, not only when a
+    /// result arrives: the user hides `email` *then* exports, and a count taken
+    /// at the result's arrival would still read zero.
+    pub fn set_hidden_columns(&mut self, hidden: usize, cx: &mut Context<'_, Self>) {
+        if self.hidden_columns != hidden {
+            self.hidden_columns = hidden;
+            cx.notify();
+        }
+    }
+
+    /// How many hidden columns the export will write anyway.
+    #[must_use]
+    pub const fn hidden_columns(&self) -> usize {
+        self.hidden_columns
     }
 
     /// Is a whole result available to export?
@@ -296,6 +326,11 @@ impl ResultExport {
         }
         self.phase = ExportPhase::Idle;
         self.picking = false;
+        // Le compte décrivait le résultat précédent. Le laisser en place ferait
+        // annoncer « 2 hidden columns » sur un résultat dont rien n'est masqué :
+        // une réserve qui peut être fausse cesse d'être une réserve, et un
+        // avertissement pris pour du bruit est ignoré le jour où il est vrai.
+        self.hidden_columns = 0;
         cx.notify();
     }
 
@@ -473,6 +508,17 @@ impl Render for ResultExport {
             bar = bar.child(format!(
                 "{rows} preview rows included · Not the entire table"
             ));
+        }
+        if self.hidden_columns > 0 {
+            bar = bar.child(
+                div()
+                    .text_color(theme.colors.warning)
+                    .child(SharedString::from(format!(
+                        "{} hidden column{} will still be written",
+                        self.hidden_columns,
+                        if self.hidden_columns == 1 { "" } else { "s" }
+                    ))),
+            );
         }
         if self.preview_rows.is_none() {
             bar = bar.child(self.button(

@@ -156,8 +156,8 @@ impl ApprovalRequest {
 #[must_use]
 pub fn actor_label(actor: &Actor) -> &'static str {
     match actor {
-        Actor::Human => "Vous demandez",
-        Actor::Agent { .. } => "Un agent demande",
+        Actor::Human => "You are asking",
+        Actor::Agent { .. } => "An agent is asking",
     }
 }
 
@@ -414,8 +414,7 @@ impl ApprovalDialog {
                     .text_size(theme.typography.small_size)
                     .text_color(theme.colors.warning)
                     .child(SharedString::from(format!(
-                        "environ {lignes} ligne{} touchée{}",
-                        if lignes == 1 { "" } else { "s" },
+                        "about {lignes} affected row{}",
                         if lignes == 1 { "" } else { "s" }
                     ))),
                 // Pas d'estimation : on le dit. Un chiffre inventé serait pire
@@ -423,7 +422,7 @@ impl ApprovalDialog {
                 None => div()
                     .text_size(theme.typography.small_size)
                     .text_color(theme.colors.text_faint)
-                    .child("Nombre de lignes touchées inconnu."),
+                    .child("Number of affected rows is unknown."),
             })
             .into_any_element()
     }

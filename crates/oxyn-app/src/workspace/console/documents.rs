@@ -2,6 +2,16 @@
 
 use super::*;
 use oxyn_core::QueryDocumentUpdate;
+use std::time::Duration;
+
+/// Le repos de frappe au-delà duquel le brouillon part.
+///
+/// 250 ms : sous le budget de 300 ms de « retour visible » — donc imperceptible
+/// à qui s'arrête de taper — et au-dessus de l'intervalle d'une frappe rapide,
+/// pour qu'une phrase tapée d'un trait ne produise qu'une écriture. Un choix de
+/// produit, pas une mesure ; il s'amende dans
+/// [ADR-0024](../../../../docs/adr/0024-autosauvegarde-au-repos-de-frappe.md).
+const DRAFT_IDLE: Duration = Duration::from_millis(250);
 
 impl QueryConsole {
     pub(in crate::workspace) fn open_library_query(
@@ -14,7 +24,12 @@ impl QueryConsole {
                 text,
                 title,
                 origin,
+                provenance,
             } => {
+                // La marque suit le texte jusqu'à la première écriture. Elle
+                // est posée ici et non plus loin : à partir de l'autosauvegarde,
+                // plus rien ne sait d'où ce texte venait (ADR-0023).
+                self.provenance = provenance;
                 self.title = title.clone();
                 self.name.update(cx, |name, cx| name.set_text(title, cx));
                 self.editor
@@ -72,8 +87,72 @@ impl QueryConsole {
         cx.notify();
     }
 
+    /// Une frappe : on marque, on ne copie pas.
+    ///
+    /// `editor.text()` est un `join` sur toutes les lignes — une copie complète
+    /// du document, jusqu'à un mégaoctet, sur le fil d'interface. La faire à
+    /// chaque touche est la cause mesurée du seul dépassement de budget de
+    /// trame du produit : 17 à-coups en 14 s de frappe, dont un de 50 ms pour un
+    /// budget de 8 ms ([ADR-0024](../../../../docs/adr/0024-autosauvegarde-au-repos-de-frappe.md)).
+    ///
+    /// Le minuteur est relancé à chaque touche : une phrase tapée d'un trait
+    /// n'écrit rien tant qu'elle dure, et écrit une fois quand elle s'arrête.
     pub(crate) fn document_changed(&mut self, cx: &mut Context<'_, Self>) {
         self.refresh_document_state(cx);
+        if self.result_only || self.closed || self.document_closing || self.save_conflict {
+            return;
+        }
+        // Compter la frappe suffit : **une seule** tâche est en vol, et elle se
+        // rendort tant que le compteur bouge.
+        //
+        // Spawner une tâche et un minuteur à chaque touche coûte plus cher que
+        // la copie qu'on cherchait à éviter : la première version de ce code
+        // l'a fait, et la mesure est passée de 17 à-coups à **48**, avec un pic
+        // de 50 ms à 210 ms. Une frappe rapide crée mille tâches en quelques
+        // secondes ; c'est la création qui coûte, pas l'attente.
+        self.draft_debounce = self.draft_debounce.wrapping_add(1);
+        if self.draft_timer {
+            return;
+        }
+        self.draft_timer = true;
+        cx.spawn(async move |console, cx| {
+            loop {
+                let vu = match console.read_with(cx, |console, _| console.draft_debounce) {
+                    Ok(vu) => vu,
+                    Err(_) => return,
+                };
+                cx.background_executor().timer(DRAFT_IDLE).await;
+                let encore = console.update(cx, |console, cx| {
+                    if console.draft_debounce == vu {
+                        // Rien n'a bougé pendant l'attente : c'est le repos.
+                        console.draft_timer = false;
+                        console.write_draft_now(cx);
+                        false
+                    } else {
+                        true
+                    }
+                });
+                match encore {
+                    Ok(true) => continue,
+                    _ => return,
+                }
+            }
+        })
+        .detach();
+    }
+
+    /// Copie le brouillon et l'envoie **maintenant**.
+    ///
+    /// Appelée par le minuteur au repos de frappe, et par les trois échappées
+    /// immédiates d'ADR-0024 : perte de focus, fermeture, exécution. Ces
+    /// trois-là bornent ce qu'un arrêt brutal peut coûter.
+    pub(crate) fn write_draft_now(&mut self, cx: &mut Context<'_, Self>) {
+        // Un envoi immédiat annule le minuteur en cours : sans cela, la même
+        // révision partirait deux fois. Le drapeau retombe aussi, sans quoi la
+        // frappe suivante croirait une tâche en vol et n'en armerait aucune —
+        // le brouillon ne repartirait plus jamais.
+        self.draft_debounce = self.draft_debounce.wrapping_add(1);
+        self.draft_timer = false;
         if self.result_only || self.closed || self.document_closing || self.save_conflict {
             return;
         }
@@ -91,6 +170,7 @@ impl QueryConsole {
             connection: self.connection,
             save_named: false,
             is_open: true,
+            provenance: self.provenance.clone(),
         };
         if let Err(error) = update.validate() {
             self.draft_pending = None;
@@ -159,6 +239,7 @@ impl QueryConsole {
             connection: self.connection,
             save_named: true,
             is_open: true,
+            provenance: self.provenance.clone(),
         };
         if let Err(error) = update.validate() {
             self.save_problem = true;
@@ -255,6 +336,12 @@ impl QueryConsole {
     pub(crate) fn close_document(&mut self, discard: bool, cx: &mut Context<'_, Self>) {
         if self.closed || self.document_closing || self.save_active.is_some() {
             return;
+        }
+        // Échappée immédiate d'ADR-0024. Sans elle, fermer une console dans les
+        // 250 ms qui suivent la dernière touche perdrait ces caractères — et
+        // `discard` déciderait du sort d'un brouillon qui n'a jamais été écrit.
+        if !discard {
+            self.write_draft_now(cx);
         }
         if self.result_only || self.save_conflict {
             self.editor

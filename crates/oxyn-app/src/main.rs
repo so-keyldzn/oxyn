@@ -5,6 +5,7 @@
 //! that can be tested without a screen
 //! ([ARCHITECTURE](../../../docs/ARCHITECTURE.md#le-sens-des-dépendances)).
 
+mod ai;
 mod backend;
 mod credentials;
 mod picker;
@@ -66,7 +67,7 @@ fn main() -> Result<()> {
             cx.set_global(ShutdownStarted);
             let backend = quitting_backend.clone();
             async move {
-                backend.wait_for_local_writes().await;
+                backend.close_session_after_local_writes().await;
             }
         })
         .detach();
@@ -75,7 +76,7 @@ fn main() -> Result<()> {
             if cx.windows().is_empty() && cx.try_global::<ShutdownStarted>().is_none() {
                 let backend = closing_backend.clone();
                 cx.spawn(async move |cx| {
-                    backend.wait_for_local_writes().await;
+                    backend.close_session_after_local_writes().await;
                     let _ = cx.update(|cx| cx.quit());
                 })
                 .detach();

@@ -115,11 +115,19 @@ impl Root {
             cx.notify();
         })
         .detach();
+        // L'écran de reprise n'existe que s'il a quelque chose à annoncer. Une
+        // fermeture ordinaire laisse des copies de travail derrière elle, et les
+        // montrer à chaque démarrage useraient l'écran : le jour où une écriture
+        // a réellement été interrompue, l'avertissement qui compte passerait
+        // avec le bruit ([ADR-0021](../../docs/adr/0021-marqueur-d-arret.md)).
+        // Ces copies restent accessibles par la bibliothèque, qui est faite pour
+        // ça.
+        let showing_recovery = backend.previous_shutdown().needs_recovery();
         Self {
             backend,
             form,
             recovery,
-            showing_recovery: true,
+            showing_recovery,
             pending_recovered: None,
             saved,
             workspace: None,
@@ -634,6 +642,7 @@ mod tests {
                         connection: document.connection,
                         save_named: false,
                         is_open: true,
+                        provenance: None,
                     }),
                 },
                 CancelToken::new(),
@@ -673,6 +682,68 @@ mod tests {
         });
         while let Ok(event) = events.try_recv() {
             assert!(!matches!(event.event, oxyn_core::Event::SchemaReady { .. }));
+        }
+    }
+
+    /// La preuve géométrique du non-chevauchement, et pas seulement structurelle.
+    ///
+    /// Le test voisin vérifie que les actions **appartiennent** à la barre de
+    /// titre du formulaire ; celui-ci vérifie ce que l'utilisateur constate :
+    /// que « Saved working copies » ne se pose pas sur la marque Oxyn. Les deux
+    /// sont nécessaires — une hiérarchie correcte peut produire une
+    /// superposition, et c'est exactement ce qui s'était produit le 2026-09-10.
+    ///
+    /// Ce n'est pas une preuve pixel : le harnais GPUI a sa propre métrique de
+    /// texte, et les largeurs qu'il rend ne sont pas celles de l'écran. Ce qui
+    /// est éprouvé ici est la **décision de disposition** — deux boîtes d'une
+    /// rangée `justify_between`, donc disjointes quelle que soit la police.
+    #[gpui::test]
+    fn la_marque_et_les_actions_de_l_accueil_ne_se_superposent_pas(cx: &mut gpui::TestAppContext) {
+        use oxyn_ui::ThemeMode;
+
+        // Le chevauchement rapporté le 2026-09-10 ne s'est pas produit à une
+        // seule largeur : il tenait à une superposition absolue, qui se voit
+        // d'autant plus que la fenêtre est étroite. Les quatre largeurs de la
+        // recette native et les **deux** thèmes sont donc éprouvés — c'est ce
+        // que demande « aux largeurs et thèmes supportés ».
+        for mode in [ThemeMode::Dark, ThemeMode::Light] {
+            for largeur in [1440.0_f32, 1200.0, 1024.0, 760.0] {
+                let backend = Backend::open_temporary().expect("isolated backend");
+                let (root, cx) = cx.add_window_view(|_, cx| {
+                    oxyn_ui::Theme::init(mode, cx);
+                    Root::new(backend, cx)
+                });
+                root.update(cx, |root, cx| {
+                    root.showing_recovery = false;
+                    cx.notify();
+                });
+                cx.simulate_resize(gpui::size(gpui::px(largeur), gpui::px(820.)));
+                cx.run_until_parked();
+
+                let marque = cx
+                    .debug_bounds("home-brand")
+                    .expect("la marque Oxyn est dessinée sur l'accueil");
+                let copies = cx
+                    .debug_bounds("open-recovery")
+                    .expect("« Saved working copies » est offert quand des copies existent");
+
+                // Disjointes horizontalement : la marque finit avant que
+                // l'action ne commence. C'est ce que `justify_between`
+                // garantit, et ce qu'une superposition absolue avait cassé.
+                assert!(
+                    marque.origin.x + marque.size.width <= copies.origin.x,
+                    "thème {mode:?}, largeur {largeur} : la marque ({marque:?}) \
+                     déborde sur l'action ({copies:?})"
+                );
+
+                // Et les deux restent dans la fenêtre : une action poussée hors
+                // du cadre par une fenêtre étroite est aussi invisible qu'une
+                // action recouverte.
+                assert!(
+                    copies.origin.x + copies.size.width <= gpui::px(largeur),
+                    "thème {mode:?}, largeur {largeur} : l'action sort du cadre ({copies:?})"
+                );
+            }
         }
     }
 
@@ -764,5 +835,36 @@ mod tests {
             );
             assert!(root.form.read(cx).header_actions().is_empty());
         });
+    }
+
+    /// L'écran de reprise ne s'ouvre que sur un constat, jamais par défaut.
+    ///
+    /// C'est le défaut que le marqueur corrige : `documents.is_open` vaut vrai
+    /// après un `⌘Q` ordinaire, si bien que l'écran s'affichait à chaque
+    /// démarrage. Montré tout le temps, il cesse d'être lu.
+    #[gpui::test]
+    fn recovery_opens_only_after_an_abnormal_shutdown(cx: &mut gpui::TestAppContext) {
+        // Un backend neuf n'a aucune session antérieure : rien à annoncer.
+        let backend = Backend::open_temporary().expect("isolated backend");
+        assert!(!backend.previous_shutdown().needs_recovery());
+        let (root, cx) = cx.add_window_view(|_, cx| Root::new(backend.clone(), cx));
+        cx.run_until_parked();
+        assert!(
+            !root.read_with(cx, |root, _| root.showing_recovery),
+            "une première ouverture ne parle pas de plantage"
+        );
+
+        // Une session laissée ouverte et muette : c'est un arrêt anormal, et
+        // l'écran s'ouvre dessus.
+        let plante = Backend::temporary_with_abandoned_session().expect("abandoned session");
+        assert!(plante.previous_shutdown().needs_recovery());
+        let (root, cx) = cx.add_window_view(|_, cx| Root::new(plante, cx));
+        assert!(
+            root.read_with(cx, |root, _| root.showing_recovery),
+            "le constat décide de l'ouverture"
+        );
+        // Et il reste ouvert : un brouillon attend d'être repris.
+        cx.run_until_parked();
+        assert!(root.read_with(cx, |root, _| root.showing_recovery));
     }
 }

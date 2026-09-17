@@ -338,7 +338,16 @@ impl Default for Radii {
 pub struct Metrics {
     /// Hauteur de la barre d'outils du workspace.
     ///
-    /// Figma `47:8422` « Workspace toolbar », lu le 2026-09-07.
+    /// Figma `47:8422`, **relu au serveur le 2026-09-15** : la frame s'y nomme
+    /// « Connection toolbar » et mesure 1296 × **48**. La valeur portée ici
+    /// était 52, attribuée à ce même nœud sous le nom « Workspace toolbar » lors
+    /// de la lecture du 2026-09-07.
+    ///
+    /// Les planches de workspace confirment 48 sans exception — `190:1543`,
+    /// `229:7640`, `232:9103`. Le 52 ne venait donc d'aucune frame, et le test
+    /// de ce module l'ancrait : vert, sur une valeur fausse. C'est exactement ce
+    /// que [I-12](../../../CLAUDE.md#i-12) décrit — « une valeur plausible et
+    /// fausse ne se voit ni à la compilation, ni aux tests, ni en revue ».
     pub toolbar_height: Pixels,
     /// Hauteur de la barre d'état.
     ///
@@ -402,7 +411,7 @@ pub struct Metrics {
 impl Default for Metrics {
     fn default() -> Self {
         Self {
-            toolbar_height: px(52.0),
+            toolbar_height: px(48.0),
             status_bar_height: px(32.0),
             sidebar_width: px(280.0),
             sidebar_collapsed_width: px(64.0),
@@ -599,7 +608,11 @@ mod tests {
         // ces nombres change, il doit être relu dans la maquette et sa
         // documentation mise à jour, pas ajusté en silence.
         let metrics = Metrics::default();
-        assert_eq!(metrics.toolbar_height, px(52.0), "Figma 47:8422");
+        assert_eq!(
+            metrics.toolbar_height,
+            px(48.0),
+            "Figma 47:8422, relu le 2026-09-15"
+        );
         assert_eq!(metrics.sidebar_width, px(280.0), "Figma 8:4");
         assert_eq!(metrics.sidebar_collapsed_width, px(64.0), "Figma 13:165");
         assert_eq!(metrics.control_height, px(38.0), "Figma 47:8461");
@@ -643,5 +656,173 @@ mod tests {
         let metrics = Metrics::default();
         assert!(metrics.min_column_width < metrics.default_column_width);
         assert!(metrics.default_column_width < metrics.max_column_width);
+    }
+
+    /// La luminance relative d'une couleur, au sens WCAG 2.1.
+    ///
+    /// Les couleurs du thème sont en HSL ; la formule WCAG porte sur du sRGB
+    /// linéarisé. La conversion est faite ici plutôt qu'empruntée : c'est
+    /// quinze lignes, et une dépendance de plus pour un test n'en vaut pas le
+    /// prix.
+    fn luminance(couleur: Hsla) -> f32 {
+        let rgba = gpui::Rgba::from(couleur);
+        let canal = |c: f32| {
+            if c <= 0.039_28 {
+                c / 12.92
+            } else {
+                ((c + 0.055) / 1.055).powf(2.4)
+            }
+        };
+        0.2126 * canal(rgba.r) + 0.7152 * canal(rgba.g) + 0.0722 * canal(rgba.b)
+    }
+
+    /// Compose une couleur translucide sur son fond.
+    ///
+    /// Indispensable ici : plusieurs jetons de la palette sont des voiles à
+    /// 2 % d'opacité — une rayure de grille, un survol. Mesurer leur contraste
+    /// sans les composer donne un résultat qui ne veut rien dire, et c'est
+    /// l'erreur que ce test a commise avant d'être corrigé : il annonçait
+    /// « 1,00:1 » sur une rayure parfaitement lisible.
+    fn compose(avant: Hsla, arriere: Hsla) -> gpui::Rgba {
+        let (a, b) = (gpui::Rgba::from(avant), gpui::Rgba::from(arriere));
+        gpui::Rgba {
+            r: a.r * a.a + b.r * (1.0 - a.a),
+            g: a.g * a.a + b.g * (1.0 - a.a),
+            b: a.b * a.a + b.b * (1.0 - a.a),
+            a: 1.0,
+        }
+    }
+
+    /// Le rapport de contraste entre une couleur et son fond, de 1 à 21.
+    ///
+    /// Les deux couleurs sont composées sur le fond opaque avant mesure, dans
+    /// cet ordre : le fond d'abord — il peut lui-même être translucide —, puis
+    /// l'avant-plan par-dessus.
+    fn contraste(avant: Hsla, arriere: Hsla, opaque: Hsla) -> f32 {
+        let fond = compose(arriere, opaque);
+        let texte = compose(avant, Hsla::from(fond));
+        let (a, b) = (luminance(Hsla::from(texte)), luminance(Hsla::from(fond)));
+        let (clair, sombre) = if a > b { (a, b) } else { (b, a) };
+        (clair + 0.05) / (sombre + 0.05)
+    }
+
+    /// Le texte reste lisible dans **les deux** thèmes.
+    ///
+    /// Le défaut que ce test ferme est silencieux et ne se voit que dans un
+    /// thème sur deux : un jeton choisi en regardant le sombre donne du gris
+    /// sur gris en clair, personne ne s'en aperçoit avant qu'un utilisateur ne
+    /// bascule. Le seuil de 4,5:1 est celui de WCAG AA pour du texte courant ;
+    /// `text_faint` et les traits de grille n'y sont pas soumis — ce sont des
+    /// repères, pas du texte à lire — mais ils doivent rester **visibles**,
+    /// d'où le seuil de 1,3:1 qui les distingue de leur fond.
+    #[test]
+    fn chaque_theme_garde_son_texte_lisible() {
+        for theme in [Theme::dark(), Theme::light()] {
+            let p = theme.colors;
+            let nom = theme.mode.as_str();
+
+            for (avant, arriere, quoi) in [
+                (p.text, p.background, "texte sur fond"),
+                (p.text, p.surface, "texte sur surface"),
+                (p.text, p.surface_raised, "texte sur surface relevée"),
+                (p.text_muted, p.background, "texte atténué sur fond"),
+                (p.text_muted, p.surface, "texte atténué sur surface"),
+                (p.text_on_accent, p.accent, "texte sur accent"),
+                (p.text, p.grid_header, "texte d'en-tête de grille"),
+                (p.text, p.grid_stripe, "texte sur ligne alternée"),
+            ] {
+                let ratio = contraste(avant, arriere, p.background);
+                assert!(
+                    ratio >= 4.5,
+                    "thème {nom} : {quoi} à {ratio:.2}:1, sous le seuil AA de 4,5:1"
+                );
+            }
+
+            // Les repères ne se lisent pas, mais ils se voient.
+            for (avant, arriere, quoi) in [
+                (p.border, p.background, "bordure sur fond"),
+                (p.grid_line, p.background, "trait de grille"),
+                (p.text_faint, p.background, "texte très atténué"),
+            ] {
+                let ratio = contraste(avant, arriere, p.background);
+                assert!(
+                    ratio >= 1.3,
+                    "thème {nom} : {quoi} à {ratio:.2}:1, invisible sur son fond"
+                );
+            }
+        }
+    }
+
+    /// Un environnement de production se distingue dans les deux thèmes.
+    ///
+    /// [I-02](../../../CLAUDE.md#i-02) fait du marquage un signal permanent. Un
+    /// badge dont la couleur se fond dans le fond d'un des deux thèmes n'avertit
+    /// de rien, et c'est le thème que l'auteur n'utilise pas qui en souffre.
+    #[test]
+    fn le_marquage_de_production_reste_visible_dans_les_deux_themes() {
+        for theme in [Theme::dark(), Theme::light()] {
+            let nom = theme.mode.as_str();
+            let production = theme.colors.environment(oxyn_core::Environment::Production);
+            let ratio = contraste(production, theme.colors.background, theme.colors.background);
+            assert!(
+                ratio >= 3.0,
+                "thème {nom} : le marquage de production est à {ratio:.2}:1 de son fond"
+            );
+
+            // Ce qui n'est **pas** vérifié ici, et pourquoi : que la production
+            // se distingue des autres environnements par sa seule couleur. Le
+            // contraste WCAG ne mesure qu'une luminance, et `danger` (rouge) et
+            // `text_faint` (gris) en ont de proches — les mesurer l'un contre
+            // l'autre ferait échouer ce test sur une palette parfaitement
+            // lisible. L'information ne repose de toute façon pas sur la
+            // couleur seule : le badge écrit « PRODUCTION » en capitales, ce
+            // qui est ce qu'il faut pour un écran monochrome comme pour un
+            // daltonien ([I-02](../../../CLAUDE.md#i-02)).
+        }
+    }
+
+    /// Un thème ne décide que des **couleurs**.
+    ///
+    /// C'est l'exigence « aux largeurs et thèmes supportés » prise par le seul
+    /// bout qui se teste directement. Le jour où un jeton de thème porte une
+    /// métrique — une bordure plus épaisse en clair, une sidebar plus large, une
+    /// barre d'état plus haute — la bascule **déplace l'interface**, et cela ne
+    /// se voit que chez l'utilisateur qui bascule.
+    ///
+    /// Ce test a d'abord été écrit comme un test de vue : relever les bornes des
+    /// éléments dans les deux thèmes et les comparer. Il passait au vert sur
+    /// trois sabotages successifs, parce que les boîtes qu'il savait nommer
+    /// n'étaient pas celles que la métrique sabotée déplaçait. Le comparer ici,
+    /// sur les structures elles-mêmes, est à la fois plus simple et **complet** :
+    /// il ne peut pas manquer un champ.
+    #[test]
+    fn un_theme_ne_decide_que_des_couleurs() {
+        let sombre = Theme::dark();
+        let clair = Theme::light();
+
+        assert_eq!(
+            sombre.metrics, clair.metrics,
+            "une métrique diffère entre les deux thèmes : la bascule déplacera l'interface"
+        );
+        assert_eq!(
+            sombre.spacing, clair.spacing,
+            "un espacement diffère entre les deux thèmes"
+        );
+        assert_eq!(
+            sombre.radii, clair.radii,
+            "un rayon diffère entre les deux thèmes"
+        );
+        assert_eq!(
+            sombre.typography, clair.typography,
+            "la typographie diffère entre les deux thèmes"
+        );
+
+        // Et ce qui doit différer, diffère : sans quoi le test ci-dessus serait
+        // satisfait par deux thèmes identiques, donc par l'absence de thème clair.
+        assert_ne!(
+            sombre.colors.background, clair.colors.background,
+            "les deux thèmes doivent bien avoir des fonds distincts"
+        );
+        assert_ne!(sombre.mode, clair.mode);
     }
 }

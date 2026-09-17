@@ -7,10 +7,11 @@ use gpui::{
     UniformListScrollHandle, Window, div, px, uniform_list,
 };
 use oxyn_core::{
-    CancelToken, Command, CommandId, ConnectionId, DocumentFilter, DocumentId, HistoryFilter,
-    HistoryStatusFilter, OxynError,
+    CancelToken, Command, CommandId, ConnectionId, DocumentFilter, DocumentId,
+    HistoryConnectionFilter, HistoryFilter, HistoryStatusFilter, OxynError,
 };
 use oxyn_exec::Outcome;
+use oxyn_store::history::HistoryConnectionSummary;
 use oxyn_store::{Document, HistoryEntry};
 use oxyn_ui::{FieldEvent, QueryEditor, SelectField, TextField, Theme};
 
@@ -54,6 +55,34 @@ enum Detail {
     Document(Box<Document>),
 }
 
+/// Appends the agent mark to a notice, when the text came from one.
+///
+/// # Pourquoi c'est ici qu'elle manquait
+///
+/// [UX-SPEC](../../../docs/UX-SPEC.md) demande la marque « sur l'onglet **et
+/// dans la bibliothèque » ; seul l'onglet la portait. Or c'est par la
+/// bibliothèque qu'on relit un texte l'an prochain, et c'est exactement le cas
+/// qu'[ADR-0023](../../../docs/adr/0023-fournisseurs-declares-et-provenance.md)
+/// décrit : un `SELECT` proposé par un agent, sauvegardé sous un nom, rouvert
+/// longtemps après. La marque était visible là où elle ne sert pas et absente
+/// là où elle compte.
+///
+/// Ce qui est montré : la famille de fournisseur, le modèle et la date — ce que
+/// demande UX-SPEC. **Pas** l'`AgentId` ni l'identifiant de session : ils ne
+/// disent rien à un lecteur et ce sont des identifiants
+/// ([I-03](../../../CLAUDE.md#i-03)).
+fn with_provenance(notice: &str, provenance: Option<&oxyn_core::Provenance>) -> String {
+    let Some(marque) = provenance else {
+        return notice.to_owned();
+    };
+    format!(
+        "{notice} AI · {} {} · {}",
+        marque.kind,
+        marque.model,
+        marque.at.format("%Y-%m-%d")
+    )
+}
+
 /// The library owns all request identities and leaves the workspace editor untouched.
 pub(super) struct QueryLibrary {
     backend: Backend,
@@ -66,8 +95,14 @@ pub(super) struct QueryLibrary {
     reader: Entity<QueryEditor>,
     scroll: UniformListScrollHandle,
     tab: Tab,
-    connections: Vec<(ConnectionId, String)>,
-    connection_index: Option<usize>,
+    connections: Vec<FilterConnection>,
+    /// The chosen connection itself, not its rank: the menu grows while it is open.
+    connection_filter: Option<ConnectionId>,
+    /// Set once a page of history connections has been merged into the menu.
+    connections_loaded: bool,
+    /// What the connection menu cannot offer, when that is the case.
+    connections_notice: Option<&'static str>,
+    connections_request: Option<(CommandId, CancelToken)>,
     days: Option<u16>,
     status: HistoryStatusFilter,
     rows: Vec<Row>,
@@ -89,6 +124,8 @@ pub(super) struct QueryLibrary {
     detail_notice: String,
     search_revision: u64,
     search_pending: bool,
+    /// A re-read owed to an execution that finished while one was on the wire.
+    reload_owed: bool,
 }
 impl Focusable for QueryLibrary {
     fn focus_handle(&self, cx: &gpui::App) -> FocusHandle {
@@ -142,20 +179,27 @@ impl QueryLibrary {
             _ => {}
         })
         .detach();
-        let mut connections: Vec<(ConnectionId, String)> = backend
+        let mut connections: Vec<FilterConnection> = backend
             .saved_connections()
             .unwrap_or_default()
             .into_iter()
-            .map(|(id, saved)| (id, saved.name.to_string()))
+            .map(|(id, saved)| FilterConnection {
+                id,
+                name: saved.name.to_string(),
+                in_workspace: true,
+            })
             .collect();
         if let Some(current) = current.clone()
-            && !connections.iter().any(|entry| entry.0 == current.0)
+            && !connections.iter().any(|entry| entry.id == current.0)
         {
-            connections.push(current);
+            connections.push(FilterConnection {
+                id: current.0,
+                name: current.1,
+                in_workspace: true,
+            });
         }
-        let mut labels = vec!["All connections".into()];
-        labels.extend(connections.iter().map(|entry| entry.1.clone().into()));
-        let connection_select = cx.new(|cx| SelectField::new(labels, 0, cx));
+        let connection_select =
+            cx.new(|cx| SelectField::new(connection_labels(&connections), 0, cx));
         let days_select = cx.new(|cx| {
             SelectField::new(
                 vec![
@@ -183,7 +227,13 @@ impl QueryLibrary {
             )
         });
         cx.subscribe(&connection_select, |this, _, event, cx| {
-            this.connection_index = event.index.checked_sub(1);
+            // Rank zero is "all connections"; any other rank names a connection
+            // history knows, which is not always one this workspace still has.
+            this.connection_filter = event
+                .index
+                .checked_sub(1)
+                .and_then(|rank| this.connections.get(rank))
+                .map(|entry| entry.id);
             this.reload(cx);
         })
         .detach();
@@ -221,7 +271,10 @@ impl QueryLibrary {
             scroll: UniformListScrollHandle::new(),
             tab: Tab::History,
             connections,
-            connection_index: None,
+            connection_filter: None,
+            connections_loaded: false,
+            connections_notice: None,
+            connections_request: None,
             days: Some(7),
             status: HistoryStatusFilter::All,
             rows: Vec::new(),
@@ -243,7 +296,35 @@ impl QueryLibrary {
             detail_notice: "Select an entry to inspect it.".into(),
             search_revision: 0,
             search_pending: false,
+            reload_owed: false,
         }
+    }
+    /// How many entries the page on screen holds.
+    #[cfg(test)]
+    pub(super) fn entry_count(&self) -> usize {
+        self.rows.len()
+    }
+    /// Re-reads the list after an execution, without undoing what the user is doing.
+    ///
+    /// [`reload`](Self::reload) goes back to the first page and drops the entry
+    /// being inspected. Doing that behind the user's back is exactly the
+    /// destruction of in-flight state ADR-0022 forbids, so a drilled-in or
+    /// paged library is left alone: the new entry is one `Refresh` away, and it
+    /// is not worth losing the entry someone was reading.
+    ///
+    /// A read already on the wire is not interrupted either — one re-read is
+    /// owed after it, because that read may have been issued before the entry
+    /// this event announces existed. One flag, so a script that executes a
+    /// hundred times still owes exactly one.
+    pub(super) fn refresh_after_execution(&mut self, cx: &mut Context<'_, Self>) {
+        if self.selected.is_some() || self.show_retained || self.cursors.len() > 1 {
+            return;
+        }
+        if self.request.is_some() {
+            self.reload_owed = true;
+            return;
+        }
+        self.reload(cx);
     }
     pub(super) fn reload(&mut self, cx: &mut Context<'_, Self>) {
         self.show_retained = false;
@@ -257,6 +338,7 @@ impl QueryLibrary {
             &mut self.request,
             &mut self.detail_request,
             &mut self.result_request,
+            &mut self.connections_request,
         ] {
             if let Some((_, token)) = request.take() {
                 token.cancel();
@@ -290,11 +372,17 @@ impl QueryLibrary {
         self.reader.update(cx, |reader, cx| reader.set_text("", cx));
     }
     fn load(&mut self, cx: &mut Context<'_, Self>) {
+        // This read leaves now, so it sees every entry already written: it
+        // settles whatever automatic re-read was owed before it.
+        self.reload_owed = false;
         self.cancel_requests();
         self.clear_detail(cx);
         self.rows.clear();
         self.next = None;
         self.notice = "Loading local queries…".into();
+        if !self.connections_loaded {
+            self.load_connections(cx);
+        }
         let cursor = self.cursors.last().copied().flatten();
         let search = self.search.read(cx).text().to_owned();
         let command = if self.tab == Tab::Saved {
@@ -312,9 +400,7 @@ impl QueryLibrary {
         } else {
             Command::ReadHistory {
                 filter: Box::new(HistoryFilter {
-                    connection: self
-                        .connection_index
-                        .and_then(|index| self.connections.get(index).map(|pair| pair.0)),
+                    connection: self.connection_filter,
                     search,
                     days: self.days,
                     status: self.status,
@@ -342,6 +428,10 @@ impl QueryLibrary {
                     return;
                 }
                 this.request = None;
+                let listed = matches!(
+                    outcome,
+                    Ok(Outcome::HistoryListed { .. } | Outcome::QueryDocumentsListed { .. })
+                );
                 match outcome {
                     Ok(Outcome::HistoryListed { page }) => {
                         this.next = page.next.map(EntryKey::History);
@@ -375,7 +465,11 @@ impl QueryLibrary {
                             .into_iter()
                             .map(|entry| Row {
                                 key: EntryKey::Document(entry.id),
-                                title: entry.title,
+                                // La même marque que l'onglet, par la même
+                                // fonction : c'est ici qu'on relit un texte
+                                // l'an prochain, et le repérer sans l'ouvrir
+                                // est tout l'intérêt (ADR-0023).
+                                title: super::content::agent_marked(&entry.title, entry.from_agent),
                                 connection: entry
                                     .connection_name
                                     .unwrap_or_else(|| "No connection".into()),
@@ -394,6 +488,13 @@ impl QueryLibrary {
                     Ok(Outcome::Denied { reason, .. }) => this.notice = reason,
                     Err(error) => this.notice = error.to_string(),
                     _ => this.notice = "Unexpected library response".into(),
+                }
+                // An execution finished while this page was on the wire: it may
+                // be missing its entry. Exactly one re-read follows, and only
+                // after a page that actually arrived — re-reading over an error
+                // would replace the message with an empty list.
+                if std::mem::take(&mut this.reload_owed) && listed {
+                    this.reload(cx);
                 }
                 cx.notify();
             });
@@ -462,21 +563,24 @@ impl QueryLibrary {
             Detail::History(entry) => (
                 &entry.record.statement,
                 if entry.record.requires_reconciliation() {
-                    "Unresolved outcome. Inspect the server state before preparing any further write. Nothing is replayed here."
+                    "Unresolved outcome. Inspect the server state before preparing any further write. Nothing is replayed here.".to_owned()
                 } else {
-                    "Historical query · read only. Bound parameters are not stored."
+                    "Historical query · read only. Bound parameters are not stored.".to_owned()
                 },
             ),
             Detail::Document(document) if self.working_copy => (
                 &document.content,
-                "Working copy · read only. The named query remains unchanged.",
+                with_provenance(
+                    "Working copy · read only. The named query remains unchanged.",
+                    document.provenance.as_ref(),
+                ),
             ),
             Detail::Document(document) => (
                 document.saved_content.as_ref().unwrap_or(&document.content),
-                "Saved query · read only.",
+                with_provenance("Saved query · read only.", document.provenance.as_ref()),
             ),
         };
-        self.detail_notice = notice.into();
+        self.detail_notice = notice;
         self.reader
             .update(cx, |reader, cx| reader.set_text(text, cx));
     }
@@ -513,7 +617,13 @@ impl QueryLibrary {
                 self.tab = tab;
                 self.reload(cx);
             }
-            Action::Refresh => self.reload(cx),
+            Action::Refresh => {
+                // An explicit refresh also re-reads the filter menu: a
+                // connection used since the view opened belongs in it, and this
+                // is the only gesture that asks for the extra local read.
+                self.connections_loaded = false;
+                self.reload(cx);
+            }
             Action::Cancel => self.cancel(cx),
             Action::Next => {
                 if let Some(cursor) = self.next {
@@ -611,6 +721,9 @@ impl Drop for QueryLibrary {
         self.cancel_requests();
     }
 }
+
+mod filters;
+use filters::{FilterConnection, connection_labels};
 
 mod render;
 

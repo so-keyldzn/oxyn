@@ -9,6 +9,14 @@ pub(in crate::workspace) enum OpenQuery {
         text: String,
         title: String,
         origin: String,
+        /// D'où vient ce texte, quand un agent l'a écrit.
+        ///
+        /// `None` pour une copie d'historique ou de document : elle recopie ce
+        /// que l'utilisateur avait déjà, et la provenance de l'original — s'il
+        /// en avait une — reste sur l'original. Une copie n'hérite pas d'une
+        /// marque, elle en reçoit une ou pas
+        /// ([ADR-0023](../../../../docs/adr/0023-fournisseurs-declares-et-provenance.md)).
+        provenance: Option<oxyn_core::Provenance>,
     },
     Working(Box<Document>),
 }
@@ -77,6 +85,7 @@ impl QueryLibrary {
             text: self.reader.read(cx).text(),
             title,
             origin,
+            provenance: None,
         });
     }
     pub(super) fn edit_original(&mut self, cx: &mut Context<'_, Self>) {

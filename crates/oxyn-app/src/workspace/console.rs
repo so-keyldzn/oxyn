@@ -24,10 +24,38 @@ pub(crate) struct QueryConsole {
     pub(crate) document_closing: bool,
     document_close_token: Option<CancelToken>,
     document_revision: u64,
+    /// Quel minuteur d'autosauvegarde est le bon.
+    ///
+    /// Chaque frappe l'incrémente ; la tâche qui s'éveille compare et se tait si
+    /// elle a été remplacée. Même forme que `console_attempt` et `preview_active`
+    /// ailleurs dans le workspace : la demande encore attendue se nomme
+    /// elle-même ([ADR-0024](../../../docs/adr/0024-autosauvegarde-au-repos-de-frappe.md)).
+    draft_debounce: u64,
+    /// Une tâche d'autosauvegarde est-elle déjà en vol ?
+    ///
+    /// Sans ce drapeau, chaque touche en créerait une nouvelle — ce qui coûte
+    /// plus cher que la copie qu'ADR-0024 cherche à éviter, mesure à l'appui.
+    draft_timer: bool,
+    /// Le résultat affiché est-il un **plan d'exécution** ?
+    ///
+    /// `EXPLAIN` rend des lignes comme n'importe quelle requête : rien dans la
+    /// grille ne distingue un plan des données, et un utilisateur qui a lancé
+    /// `Explain` puis regarde son résultat n'a aucun moyen de savoir lequel des
+    /// deux il lit. La maquette `191:1521` le dit par un onglet `Explain plan`
+    /// à côté de `Result 1`.
+    pub(super) showing_plan: bool,
     writer: crate::backend::DocumentWriter,
     pub(crate) draft_pending: Option<u64>,
     pub(crate) draft_notice: String,
     document_language: QueryLanguage,
+    /// D'où vient le texte de cette console, quand un agent l'a écrit.
+    ///
+    /// Posée à l'arrivée d'une proposition, et jointe à chaque écriture. Le
+    /// store applique la règle : une provenance absente ne dit pas
+    /// « personne », elle dit « rien de neuf à écrire », et n'efface donc pas
+    /// celle qui est déjà là
+    /// ([ADR-0023](../../../docs/adr/0023-fournisseurs-declares-et-provenance.md)).
+    pub(super) provenance: Option<oxyn_core::Provenance>,
     close_after_save: bool,
     saved_text: String,
     saved_title: String,
@@ -162,10 +190,23 @@ impl QueryConsole {
             _ => {}
         })
         .detach();
-        cx.subscribe(&grid, |this, _, event, cx| {
+        cx.subscribe(&grid, |this, grille, event, cx| {
             this.on_page_event(event, cx);
             if matches!(event, GridEvent::CancelRequested) {
                 this.cancel(cx);
+            }
+            // Hiding a column does not change what the export writes, and that
+            // is precisely why the bar has to say so. Counted here rather than
+            // when a result arrives: the user hides the column *then* exports.
+            if matches!(event, GridEvent::ColumnsChanged) {
+                let masquees = grille
+                    .read(cx)
+                    .columns()
+                    .iter()
+                    .filter(|colonne| !colonne.visible)
+                    .count();
+                this.export
+                    .update(cx, |export, cx| export.set_hidden_columns(masquees, cx));
             }
         })
         .detach();
@@ -236,6 +277,10 @@ impl QueryConsole {
             document_closing: false,
             document_close_token: None,
             document_revision: 0,
+            draft_debounce: 0,
+            draft_timer: false,
+            showing_plan: false,
+            provenance: None,
             document_language: QueryLanguage::Sql(dialect),
             close_after_save: false,
             saved_text: String::new(),
@@ -297,6 +342,13 @@ impl QueryConsole {
         if self.result_only {
             return;
         }
+        // Échappée immédiate d'ADR-0024 : ce qui s'exécute doit être ce qui est
+        // écrit. Attendre le repos de frappe laisserait une fenêtre où
+        // l'historique et le brouillon divergent de ce qui vient de partir.
+        self.write_draft_now(cx);
+        // Retenu **avant** l'exécution : ce qui arrivera dans la grille est un
+        // plan ou des données, et la grille ne le dira pas d'elle-même.
+        self.showing_plan = explain;
         let Some((connection, session)) = self.connection.zip(self.session) else {
             self.status.update(cx, |status, cx| {
                 status.set_notice(
@@ -442,7 +494,7 @@ impl QueryConsole {
                             &Decision::RequireApproval { reason, preview },
                         );
                         this.status.update(cx, |bar, cx| {
-                            bar.set_notice(Some("Confirmation requise avant exécution."), cx)
+                            bar.set_notice(Some("Confirmation required before running."), cx)
                         });
                     }
                     Ok(Outcome::Executed {
@@ -461,6 +513,9 @@ impl QueryConsole {
                             buffer.is_complete(),
                             buffer.stats().truncated,
                         );
+                        // Lu avant que `buffer` ne parte dans la grille, pour la
+                        // même raison que `blocked` juste au-dessus.
+                        let horodatages = oxyn_data::timestamp_display(buffer.schema());
                         this.grid.update(cx, |grid, cx| {
                             if cancelled && buffer.row_count() == 0 {
                                 grid.cancelled(cx);
@@ -479,7 +534,10 @@ impl QueryConsole {
                                 if cancelled {
                                     ExecutionStatus::Cancelled
                                 } else {
-                                    ExecutionStatus::Completed(stats)
+                                    ExecutionStatus::Completed {
+                                        stats,
+                                        timestamps: horodatages,
+                                    }
                                 },
                                 cx,
                             )

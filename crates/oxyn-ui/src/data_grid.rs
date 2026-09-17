@@ -238,6 +238,17 @@ pub struct DataGrid {
     /// de connaître la taille réelle sans refaire la mise en page à la main.
     viewport: Rc<Cell<Pixels>>,
     selected_row: Option<usize>,
+    /// Où `Find in loaded results…` a trouvé, et ce qu'il n'a pas lu.
+    ///
+    /// La grille ne cherche pas elle-même : le parcours coûte en proportion des
+    /// cellules résidentes et ne peut donc pas vivre sur le fil d'interface
+    /// ([I-05](../../../CLAUDE.md#i-05)). Elle reçoit le résultat et le montre.
+    ///
+    /// `None` veut dire **aucune recherche en cours**, ce qui n'est pas la même
+    /// chose qu'une recherche sans correspondance : confondre les deux ferait
+    /// annoncer « aucune correspondance » sur un résultat que personne n'a
+    /// cherché. Un nouveau tampon y revient, ses lignes n'étant plus les mêmes.
+    find: Option<oxyn_data::FindOutcome>,
     drag: Option<ColumnDrag>,
     /// What the connected session declares. Governs what the cancel control is
     /// allowed to promise ([ADR-0003](../../../docs/adr/0003-driver-capabilities.md)).
@@ -266,6 +277,7 @@ impl DataGrid {
             h_offset: Pixels::ZERO,
             viewport: Rc::new(Cell::new(px(0.0))),
             selected_row: None,
+            find: None,
             drag: None,
             // Empty until a session is connected: promising nothing is the safe
             // default, promising server-side cancellation is not.
@@ -327,6 +339,9 @@ impl DataGrid {
         self.state = GridState::Starting;
         self.columns.clear();
         self.widths_measured = false;
+        // Les correspondances portaient sur les lignes du résultat précédent :
+        // les garder les ferait désigner d'autres lignes.
+        self.find = None;
         self.selected_row = None;
         self.h_offset = Pixels::ZERO;
         cx.notify();
@@ -362,6 +377,9 @@ impl DataGrid {
         // journal n'est pas le bon endroit pour cela (I-03).
         tracing::debug!(columns = self.columns.len(), "grid: schema attached");
         self.widths_measured = false;
+        // Les correspondances portaient sur les lignes du résultat précédent :
+        // les garder les ferait désigner d'autres lignes.
+        self.find = None;
         self.selected_row = None;
         self.h_offset = Pixels::ZERO;
         self.state = GridState::Streaming(buffer);
@@ -379,14 +397,20 @@ impl DataGrid {
             && let Some(lot) = first_resident_batch(&tampon)
         {
             let metrics = Theme::of(cx).metrics;
+            let viewport = self.content_viewport(&metrics);
             fit_columns(
                 &mut self.columns,
                 &lot,
                 &self.format,
                 &metrics,
                 WIDTH_SAMPLE_ROWS,
+                viewport,
             );
-            self.widths_measured = true;
+            // Une largeur utile nulle veut dire qu'aucune trame n'a encore
+            // mesuré la grille : l'ajustement s'est fait au plafond, faute de
+            // savoir ce qui tient à l'écran. Ne pas marquer la mesure faite
+            // laisse le lot suivant la refaire une fois la largeur connue.
+            self.widths_measured = f32::from(viewport) > 0.0;
         }
         cx.notify();
     }
@@ -412,6 +436,9 @@ impl DataGrid {
         self.state = GridState::Idle;
         self.columns.clear();
         self.widths_measured = false;
+        // Les correspondances portaient sur les lignes du résultat précédent :
+        // les garder les ferait désigner d'autres lignes.
+        self.find = None;
         self.selected_row = None;
         self.h_offset = Pixels::ZERO;
         cx.notify();
@@ -495,6 +522,71 @@ impl DataGrid {
         }
         self.h_offset = px(vise);
         true
+    }
+
+    /// Le tampon affiché, pour une recherche menée ailleurs.
+    ///
+    /// Partagé plutôt que copié : c'est le même tampon que le puits alimente,
+    /// et le rendre permet de le parcourir sur l'exécuteur de fond sans figer
+    /// l'interface ([I-05](../../../CLAUDE.md#i-05)).
+    #[must_use]
+    pub fn buffer(&self) -> Option<Arc<ResultBuffer>> {
+        self.state.buffer().cloned()
+    }
+
+    /// Les options de format, pour chercher ce qui est réellement affiché.
+    #[must_use]
+    pub const fn format(&self) -> &FormatOptions {
+        &self.format
+    }
+
+    /// Reçoit le résultat d'une recherche menée hors du fil d'interface.
+    ///
+    /// Ne déplace pas la sélection : trouver n'est pas aller voir. C'est
+    /// `reveal_match` qui déplace, quand l'utilisateur le demande.
+    pub fn set_find(
+        &mut self,
+        outcome: Option<oxyn_data::FindOutcome>,
+        cx: &mut Context<'_, Self>,
+    ) {
+        self.find = outcome;
+        cx.notify();
+    }
+
+    /// Ce que la dernière recherche a trouvé, s'il y en a une.
+    #[must_use]
+    pub const fn find(&self) -> Option<&oxyn_data::FindOutcome> {
+        self.find.as_ref()
+    }
+
+    /// Va à la correspondance suivante ou précédente, en rebouclant.
+    ///
+    /// Rend `false` quand il n'y en a aucune : l'appelant peut alors le dire
+    /// plutôt que de laisser croire que le geste a marché.
+    pub fn reveal_match(&mut self, forward: bool, cx: &mut Context<'_, Self>) -> bool {
+        let depuis = self.selected_row.unwrap_or(0);
+        // L'emprunt se termine avec le bloc, avant `select_row` qui prend
+        // `&mut self`. Cloner à la place copierait le vecteur de
+        // correspondances **sur le fil d'interface**, à chaque appui — et il
+        // peut en compter des dizaines de milliers.
+        let cible = {
+            let Some(trouve) = self.find.as_ref() else {
+                return false;
+            };
+            if forward {
+                // `+1` sinon « suivante » resterait sur la correspondance courante.
+                trouve.next_from(depuis.saturating_add(1))
+            } else {
+                trouve.previous_from(depuis)
+            }
+        };
+        match cible {
+            Some(ligne) => {
+                self.select_row(ligne, cx);
+                true
+            }
+            None => false,
+        }
     }
 
     /// Selects an existing row and reveals it without executing a query.
@@ -644,17 +736,35 @@ pub fn column_layouts(schema: &SchemaRef, metrics: &Metrics) -> Vec<ColumnLayout
 /// [`Metrics::char_width`] : mesurer réellement le texte demanderait de mettre
 /// en page cent lignes hors écran, ce qui coûterait le budget du premier
 /// affichage pour un gain que l'utilisateur corrige d'un glissement.
-/// Elle n'élargit jamais, ne rétrécit jamais en dessous de l'en-tête, et reste
-/// bornée par [`Metrics::max_column_width`].
+/// Elle n'élargit jamais et ne rétrécit jamais en dessous de l'en-tête.
+///
+/// `viewport` est la largeur que les colonnes se partagent, gouttière déjà
+/// retranchée — voir `DataGrid::content_viewport`.
+///
+/// [`Metrics::max_column_width`] n'est **pas** un maximum absolu, et le traiter
+/// comme tel était un défaut : c'est ce qu'une colonne a le droit de prendre
+/// **au détriment des autres**. Tant que les colonnes tiennent ensemble dans
+/// `viewport`, aucune n'est chassée de l'écran et le plafond n'a rien à
+/// protéger. Ce qu'il coûtait se voyait sur un résultat à une seule colonne
+/// large : 480 px valent environ 66 caractères, si bien qu'une ligne de plan
+/// `EXPLAIN` perdait sa queue `(cost=… rows=…)` — exactement ce qu'on lit un
+/// plan pour voir — alors que rien d'autre ne réclamait la place.
+///
+/// Une `viewport` nulle signifie qu'aucune trame n'a encore mesuré la grille :
+/// faute de savoir ce qui tient à l'écran, le plafond s'applique.
 pub fn fit_columns(
     columns: &mut [ColumnLayout],
     batch: &RecordBatch,
     options: &FormatOptions,
     metrics: &Metrics,
     sample_rows: usize,
+    viewport: Pixels,
 ) {
     let lignes = batch.num_rows().min(sample_rows);
-    for (index, colonne) in columns.iter_mut().enumerate() {
+    // Ce que chaque colonne demande, plafond non appliqué : on ne peut décider
+    // du plafond qu'une fois le total connu.
+    let mut voulues: Vec<Pixels> = columns.iter().map(|colonne| colonne.width).collect();
+    for (index, colonne) in columns.iter().enumerate() {
         let mut caracteres = 0usize;
         for ligne in 0..lignes {
             let valeur = format_cell(batch, ligne, index, options);
@@ -676,11 +786,31 @@ pub fn fit_columns(
             continue;
         }
         let voulue = text_width(caracteres, metrics) + metrics.cell_padding * 2.0;
-        let bornee = voulue
-            .max(colonne.header_width(metrics))
-            .max(metrics.min_column_width)
-            .min(metrics.max_column_width);
-        colonne.width = colonne.width.max(bornee).min(metrics.max_column_width);
+        if let Some(place) = voulues.get_mut(index) {
+            *place = colonne.width.max(
+                voulue
+                    .max(colonne.header_width(metrics))
+                    .max(metrics.min_column_width),
+            );
+        }
+    }
+
+    // Seules les colonnes visibles occupent la largeur ; une colonne masquée ne
+    // chasse personne.
+    let total: f32 = columns
+        .iter()
+        .zip(&voulues)
+        .filter(|(colonne, _)| colonne.visible)
+        .map(|(_, largeur)| f32::from(*largeur))
+        .sum();
+    let tient = f32::from(viewport) > 0.0 && total <= f32::from(viewport);
+
+    for (colonne, voulue) in columns.iter_mut().zip(voulues) {
+        colonne.width = if tient {
+            voulue
+        } else {
+            voulue.min(metrics.max_column_width)
+        };
     }
 }
 
@@ -851,28 +981,28 @@ impl Render for DataGrid {
 
         match &self.state {
             GridState::Idle => racine.child(self.render_placeholder(
-                "Aucun résultat",
-                "Écrivez une requête et exécutez-la avec Cmd+Entrée.",
+                "No result",
+                "Write a query and run it with Cmd+Enter.",
                 theme.colors.text_faint,
                 cx,
             )),
             GridState::Starting => racine.child(self.render_placeholder(
-                "Exécution…",
-                "En attente du schéma. Échap annule.",
+                "Running…",
+                "Waiting for the schema. Esc cancels.",
                 theme.colors.text_muted,
                 cx,
             )),
             GridState::Cancelled => racine.child(self.render_placeholder(
-                "Exécution annulée",
-                "Vous pouvez modifier ou relancer la requête.",
+                "Execution cancelled",
+                "You can edit the query or run it again.",
                 theme.colors.text_muted,
                 cx,
             )),
             GridState::Failed { message, retryable } => {
                 let detail = if *retryable {
-                    "L'erreur est transitoire : la requête peut être relancée telle quelle."
+                    "This error is transient: the query can be run again as is."
                 } else {
-                    "L'erreur est permanente : relancer la même requête donnera le même résultat."
+                    "This error is permanent: running the same query again gives the same result."
                 };
                 racine.child(self.render_placeholder(
                     message.clone(),
@@ -888,8 +1018,8 @@ impl Render for DataGrid {
                     return racine
                         .child(self.render_header(cx))
                         .child(self.render_placeholder(
-                            "Aucune ligne",
-                            "La requête a abouti et n'a renvoyé aucune ligne.",
+                            "No rows",
+                            "The query succeeded and returned no rows.",
                             theme.colors.text_muted,
                             cx,
                         ))
@@ -997,7 +1127,7 @@ impl DataGrid {
         .py(theme.spacing.tiny)
         .font_family(theme.typography.ui_family.clone())
         .text_size(theme.typography.small_size)
-        .child("Annuler (Échap)")
+        .child("Cancel (Esc)")
         .into_any_element()
     }
 
@@ -1187,6 +1317,13 @@ impl DataGrid {
     ) -> AnyElement {
         let metrics = theme.metrics;
         let selectionnee = self.selected_row == Some(ligne);
+        // Recherche binaire : les correspondances sont croissantes par
+        // construction, et ce test tombe une fois par ligne visible et par
+        // trame — un parcours linéaire y coûterait le nombre de correspondances.
+        let correspond = self
+            .find
+            .as_ref()
+            .is_some_and(|trouve| trouve.rows.binary_search(&ligne).is_ok());
         let decalage = f32::from(visibles.leading) - f32::from(self.h_offset);
 
         let mut piste = div()
@@ -1234,6 +1371,13 @@ impl DataGrid {
             .when(ligne % 2 == 1, |element| {
                 element.bg(theme.colors.grid_stripe)
             })
+            // Une correspondance se **marque**, elle ne se colore pas : un fond
+            // supplémentaire changerait le contraste du texte par-dessus, et la
+            // lisibilité des deux thèmes est tenue par un test. Le repère, lui,
+            // n'a que son propre contraste à respecter.
+            .when(correspond, |element| {
+                element.border_l_2().border_color(theme.colors.accent)
+            })
             .when(selectionnee, |element| element.bg(theme.colors.selection))
             .hover(|style| style.bg(theme.colors.hover))
             .on_click(cx.listener(move |grille, _event: &ClickEvent, window, cx| {
@@ -1271,7 +1415,7 @@ impl DataGrid {
         let libelle = if complet {
             format!("{} lignes", stats.rows)
         } else {
-            format!("{} lignes reçues…", tampon.row_count())
+            format!("{} rows received…", tampon.row_count())
         };
 
         div()
@@ -1293,14 +1437,14 @@ impl DataGrid {
                 element.child(
                     div()
                         .text_color(theme.colors.warning)
-                        .child("résultat tronqué"),
+                        .child("truncated result"),
                 )
             })
             .when(tampon.spilled_batches() > 0, |element| {
                 element.child(
                     div()
                         .text_color(theme.colors.text_faint)
-                        .child("débordé sur disque"),
+                        .child("spilled to disk"),
                 )
             })
             .when(!complet, |element| {
@@ -1537,16 +1681,19 @@ mod tests {
     }
 
     #[test]
-    fn la_mesure_elargit_sur_les_valeurs_et_reste_bornee() {
+    fn la_mesure_elargit_sur_les_valeurs_et_reste_bornee_quand_la_place_manque() {
         let metrics = Metrics::default();
         let mut colonnes = column_layouts(&schema_exemple(), &metrics);
         let avant = colonnes[1].width;
+        // Une fenêtre trop étroite pour les deux colonnes : elles se disputent
+        // la place, donc le plafond a quelque chose à protéger.
         fit_columns(
             &mut colonnes,
             &lot_exemple(),
             &FormatOptions::default(),
             &metrics,
             WIDTH_SAMPLE_ROWS,
+            px(120.0),
         );
         assert!(colonnes[1].width >= avant);
         for colonne in &colonnes {
@@ -1568,8 +1715,76 @@ mod tests {
             &FormatOptions::default(),
             &metrics,
             1,
+            px(1200.0),
         );
         assert!(colonnes[1].width >= entete);
+    }
+
+    /// Une ligne de plan PostgreSQL réelle : c'est sa queue qui porte le coût.
+    fn lot_plan() -> RecordBatch {
+        let schema: SchemaRef = Arc::new(Schema::new(vec![Field::new(
+            "QUERY PLAN",
+            DataType::Utf8,
+            true,
+        )]));
+        let lignes = StringArray::from(vec![Some(
+            "   ->  Index Scan using idx_orders_customer_created on public.orders o  \
+(cost=0.42..8.44 rows=1 width=124)",
+        )]);
+        let colonnes: Vec<ArrayRef> = vec![Arc::new(lignes)];
+        RecordBatch::try_new(schema, colonnes).expect("le lot de plan respecte son propre schéma")
+    }
+
+    #[test]
+    fn une_colonne_seule_depasse_le_plafond_plutot_que_de_couper_le_plan() {
+        let metrics = Metrics::default();
+        let lot = lot_plan();
+        let schema = lot.schema();
+        let attendu = {
+            let texte = lot_plan();
+            let CellValue::Text(valeur) = format_cell(&texte, 0, 0, &FormatOptions::default())
+            else {
+                panic!("la ligne de plan est du texte");
+            };
+            valeur.chars().count()
+        };
+        // Le plafond coupe bien avant la fin de la ligne : c'est le défaut que
+        // ce test tient fermé.
+        assert!(
+            text_width(attendu, &metrics) > metrics.max_column_width,
+            "la ligne de plan doit dépasser le plafond, sinon le test ne prouve rien"
+        );
+
+        let mut large = column_layouts(&schema, &metrics);
+        fit_columns(
+            &mut large,
+            &lot,
+            &FormatOptions::default(),
+            &metrics,
+            WIDTH_SAMPLE_ROWS,
+            px(1200.0),
+        );
+        assert!(
+            large[0].width > metrics.max_column_width,
+            "seule dans une fenêtre large, la colonne ne chasse personne"
+        );
+        assert!(
+            large[0].width >= text_width(attendu, &metrics),
+            "la ligne entière doit tenir, queue de coût comprise"
+        );
+
+        // La même colonne dans une fenêtre étroite : là, le plafond protège
+        // quelque chose, et il s'applique.
+        let mut etroite = column_layouts(&schema, &metrics);
+        fit_columns(
+            &mut etroite,
+            &lot,
+            &FormatOptions::default(),
+            &metrics,
+            WIDTH_SAMPLE_ROWS,
+            px(200.0),
+        );
+        assert!(etroite[0].width <= metrics.max_column_width);
     }
 
     #[test]

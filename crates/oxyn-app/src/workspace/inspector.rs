@@ -208,39 +208,93 @@ impl Workspace {
     pub(super) fn result_area(&self, source: ResultSource, cx: &Context<'_, Self>) -> AnyElement {
         let theme = Theme::of(cx);
         div()
-            .relative()
             .flex_1()
             .min_h_0()
             .flex()
+            .flex_col()
             .gap_0()
-            .overflow_hidden()
+            // `191:1521` distingue `Result 1` d'un `Explain plan`. Sans cette
+            // mention, un plan et des données se ressemblent trait pour trait
+            // dans la grille — et c'est le plan qu'on finit par lire comme des
+            // données.
+            .children(self.plan_notice(source, cx))
+            // `191:2058` — la barre d'actions du résultat, où la maquette place
+            // son champ de 300 px. Réservée au résultat de requête : un aperçu
+            // d'objet a son propre filtre `WHERE`, qui interroge le serveur, et
+            // les confondre ferait croire que l'un fait ce que fait l'autre.
+            .children((source == ResultSource::Query).then(|| self.find_bar(cx)))
             .child(
                 div()
+                    .relative()
                     .flex_1()
-                    .min_w_0()
-                    .h_full()
-                    .border_1()
-                    .border_color(theme.colors.border)
-                    .rounded(theme.radii.surface)
+                    .min_h_0()
+                    .flex()
+                    .gap_0()
                     .overflow_hidden()
-                    .child(self.result_grid(source)),
+                    .child(
+                        div()
+                            .flex_1()
+                            .min_w_0()
+                            .h_full()
+                            .border_1()
+                            .border_color(theme.colors.border)
+                            .rounded(theme.radii.surface)
+                            .overflow_hidden()
+                            .child(self.result_grid(source)),
+                    )
+                    .when(!self.compact_layout && self.inspector_open, |el| {
+                        el.child(self.inspector_handle(cx))
+                            .child(self.record_inspector(source, cx))
+                    })
+                    .when(self.compact_layout && self.inspector_overlay, |el| {
+                        el.child(
+                            div()
+                                .absolute()
+                                .right_0()
+                                .top_0()
+                                .bottom_0()
+                                .w(px(280.))
+                                .child(self.record_inspector(source, cx)),
+                        )
+                    }),
             )
-            .when(!self.compact_layout && self.inspector_open, |el| {
-                el.child(self.inspector_handle(cx))
-                    .child(self.record_inspector(source, cx))
-            })
-            .when(self.compact_layout && self.inspector_overlay, |el| {
-                el.child(
-                    div()
-                        .absolute()
-                        .right_0()
-                        .top_0()
-                        .bottom_0()
-                        .w(px(280.))
-                        .child(self.record_inspector(source, cx)),
-                )
-            })
             .into_any_element()
+    }
+
+    /// La mention « Explain plan » de `191:1521`.
+    ///
+    /// Un plan n'existe que pour une console : un aperçu de table n'en produit
+    /// jamais, et l'afficher là serait un état impossible.
+    fn plan_notice(&self, source: ResultSource, cx: &Context<'_, Self>) -> Option<AnyElement> {
+        if source != ResultSource::Query || !self.console.read(cx).showing_plan {
+            return None;
+        }
+        let theme = Theme::of(cx);
+        Some(
+            div()
+                .flex_none()
+                .flex()
+                .items_center()
+                .gap_2()
+                .pb_1()
+                .child(
+                    div()
+                        .px_2()
+                        .py_1()
+                        .rounded(theme.radii.full)
+                        .border_1()
+                        .border_color(theme.colors.border)
+                        .text_size(theme.typography.small_size)
+                        .child("Explain plan"),
+                )
+                .child(
+                    div()
+                        .text_size(theme.typography.small_size)
+                        .text_color(theme.colors.text_muted)
+                        .child("These rows describe how the server would run the statement."),
+                )
+                .into_any_element(),
+        )
     }
 
     fn record_inspector(&self, source: ResultSource, cx: &Context<'_, Self>) -> AnyElement {

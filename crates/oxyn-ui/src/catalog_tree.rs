@@ -427,9 +427,7 @@ fn push_namespaces(
         let ouvert = expanded.contains(&chemin);
         lignes.push(TreeRow {
             label: SharedString::from(espace.name().to_owned()),
-            detail: espace
-                .is_system
-                .then(|| SharedString::new_static("système")),
+            detail: espace.is_system.then(|| SharedString::new_static("system")),
             depth,
             level: CatalogLevel::Namespace,
             kind: None,
@@ -857,7 +855,7 @@ mod tests {
         assert_eq!(lignes[1].depth, 1);
         assert_eq!(
             lignes[2].detail.as_ref().map(SharedString::as_str),
-            Some("système")
+            Some("system")
         );
     }
 

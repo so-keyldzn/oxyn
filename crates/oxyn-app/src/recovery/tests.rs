@@ -21,6 +21,7 @@ fn fixture(backend: &Backend, title: &str, text: &str) -> DocumentId {
                     connection: None,
                     save_named: false,
                     is_open: true,
+                    provenance: None,
                 }),
             },
             CancelToken::new(),
@@ -38,6 +39,10 @@ fn fixture(backend: &Backend, title: &str, text: &str) -> DocumentId {
 fn settle(view: &Entity<Recovery>, cx: &mut VisualTestContext) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
+        // Les éditeurs restaurés autosauvegardent au repos de frappe : sans
+        // avancer l'horloge, leur brouillon ne part jamais (ADR-0024).
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(300));
         cx.run_until_parked();
         if view.read_with(cx, |view, cx| {
             view.request.is_none()
@@ -133,4 +138,44 @@ fn recovered_query_can_be_saved_and_closed_without_a_connection(cx: &mut TestApp
     assert!(
         matches!(stored, Outcome::DocumentOpened { document } if !document.is_open && document.saved_content.as_deref() == Some("SELECT 5"))
     );
+}
+
+/// L'écran dit ce qu'il a constaté — et rien de plus.
+///
+/// ADR-0021 justifie la table `app_sessions` et son battement périodique par le
+/// fait que l'écran **affirme** quelque chose : « Oxyn ne s'est pas fermé
+/// normalement ». Il ne l'affirmait pas. Le coût de la migration était payé, le
+/// bénéfice annoncé ne l'était pas.
+///
+/// Le sens inverse compte autant : le même écran s'ouvre à la demande, par
+/// « Saved working copies ». Y annoncer un plantage qui n'a pas eu lieu serait
+/// le mensonge symétrique du silence.
+#[gpui::test]
+fn l_ecran_de_reprise_annonce_l_arret_anormal_et_seulement_alors(cx: &mut gpui::TestAppContext) {
+    // Un backend dont le lancement précédent a laissé une session abandonnée.
+    let backend = Backend::temporary_with_abandoned_session().expect("backend");
+    let (recovery, cx) = cx.add_window_view(|_, cx| Recovery::new(backend, cx));
+    // La lecture part sur le runtime Tokio : `run_until_parked` seul rend la
+    // main pendant que le message dit encore « Loading… ». `settle` attend que
+    // la lecture ait répondu, comme les autres tests de ce fichier.
+    settle(&recovery, cx);
+    recovery.read_with(cx, |vue, _| {
+        assert!(
+            vue.notice.contains("did not close normally"),
+            "un arrêt anormal constaté doit être dit : {}",
+            vue.notice
+        );
+    });
+
+    // Le même écran, ouvert sur un lancement ordinaire.
+    let ordinaire = Backend::open_temporary().expect("backend");
+    let (recovery, cx) = cx.add_window_view(|_, cx| Recovery::new(ordinaire, cx));
+    settle(&recovery, cx);
+    recovery.read_with(cx, |vue, _| {
+        assert!(
+            !vue.notice.contains("did not close normally"),
+            "aucun plantage n'a été constaté : ne rien affirmer — {}",
+            vue.notice
+        );
+    });
 }

@@ -171,6 +171,7 @@ fn submitted_document_writes_finish_even_when_their_view_receiver_is_dropped() {
                     connection: None,
                     save_named: true,
                     is_open: true,
+                    provenance: None,
                 }),
             },
             CancelToken::new(),

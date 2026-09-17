@@ -925,8 +925,8 @@ impl Focusable for ConnectionForm {
 pub fn environment_choice_label(environment: Environment) -> &'static str {
     match environment {
         Environment::Local => "local",
-        Environment::Development => "développement",
-        Environment::Staging => "préproduction",
+        Environment::Development => "development",
+        Environment::Staging => "staging",
         Environment::Production => "production",
     }
 }

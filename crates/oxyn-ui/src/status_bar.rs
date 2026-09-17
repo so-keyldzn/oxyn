@@ -26,6 +26,7 @@ use std::time::Duration;
 use gpui::prelude::*;
 use gpui::{AnyElement, ClickEvent, Context, EventEmitter, Hsla, SharedString, Window, div, px};
 use oxyn_core::{Capabilities, Environment, ExecStats};
+use oxyn_data::TimestampDisplay;
 
 use crate::controls::{ControlState, ControlTone, control};
 use crate::session_capabilities::cancel_caveat;
@@ -56,7 +57,16 @@ pub enum ExecutionStatus {
     /// L'exécution a été annulée, et le serveur l'a confirmé.
     Cancelled,
     /// L'exécution est terminée.
-    Completed(ExecStats),
+    Completed {
+        /// Ce que l'exécution a coûté, et ce qu'elle a rendu.
+        stats: ExecStats,
+        /// Le fuseau dans lequel **ce** résultat rend ses instants.
+        ///
+        /// Porté par la variante plutôt que par la barre : un fuseau rangé à
+        /// côté de l'état survivrait au résultat suivant et décrirait alors des
+        /// lignes qui ne sont plus à l'écran. Ici, il disparaît avec elles.
+        timestamps: TimestampDisplay,
+    },
     /// L'exécution a échoué.
     Failed {
         /// Le message du serveur, code compris.
@@ -274,20 +284,51 @@ pub fn format_duration(duration: Duration) -> String {
 ///
 /// Le temps serveur n'apparaît que si le driver l'a donné : l'inventer à partir
 /// du temps client ferait passer la latence réseau pour du temps de calcul.
+///
+/// `timestamps` vient du schéma du résultat, jamais d'une préférence : Oxyn ne
+/// convertit aucun horodatage. Voir [`oxyn_data::timestamp_display`].
 #[must_use]
-pub fn format_stats(stats: &ExecStats) -> String {
+pub fn format_stats(stats: &ExecStats, timestamps: &TimestampDisplay) -> String {
     let mut sortie = format!(
-        "{} ligne{} en {}",
+        "{} row{} in {}",
         stats.rows,
         if stats.rows == 1 { "" } else { "s" },
         format_duration(stats.total_time)
     );
     if let Some(serveur) = stats.server_time {
-        sortie.push_str(&format!(" (serveur {})", format_duration(serveur)));
+        sortie.push_str(&format!(" (server {})", format_duration(serveur)));
     }
     if stats.truncated {
-        sortie.push_str(" — tronqué");
+        sortie.push_str(" — truncated");
     }
+    // Le relevé `191:1521` écrit « Display timezone UTC », à cette place. Le
+    // fuseau n'est pas décoratif : `2026-09-05T12:00:00Z` et le même instant
+    // rendu ailleurs ne désignent pas la même heure de bureau, et un
+    // professionnel qui compare deux résultats a besoin de savoir dans quoi il
+    // lit. La mention se tait quand le résultat ne contient aucun instant daté,
+    // parce qu'elle n'aurait alors rien à décrire.
+    match timestamps {
+        TimestampDisplay::Absent => {}
+        TimestampDisplay::Uniform(zone) => {
+            sortie.push_str(&format!(" · Display timezone {zone}"));
+        }
+        // Nommer un fuseau décrirait les autres colonnes à tort.
+        TimestampDisplay::Mixed => sortie.push_str(" · Display timezone varies by column"),
+        // `TimestampDisplay` est `#[non_exhaustive]` : une variante ajoutée dans
+        // `oxyn-data` arrive ici sans casser la compilation. Se taire est le
+        // seul défaut sûr — annoncer un fuseau qu'on ne sait pas nommer serait
+        // pire que de n'en annoncer aucun.
+        autre => tracing::error!(
+            display = ?autre,
+            "unhandled TimestampDisplay variant: oxyn-ui is behind oxyn-data"
+        ),
+    }
+    // Le relevé `191:1521` écrit « Results belong to this execution ». La
+    // mention paraît redondante ; elle ne l'est pas. Une console garde son
+    // résultat précédent affiché pendant qu'une nouvelle exécution tourne, et
+    // rien à l'écran ne dit alors de quelle exécution viennent les lignes qu'on
+    // est en train de lire.
+    sortie.push_str(" · Results belong to this execution");
     sortie
 }
 
@@ -328,7 +369,7 @@ impl StatusBar {
         let Some(connexion) = &self.connection else {
             return div()
                 .text_color(theme.colors.text_faint)
-                .child("Aucune connexion")
+                .child("No connection")
                 .into_any_element();
         };
 
@@ -364,24 +405,24 @@ impl StatusBar {
         let ligne = match &self.status {
             ExecutionStatus::Idle => div()
                 .text_color(theme.colors.text_faint)
-                .child("Prêt")
+                .child("Ready")
                 .into_any_element(),
             ExecutionStatus::Running { rows } => div()
                 .text_color(theme.colors.text)
-                .child(SharedString::from(format!("Exécution… {rows} lignes")))
+                .child(SharedString::from(format!("Running… {rows} rows")))
                 .into_any_element(),
             ExecutionStatus::Cancelling => div()
                 .text_color(theme.colors.warning)
                 // Le serveur n'a pas confirmé : ne pas écrire « annulée ».
-                .child("Annulation demandée…")
+                .child("Cancellation requested…")
                 .into_any_element(),
             ExecutionStatus::Cancelled => div()
                 .text_color(theme.colors.text_muted)
-                .child("Annulée")
+                .child("Cancelled")
                 .into_any_element(),
-            ExecutionStatus::Completed(stats) => div()
+            ExecutionStatus::Completed { stats, timestamps } => div()
                 .text_color(theme.colors.text)
-                .child(SharedString::from(format_stats(stats)))
+                .child(SharedString::from(format_stats(stats, timestamps)))
                 .into_any_element(),
             ExecutionStatus::Failed { message, retryable } => div()
                 .flex()
@@ -410,20 +451,32 @@ impl StatusBar {
             .child(ligne)
             .when(self.status.is_cancellable(), |element| {
                 element.child(
-                    // Atteignable au clavier, focus visible, état pressé :
-                    // GPUI n'offre rien de tout cela gratuitement, et le
-                    // rattraper après coup coûte une réécriture (ADR-0001).
-                    control(
-                        "oxyn-status-cancel",
-                        ControlState::Enabled,
-                        ControlTone::Neutral,
-                        theme,
-                        cx.listener(|_barre, _event: &ClickEvent, _window, cx| {
-                            cx.emit(StatusBarEvent::CancelRequested);
-                        }),
+                    // GPUI n'offre ni l'atteignabilité ni l'activation
+                    // gratuitement, et les deux se déclarent séparément :
+                    // `control` pose `tab_stop`, `activable` pose la touche.
+                    // Ce commentaire a longtemps prétendu que le clavier était
+                    // acquis ; il ne l'était pas, et le bouton — seul moyen
+                    // d'arrêter une requête en cours — était inerte pour qui
+                    // n'a pas de souris (ADR-0001).
+                    crate::controls::activable(
+                        control(
+                            "oxyn-status-cancel",
+                            ControlState::Enabled,
+                            ControlTone::Neutral,
+                            theme,
+                            cx.listener(|_barre, _event: &ClickEvent, _window, cx| {
+                                cx.emit(StatusBarEvent::CancelRequested);
+                            }),
+                        ),
+                        |_barre, _window, cx| cx.emit(StatusBarEvent::CancelRequested),
+                        cx,
                     )
+                    // Sans lui, ce bouton n'était atteignable par aucun test :
+                    // ni son existence, ni son clavier. C'est ce qui a laissé
+                    // passer qu'il ne s'activait pas.
+                    .debug_selector(|| "oxyn-status-cancel".into())
                     .px(theme.spacing.small)
-                    .child("Annuler"),
+                    .child("Cancel"),
                 )
             })
             // La réserve accompagne le bouton, elle ne le remplace pas : couper
@@ -488,7 +541,10 @@ mod tests {
 
     #[test]
     fn un_etat_termine_nest_ni_occupe_ni_annulable() {
-        let termine = ExecutionStatus::Completed(ExecStats::default());
+        let termine = ExecutionStatus::Completed {
+            stats: ExecStats::default(),
+            timestamps: TimestampDisplay::Absent,
+        };
         assert!(!termine.is_busy());
         assert!(!termine.is_cancellable());
         let echec = ExecutionStatus::Failed {
@@ -514,11 +570,17 @@ mod tests {
             total_time: Duration::from_millis(12),
             ..ExecStats::default()
         };
-        assert_eq!(format_stats(&stats), "1 ligne en 12 ms");
+        assert_eq!(
+            format_stats(&stats, &TimestampDisplay::Absent),
+            "1 row in 12 ms · Results belong to this execution"
+        );
 
         stats.rows = 4;
         stats.truncated = true;
-        assert_eq!(format_stats(&stats), "4 lignes en 12 ms — tronqué");
+        assert_eq!(
+            format_stats(&stats, &TimestampDisplay::Absent),
+            "4 rows in 12 ms — truncated · Results belong to this execution"
+        );
     }
 
     #[test]
@@ -529,12 +591,93 @@ mod tests {
             total_time: Duration::from_millis(30),
             ..ExecStats::default()
         };
-        assert!(!format_stats(&stats).contains("serveur"));
+        assert!(!format_stats(&stats, &TimestampDisplay::Absent).contains("server"));
 
         let stats = ExecStats {
             server_time: Some(Duration::from_millis(8)),
             ..stats
         };
-        assert_eq!(format_stats(&stats), "2 lignes en 30 ms (serveur 8 ms)");
+        assert_eq!(
+            format_stats(&stats, &TimestampDisplay::Absent),
+            "2 rows in 30 ms (server 8 ms) · Results belong to this execution"
+        );
+    }
+
+    #[test]
+    fn le_fuseau_saffiche_a_la_place_de_la_maquette_et_se_tait_sil_ny_a_rien_a_dire() {
+        let stats = ExecStats {
+            rows: 10,
+            total_time: Duration::from_millis(12),
+            ..ExecStats::default()
+        };
+
+        // `191:1521` place la mention entre le décompte et l'appartenance.
+        assert_eq!(
+            format_stats(&stats, &TimestampDisplay::Uniform("UTC".to_owned())),
+            "10 rows in 12 ms · Display timezone UTC · Results belong to this execution"
+        );
+
+        // Un résultat sans instant daté n'a pas de fuseau à annoncer : la
+        // mention disparaît au lieu d'écrire « UTC » par défaut, ce qui
+        // affirmerait quelque chose du contenu.
+        assert!(
+            !format_stats(&stats, &TimestampDisplay::Absent).contains("timezone"),
+            "sans colonne datée, aucune mention de fuseau"
+        );
+
+        // Deux fuseaux dans le même résultat : en nommer un décrirait l'autre
+        // colonne à tort.
+        let melange = format_stats(&stats, &TimestampDisplay::Mixed);
+        assert!(
+            melange.contains("Display timezone varies by column"),
+            "{melange}"
+        );
+    }
+
+    /// UX-SPEC : « l'état "en cours" porte toujours un moyen d'annuler ».
+    ///
+    /// Un moyen que la souris seule atteint n'en est pas un. Ce bouton était
+    /// atteignable au Tab et inerte — et le commentaire au-dessus de sa
+    /// construction affirmait le contraire, ce qui est la façon dont ce défaut
+    /// a survécu. Le test porte sur l'**événement émis**, pas sur l'apparence.
+    #[gpui::test]
+    fn annuler_une_execution_en_cours_se_fait_aussi_au_clavier(cx: &mut gpui::TestAppContext) {
+        use std::cell::Cell;
+        use std::rc::Rc;
+
+        let (barre, cx) = cx.add_window_view(|_, cx| {
+            let mut barre = StatusBar::new();
+            barre.set_status(ExecutionStatus::Running { rows: 0 }, cx);
+            barre
+        });
+        cx.run_until_parked();
+
+        let demandes = Rc::new(Cell::new(0usize));
+        let compteur = Rc::clone(&demandes);
+        cx.update(|_, cx| {
+            cx.subscribe(&barre, move |_, event: &StatusBarEvent, _| {
+                if matches!(event, StatusBarEvent::CancelRequested) {
+                    compteur.set(compteur.get() + 1);
+                }
+            })
+            .detach();
+        });
+
+        // Le clic pose le focus sur le bouton, comme une tabulation l'y mènerait.
+        let bouton = cx
+            .debug_bounds("oxyn-status-cancel")
+            .expect("une exécution en cours offre d'annuler");
+        cx.simulate_click(bouton.center(), gpui::Modifiers::none());
+        cx.run_until_parked();
+        assert_eq!(demandes.get(), 1, "la souris marchait déjà");
+
+        cx.simulate_keystrokes("enter");
+        cx.run_until_parked();
+        assert_eq!(
+            demandes.get(),
+            2,
+            "et le clavier doit marcher aussi : sinon le seul moyen d'arrêter \
+             une requête de trente secondes demande une souris"
+        );
     }
 }

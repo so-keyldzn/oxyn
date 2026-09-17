@@ -1,8 +1,7 @@
 //! The local workspace shell and keyboard navigation; data stays in its entities.
 
 use super::*;
-use gpui::{AnyElement, KeyDownEvent, SharedString, div, px};
-use oxyn_ui::icons::{IconName, icon};
+use gpui::{KeyDownEvent, div, px};
 use oxyn_ui::{Theme, ThemeMode};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -12,6 +11,8 @@ pub(super) enum WorkspacePanel {
     Help,
     Preferences,
     Library,
+    /// The conversation panel. Only reachable when a provider is declared.
+    Assistant,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -49,11 +50,16 @@ pub(super) enum Control {
     IncomingRelations,
     OutgoingRelations,
     OpenRelated,
+    /// Ouvre le modèle de requête liée dans une console, sans l'exécuter.
+    ReviewRelatedQuery,
     Definition,
     RefreshDefinition,
     CancelDefinition,
     CopyDefinition,
     OpenDefinition,
+    ProposeChange,
+    PreviousMatch,
+    NextMatch,
     MoreMetadata,
     RefreshMetadata,
     Columns,
@@ -64,10 +70,16 @@ pub(super) enum Control {
     RetryPreferences,
     ToggleReading,
     CancelSessionContext,
+    PreviewApply,
+    PreviewSort,
+    PreviewColumns,
+    PreviewPreviousPage,
+    PreviewNextPage,
+    AskAi,
 }
 
 impl Workspace {
-    fn activate_control(
+    pub(super) fn activate_control(
         &mut self,
         control: Control,
         window: &mut Window,
@@ -163,6 +175,10 @@ impl Workspace {
             Control::CancelDefinition => self.cancel_definition(cx),
             Control::CopyDefinition => self.copy_definition(cx),
             Control::OpenDefinition => self.open_definition_console(cx),
+            Control::ProposeChange => self.open_proposed_change(cx),
+            Control::PreviousMatch => self.reveal_find(false, cx),
+            Control::NextMatch => self.reveal_find(true, cx),
+            Control::ReviewRelatedQuery => self.open_related_row_query(cx),
             Control::MoreMetadata => self.metadata_menu_open = !self.metadata_menu_open,
             Control::RefreshMetadata => {
                 self.refresh_object_metadata(cx);
@@ -215,6 +231,13 @@ impl Workspace {
                 window.refresh();
             }
             Control::Help => self.panel = WorkspacePanel::Help,
+            // The focus lands in the question field rather than on the panel:
+            // the panel exists to be typed into, and a keyboard user who has to
+            // tab across the whole transcript to reach it would give up.
+            Control::AskAi => {
+                self.panel = WorkspacePanel::Assistant;
+                window.focus(&self.assistant.question.read(cx).focus_handle(cx));
+            }
             Control::NewConnection => cx.emit(WorkspaceEvent::NewConnectionRequested),
             Control::Run => self.execute(cx),
             Control::Stop => self.cancel(cx),
@@ -227,6 +250,13 @@ impl Workspace {
             Control::CancelSessionContext => self
                 .console
                 .update(cx, |console, cx| console.cancel_context(cx)),
+            Control::PreviewApply => self.apply_preview_predicate(cx),
+            Control::PreviewSort => self.toggle_preview_sort(cx),
+            // Only the columns: the DDL of `RefreshMetadata` is a second read
+            // that nobody asked for from the sort menu.
+            Control::PreviewColumns => self.refresh_object_metadata(cx),
+            Control::PreviewPreviousPage => self.page_preview(false, cx),
+            Control::PreviewNextPage => self.page_preview(true, cx),
             Control::Refresh => self.refresh_catalog(self.catalog_scope.clone(), cx),
             Control::CancelCatalog => {
                 self.cancel_catalog(cx);
@@ -269,6 +299,7 @@ impl Workspace {
             }
             WorkspacePanel::Preferences => self.preferences_focus.clone(),
             WorkspacePanel::Library => self.library.read(cx).focus_handle(cx),
+            WorkspacePanel::Assistant => self.assistant.question.read(cx).focus_handle(cx),
             _ => self.shell_focus.clone(),
         };
         window.focus(&focus);
@@ -371,194 +402,6 @@ impl Workspace {
             cx.stop_propagation();
         }
     }
-
-    /// Whether a control can act right now.
-    ///
-    /// Figma `273:37036` draws Run and Stop as two segments of one group, with
-    /// the one that has nothing to do greyed out. A single decision point serves
-    /// both the drawing and the activation, so a greyed control is genuinely
-    /// inert rather than merely looking it.
-    fn control_enabled(&self, control: Control, cx: &gpui::App) -> bool {
-        match control {
-            Control::Run => !self.is_executing(cx),
-            Control::Stop => self.is_executing(cx),
-            _ => true,
-        }
-    }
-
-    pub(super) fn control(
-        &self,
-        id: &'static str,
-        label: impl Into<SharedString>,
-        control: Control,
-        compact: bool,
-        cx: &Context<'_, Self>,
-    ) -> AnyElement {
-        let theme = Theme::of(cx);
-        let enabled = self.control_enabled(control, cx);
-        let label = label.into();
-        let tooltip = label.clone();
-        let glyph = match control {
-            Control::Sidebar | Control::CancelCatalog => IconName::Panel,
-            Control::Sql
-            | Control::Run
-            | Control::Stop
-            | Control::Explain
-            | Control::Parameters => IconName::Terminal,
-            Control::Catalog | Control::Refresh => IconName::Database,
-            Control::Help => IconName::Book,
-            Control::Library => IconName::History,
-            Control::Theme
-            | Control::FormatSettings
-            | Control::Preferences
-            | Control::RetryPreferences
-            | Control::ToggleReading => IconName::Settings,
-            Control::NewConnection | Control::NewConsole => IconName::Plus,
-            Control::CancelNewConsole | Control::CloseConsole | Control::CancelSessionContext => {
-                IconName::History
-            }
-            Control::SaveConsole
-            | Control::SaveConsoleCopy
-            | Control::CancelSave
-            | Control::CancelDocumentClose => IconName::Folder,
-            Control::Describe | Control::Data | Control::Object => IconName::Table,
-            Control::Preview | Control::RefreshMetadata => IconName::History,
-            Control::Constraints
-            | Control::Indexes
-            | Control::Relations
-            | Control::IncomingRelations
-            | Control::OutgoingRelations
-            | Control::OpenRelated
-            | Control::Definition
-            | Control::RefreshDefinition
-            | Control::CancelDefinition
-            | Control::CopyDefinition
-            | Control::OpenDefinition
-            | Control::MoreMetadata => IconName::Table,
-            Control::PreviewExport => IconName::Folder,
-            Control::ObjectHelp => IconName::Book,
-            Control::Columns
-            | Control::ResultActions
-            | Control::Inspector
-            | Control::InspectValue => IconName::Table,
-        };
-        let selected = matches!(
-            (control, self.panel),
-            (Control::Sql, WorkspacePanel::Sql)
-                | (Control::Catalog, WorkspacePanel::Object)
-                | (Control::Help, WorkspacePanel::Help)
-                | (Control::Object, WorkspacePanel::Object)
-                | (Control::Preferences, WorkspacePanel::Preferences)
-                | (Control::Library, WorkspacePanel::Library)
-        ) || (self.panel == WorkspacePanel::Object
-            && matches!(
-                (control, self.object_tab),
-                (Control::Data, ObjectTab::Data)
-                    | (Control::Describe, ObjectTab::Structure)
-                    | (Control::Indexes, ObjectTab::Indexes)
-                    | (Control::Constraints, ObjectTab::Constraints)
-                    | (Control::Definition, ObjectTab::Ddl)
-                    | (Control::Relations, ObjectTab::Relations)
-                    | (Control::Relations, ObjectTab::IncomingRelations)
-                    | (Control::IncomingRelations, ObjectTab::IncomingRelations)
-                    | (Control::OutgoingRelations, ObjectTab::Relations)
-            ));
-        div()
-            .id(id)
-            .debug_selector(move || id.into())
-            .tab_index(0)
-            .h(px(32.))
-            .flex_none()
-            .flex()
-            .items_center()
-            .gap_2()
-            .px_2()
-            .rounded(px(6.))
-            .border_1()
-            .border_color(theme.colors.surface)
-            .when(compact, |el| el.w(px(32.)).px(px(7.)).justify_center())
-            .when(
-                matches!(control, Control::Inspector | Control::InspectValue),
-                |el| el.justify_center().px_3(),
-            )
-            .when(matches!(control, Control::Data), |el| {
-                el.min_w(px(64.)).justify_center().px_3()
-            })
-            .when(
-                matches!(control, Control::Describe | Control::Relations),
-                |el| el.min_w(px(99.)).justify_center().px_3(),
-            )
-            .when(matches!(control, Control::Constraints), |el| {
-                el.min_w(px(113.)).justify_center().px_3()
-            })
-            .when(matches!(control, Control::Definition), |el| {
-                el.min_w(px(57.)).justify_center().px_3()
-            })
-            .when(matches!(control, Control::Indexes), |el| {
-                el.min_w(px(85.)).justify_center().px_3()
-            })
-            // Figma `191:1993`: the parameters control is 144 px wide, right of
-            // the 286 px Run/Stop/Explain group.
-            .when(matches!(control, Control::Parameters), |el| {
-                el.min_w(px(144.)).justify_center().px_3()
-            })
-            .when(selected, |el| {
-                el.bg(theme.colors.background)
-                    .border_color(theme.colors.border)
-            })
-            .when(enabled, |el| {
-                el.hover(|style| style.bg(theme.colors.hover))
-                    .cursor_pointer()
-            })
-            .when(!enabled, |el| el.text_color(theme.colors.text_muted))
-            .focus(|style| style.border_color(theme.colors.border_focus))
-            .tooltip(move |window, cx| {
-                let _ = window;
-                cx.new(|_| WorkspaceTooltip(tooltip.clone())).into()
-            })
-            .on_click(
-                cx.listener(move |this, _, window, cx| this.activate_control(control, window, cx)),
-            )
-            .on_key_down(cx.listener(move |this, event: &KeyDownEvent, window, cx| {
-                if matches!(event.keystroke.key.as_str(), "enter" | "space") {
-                    this.activate_control(control, window, cx);
-                    cx.stop_propagation();
-                }
-            }))
-            .when(
-                !matches!(
-                    control,
-                    Control::CancelCatalog
-                        | Control::RetryPreferences
-                        | Control::ToggleReading
-                        | Control::Columns
-                        | Control::ResultActions
-                        | Control::Inspector
-                        | Control::InspectValue
-                        | Control::Indexes
-                        | Control::Constraints
-                        | Control::Relations
-                        | Control::IncomingRelations
-                        | Control::OutgoingRelations
-                        | Control::Definition
-                        | Control::MoreMetadata
-                        | Control::Data
-                        | Control::Describe
-                        | Control::Object
-                        | Control::PreviewExport
-                        | Control::ObjectHelp
-                ),
-                |el| {
-                    el.child(
-                        icon(glyph)
-                            .size(px(16.))
-                            .text_color(theme.colors.text_muted),
-                    )
-                },
-            )
-            .when(!compact, |el| el.child(label))
-            .into_any_element()
-    }
 }
 
 impl Render for Workspace {
@@ -606,14 +449,6 @@ impl Render for Workspace {
             self.approval
                 .update(cx, |dialog, cx| dialog.present(request, window, cx));
         }
-        let context = if self.panel == WorkspacePanel::Object {
-            self.selected_path
-                .as_ref()
-                .map(|path| format!("{} / {path}", self.display.name))
-                .unwrap_or_else(|| self.display.name.clone())
-        } else {
-            self.display.name.clone()
-        };
         div()
             .relative()
             .size_full()
@@ -651,50 +486,7 @@ impl Render for Workspace {
                     .border_1()
                     .border_color(theme.colors.border)
                     .rounded(px(8.))
-                    .child(
-                        div()
-                            .h(px(48.))
-                            .flex_none()
-                            .flex()
-                            .items_center()
-                            .gap_3()
-                            .px_3()
-                            .child(self.control(
-                                "sidebar-toggle",
-                                "Toggle sidebar · ⌘B",
-                                Control::Sidebar,
-                                true,
-                                cx,
-                            ))
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .truncate()
-                                    .text_color(theme.colors.text_muted)
-                                    .child(context),
-                            )
-                            .when(self.read_only, |el| {
-                                el.child(
-                                    div()
-                                        .text_size(theme.typography.small_size)
-                                        .text_color(theme.colors.text_muted)
-                                        .child("READ ONLY"),
-                                )
-                            })
-                            .child(
-                                div()
-                                    .flex_none()
-                                    .px_2()
-                                    .py_1()
-                                    .rounded(theme.radii.full)
-                                    .border_1()
-                                    .border_color(theme.colors.environment(self.environment))
-                                    .text_size(theme.typography.small_size)
-                                    .text_color(theme.colors.environment(self.environment))
-                                    .child(self.environment.as_str().to_uppercase()),
-                            ),
-                    )
+                    .child(self.connection_bar(cx))
                     .child(self.document_tabs(cx))
                     .when_some(self.console_notice.clone(), |el, notice| {
                         el.child(
@@ -761,23 +553,5 @@ impl Render for Workspace {
             })
             .child(self.approval.clone())
             .when_some(self.render_close_console(cx), |el, dialog| el.child(dialog))
-    }
-}
-
-#[derive(Debug)]
-struct WorkspaceTooltip(SharedString);
-impl Render for WorkspaceTooltip {
-    fn render(&mut self, _: &mut Window, cx: &mut Context<'_, Self>) -> impl IntoElement {
-        let theme = Theme::of(cx);
-        div()
-            .px_2()
-            .py_1()
-            .rounded(px(6.))
-            .bg(theme.colors.surface_raised)
-            .border_1()
-            .border_color(theme.colors.border)
-            .text_color(theme.colors.text)
-            .text_size(theme.typography.small_size)
-            .child(self.0.clone())
     }
 }

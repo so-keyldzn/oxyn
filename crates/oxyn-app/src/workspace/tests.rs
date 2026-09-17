@@ -209,6 +209,59 @@ fn the_exported_file_is_written_from_the_result_the_view_designates() {
     let _ = std::fs::remove_file(&destination);
 }
 
+/// `Find in loaded results…` révèle, il ne retranche pas.
+///
+/// C'est la propriété qui rend ce lot possible sans trancher l'arbitrage
+/// export/affichage : aucune ligne ne quitte la grille, donc « ce qui est
+/// exporté est ce qui est affiché » reste vrai sans qu'on y touche.
+#[gpui::test]
+fn la_recherche_revele_une_ligne_sans_en_retrancher_aucune(cx: &mut TestAppContext) {
+    let (backend, open) = connected_workspace();
+    let (workspace, cx) = cx.add_window_view(|_, cx| Workspace::new(backend, open, cx));
+    cx.run_until_parked();
+
+    cx.simulate_input("SELECT 'alpha' AS mot UNION ALL SELECT 'beta' UNION ALL SELECT 'gamma'");
+    workspace.update(cx, |view, cx| view.execute(cx));
+    cx.run_until_parked();
+
+    let lignes_avant = workspace.read_with(cx, |view, cx| {
+        view.grid
+            .read(cx)
+            .buffer()
+            .map_or(0, |tampon| tampon.row_count())
+    });
+    assert_eq!(lignes_avant, 3, "les trois lignes sont chargées");
+    assert!(
+        workspace.read_with(cx, |view, cx| view.grid.read(cx).find().is_none()),
+        "aucune recherche n'a encore eu lieu : ce n'est pas « aucune correspondance »"
+    );
+
+    // L'utilisateur tape dans le champ et valide.
+    workspace.update(cx, |view, cx| {
+        view.find_field
+            .update(cx, |champ, cx| champ.set_text("beta".to_owned(), cx));
+        view.find_field
+            .update(cx, |_, cx| cx.emit(oxyn_ui::FieldEvent::Submit));
+    });
+    cx.run_until_parked();
+
+    let (lignes_apres, trouve, selection) = workspace.read_with(cx, |view, cx| {
+        let grille = view.grid.read(cx);
+        (
+            grille.buffer().map_or(0, |tampon| tampon.row_count()),
+            grille.find().map(|trouve| trouve.rows.clone()),
+            grille.selected_row(),
+        )
+    });
+
+    assert_eq!(
+        lignes_apres, lignes_avant,
+        "chercher ne retire aucune ligne : c'est ce qui laisse l'export intact"
+    );
+    assert_eq!(trouve, Some(vec![1]), "« beta » est la deuxième ligne");
+    assert_eq!(selection, Some(1), "la correspondance est révélée");
+}
+
 #[gpui::test]
 fn sidebar_shortcuts_work_from_editor_without_consuming_native_editing(cx: &mut TestAppContext) {
     let (backend, open) = connected_workspace();
@@ -306,11 +359,17 @@ fn catalog_selection_changes_context_without_executing_or_replacing_the_draft(
     );
 }
 
-fn preview_fixture() -> (Backend, OpenConnection) {
+pub(super) fn preview_fixture() -> (Backend, OpenConnection) {
     let (backend, open) = connected_workspace();
     for sql in [
         "CREATE TABLE preview_rows AS WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<1000) SELECT x AS id FROM n",
         "CREATE TABLE preview_empty (id INTEGER)",
+        // `preview_rows` is built by `CREATE TABLE … AS`, so it declares no
+        // primary key: it is what an unpageable relation looks like. This one
+        // declares one, which is what makes a total order — and therefore a
+        // page — possible at all.
+        "CREATE TABLE preview_keyed (id INTEGER PRIMARY KEY, label TEXT)",
+        "INSERT INTO preview_keyed (id, label) SELECT id, 'row ' || id FROM preview_rows",
     ] {
         backend
             .dispatch(
@@ -356,7 +415,7 @@ fn preview_fixture() -> (Backend, OpenConnection) {
     clippy::disallowed_methods,
     reason = "test harness polling a wall-clock executor, not the UI thread"
 )]
-fn wait_for_preview(view: &Entity<Workspace>, cx: &mut gpui::VisualTestContext) {
+pub(super) fn wait_for_preview(view: &Entity<Workspace>, cx: &mut gpui::VisualTestContext) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
     loop {
         cx.run_until_parked();
@@ -365,6 +424,32 @@ fn wait_for_preview(view: &Entity<Workspace>, cx: &mut gpui::VisualTestContext) 
         }
         assert!(std::time::Instant::now() < deadline, "preview must finish");
         // The driver's Tokio executor uses wall time, outside GPUI's virtual clock.
+        std::thread::sleep(std::time::Duration::from_millis(1));
+    }
+}
+
+/// Waits for a state the workspace must reach **on its own**.
+///
+/// A plain `run_until_parked` is not enough: the answer comes from a Tokio
+/// runtime GPUI's virtual clock does not drive, so the loop yields wall time
+/// between frames, with a deadline that names what never happened.
+#[expect(
+    clippy::disallowed_methods,
+    reason = "test harness polling a wall-clock executor, not the UI thread"
+)]
+pub(super) fn wait_until(
+    view: &Entity<Workspace>,
+    cx: &mut gpui::VisualTestContext,
+    what: &str,
+    mut ready: impl FnMut(&Workspace, &gpui::App) -> bool,
+) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        cx.run_until_parked();
+        if view.read_with(cx, |view, cx| ready(view, cx)) {
+            return;
+        }
+        assert!(std::time::Instant::now() < deadline, "{what}");
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
 }
@@ -548,6 +633,7 @@ fn exporting_a_complete_preview_writes_only_its_bounded_rows() {
             namespace: Some("main".into()),
             relation: "preview_rows".into(),
             limit: preview::PREVIEW_ROWS,
+            shape: oxyn_core::PreviewShape::unordered(),
         },
     )
     .expect("preview");
@@ -684,6 +770,79 @@ fn metadata_tabs_load_real_indexes_and_keys_without_running_the_draft(cx: &mut T
         assert!(view.console.read(cx).active.is_none());
         assert!(view.preview_active.is_none());
     });
+}
+
+/// `Open Indexes` mène où sa phrase dit d'aller, et disparaît sans la capacité.
+///
+/// Relevé `229:8021` : la maquette place ce bouton sous « Unique indexes ». Le
+/// code n'avait que la phrase « listed under Indexes », qui envoie chercher
+/// sans mener — juste après avoir dit qu'on regardait au mauvais endroit. Le
+/// test porte aussi sur l'absence : un bouton qui mène à un onglet qu'un driver
+/// sans introspection d'index ne peut pas remplir promet une vue vide
+/// ([ADR-0003](../../../docs/adr/0003-driver-capabilities.md)).
+#[gpui::test]
+fn depuis_les_contraintes_un_geste_mene_aux_index(cx: &mut TestAppContext) {
+    use oxyn_catalog::{Relation, RelationKind};
+    let (backend, open) = connected_workspace();
+    let (view, cx) = cx.add_window_view(|_, cx| Workspace::new(backend, open, cx));
+    let path = CatalogPath::for_relation(None, Some("main"), "items").expect("path");
+    view.update(cx, |view, cx| {
+        view.capabilities
+            .insert(Capabilities::CONSTRAINTS | Capabilities::INDEXES);
+        view.selected_path = Some(path.clone());
+        view.panel = WorkspacePanel::Object;
+        view.catalog_cache
+            .write()
+            .set_relation(&path, Relation::new("items", RelationKind::Table))
+            .expect("relation");
+        view.select_metadata_tab(ObjectTab::Constraints, cx);
+    });
+    cx.run_until_parked();
+
+    let bouton = cx
+        .debug_bounds("constraints-open-indexes")
+        .expect("le geste est proposé quand la capacité existe");
+    cx.simulate_click(bouton.center(), Default::default());
+    cx.run_until_parked();
+    view.read_with(cx, |view, _| {
+        assert_eq!(
+            view.object_tab,
+            ObjectTab::Indexes,
+            "le bouton doit mener là où sa phrase renvoie"
+        );
+    });
+}
+
+/// Sans introspection d'index, le geste n'est pas proposé du tout.
+///
+/// Une fenêtre neuve plutôt qu'une capacité retirée en cours de route :
+/// `debug_bounds` rend ce que le dernier dessin a posé, si bien qu'une
+/// transition testerait le harnais plutôt que la vue. Et c'est de toute façon
+/// le cas réel — un driver sans `INDEXES` ne l'a jamais eue
+/// ([ADR-0003](../../../docs/adr/0003-driver-capabilities.md)).
+#[gpui::test]
+fn sans_introspection_dindex_le_geste_nest_pas_propose(cx: &mut TestAppContext) {
+    use oxyn_catalog::{Relation, RelationKind};
+    let (backend, open) = connected_workspace();
+    let (view, cx) = cx.add_window_view(|_, cx| Workspace::new(backend, open, cx));
+    let path = CatalogPath::for_relation(None, Some("main"), "items").expect("path");
+    view.update(cx, |view, cx| {
+        view.capabilities.insert(Capabilities::CONSTRAINTS);
+        view.capabilities.remove(Capabilities::INDEXES);
+        view.selected_path = Some(path.clone());
+        view.panel = WorkspacePanel::Object;
+        view.catalog_cache
+            .write()
+            .set_relation(&path, Relation::new("items", RelationKind::Table))
+            .expect("relation");
+        view.select_metadata_tab(ObjectTab::Constraints, cx);
+    });
+    cx.run_until_parked();
+
+    assert!(
+        cx.debug_bounds("constraints-open-indexes").is_none(),
+        "mener vers un onglet qu'aucun driver ne peut remplir promet une vue vide"
+    );
 }
 
 #[gpui::test]
@@ -828,6 +987,68 @@ fn unavailable_metadata_never_dispatches_and_catalog_cancel_clears_queued_work(
         view.cancel_catalog(cx);
         assert!(view.catalog_pending.is_none());
         assert!(token.is_cancelled());
+    });
+}
+
+/// **Un DDL lancé ailleurs rafraîchit le catalogue sans clic Refresh.**
+///
+/// La commande n'est jamais soumise par cette vue : c'est le signal reçu par
+/// `on_exec_event` sur le bus d'événements, pas un appel que le test se
+/// contenterait de rejouer, qui doit déclencher `refresh_catalog`.
+#[gpui::test]
+fn a_ddl_from_elsewhere_refreshes_the_catalog_without_a_click(cx: &mut TestAppContext) {
+    let (backend, open) = connected_workspace();
+    let submitter = backend.clone();
+    let connection = open.connection;
+    let session = open.session;
+    let dialect = open.dialect;
+    let (view, cx) = cx.add_window_view(|_, cx| Workspace::new(backend, open, cx));
+
+    // Like a workspace whose catalog tree is already open: a node never read
+    // stays `Never`, never `Invalidated` (`CatalogCache`'s module docs).
+    // Completion always settles `catalog_scope` back to `Server` (see
+    // `refresh_catalog`), so `Server` is also the scope the auto-refresh
+    // below will actually re-fetch — the same one the Refresh button uses.
+    view.update(cx, |view, cx| {
+        view.refresh_catalog(CatalogScope::Server, cx);
+    });
+    wait_for_metadata(&view, cx);
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.catalog_scope, CatalogScope::Server);
+        assert!(
+            matches!(
+                view.catalog_cache.read().freshness(&CatalogScope::Server),
+                oxyn_catalog::Freshness::Fetched(_)
+            ),
+            "the initial refresh must have left the scope fresh"
+        );
+    });
+
+    // A different actor on the same connection, out of band: this view never
+    // dispatches this command itself.
+    submit(
+        &submitter,
+        execution_command(
+            connection,
+            session,
+            false,
+            dialect,
+            "CREATE TABLE probe (id INTEGER)".into(),
+            Vec::new(),
+        ),
+    )
+    .expect("fixture ddl");
+
+    wait_for_metadata(&view, cx);
+    view.read_with(cx, |view, _| {
+        assert!(
+            matches!(
+                view.catalog_cache.read().freshness(&CatalogScope::Server),
+                oxyn_catalog::Freshness::Fetched(_)
+            ),
+            "the workspace must have re-fetched on its own after the external DDL, \
+             without this test ever calling refresh_catalog a second time"
+        );
     });
 }
 
@@ -1266,4 +1487,174 @@ fn collapsing_sidebar_keeps_table_context_and_settings_take_keyboard_focus(
         assert_eq!(view.read(cx).panel, WorkspacePanel::Preferences);
         assert!(view.read(cx).preferences_focus.is_focused(window));
     });
+}
+
+/// **Where you were comes back; nothing you were reading does.**
+///
+/// UX-SPEC promises a restored object tab that keeps its location « sans charger
+/// ses données avant une reconnexion explicite ». The event count is the half
+/// that matters: a restoration that reloaded the preview would put the first
+/// request of the session on the wire for a window nobody has looked at yet.
+#[gpui::test]
+fn a_restored_location_and_its_sub_tab_come_back_without_reading_anything(cx: &mut TestAppContext) {
+    let (backend, open) = preview_fixture();
+    let path = CatalogPath::for_relation(None, Some("main"), "preview_rows").expect("table path");
+    {
+        let (view, cx) = cx.add_window_view({
+            let backend = backend.clone();
+            let open = open.clone();
+            |_, cx| Workspace::new(backend, open, cx)
+        });
+        let tree = view.read_with(cx, |view, _| view.catalog.clone().expect("catalog"));
+        tree.update(cx, |tree, cx| tree.select(path.clone(), cx));
+        wait_for_preview(&view, cx);
+        view.update(cx, |view, cx| {
+            view.select_metadata_tab(ObjectTab::Indexes, cx);
+        });
+        wait_for_metadata(&view, cx);
+        wait_for_preferences(&view, cx);
+    }
+
+    // The location reached the store, not only the in-memory snapshot.
+    let saved = submit(
+        &backend,
+        Command::ReadWorkspacePreferences {
+            workspace: backend.workspace_id(),
+        },
+    )
+    .expect("preferences read");
+    let Outcome::WorkspacePreferences { snapshot } = saved else {
+        panic!("preferences outcome required")
+    };
+    let location = snapshot
+        .preferences
+        .object_location
+        .expect("the browsing location is saved with the other preferences");
+    assert_eq!(location.path, path.to_string());
+    assert_eq!(location.section, oxyn_core::ObjectSection::Indexes);
+    assert_eq!(location.connection, open.connection);
+
+    let mut events = backend.subscribe();
+    let (restored, cx) = cx.add_window_view({
+        let backend = backend.clone();
+        let open = open.clone();
+        |_, cx| Workspace::new(backend, open, cx)
+    });
+    cx.run_until_parked();
+    restored.read_with(cx, |view, cx| {
+        assert_eq!(view.selected_path.as_ref(), Some(&path));
+        assert_eq!(view.object_tab, ObjectTab::Indexes);
+        assert!(view.preview_active.is_none(), "no preview was started");
+        assert!(view.preview_path.is_none(), "no preview was even requested");
+        assert!(view.catalog_active.is_none(), "no catalog read was started");
+        assert!(view.console.read(cx).active.is_none());
+        assert_eq!(
+            view.panel,
+            WorkspacePanel::Sql,
+            "restoring a location does not open the object panel"
+        );
+    });
+    let mut reads = 0;
+    while let Ok(event) = events.try_recv() {
+        if matches!(
+            event.event,
+            Event::SchemaReady { .. } | Event::Completed { .. }
+        ) {
+            reads += 1;
+        }
+    }
+    assert_eq!(reads, 0, "restoring a location must execute nothing");
+}
+
+/// **An object dropped between two sessions is said, not silently forgotten.**
+#[gpui::test]
+fn a_restored_object_that_vanished_is_explained_and_never_erased(cx: &mut TestAppContext) {
+    let (backend, open) = preview_fixture();
+    let gone =
+        CatalogPath::for_relation(None, Some("main"), "dropped_between_sessions").expect("path");
+    {
+        let (view, cx) = cx.add_window_view({
+            let backend = backend.clone();
+            let open = open.clone();
+            |_, cx| Workspace::new(backend, open, cx)
+        });
+        view.update(cx, |view, cx| view.select_object(gone.clone(), cx));
+        wait_for_preferences(&view, cx);
+    }
+    let (restored, cx) = cx.add_window_view({
+        let backend = backend.clone();
+        let open = open.clone();
+        |_, cx| Workspace::new(backend, open, cx)
+    });
+    cx.run_until_parked();
+    restored.read_with(cx, |view, _| {
+        assert_eq!(view.selected_path.as_ref(), Some(&gone));
+        assert!(
+            view.console_notice.is_none(),
+            "an unread catalog is not evidence of a missing object"
+        );
+    });
+    // Listing the schema that would hold it is what turns « not read » into
+    // « not there » — the workspace never starts this read on its own.
+    let namespace = gone.parent().expect("a relation has a container");
+    restored.update(cx, |view, cx| {
+        view.refresh_catalog(CatalogScope::Namespace(namespace), cx);
+    });
+    wait_for_metadata(&restored, cx);
+    restored.read_with(cx, |view, cx| {
+        assert_eq!(
+            view.selected_path.as_ref(),
+            Some(&gone),
+            "the location is kept: the breadcrumb is what gives the notice a subject"
+        );
+        let notice = view
+            .console_notice
+            .clone()
+            .expect("a missing object is explained, not shown as an empty tab");
+        assert!(notice.contains("dropped_between_sessions"));
+        assert!(view.preview_active.is_none());
+        assert!(view.console.read(cx).active.is_none());
+    });
+}
+
+/// **A very long object name costs its own location, never the preferences.**
+#[gpui::test]
+fn an_object_name_too_long_to_store_still_saves_every_other_preference(cx: &mut TestAppContext) {
+    let (backend, open) = connected_workspace();
+    let long = "n".repeat(oxyn_core::ObjectLocation::MAX_PATH_BYTES);
+    let path = CatalogPath::for_relation(None, Some("main"), long).expect("legal table name");
+    assert!(path.to_string().len() > oxyn_core::ObjectLocation::MAX_PATH_BYTES);
+    let (view, cx) = cx.add_window_view({
+        let backend = backend.clone();
+        let open = open.clone();
+        |_, cx| Workspace::new(backend, open, cx)
+    });
+    view.update(cx, |view, cx| {
+        view.select_object(path.clone(), cx);
+        view.sidebar_collapsed = true;
+        view.persist_preferences(cx);
+    });
+    // `wait_for_preferences` asserts the save succeeded rather than failed.
+    wait_for_preferences(&view, cx);
+    view.read_with(cx, |view, _| {
+        assert_eq!(view.selected_path.as_ref(), Some(&path));
+    });
+    let saved = submit(
+        &backend,
+        Command::ReadWorkspacePreferences {
+            workspace: backend.workspace_id(),
+        },
+    )
+    .expect("preferences read");
+    let Outcome::WorkspacePreferences { snapshot } = saved else {
+        panic!("preferences outcome required")
+    };
+    assert!(
+        snapshot.preferences.object_location.is_none(),
+        "an unstorable location is dropped"
+    );
+    assert!(
+        snapshot.preferences.sidebar_collapsed,
+        "the preference saved alongside it is unaffected"
+    );
 }

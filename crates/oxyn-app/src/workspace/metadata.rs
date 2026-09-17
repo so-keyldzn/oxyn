@@ -1,9 +1,12 @@
 //! Capability-aware metadata tabs, reading only visible rows from the shared cache.
 
 use super::layout::Control;
+use super::preview::PREVIEW_ROWS;
 use super::*;
 use gpui::{AnyElement, ClipboardItem, KeyDownEvent, ScrollStrategy, div, px, uniform_list};
 use oxyn_catalog::CatalogCache;
+use oxyn_catalog::path::{QuoteStyle, quote_identifier};
+use oxyn_core::SqlDialect;
 use oxyn_ui::Theme;
 
 fn required_capability(tab: ObjectTab) -> Capabilities {
@@ -15,6 +18,163 @@ fn required_capability(tab: ObjectTab) -> Capabilities {
         ObjectTab::Ddl => Capabilities::OBJECT_DEFINITION,
         _ => Capabilities::empty(),
     }
+}
+
+/// Les deux synthèses que la maquette place sous la liste des contraintes.
+///
+/// Relevé `229:7637` : « NOT NULL columns » suivi des noms, et « Unique indexes »
+/// suivi d'une phrase qui renvoie vers l'onglet Indexes. Elles ne demandent
+/// **aucune lecture** — tout est déjà dans le cache, écrit par l'introspection
+/// qui a rempli la table au-dessus.
+///
+/// Ce qu'elles apportent, et que la liste des contraintes ne dit pas : un
+/// `NOT NULL` n'est pas une ligne de `pg_constraint` sur PostgreSQL — c'est un
+/// attribut de colonne. Une table dont chaque colonne est obligatoire affiche
+/// donc une liste de contraintes qui n'en mentionne aucune, et l'utilisateur en
+/// conclut qu'il n'y en a pas. Un index unique, lui, est bien une contrainte,
+/// mais il vit dans un autre onglet : le dire évite de le chercher ici.
+///
+/// Rend `None` quand la relation n'est pas encore lue — il n'y a alors rien à
+/// résumer, et afficher « aucune colonne obligatoire » serait faux.
+fn constraint_summaries(
+    cache: &CatalogCache,
+    path: &CatalogPath,
+) -> Option<(Vec<String>, Vec<String>)> {
+    let relation = cache.relation(path)?;
+    let obligatoires = relation
+        .fields
+        .iter()
+        .filter(|field| !field.nullable)
+        .map(|field| field.name.clone())
+        .collect();
+    let uniques = cache
+        .indexes(path)
+        .unwrap_or_default()
+        .iter()
+        .filter(|index| index.unique)
+        .map(|index| index.name.clone())
+        .collect();
+    Some((obligatoires, uniques))
+}
+
+/// La phrase qui décrit la relation sélectionnée.
+///
+/// Relevé `229:32690` : « public.orders → public.customers » suivi d'une phrase
+/// sur la clé étrangère. La liste au-dessus donne les colonnes ; elle ne dit pas
+/// **dans quel sens** la relation va, et c'est tout ce qui compte pour savoir
+/// laquelle des deux tables porte la contrainte.
+///
+/// La flèche part toujours de la table qui **porte** la clé vers celle qui est
+/// référencée, quel que soit l'onglet : en relations entrantes, la table
+/// affichée est la cible, et inverser la flèche selon l'onglet donnerait deux
+/// lectures contradictoires du même lien.
+fn selected_relationship(
+    cache: &CatalogCache,
+    path: &CatalogPath,
+    tab: ObjectTab,
+    index: usize,
+) -> Option<String> {
+    let rendu = |source: &CatalogPath, cible: &CatalogPath, colonnes: &[String], action: &str| {
+        format!(
+            "{} → {} · {} · on delete {action}",
+            source,
+            cible,
+            colonnes.join(", ")
+        )
+    };
+    match tab {
+        ObjectTab::Relations => {
+            let cle = cache.foreign_keys(path)?.get(index)?;
+            Some(rendu(
+                path,
+                &cle.references.relation,
+                &cle.fields,
+                cle.on_delete.as_str(),
+            ))
+        }
+        ObjectTab::IncomingRelations => {
+            let cle = cache.incoming_foreign_keys(path)?.get(index)?;
+            Some(rendu(
+                &cle.source,
+                path,
+                &cle.key.fields,
+                cle.key.on_delete.as_str(),
+            ))
+        }
+        _ => None,
+    }
+}
+
+/// La requête bornée que `229:32690` montre sous la relation sélectionnée.
+///
+/// # Ce qu'elle est, et ce qu'elle n'est pas
+///
+/// Un **modèle à compléter**, jamais une requête à lancer. Elle nomme la table
+/// qui porte la clé, ses colonnes, et laisse la valeur à saisir — parce
+/// qu'Oxyn ne l'a pas : la maquette elle-même écrit `WHERE customer_i…` sans
+/// valeur. Elle n'est exécutée par aucun chemin ; `Review related-row query`
+/// l'ouvre dans une console, où l'utilisateur la lit, la complète et l'exécute
+/// lui-même ([I-07](../../../CLAUDE.md#i-07)).
+///
+/// # Les identifiants sont cités
+///
+/// Ils viennent du catalogue, donc du serveur : les concaténer tels quels
+/// violerait [I-10](../../../CLAUDE.md#i-10), y compris dans un texte qui ne
+/// s'exécute pas — une table nommée `"users"; DROP TABLE audit; --` produirait
+/// un modèle qui fait exactement cela au premier clic sur `Run`.
+/// `quote_identifier` est la fonction que les deux drivers emploient déjà pour
+/// composer leurs aperçus ; le style suit le dialecte de la session.
+///
+/// # La borne
+///
+/// `LIMIT 200`, la même que l'aperçu (`PREVIEW_ROWS`). « Bounded » est dans le
+/// nom de la planche : ouvrir un modèle sans borne sur une table liée de
+/// plusieurs millions de lignes offrirait en un clic le `SELECT *` que
+/// [I-06](../../../CLAUDE.md#i-06) passe son temps à empêcher.
+fn related_row_query(
+    cache: &CatalogCache,
+    path: &CatalogPath,
+    tab: ObjectTab,
+    index: usize,
+    dialect: SqlDialect,
+) -> Option<String> {
+    let style = QuoteStyle::for_dialect(dialect);
+    let cite = |chemin: &CatalogPath| {
+        let mut morceaux = Vec::new();
+        if let Some(namespace) = chemin.namespace() {
+            morceaux.push(quote_identifier(namespace, style));
+        }
+        morceaux.push(quote_identifier(chemin.relation()?, style));
+        Some(morceaux.join("."))
+    };
+
+    let (porteuse, colonnes) = match tab {
+        ObjectTab::Relations => {
+            let cle = cache.foreign_keys(path)?.get(index)?;
+            (path.clone(), cle.fields.clone())
+        }
+        ObjectTab::IncomingRelations => {
+            let cle = cache.incoming_foreign_keys(path)?.get(index)?;
+            (cle.source.clone(), cle.key.fields.clone())
+        }
+        _ => return None,
+    };
+    if colonnes.is_empty() {
+        return None;
+    }
+
+    // Une clé composite donne autant de conditions que de colonnes : en omettre
+    // une rendrait le modèle silencieusement plus large que la relation.
+    let conditions = colonnes
+        .iter()
+        .map(|colonne| format!("{} = ", quote_identifier(colonne, style)))
+        .collect::<Vec<_>>()
+        .join("\n  AND ");
+
+    Some(format!(
+        "SELECT *\nFROM {}\nWHERE {conditions}\nLIMIT {PREVIEW_ROWS};",
+        cite(&porteuse)?
+    ))
 }
 
 fn metadata_count(cache: &CatalogCache, path: &CatalogPath, tab: ObjectTab) -> Option<usize> {
@@ -235,6 +395,9 @@ impl Workspace {
 
     pub(super) fn select_metadata_tab(&mut self, tab: ObjectTab, cx: &mut Context<'_, Self>) {
         self.object_tab = tab;
+        // Before the early returns below: the sub-tab is part of the restored
+        // location whether or not this session can load what it shows.
+        self.persist_location(cx);
         self.metadata_selected = 0;
         self.metadata_scroll.scroll_to_item(0, ScrollStrategy::Top);
         self.metadata_menu_open = false;
@@ -435,7 +598,190 @@ impl Workspace {
                 },
             )
             .child(self.metadata_table(cx))
+            .children(self.selected_relationship_line(cx))
+            .children(self.constraint_summaries_panel(cx))
             .into_any_element()
+    }
+
+    /// La ligne « Selected relationship » de `229:32690`.
+    fn selected_relationship_line(&self, cx: &Context<'_, Self>) -> Option<AnyElement> {
+        if !matches!(
+            self.object_tab,
+            ObjectTab::Relations | ObjectTab::IncomingRelations
+        ) {
+            return None;
+        }
+        let theme = Theme::of(cx);
+        let path = self.selected_path.as_ref()?;
+        let phrase = {
+            let cache = self.catalog_cache.try_read()?;
+            selected_relationship(&cache, path, self.object_tab, self.metadata_selected)?
+        };
+        Some(
+            div()
+                .flex_none()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .pt_2()
+                .child(
+                    div()
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .child("Selected relationship"),
+                )
+                .child(
+                    div()
+                        .text_size(theme.typography.small_size)
+                        .text_color(theme.colors.text_muted)
+                        .child(phrase),
+                )
+                .children(self.related_row_preview(cx))
+                .into_any_element(),
+        )
+    }
+
+    /// Ouvre le modèle de requête liée dans une console. **Rien ne s'exécute.**
+    pub(super) fn open_related_row_query(&mut self, cx: &mut Context<'_, Self>) {
+        let Some(path) = self.selected_path.clone() else {
+            return;
+        };
+        let Some(requete) = self.catalog_cache.try_read().and_then(|cache| {
+            related_row_query(
+                &cache,
+                &path,
+                self.object_tab,
+                self.metadata_selected,
+                self.dialect,
+            )
+        }) else {
+            return;
+        };
+        self.open_library_query(
+            library::OpenQuery::Copy {
+                text: requete,
+                title: "Related rows.sql".into(),
+                origin: "a related-row template · complete the condition before running".into(),
+                // Un modèle composé par Oxyn n'est écrit ni par l'utilisateur ni
+                // par un agent : il n'a pas de provenance à porter.
+                provenance: None,
+            },
+            cx,
+        );
+    }
+
+    /// L'aperçu de requête liée de `229:32690`, et le bouton qui l'ouvre.
+    ///
+    /// Le modèle est **montré avant d'être ouvert** : c'est ce qui permet de
+    /// juger sans rien déclencher. Le bouton l'envoie dans une console, où rien
+    /// ne s'exécute tant que l'utilisateur ne le demande pas
+    /// ([I-07](../../../CLAUDE.md#i-07)) — le même chemin que `Open DDL in
+    /// console`.
+    fn related_row_preview(&self, cx: &Context<'_, Self>) -> Option<AnyElement> {
+        let theme = Theme::of(cx);
+        let path = self.selected_path.as_ref()?;
+        let requete = {
+            let cache = self.catalog_cache.try_read()?;
+            related_row_query(
+                &cache,
+                path,
+                self.object_tab,
+                self.metadata_selected,
+                self.dialect,
+            )?
+        };
+        Some(
+            div()
+                .flex_none()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .pt_2()
+                .child(
+                    div()
+                        .font_weight(gpui::FontWeight::MEDIUM)
+                        .child("Bounded related-row preview"),
+                )
+                .child(
+                    div()
+                        .p_2()
+                        .rounded(theme.radii.control)
+                        .border_1()
+                        .border_color(theme.colors.border)
+                        .font_family(theme.typography.mono_family.clone())
+                        .text_size(theme.typography.mono_size)
+                        .text_color(theme.colors.text_muted)
+                        .child(requete),
+                )
+                .child(div().flex().child(self.control(
+                    "review-related-query",
+                    "Review related-row query",
+                    Control::ReviewRelatedQuery,
+                    false,
+                    cx,
+                )))
+                .into_any_element(),
+        )
+    }
+
+    /// Les deux synthèses de `229:7637`, sous la liste des contraintes.
+    fn constraint_summaries_panel(&self, cx: &Context<'_, Self>) -> Option<AnyElement> {
+        if self.object_tab != ObjectTab::Constraints {
+            return None;
+        }
+        let theme = Theme::of(cx);
+        let path = self.selected_path.as_ref()?;
+        let (obligatoires, uniques) = {
+            // `try_read` et non `read` : le catalogue est partagé, et le fil
+            // d'interface ne bloque jamais sur un verrou (I-05). Sans la
+            // synthèse, la liste des contraintes reste lisible.
+            let cache = self.catalog_cache.try_read()?;
+            constraint_summaries(&cache, path)?
+        };
+
+        let titre = |texte: &'static str| div().font_weight(gpui::FontWeight::MEDIUM).child(texte);
+        let detail = |texte: String| {
+            div()
+                .text_size(theme.typography.small_size)
+                .text_color(theme.colors.text_muted)
+                .child(texte)
+        };
+
+        Some(
+            div()
+                .flex_none()
+                .flex()
+                .flex_col()
+                .gap_1()
+                .pt_2()
+                .child(titre("NOT NULL columns"))
+                .child(detail(if obligatoires.is_empty() {
+                    "None: every column accepts NULL.".to_owned()
+                } else {
+                    obligatoires.join(" · ")
+                }))
+                .child(titre("Unique indexes"))
+                .child(detail(if uniques.is_empty() {
+                    "None. Unique indexes, when there are any, are listed under Indexes.".to_owned()
+                } else {
+                    format!("{} · listed under Indexes.", uniques.join(" · "))
+                }))
+                // `Open Indexes` (`229:8021`) : la maquette offre le geste, le
+                // code ne donnait que la phrase. Dire « c'est dans un autre
+                // onglet » sans y mener oblige à revenir à la barre et à s'y
+                // repérer, juste après avoir lu qu'on regardait au mauvais
+                // endroit. Le contrôle est celui de la barre d'onglets — même
+                // `Control::Indexes`, donc aucun second chemin.
+                .when(self.capabilities.contains(Capabilities::INDEXES), |el| {
+                    el.child(div().pt_1().child(self.control(
+                        "constraints-open-indexes",
+                        "Open Indexes",
+                        Control::Indexes,
+                        false,
+                        cx,
+                    )))
+                })
+                .into_any_element(),
+        )
     }
 
     fn metadata_table(&self, cx: &Context<'_, Self>) -> AnyElement {
@@ -735,5 +1081,214 @@ mod tests {
         );
         assert!(metadata_row(&cache, &path, ObjectTab::Indexes, usize::MAX).is_none());
         assert_eq!(metadata_count(&cache, &path, ObjectTab::Relations), None);
+    }
+
+    /// Les deux synthèses disent ce que la liste des contraintes ne dit pas.
+    ///
+    /// Relevé `229:7637`. L'intérêt n'est pas décoratif : sur PostgreSQL, un
+    /// `NOT NULL` n'est **pas** une ligne de `pg_constraint` — c'est un attribut
+    /// de colonne. Une table dont chaque colonne est obligatoire affiche donc
+    /// une liste de contraintes qui n'en mentionne aucune, et l'utilisateur en
+    /// conclut qu'il n'y en a pas.
+    #[test]
+    fn les_synthese_de_contraintes_montrent_ce_que_la_liste_tait() {
+        use oxyn_catalog::{Field, LogicalType};
+
+        let path = CatalogPath::for_relation(None, Some("public"), "clients").expect("path");
+        let mut cache = CatalogCache::new();
+        cache
+            .set_relation(
+                &path,
+                Relation::new("clients", RelationKind::Table).with_fields(vec![
+                    Field::new("id", 0, LogicalType::INT64, "int8").primary_key(),
+                    Field::new("email", 1, LogicalType::Text, "text"),
+                    Field::new("note", 2, LogicalType::Text, "text"),
+                ]),
+            )
+            .expect("relation");
+
+        let mut unique = Index::new("clients_email_idx", vec!["email".into()]);
+        unique.unique = true;
+        let ordinaire = Index::new("clients_note_idx", vec!["note".into()]);
+        cache
+            .set_indexes(&path, vec![unique, ordinaire])
+            .expect("indexes");
+
+        let (obligatoires, uniques) =
+            constraint_summaries(&cache, &path).expect("la relation est lue");
+
+        // `primary_key()` implique non nul ; les deux autres colonnes sont
+        // nullables par défaut — le parti prudent du modèle.
+        assert_eq!(obligatoires, vec!["id".to_owned()]);
+        // Seul l'index unique compte : l'autre n'est pas une contrainte.
+        assert_eq!(uniques, vec!["clients_email_idx".to_owned()]);
+    }
+
+    /// Une relation non encore lue ne se résume pas.
+    ///
+    /// Le piège que ce test ferme : rendre `Some((vec![], vec![]))` afficherait
+    /// « aucune colonne obligatoire » sur une table dont on ne sait encore rien
+    /// — une affirmation fausse, indiscernable d'une table réellement toute
+    /// nullable.
+    #[test]
+    fn une_relation_non_lue_ne_produit_aucune_synthese() {
+        let path = CatalogPath::for_relation(None, Some("public"), "inconnue").expect("path");
+        assert!(constraint_summaries(&CatalogCache::new(), &path).is_none());
+    }
+
+    /// La flèche part de qui **porte** la clé, dans les deux onglets.
+    ///
+    /// Relevé `229:32690`. Le piège qu'un test ferme ici : inverser la flèche
+    /// selon l'onglet paraît naturel — on regarde « ses » relations entrantes —
+    /// et donnerait deux lectures contradictoires du **même** lien. Or ce qui
+    /// intéresse le lecteur est invariant : quelle table porte la contrainte, et
+    /// donc laquelle refusera l'écriture.
+    #[test]
+    fn la_fleche_dune_relation_ne_change_pas_de_sens_selon_l_onglet() {
+        use oxyn_catalog::{ForeignKey, ForeignKeyTarget, IncomingForeignKey};
+
+        let clients = CatalogPath::for_relation(None, Some("public"), "clients").expect("path");
+        let commandes = CatalogPath::for_relation(None, Some("public"), "commandes").expect("path");
+        let mut cache = CatalogCache::new();
+        for chemin in [&clients, &commandes] {
+            cache
+                .set_relation(chemin, Relation::new("t", RelationKind::Table))
+                .expect("relation");
+        }
+
+        // `commandes` porte la clé vers `clients`.
+        let cle = ForeignKey::new(
+            "commandes_client_fk",
+            vec!["client_id".into()],
+            ForeignKeyTarget {
+                relation: clients.clone(),
+                fields: vec!["id".into()],
+            },
+        );
+        cache
+            .set_foreign_keys(&commandes, vec![cle.clone()])
+            .expect("sortantes");
+        cache
+            .set_incoming_foreign_keys(
+                &clients,
+                vec![IncomingForeignKey {
+                    source: commandes.clone(),
+                    key: cle,
+                    source_unique: None,
+                }],
+            )
+            .expect("entrantes");
+
+        // Vue depuis `commandes` — ses relations sortantes.
+        let sortante = selected_relationship(&cache, &commandes, ObjectTab::Relations, 0)
+            .expect("une relation sortante");
+        // Vue depuis `clients` — ses relations entrantes. Le même lien.
+        let entrante = selected_relationship(&cache, &clients, ObjectTab::IncomingRelations, 0)
+            .expect("une relation entrante");
+
+        let attendu = "public.commandes → public.clients";
+        assert!(sortante.starts_with(attendu), "{sortante}");
+        assert!(
+            entrante.starts_with(attendu),
+            "le même lien, lu de l'autre bout, garde son sens : {entrante}"
+        );
+    }
+
+    /// Le modèle de requête liée cite ses identifiants — I-10 vaut aussi pour
+    /// un texte qui ne s'exécute pas.
+    ///
+    /// Une table nommée `"users"; DROP TABLE audit; --` est légale dans
+    /// PostgreSQL. Sans citation, le modèle ouvert dans une console exécuterait
+    /// la suppression au premier clic sur `Run` — et le fait qu'Oxyn n'ait rien
+    /// lancé lui-même ne serait qu'une consolation.
+    #[test]
+    fn le_modele_de_requete_liee_cite_ses_identifiants() {
+        use oxyn_catalog::{ForeignKey, ForeignKeyTarget};
+
+        let hostile =
+            CatalogPath::for_relation(None, Some("public"), "users\"; DROP TABLE audit; --")
+                .expect("un nom hostile reste un nom légal");
+        let cible = CatalogPath::for_relation(None, Some("public"), "clients").expect("path");
+        let mut cache = CatalogCache::new();
+        for chemin in [&hostile, &cible] {
+            cache
+                .set_relation(chemin, Relation::new("t", RelationKind::Table))
+                .expect("relation");
+        }
+        cache
+            .set_foreign_keys(
+                &hostile,
+                vec![ForeignKey::new(
+                    "fk",
+                    vec!["client_id".into()],
+                    ForeignKeyTarget {
+                        relation: cible,
+                        fields: vec!["id".into()],
+                    },
+                )],
+            )
+            .expect("clé");
+
+        let sql = related_row_query(
+            &cache,
+            &hostile,
+            ObjectTab::Relations,
+            0,
+            SqlDialect::Postgres,
+        )
+        .expect("un modèle");
+
+        // Le guillemet fermant est doublé : la citation ne se clôt pas par
+        // surprise, et le `;` reste à l'intérieur du nom.
+        assert!(
+            sql.contains("\"users\"\"; DROP TABLE audit; --\""),
+            "l'identifiant doit être cité : {sql}"
+        );
+        assert!(sql.contains("LIMIT 200"), "le modèle est borné : {sql}");
+        // La valeur est laissée à saisir : Oxyn ne l'a pas.
+        assert!(sql.trim_end().ends_with("LIMIT 200;"), "{sql}");
+    }
+
+    /// Une clé composite donne autant de conditions que de colonnes.
+    ///
+    /// En omettre une rendrait le modèle silencieusement **plus large** que la
+    /// relation qu'il prétend suivre — et l'utilisateur lirait des lignes qui
+    /// n'ont rien à voir.
+    #[test]
+    fn une_cle_composite_donne_toutes_ses_conditions() {
+        use oxyn_catalog::{ForeignKey, ForeignKeyTarget};
+
+        let source = CatalogPath::for_relation(None, Some("public"), "lignes").expect("path");
+        let cible = CatalogPath::for_relation(None, Some("public"), "commandes").expect("path");
+        let mut cache = CatalogCache::new();
+        for chemin in [&source, &cible] {
+            cache
+                .set_relation(chemin, Relation::new("t", RelationKind::Table))
+                .expect("relation");
+        }
+        cache
+            .set_foreign_keys(
+                &source,
+                vec![ForeignKey::new(
+                    "fk",
+                    vec!["commande_id".into(), "ligne_no".into()],
+                    ForeignKeyTarget {
+                        relation: cible,
+                        fields: vec!["id".into(), "no".into()],
+                    },
+                )],
+            )
+            .expect("clé");
+
+        let sql = related_row_query(
+            &cache,
+            &source,
+            ObjectTab::Relations,
+            0,
+            SqlDialect::Postgres,
+        )
+        .expect("un modèle");
+        assert!(sql.contains("\"commande_id\" = "), "{sql}");
+        assert!(sql.contains("AND \"ligne_no\" = "), "{sql}");
     }
 }

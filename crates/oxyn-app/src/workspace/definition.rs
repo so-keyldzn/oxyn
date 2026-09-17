@@ -179,6 +179,9 @@ impl Workspace {
                     "object definition"
                 }
                 .into(),
+                // Un DDL relu du serveur n'est écrit par personne : ni
+                // l'utilisateur, ni un agent. La marque reste absente.
+                provenance: None,
             },
             cx,
         );
@@ -231,6 +234,20 @@ impl Workspace {
                     "copy-structure-ddl",
                     "Copy DDL",
                     Control::CopyDefinition,
+                    false,
+                    cx,
+                ))
+            })
+            // `229:7663`. Le contrôle n'existe que s'il y a quelque chose à
+            // proposer : pas de sélection, onglet sans objet modifiable, ou
+            // dialecte qui n'accepte pas l'opération l'effacent. Un bouton qui
+            // produirait un texte inexécutable serait la promesse creuse
+            // qu'ADR-0003 interdit.
+            .when(self.can_propose_change(), |row| {
+                row.child(self.control(
+                    "propose-change",
+                    "Propose change…",
+                    Control::ProposeChange,
                     false,
                     cx,
                 ))

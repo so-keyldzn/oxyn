@@ -3,12 +3,65 @@
 use super::layout::Control;
 use super::*;
 use gpui::{AnyElement, Global, div, px};
-use oxyn_core::{Appearance, PreferencesSnapshot, ReadingDensity};
+use oxyn_core::{
+    Appearance, ObjectLocation, ObjectSection, PreferencesSnapshot, ReadingDensity,
+    WorkspacePreferences,
+};
 use oxyn_ui::{Theme, ThemeMode};
 
 #[derive(Clone, Debug)]
 struct UiPreferences(PreferencesSnapshot);
 impl Global for UiPreferences {}
+
+/// The sub-tab and the stored section are one concept in two crates: the view
+/// must not invent a second persisted spelling, and the domain must not learn
+/// about tabs.
+fn section_of(tab: ObjectTab) -> ObjectSection {
+    match tab {
+        ObjectTab::Data => ObjectSection::Data,
+        ObjectTab::Structure => ObjectSection::Structure,
+        ObjectTab::Indexes => ObjectSection::Indexes,
+        ObjectTab::Constraints => ObjectSection::Constraints,
+        ObjectTab::Relations => ObjectSection::Relations,
+        ObjectTab::IncomingRelations => ObjectSection::IncomingRelations,
+        ObjectTab::Ddl => ObjectSection::Definition,
+    }
+}
+
+/// `ObjectSection` is `#[non_exhaustive]`: a section this build cannot show
+/// falls back to the data tab rather than refusing the whole payload.
+fn tab_of(section: ObjectSection) -> ObjectTab {
+    match section {
+        ObjectSection::Structure => ObjectTab::Structure,
+        ObjectSection::Indexes => ObjectTab::Indexes,
+        ObjectSection::Constraints => ObjectTab::Constraints,
+        ObjectSection::Relations => ObjectTab::Relations,
+        ObjectSection::IncomingRelations => ObjectTab::IncomingRelations,
+        ObjectSection::Definition => ObjectTab::Ddl,
+        _ => ObjectTab::Data,
+    }
+}
+
+/// Reads back where browsing stopped, without touching the catalog or the server.
+///
+/// Returns `None` when the location belongs to another connection, when the
+/// stored path cannot be parsed — a payload can be hand-edited or written by a
+/// later version, and neither may panic ([I-09](../../../CLAUDE.md#i-09)) — or
+/// when it names the server itself, which is not a location anyone browsed to.
+pub(crate) fn restored_location(
+    preferences: &WorkspacePreferences,
+    connection: oxyn_core::ConnectionId,
+) -> Option<(CatalogPath, ObjectTab)> {
+    let location = preferences.object_location.as_ref()?;
+    if location.connection != connection {
+        return None;
+    }
+    let path: CatalogPath = location.path.parse().ok()?;
+    if path.is_empty() {
+        return None;
+    }
+    Some((path, tab_of(location.section)))
+}
 
 #[derive(Debug, Default)]
 pub(super) enum PreferenceSaveState {
@@ -69,6 +122,36 @@ impl Workspace {
         snapshot
     }
 
+    /// Where browsing stopped, in the one textual form the catalog already has.
+    ///
+    /// `None` when nothing is selected, and also when the rendered path exceeds
+    /// the location budget: an object name long enough to threaten the payload
+    /// costs its own location, never the rest of the snapshot.
+    fn current_location(&self) -> Option<ObjectLocation> {
+        let path = self.selected_path.as_ref()?;
+        ObjectLocation::new(
+            self.connection,
+            path.to_string(),
+            section_of(self.object_tab),
+        )
+    }
+
+    /// Saves the browsing location on the gesture that changed it.
+    ///
+    /// Same trigger as the sidebar toggle or the inspector handle: a deliberate
+    /// gesture, not a keystroke. A gesture that lands on the location already
+    /// stored writes nothing, so holding an arrow key on one row cannot burn a
+    /// revision per frame.
+    pub(super) fn persist_location(&mut self, cx: &mut Context<'_, Self>) {
+        let stored = Self::preferences_for_backend(&self.backend, cx)
+            .preferences
+            .object_location;
+        if stored == self.current_location() {
+            return;
+        }
+        self.persist_preferences(cx);
+    }
+
     pub(super) fn persist_preferences(&mut self, cx: &mut Context<'_, Self>) {
         let mut snapshot = Self::preferences_for_backend(&self.backend, cx);
         let Some(revision) = snapshot
@@ -96,6 +179,7 @@ impl Workspace {
         snapshot.preferences.null_text = format.null_text.to_string();
         snapshot.preferences.group_thousands =
             format.number_grouping == oxyn_data::NumberGrouping::Thousands;
+        snapshot.preferences.object_location = self.current_location();
         self.preference_revision = revision;
         cx.set_global(UiPreferences(snapshot.clone()));
         if let Err(error) = snapshot.validate() {
@@ -300,6 +384,11 @@ impl Workspace {
             )))
             .child(self.reading_settings(cx))
             .child(self.settings.clone())
+            // Les fournisseurs de modèles se déclarent ici et nulle part
+            // ailleurs : UX-SPEC refuse un appel à l'action dans la barre de
+            // connexion, qui serait une publicité pour une fonctionnalité
+            // absente. L'écran vit dans les réglages, où on vient le chercher.
+            .child(self.provider_settings.clone())
             .child(
                 div()
                     .text_size(theme.typography.small_size)

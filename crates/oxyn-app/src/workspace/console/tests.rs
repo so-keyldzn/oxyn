@@ -11,6 +11,12 @@ use gpui::{TestAppContext, VisualTestContext};
 fn settle(workspace: &Entity<Workspace>, cx: &mut VisualTestContext) {
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
     loop {
+        // Le brouillon part au **repos de frappe**, pas à la touche
+        // ([ADR-0024](../../../../docs/adr/0024-autosauvegarde-au-repos-de-frappe.md)).
+        // On avance l'horloge du harnais plutôt que d'attendre réellement : le
+        // minuteur se déclenche, et le test reste déterministe.
+        cx.executor()
+            .advance_clock(std::time::Duration::from_millis(300));
         cx.run_until_parked();
         if workspace.read_with(cx, |view, cx| {
             view.console_attempt.is_none()
@@ -30,6 +36,61 @@ fn settle(workspace: &Entity<Workspace>, cx: &mut VisualTestContext) {
         );
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
+}
+
+/// Masquer une colonne ne la retire pas du fichier, et la barre le dit.
+///
+/// Le test tient les **deux** moitiés, et la seconde est celle qui compte : que
+/// la mention s'affiche ne prouve rien si elle ment. On exporte donc réellement,
+/// et on vérifie que la colonne masquée est bien dans le CSV. Si quelqu'un fait
+/// un jour suivre la visibilité à l'export — c'est une question ouverte, voir
+/// « les colonnes masquées » dans `docs/IMPLEMENTATION-PLAN.md` —, ce test
+/// échoue et force à retirer la réserve en même temps.
+#[gpui::test]
+fn une_colonne_masquee_part_quand_meme_a_lexport_et_la_barre_lannonce(cx: &mut TestAppContext) {
+    let (backend, open) = connected_workspace();
+    let (view, cx) = cx.add_window_view(|_, cx| Workspace::new(backend, open, cx));
+    cx.run_until_parked();
+    let console = view.read_with(cx, |view, _| view.console.clone());
+
+    cx.simulate_input("SELECT 11 AS garde, 22 AS secret");
+    console.update(cx, |console, cx| console.execute(cx));
+    settle(&view, cx);
+    let result = console.read_with(cx, |console, _| console.last_result.expect("un résultat"));
+
+    // Rien n'est masqué : la barre n'a aucune réserve à porter.
+    assert_eq!(
+        console.read_with(cx, |console, cx| console.export.read(cx).hidden_columns()),
+        0
+    );
+
+    // L'utilisateur masque la seconde colonne, comme le fait le panneau de
+    // l'inspecteur.
+    console.update(cx, |console, cx| {
+        console
+            .grid
+            .update(cx, |grid, cx| grid.set_column_visible(1, false, cx));
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        console.read_with(cx, |console, cx| console.export.read(cx).hidden_columns()),
+        1,
+        "la barre doit compter la colonne masquée"
+    );
+
+    let destination =
+        std::env::temp_dir().join(format!("oxyn-colonnes-masquees-{}.csv", ResultId::new()));
+    console.update(cx, |console, cx| {
+        console.start_export(result, ExportFormat::Csv, destination.clone(), cx);
+    });
+    settle(&view, cx);
+
+    let csv = std::fs::read_to_string(&destination).expect("le fichier exporté");
+    let _ = std::fs::remove_file(&destination);
+    assert!(
+        csv.contains("secret") && csv.contains("22"),
+        "la colonne masquée est écrite : c'est ce que la réserve annonce — {csv}"
+    );
 }
 
 #[gpui::test]
@@ -446,6 +507,7 @@ fn a_save_conflict_preserves_the_external_copy_and_offers_a_new_identity(
                     connection: Some(connection),
                     save_named: true,
                     is_open: true,
+                    provenance: None,
                 }),
             },
         )
@@ -926,4 +988,106 @@ fn each_tab_shows_its_own_context_and_switching_follows_it(cx: &mut TestAppConte
         }
     }
     assert_eq!(executed, 0, "showing a context runs no SQL");
+}
+
+/// Une frappe continue n'écrit rien ; son repos écrit une fois.
+///
+/// C'est la décision d'[ADR-0024], et elle vient d'une mesure : copier le
+/// document entier à chaque touche produisait 17 à-coups en 14 s de frappe, dont
+/// un de 50 ms pour un budget de 8 ms. `editor.text()` est un `join` sur toutes
+/// les lignes — jusqu'à un mégaoctet, sur le fil d'interface, par caractère.
+///
+/// Le test porte sur le **nombre de révisions** : c'est ce qui compte, parce que
+/// chaque révision est une copie et une écriture.
+///
+/// [ADR-0024]: ../../../../docs/adr/0024-autosauvegarde-au-repos-de-frappe.md
+#[gpui::test]
+fn une_frappe_continue_n_ecrit_qu_au_repos(cx: &mut TestAppContext) {
+    let (backend, open) = connected_workspace();
+    let (workspace, cx) = cx.add_window_view(|_, cx| Workspace::new(backend, open, cx));
+    settle(&workspace, cx);
+
+    let revision = |cx: &mut VisualTestContext| {
+        workspace.read_with(cx, |view, cx| {
+            view.consoles
+                .first()
+                .expect("une console est ouverte")
+                .read(cx)
+                .document_revision
+        })
+    };
+    let depart = revision(cx);
+
+    // Dix touches sans pause : le minuteur est relancé à chaque fois.
+    workspace.update(cx, |view, cx| {
+        let console = view.consoles.first().expect("console").clone();
+        console.update(cx, |console, cx| {
+            for lettre in "SELECT 1;\n".chars() {
+                console
+                    .editor
+                    .update(cx, |editor, cx| editor.insert(&lettre.to_string(), cx));
+            }
+        });
+    });
+    cx.run_until_parked();
+    assert_eq!(
+        revision(cx),
+        depart,
+        "dix touches sans pause ne doivent produire aucune écriture"
+    );
+
+    // Le repos, et une seule écriture pour les dix touches.
+    cx.executor()
+        .advance_clock(std::time::Duration::from_millis(300));
+    cx.run_until_parked();
+    assert_eq!(
+        revision(cx),
+        depart + 1,
+        "le repos de frappe écrit une fois, pas dix"
+    );
+}
+
+/// Un plan d'exécution se distingue des données qu'il décrit.
+///
+/// `EXPLAIN` rend des lignes comme n'importe quelle requête : rien dans la
+/// grille ne dit qu'on lit un plan et non le contenu de la table. Le relevé
+/// `191:1521` le dit par un onglet `Explain plan` à côté de `Result 1`.
+///
+/// Le piège que ce test ferme est de l'ordre du contresens : un utilisateur qui
+/// lance `Explain` sur un `SELECT`, s'absente, revient, et lit sa grille comme
+/// des données — alors qu'il regarde un plan.
+#[gpui::test]
+fn un_plan_ne_se_lit_pas_comme_des_donnees(cx: &mut TestAppContext) {
+    let (backend, open) = connected_workspace();
+    let (workspace, cx) = cx.add_window_view(|_, cx| Workspace::new(backend, open, cx));
+    settle(&workspace, cx);
+
+    let console = workspace.read_with(cx, |view, _| {
+        view.consoles.first().expect("une console").clone()
+    });
+
+    // Une exécution ordinaire ne montre aucune mention de plan.
+    console.update(cx, |console, cx| {
+        console
+            .editor
+            .update(cx, |editor, cx| editor.set_text("SELECT 1", cx));
+        console.execute(cx);
+    });
+    settle(&workspace, cx);
+    console.read_with(cx, |console, _| {
+        assert!(
+            !console.showing_plan,
+            "un SELECT ordinaire ne produit pas de plan"
+        );
+    });
+
+    // `Explain` sur la même instruction, si la session le permet.
+    console.update(cx, |console, cx| console.execute_explain(cx));
+    settle(&workspace, cx);
+    console.read_with(cx, |console, _| {
+        assert!(
+            console.showing_plan,
+            "après Explain, la vue doit dire que ces lignes sont un plan"
+        );
+    });
 }

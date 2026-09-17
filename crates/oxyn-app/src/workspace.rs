@@ -2,16 +2,20 @@
 
 use gpui::prelude::*;
 use gpui::{Entity, EventEmitter, FocusHandle, Focusable, Window};
-use oxyn_catalog::{CatalogPath, CatalogScope};
+use oxyn_catalog::{CatalogPath, CatalogScope, Freshness};
 use oxyn_core::Capabilities;
 
+mod assistant;
 mod capabilities;
 mod catalog;
+mod connection_bar;
 pub(crate) mod console;
 mod consoles;
 mod content;
+mod controls;
 mod definition;
 mod export;
+mod find;
 mod inspector;
 mod inspector_resize;
 mod layout;
@@ -20,6 +24,9 @@ mod metadata;
 mod object_view;
 mod preferences;
 mod preview;
+mod propose;
+mod providers;
+mod refresh;
 mod result_pages;
 mod sidebar;
 #[cfg(test)]
@@ -37,7 +44,8 @@ use oxyn_ui::{
     ActiveConnection, ApprovalDialog, ApprovalEvent, ApprovalId, ApprovalOutcome, ApprovalRequest,
     CatalogTree, CatalogTreeEvent, DataGrid, EditorEvent, ExecutionStatus, ExportEvent,
     FormatSettings, FormatSettingsEvent, GridEvent, NotExportable, ParameterEditor,
-    ParameterEditorEvent, QueryEditor, ResultExport, StatusBar, StatusBarEvent,
+    ParameterEditorEvent, QueryEditor, ResultExport, StatusBar, StatusBarEvent, TextField,
+    provider_settings::ProviderSettings,
 };
 use preview::ObjectTab;
 use std::path::PathBuf;
@@ -126,9 +134,24 @@ pub struct Workspace {
     console_close: Option<consoles::CloseConsole>,
     editor: Entity<QueryEditor>,
     grid: Entity<DataGrid>,
+    /// `Find in loaded results…` (`273:37024`) et ce qu'il cherche.
+    ///
+    /// `find_generation` distingue les réponses : un parcours parti sur un
+    /// résultat et revenu après le suivant désignerait des lignes qui ne sont
+    /// plus à l'écran.
+    find_field: Entity<TextField>,
+    find_needle: String,
+    find_generation: u64,
     status: Entity<StatusBar>,
     approval: Entity<ApprovalDialog>,
     settings: Entity<FormatSettings>,
+    /// L'écran de déclaration des fournisseurs de modèles.
+    ///
+    /// Vit dans le panneau de réglages, jamais dans la barre de connexion : un
+    /// appel à l'action « configurez l'IA » à côté d'une entrée absente serait
+    /// une publicité, pas une fonctionnalité
+    /// ([UX-SPEC](../../docs/UX-SPEC.md#le-workspace-ia-nexiste-que-sil-a-été-configuré)).
+    provider_settings: Entity<ProviderSettings>,
     /// Vrai quand le panneau de réglages d'affichage est déplié.
     settings_open: bool,
     columns_open: bool,
@@ -180,10 +203,32 @@ pub struct Workspace {
     catalog_focus_pending: bool,
     selected_path: Option<CatalogPath>,
     object_tab: ObjectTab,
+    /// A location restored from preferences that the catalog has not confirmed.
+    ///
+    /// Restoring points at an object; it does not prove the object still
+    /// exists. The claim is settled by the first catalog read the user asks
+    /// for, never by a read this workspace starts on its own.
+    location_unconfirmed: bool,
     preview_grid: Entity<DataGrid>,
     preview_path: Option<CatalogPath>,
     preview_active: Option<(CommandId, CancelToken)>,
     preview_notice: String,
+    preview_controls: preview::filter::PreviewControls,
+    /// A preview re-read owed to a change that landed while one was in flight.
+    ///
+    /// One flag, not a queue: what is owed is « read again », and reading twice
+    /// answers no question the first read did not ([ADR-0022]).
+    ///
+    /// [ADR-0022]: ../../docs/adr/0022-rafraichissement-automatique.md
+    preview_refresh_owed: bool,
+    /// The same debt, for the catalog scope currently shown.
+    catalog_refresh_owed: bool,
+    /// The conversation of this connection, and the field that starts it.
+    ///
+    /// A conversation belongs to its connection: closing the connection drops
+    /// this field, and `Drop` cancels whatever it was running. It is not
+    /// persisted and does not come back at the next launch (UX-SPEC).
+    assistant: assistant::Assistant,
 }
 
 impl std::fmt::Debug for Workspace {
@@ -207,6 +252,11 @@ impl Workspace {
         cx: &mut Context<'_, Self>,
     ) -> Self {
         let preferences = Self::preferences_for_backend(&backend, cx);
+        // The location comes back, the panel does not: restoring an object tab
+        // that reads nothing is what UX-SPEC promises, and opening it would put
+        // the first request of the session back on the wire without anyone
+        // asking for it.
+        let restored = preferences::restored_location(&preferences.preferences, open.connection);
         let library = cx.new(|cx| {
             library::QueryLibrary::new(
                 backend.clone(),
@@ -252,11 +302,26 @@ impl Workspace {
             });
         grid.update(cx, |grid, cx| grid.set_format_options(format.clone(), cx));
         preview_grid.update(cx, |grid, cx| grid.set_format_options(format, cx));
-        cx.subscribe(&preview_grid, |this, _, event, cx| {
+        cx.subscribe(&preview_grid, |this, grille, event, cx| {
             this.on_page_event(ResultSource::Preview, event, cx);
             this.on_result_ui_event(ResultSource::Preview, event, cx);
             if matches!(event, GridEvent::CancelRequested) {
                 this.cancel_preview(cx);
+            }
+            // L'aperçu d'objet masque ses colonnes par le même panneau que la
+            // console, et exporte par le même chemin. Sans ce câblage, masquer
+            // `email` sur l'onglet `Data` puis exporter écrit la colonne sans
+            // que rien ne le dise — exactement la fuite que la réserve ferme
+            // côté console.
+            if matches!(event, GridEvent::ColumnsChanged) {
+                let masquees = grille
+                    .read(cx)
+                    .columns()
+                    .iter()
+                    .filter(|colonne| !colonne.visible)
+                    .count();
+                this.preview_export
+                    .update(cx, |export, cx| export.set_hidden_columns(masquees, cx));
             }
         })
         .detach();
@@ -287,6 +352,8 @@ impl Workspace {
         .detach();
         let display = &open.display;
         let settings = cx.new(|cx| FormatSettings::new(grid.read(cx).format_options().clone(), cx));
+        let provider_settings = cx.new(ProviderSettings::new);
+        Self::watch_provider_settings(&provider_settings, cx);
         // Le réglage part de la vue vers la grille, jamais l'inverse : la vue
         // de réglages ne connaît pas la grille, elle annonce (I-01).
         cx.subscribe(&settings, {
@@ -314,6 +381,25 @@ impl Workspace {
             }
         })
         .detach();
+        // Built before the subscriptions below so its own subscription belongs
+        // to the same entity, and read from the store right after construction:
+        // the entry has to exist on the first frame of a workspace opened while
+        // a provider is already declared.
+        let assistant = assistant::Assistant::new(cx);
+        // Read through the same method the settings screen will call, rather
+        // than through a copy of it inlined here: two ways to learn what is
+        // declared would be two places to get the empty case wrong, and the
+        // empty case is the whole rule (ADR-0023).
+        cx.spawn(async move |this, cx| {
+            let _ = this.update(cx, |this: &mut Workspace, cx| {
+                this.reload_ai_providers(cx);
+                // Les agents se lisent en même temps, et séparément : leur
+                // lecture ne porte aucun classement de portée, donc rien ne
+                // justifierait de faire attendre l'une pour l'autre.
+                this.reload_external_agents(cx);
+            });
+        })
+        .detach();
         let mut events = backend.subscribe();
         cx.spawn(async move |this, cx| {
             loop {
@@ -327,13 +413,23 @@ impl Workspace {
                         }
                     }
                     Err(RecvError::Closed) => break,
-                    // The oneshot response below always restores the final buffer and state.
-                    Err(RecvError::Lagged(_)) => {}
+                    // Events were dropped, and nothing says which. A view whose
+                    // freshness depends on this bus would stay wrong for good,
+                    // so the subscriber refreshes as if it had missed
+                    // everything ([ADR-0022](../../docs/adr/0022-rafraichissement-automatique.md)).
+                    Err(RecvError::Lagged(_)) => {
+                        if this
+                            .update(cx, |this, cx| this.catch_up_after_lag(cx))
+                            .is_err()
+                        {
+                            break;
+                        }
+                    }
                 }
             }
         })
         .detach();
-        Self {
+        let mut espace = Self {
             backend,
             connection: open.connection,
             session: open.session,
@@ -352,9 +448,13 @@ impl Workspace {
             console_close: None,
             editor,
             grid,
+            find_field: cx.new(|cx| TextField::new(String::new(), false, cx)),
+            find_needle: String::new(),
+            find_generation: 0,
             status,
             approval,
             settings,
+            provider_settings,
             settings_open: false,
             columns_open: false,
             result_actions_open: false,
@@ -401,13 +501,22 @@ impl Workspace {
             catalog_active: None,
             catalog_scope: CatalogScope::Server,
             catalog_focus_pending: false,
-            selected_path: None,
-            object_tab: ObjectTab::Data,
+            selected_path: restored.as_ref().map(|(path, _)| path.clone()),
+            object_tab: restored.as_ref().map_or(ObjectTab::Data, |(_, tab)| *tab),
+            location_unconfirmed: restored.is_some(),
             preview_grid,
             preview_path: None,
             preview_active: None,
             preview_notice: String::new(),
-        }
+            preview_controls: preview::filter::PreviewControls::new(cx),
+            preview_refresh_owed: false,
+            catalog_refresh_owed: false,
+            assistant,
+        };
+        // Après construction : l'abonnement a besoin de l'espace de travail
+        // lui-même, qui n'existe pas encore dans le littéral ci-dessus.
+        espace.wire_find_field(cx);
+        espace
     }
 
     /// Returns the unsaved editor draft for root-owned connection navigation.
@@ -461,28 +570,16 @@ impl Workspace {
             ResultSource::Preview => self.displayed_results.get(&source).copied(),
         }
     }
-    fn on_exec_event(&mut self, event: &oxyn_exec::ExecEvent, cx: &mut Context<'_, Self>) {
-        if self.preview_active.as_ref().map(|run| run.0) == Some(event.command)
-            && event.connection == Some(self.connection)
-        {
-            match &event.event {
-                Event::SchemaReady { result } => {
-                    self.displayed_results
-                        .insert(ResultSource::Preview, *result);
-                    if let Some(buffer) = self.backend.result(*result) {
-                        self.preview_grid
-                            .update(cx, |grid, cx| grid.set_buffer(buffer, cx));
-                    }
-                }
-                Event::BatchReady { .. } => self.preview_grid.update(cx, DataGrid::on_batch),
-                _ => {}
-            }
-        }
-    }
 }
 
 impl Drop for Workspace {
     fn drop(&mut self) {
+        // A conversation does not outlive the connection it belongs to, and its
+        // token reaches the commands the agent submitted as well as the
+        // provider itself.
+        if let Some(cancel) = &self.assistant.active {
+            cancel.cancel();
+        }
         if let Some((_, cancel)) = &self.definition.active {
             cancel.cancel();
         }
@@ -528,6 +625,7 @@ impl Focusable for Workspace {
             }
             WorkspacePanel::Library => self.library.read(cx).focus_handle(cx),
             WorkspacePanel::Preferences => self.preferences_focus.clone(),
+            WorkspacePanel::Assistant => self.assistant.question.read(cx).focus_handle(cx),
             _ => self.shell_focus.clone(),
         }
     }

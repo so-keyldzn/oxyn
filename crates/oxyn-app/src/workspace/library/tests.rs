@@ -1,6 +1,7 @@
 //! Delivered keyboard events and real local command responses.
 
 use super::*;
+use crate::workspace::library::filters::merge_history_connections;
 use crate::workspace::tests::{connected_workspace, submit};
 use gpui::{TestAppContext, VisualTestContext};
 use oxyn_core::{QueryDocumentUpdate, QueryLanguage};
@@ -14,7 +15,10 @@ fn wait_for_library(view: &Entity<QueryLibrary>, cx: &mut VisualTestContext) {
     loop {
         cx.run_until_parked();
         if view.read_with(cx, |view, _| {
-            view.request.is_none() && view.detail_request.is_none() && view.result_request.is_none()
+            view.request.is_none()
+                && view.detail_request.is_none()
+                && view.result_request.is_none()
+                && view.connections_request.is_none()
         }) {
             return;
         }
@@ -24,6 +28,222 @@ fn wait_for_library(view: &Entity<QueryLibrary>, cx: &mut VisualTestContext) {
         );
         std::thread::sleep(std::time::Duration::from_millis(1));
     }
+}
+
+/// Ranks are what the menu emits, so merging must never reshuffle them.
+#[test]
+fn merging_history_connections_appends_and_marks_without_moving_ranks() {
+    let saved = ConnectionId::new();
+    let created_since = ConnectionId::new();
+    let deleted = ConnectionId::new();
+    let mut known = vec![FilterConnection {
+        id: saved,
+        name: "Saved".into(),
+        in_workspace: true,
+    }];
+    merge_history_connections(
+        &mut known,
+        vec![
+            HistoryConnectionSummary {
+                connection: created_since,
+                name: Some("Created since".into()),
+                last_entry: 3,
+                in_workspace: true,
+            },
+            HistoryConnectionSummary {
+                connection: saved,
+                name: Some("An older name".into()),
+                last_entry: 2,
+                in_workspace: true,
+            },
+            HistoryConnectionSummary {
+                connection: deleted,
+                name: None,
+                last_entry: 1,
+                in_workspace: false,
+            },
+        ],
+    );
+    let labels = connection_labels(&known);
+    assert_eq!(
+        labels
+            .iter()
+            .map(std::convert::AsRef::as_ref)
+            .collect::<Vec<_>>(),
+        vec![
+            "All connections",
+            "Saved",
+            "Created since",
+            "Unnamed connection · not in this workspace",
+        ],
+        "the rank a menu already showed keeps pointing at the same connection"
+    );
+    assert_eq!(known[0].id, saved, "the saved name wins over the older one");
+}
+
+/// Registers and opens a second local connection, entirely through the bus.
+fn open_named_connection(backend: &Backend, name: &str) -> (ConnectionId, oxyn_core::SessionId) {
+    let mut config = oxyn_core::ConnectionConfig::new(name, oxyn_core::DriverId::sqlite())
+        .with_environment(oxyn_core::Environment::Local);
+    config.params.insert("path".into(), ":memory:".into());
+    let connection = config.id;
+    submit(
+        backend,
+        Command::CreateConnection {
+            config: Box::new(config),
+        },
+    )
+    .expect("registered connection");
+    let Outcome::Connected { session, .. } =
+        submit(backend, Command::Connect { connection }).expect("opened connection")
+    else {
+        panic!("a local SQLite connection opens without approval")
+    };
+    (connection, session)
+}
+
+/// Chooses a rank in the connection menu the way a user does: with the keyboard.
+fn choose_connection(rank: usize, view: &Entity<QueryLibrary>, cx: &mut VisualTestContext) {
+    cx.update(|window, cx| {
+        window.focus(&view.read(cx).connection_select.read(cx).focus_handle(cx));
+    });
+    cx.run_until_parked();
+    // "home" first: the menu opens on the current choice, so counting downs
+    // from an unknown rank would land somewhere else on the second call.
+    cx.simulate_keystrokes("space");
+    cx.simulate_keystrokes("home");
+    for _ in 0..rank {
+        cx.simulate_keystrokes("down");
+    }
+    cx.simulate_keystrokes("enter");
+}
+
+/// The defect this path exists for: `query_history` has no foreign key, so the
+/// entries of a deleted connection survive — but a menu built from the saved
+/// connections alone could never name it, which left them unreachable.
+#[gpui::test]
+fn a_deleted_connection_stays_choosable_in_the_history_filter(cx: &mut TestAppContext) {
+    let (backend, removed) = connected_workspace();
+    submit(
+        &backend,
+        crate::workspace::execution_command(
+            removed.connection,
+            removed.session,
+            false,
+            removed.dialect,
+            "SELECT 'ran on the removed connection'".into(),
+            Vec::new(),
+        ),
+    )
+    .expect("execution on the connection about to disappear");
+    let (kept, kept_session) = open_named_connection(&backend, "Kept connection");
+    submit(
+        &backend,
+        crate::workspace::execution_command(
+            kept,
+            kept_session,
+            false,
+            removed.dialect,
+            "SELECT 'ran on the kept connection'".into(),
+            Vec::new(),
+        ),
+    )
+    .expect("execution on the connection that stays");
+    submit(
+        &backend,
+        Command::DeleteConnection {
+            connection: removed.connection,
+        },
+    )
+    .expect("connection removed from the workspace");
+    let mut events = backend.subscribe();
+    let (view, cx) = cx.add_window_view(|_, cx| {
+        QueryLibrary::new(backend, Some((kept, "Kept connection".into())), cx)
+    });
+    view.update(cx, |view, cx| view.reload(cx));
+    wait_for_library(&view, cx);
+    let labels = view.read_with(cx, |view, _| connection_labels(&view.connections));
+    assert_eq!(
+        labels.len(),
+        3,
+        "every connection, the kept one, and the one only history remembers: {labels:?}"
+    );
+    assert_eq!(labels[1].as_ref(), "Kept connection");
+    assert!(
+        labels[2].as_ref().starts_with("Workspace interaction test")
+            && labels[2].as_ref().contains("not in this workspace"),
+        "a connection this workspace no longer holds must say so: {labels:?}"
+    );
+    choose_connection(2, &view, cx);
+    wait_for_library(&view, cx);
+    view.read_with(cx, |view, _| {
+        assert_eq!(
+            view.rows.len(),
+            1,
+            "only what ran on the deleted connection: {:?}",
+            view.rows.iter().map(|row| &row.title).collect::<Vec<_>>()
+        );
+        assert!(view.rows[0].title.contains("removed connection"));
+        assert_eq!(view.rows[0].connection, "Workspace interaction test");
+    });
+    choose_connection(0, &view, cx);
+    wait_for_library(&view, cx);
+    assert_eq!(
+        view.read_with(cx, |view, _| view.rows.len()),
+        2,
+        "returning to every connection restores the unfiltered page"
+    );
+    while let Ok(event) = events.try_recv() {
+        assert!(
+            !matches!(
+                event.event,
+                oxyn_core::Event::SchemaReady { .. }
+                    | oxyn_core::Event::BatchReady { .. }
+                    | oxyn_core::Event::Progress { .. }
+                    | oxyn_core::Event::Completed { .. }
+            ),
+            "browsing history reaches no database: {:?}",
+            event.event
+        );
+    }
+}
+
+#[gpui::test]
+/// La garantie d'[I-13](../../../../CLAUDE.md#i-13) se lit sur l'Historique, et
+/// nulle part ailleurs.
+///
+/// Relevé `268:36866`. Le texte existait, noyé en fin d'une ligne grise ; ce
+/// qu'il permet — parcourir son historique sans craindre qu'un clic rejoue une
+/// écriture — ne se lit pas dans une note de bas de ligne. Et il n'a rien à
+/// faire sur les requêtes enregistrées ni les résultats retenus : rien n'y a
+/// jamais été écrit, l'avertissement y inquiéterait sans objet.
+#[gpui::test]
+fn le_bandeau_des_ecritures_ambigues_ne_vit_que_sur_lhistorique(cx: &mut TestAppContext) {
+    let backend = Backend::open_temporary().expect("backend");
+    let (view, cx) = cx.add_window_view(|_, cx| QueryLibrary::new(backend, None, cx));
+    wait_for_library(&view, cx);
+
+    let bandeau = |vue: &Entity<QueryLibrary>, cx: &mut VisualTestContext| {
+        vue.update(cx, |vue, cx| vue.ambiguous_writes_banner(cx).is_some())
+    };
+
+    assert!(
+        bandeau(&view, cx),
+        "l'onglet Historique liste des exécutions réelles : la garantie s'y lit"
+    );
+
+    for onglet in [Tab::Saved, Tab::Results] {
+        view.update(cx, |vue, cx| vue.activate(Action::Tab(onglet), cx));
+        cx.run_until_parked();
+        assert!(
+            !bandeau(&view, cx),
+            "{onglet:?} ne liste aucune écriture : l'avertissement y serait sans objet"
+        );
+    }
+
+    view.update(cx, |vue, cx| vue.activate(Action::Tab(Tab::History), cx));
+    cx.run_until_parked();
+    assert!(bandeau(&view, cx), "et il revient avec l'Historique");
 }
 
 #[gpui::test]
@@ -40,6 +260,7 @@ fn saved_and_working_copies_are_inspected_without_modification(cx: &mut TestAppC
         connection: None,
         save_named: true,
         is_open: true,
+        provenance: None,
     };
     submit(
         &backend,
@@ -117,6 +338,7 @@ fn stale_lists_and_cancelled_inspections_cannot_replace_current_state(cx: &mut T
                     connection: None,
                     save_named: true,
                     is_open: false,
+                    provenance: None,
                 }),
             },
         )
@@ -336,6 +558,7 @@ fn resuming_a_saved_query_preserves_its_working_copy_identity_and_existing_conso
         connection: Some(open.connection),
         save_named: true,
         is_open: false,
+        provenance: None,
     };
     submit(
         &backend,
@@ -419,6 +642,7 @@ fn a_query_from_another_connection_is_opened_as_a_new_copy(cx: &mut TestAppConte
                 connection: Some(original_connection.connection),
                 save_named: true,
                 is_open: false,
+                provenance: None,
             }),
         },
     )

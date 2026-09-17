@@ -107,6 +107,9 @@ impl Workspace {
         let id = CommandId::new();
         let cancel = CancelToken::new();
         let command = catalog_command(self.connection, &scope, self.capabilities);
+        // This fetch leaves now, so it sees every change already applied and
+        // settles whatever automatic re-fetch was owed before it.
+        self.catalog_refresh_owed = false;
         self.catalog_scope = scope;
         self.catalog_state = CatalogState::Loading;
         self.catalog_active = Some((id, cancel.clone()));
@@ -146,10 +149,17 @@ impl Workspace {
                     Ok(Outcome::Denied { reason, .. }) => CatalogState::Error(reason),
                     _ => CatalogState::Error("Unexpected catalog response".into()),
                 };
+                // A catalog that has just been read is the only witness able to
+                // settle a location restored from the last session.
+                this.settle_restored_location();
                 // A refresh is the only moment the schemas on offer can change.
                 // Re-reading the cache per frame would put the frame budget at
                 // the mercy of a lock ([I-05](../../../CLAUDE.md#i-05)).
                 this.sync_context_choices(cx);
+                // Same reason for the sort menu: the columns it offers change
+                // only when the catalog does, and reading the cache per frame
+                // would put the frame budget at the mercy of a lock.
+                this.refresh_preview_sort_choices(cx);
                 if this.catalog_state == CatalogState::Ready
                     && this.panel == WorkspacePanel::Object
                     && this.object_tab == ObjectTab::Data
@@ -157,8 +167,16 @@ impl Workspace {
                 {
                     this.load_preview(cx);
                 }
+                // An expansion the user asked for comes first, and it is also a
+                // fetch: it clears the automatic debt rather than adding to it.
+                // Otherwise, a change that landed while this fetch was on the
+                // wire is answered by exactly one more fetch, however many
+                // changes arrived
+                // ([ADR-0022](../../../docs/adr/0022-rafraichissement-automatique.md)).
                 if let Some(scope) = this.catalog_pending.take() {
                     this.refresh_catalog(scope, cx);
+                } else if std::mem::take(&mut this.catalog_refresh_owed) {
+                    this.refresh_catalog(this.catalog_scope.clone(), cx);
                 }
                 cx.notify();
             });
@@ -167,8 +185,51 @@ impl Workspace {
         cx.notify();
     }
 
+    /// Settles a restored location against a catalog that has just been read.
+    ///
+    /// The location is kept either way. A table dropped while Oxyn was closed
+    /// is the server's news, not a reason to discard where the user was: the
+    /// workspace says it once, and the breadcrumb keeps naming the object so
+    /// the sentence has a subject.
+    ///
+    /// Silence is not absence: as long as the container holding the object has
+    /// never been listed, nothing is claimed. Otherwise expanding one schema
+    /// would announce the disappearance of every object in the others.
+    pub(super) fn settle_restored_location(&mut self) {
+        if !self.location_unconfirmed {
+            return;
+        }
+        let Some(path) = self.selected_path.clone() else {
+            self.location_unconfirmed = false;
+            return;
+        };
+        // Never blocks the frame on the introspection lock ([I-05]); an unread
+        // cache simply settles nothing this time.
+        let Some(cache) = self.catalog_cache.try_read() else {
+            return;
+        };
+        if cache.relation_summary(&path).is_some() {
+            self.location_unconfirmed = false;
+            return;
+        }
+        let container = path
+            .parent()
+            .map_or(CatalogScope::Server, |parent| CatalogScope::of(&parent));
+        if !cache.freshness(&container).is_known() {
+            return;
+        }
+        drop(cache);
+        self.location_unconfirmed = false;
+        self.console_notice = Some(format!(
+            "{path} is no longer in this catalog. It is where you left off in the previous session; nothing was loaded."
+        ));
+    }
+
     pub(super) fn cancel_catalog(&mut self, cx: &mut Context<'_, Self>) {
         self.catalog_pending = None;
+        // Cancelling means « stop reading »: an automatic fetch starting right
+        // after would contradict the message the user is left with.
+        self.catalog_refresh_owed = false;
         if let Some((_, cancel)) = &self.catalog_active {
             cancel.cancel();
             cx.notify();
