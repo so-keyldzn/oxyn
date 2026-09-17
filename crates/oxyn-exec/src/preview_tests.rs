@@ -5,7 +5,7 @@ use arrow::array::{Int64Array, RecordBatch};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
 use futures::{FutureExt, executor::block_on};
-use oxyn_catalog::{CatalogPath, CatalogProvider};
+use oxyn_catalog::{CatalogPath, CatalogProvider, CatalogScope, Freshness};
 use oxyn_core::{
     AgentId, AgentSessionId, Capabilities, DefaultPolicy, DriverId, ExecLimits, QueryLanguage,
     SqlDialect, StatementIntent,
@@ -33,6 +33,7 @@ fn preview(connection: ConnectionId, session: SessionId, limit: u32) -> Command 
         namespace: Some("main".into()),
         relation: HOSTILE.into(),
         limit,
+        shape: oxyn_core::PreviewShape::unordered(),
     }
 }
 
@@ -260,6 +261,7 @@ async fn preview_sqlite_is_bounded_preserves_hostile_table_and_correlates_events
                     namespace,
                     relation: "items".into(),
                     limit: 1,
+                    shape: oxyn_core::PreviewShape::unordered(),
                 },
                 &CancelToken::new(),
             )
@@ -289,12 +291,98 @@ async fn preview_sqlite_is_bounded_preserves_hostile_table_and_correlates_events
         .expect("close");
 }
 
+/// **Un DDL réussi marque le catalogue de la connexion à relire.**
+///
+/// C'est ce qui permet à l'interface de se rafraîchir sans clic Refresh
+/// (I-10 : la connexion entière est visée, jamais la seule table nommée dans
+/// le texte, puisque cet identifiant n'est jamais reconstruit depuis le SQL).
+#[tokio::test]
+async fn a_successful_ddl_invalidates_the_catalog_and_broadcasts_it() {
+    let connection = ConnectionConfig::new("memory", DriverId::sqlite())
+        .with_environment(Environment::Local)
+        .with_param(SqliteDriver::PATH, SqliteDriver::MEMORY);
+    let policy = Arc::new(DefaultPolicy::new());
+    policy.register(&connection);
+    let executor = executor(policy, &connection);
+    let Outcome::Connected { session, .. } = executor
+        .dispatch(
+            Actor::Human,
+            Command::Connect {
+                connection: connection.id,
+            },
+            &CancelToken::new(),
+        )
+        .await
+        .expect("memory connection")
+    else {
+        panic!("expected connected session");
+    };
+
+    // A node that has never been read stays `Never`, not `Invalidated`
+    // (module docs of `CatalogCache`): read it once first, like a workspace
+    // that already has its catalog tree open would have.
+    executor
+        .dispatch(
+            Actor::Human,
+            Command::RefreshCatalog {
+                connection: connection.id,
+            },
+            &CancelToken::new(),
+        )
+        .await
+        .expect("initial catalog read");
+    let cache = executor
+        .catalog(connection.id)
+        .expect("catalog exists once connected");
+    assert!(
+        matches!(
+            cache.read().freshness(&CatalogScope::Server),
+            Freshness::Fetched(_)
+        ),
+        "the initial refresh must have left the scope fresh"
+    );
+
+    let mut events = executor.subscribe();
+    execute_sql(
+        &executor,
+        connection.id,
+        session,
+        "CREATE TABLE audit (id INTEGER)".into(),
+        true,
+    )
+    .await;
+
+    assert!(
+        matches!(
+            cache.read().freshness(&CatalogScope::Server),
+            Freshness::Invalidated
+        ),
+        "a DDL must mark the whole connection stale, without naming the table it touched"
+    );
+    let mut saw_catalog_updated = false;
+    while let Ok(received) = events.try_recv() {
+        if matches!(received.event, Event::CatalogUpdated) {
+            assert_eq!(received.connection, Some(connection.id));
+            saw_catalog_updated = true;
+        }
+    }
+    assert!(
+        saw_catalog_updated,
+        "the interface learns to re-read the catalog through the event bus, not by polling"
+    );
+}
+
 #[derive(Default)]
 struct Probe {
     prepared: Mutex<Vec<(CatalogPath, u32)>>,
     executed: Mutex<Vec<ExecRequest>>,
     cancelled: AtomicBool,
     mutating: bool,
+    /// La session déclare-t-elle savoir trier et filtrer un aperçu ?
+    ///
+    /// Faux par défaut : c'est l'état d'un moteur qui ne sait pas le faire, et
+    /// c'est lui que le refus de capacité doit exercer.
+    shapes_previews: bool,
     waiting: bool,
     waiting_for_metadata: bool,
     catalog: catalog_tests::Probe,
@@ -305,12 +393,17 @@ struct PreviewSession(Arc<Probe>);
 #[async_trait]
 impl Session for PreviewSession {
     fn capabilities(&self) -> Capabilities {
-        Capabilities::SQL | Capabilities::SERVER_SIDE_CANCEL
+        let mut capacites = Capabilities::SQL | Capabilities::SERVER_SIDE_CANCEL;
+        if self.0.shapes_previews {
+            capacites |= Capabilities::PREVIEW_SORT | Capabilities::PREVIEW_FILTER;
+        }
+        capacites
     }
     async fn preview_request(
         &self,
         path: &CatalogPath,
         limit: u32,
+        shape: &oxyn_core::PreviewShape,
         cancel: &CancelToken,
     ) -> Result<ExecRequest> {
         self.0.prepared.lock().push((path.clone(), limit));
@@ -318,17 +411,21 @@ impl Session for PreviewSession {
             cancel.cancelled().await;
             return Err(OxynError::Cancelled);
         }
+        // Le prédicat est inséré comme le fait un vrai driver : c'est ce qui
+        // permet d'exercer la reclassification sur le texte final.
+        let texte = if self.0.mutating {
+            "DELETE FROM audit".to_owned()
+        } else if let Some(predicat) = shape.predicate() {
+            format!("SELECT * FROM t WHERE ({predicat}\n)")
+        } else {
+            "SELECT 1".to_owned()
+        };
         // Deliberately wrong limits and intent test executor defenses.
-        Ok(ExecRequest::new(
-            QueryLanguage::Sql(SqlDialect::Sqlite),
-            if self.0.mutating {
-                "DELETE FROM audit"
-            } else {
-                "SELECT 1"
-            },
+        Ok(
+            ExecRequest::new(QueryLanguage::Sql(SqlDialect::Sqlite), texte)
+                .with_intent(StatementIntent::Read)
+                .with_limits(ExecLimits::unbounded()),
         )
-        .with_intent(StatementIntent::Read)
-        .with_limits(ExecLimits::unbounded()))
     }
     async fn execute(&self, request: ExecRequest, _: &CancelToken) -> Result<Box<dyn Cursor>> {
         self.0.executed.lock().push(request);
@@ -596,4 +693,99 @@ async fn preview_cancellation_uses_the_existing_statement_and_command_identity()
         assert_eq!(cancelled.command, id);
         assert!(matches!(cancelled.event, Event::Cancelled));
     }
+}
+
+/// Un tri ou un prédicat qu'une session ne déclare pas est refusé **avant** que
+/// le driver ne compose quoi que ce soit.
+///
+/// La session factice de ce module ne déclare ni `PREVIEW_SORT` ni
+/// `PREVIEW_FILTER`. C'est le cas d'un moteur qui ne sait pas ordonner une
+/// lecture — le produit vise aussi les familles clé-valeur — et le refus doit
+/// arriver là, pas dans la composition du SQL, où la tentation serait
+/// d'abandonner la demande en silence : l'utilisateur croirait alors avoir
+/// exclu des lignes qui sont pourtant à l'écran (ADR-0003, ADR-0020).
+#[test]
+fn preview_refuses_a_sort_or_predicate_the_session_does_not_declare() {
+    let probe = Arc::new(Probe::default());
+    let (executor, connection, session) = fake(probe.clone(), None);
+
+    let mut trie = preview(connection, session, 200);
+    if let Command::PreviewRelation { shape, .. } = &mut trie {
+        shape.sort = vec![oxyn_core::PreviewSort::ascending("id")];
+    }
+    let mut filtre = preview(connection, session, 200);
+    if let Command::PreviewRelation { shape, .. } = &mut filtre {
+        shape.predicate = Some("id > 10".into());
+    }
+
+    for command in [trie, filtre] {
+        assert!(matches!(
+            block_on(executor.dispatch(Actor::Human, command, &CancelToken::new())),
+            Err(OxynError::NotSupported { .. })
+        ));
+    }
+    assert!(
+        probe.prepared.lock().is_empty(),
+        "le driver n'a même pas été sollicité"
+    );
+    assert!(probe.executed.lock().is_empty());
+
+    // Le test négatif, sans lequel le précédent passerait même si l'aperçu était
+    // refusé en toutes circonstances : un prédicat vide ne demande rien, donc
+    // rien n'est refusé.
+    let mut vide = preview(connection, session, 200);
+    if let Command::PreviewRelation { shape, .. } = &mut vide {
+        shape.predicate = Some("   ".into());
+    }
+    assert!(block_on(executor.dispatch(Actor::Human, vide, &CancelToken::new())).is_ok());
+    assert_eq!(probe.prepared.lock().len(), 1);
+}
+
+/// Un prédicat illisible et une écriture sont deux refus différents.
+///
+/// Le classificateur compte pour mutant ce qu'il ne comprend pas, et c'est la
+/// bonne prudence. Mais le message doit dire ce qui s'est passé : sur un
+/// aperçu, la seule part écrite à la main est le prédicat, et « pas en lecture
+/// seule » enverrait l'utilisateur chercher un droit manquant alors qu'il a une
+/// faute de frappe.
+#[test]
+fn preview_tells_an_unreadable_filter_apart_from_a_write() {
+    let probe = Arc::new(Probe {
+        shapes_previews: true,
+        ..Probe::default()
+    });
+    let (executor, connection, session) = fake(probe.clone(), None);
+    let mut casse = preview(connection, session, 200);
+    if let Command::PreviewRelation { shape, .. } = &mut casse {
+        shape.predicate = Some("id >< 3".into());
+    }
+    let Err(OxynError::PolicyDenied { reason }) =
+        block_on(executor.dispatch(Actor::Human, casse, &CancelToken::new()))
+    else {
+        panic!("un prédicat illisible est refusé");
+    };
+    assert!(
+        reason.contains("syntax"),
+        "le refus parle du prédicat, pas d'un droit : {reason}"
+    );
+    assert!(
+        !reason.contains("read-only"),
+        "et ne renvoie pas vers la lecture seule : {reason}"
+    );
+
+    // Le test négatif : un driver qui compose réellement une écriture garde son
+    // refus d'origine, celui qui dit la vérité pour ce cas-là.
+    let mutant = Arc::new(Probe {
+        mutating: true,
+        ..Probe::default()
+    });
+    let (executor, connection, session) = fake(mutant, None);
+    let Err(OxynError::PolicyDenied { reason }) = block_on(executor.dispatch(
+        Actor::Human,
+        preview(connection, session, 200),
+        &CancelToken::new(),
+    )) else {
+        panic!("une écriture composée par le driver est refusée");
+    };
+    assert!(reason.contains("read-only"), "{reason}");
 }

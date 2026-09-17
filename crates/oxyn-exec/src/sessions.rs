@@ -359,7 +359,7 @@ impl fmt::Debug for SessionSlot {
 /// Classée [`Connection`](OxynError::Connection), donc **transitoire** : la
 /// bonne suite est de rouvrir, ce que l'interface sait faire.
 fn session_closed() -> OxynError {
-    OxynError::Connection("la session a été fermée".to_owned())
+    OxynError::Connection("the session has been closed".to_owned())
 }
 
 /// Les sessions ouvertes de l'ordonnanceur.
@@ -491,19 +491,30 @@ mod tests {
         let guard = block_on(slot.session.write());
         let token = CancelToken::new();
         let path = oxyn_catalog::CatalogPath::for_relation(None, None, "t").expect("valid path");
-        let read = slot.preview_request(&path, 200, &token);
+        let simple = oxyn_core::PreviewShape::unordered();
+        let read = slot.preview_request(&path, 200, &simple, &token);
         futures::pin_mut!(read);
         assert!(read.as_mut().now_or_never().is_none());
         token.cancel();
         assert!(matches!(block_on(read), Err(OxynError::Cancelled)));
         drop(guard);
         assert!(matches!(
-            block_on(slot.preview_request(&path, 200, &CancelToken::new())),
+            block_on(slot.preview_request(
+                &path,
+                200,
+                &oxyn_core::PreviewShape::unordered(),
+                &CancelToken::new()
+            )),
             Err(OxynError::NotSupported { .. })
         ));
         block_on(slot.close()).expect("closed session");
         assert!(matches!(
-            block_on(slot.preview_request(&path, 200, &CancelToken::new())),
+            block_on(slot.preview_request(
+                &path,
+                200,
+                &oxyn_core::PreviewShape::unordered(),
+                &CancelToken::new()
+            )),
             Err(OxynError::Connection(_))
         ));
     }

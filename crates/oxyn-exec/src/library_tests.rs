@@ -22,6 +22,7 @@ async fn documents_and_history_are_local_and_workspace_scoped() {
         connection: None,
         save_named: true,
         is_open: true,
+        provenance: None,
     };
     let saved = executor
         .dispatch(

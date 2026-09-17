@@ -15,31 +15,39 @@
 //! `Cargo.toml`), et le contrat de dépendances est un choix d'architecture
 //! arrêté. Le trait ne peut donc pas être implémenté ici. Ce module fournit
 //! l'exécution complète et un [`DispatchReport`] dont la forme est celle de
-//! `ToolOutcome`, pour que le câblage dans `oxyn-app` — qui dépend des deux —
-//! soit une traduction sans logique :
+//! `DispatchOutcome`, pour que le câblage dans `oxyn-app` — qui dépend des
+//! deux — soit une traduction sans logique :
 //!
 //! ```ignore
 //! #[async_trait]
 //! impl CommandSink for MonPuits {
 //!     async fn dispatch(&self, actor: Actor, command: Command, cancel: &CancelToken)
-//!         -> ToolOutcome
+//!         -> DispatchOutcome
 //!     {
 //!         match self.0.dispatch(actor, command, cancel).await {
 //!             DispatchReport::Completed { stats: Some(stats), .. } => {
-//!                 ToolOutcome::completed(&stats)
+//!                 DispatchOutcome::completed(&stats)
 //!             }
-//!             DispatchReport::Completed { summary, .. } => ToolOutcome::Completed { summary },
+//!             DispatchReport::Completed { summary, .. } => {
+//!                 DispatchOutcome::Completed { summary }
+//!             }
 //!             DispatchReport::AwaitingApproval { reason, .. } => {
-//!                 ToolOutcome::AwaitingApproval { reason }
+//!                 DispatchOutcome::AwaitingApproval { reason }
 //!             }
-//!             DispatchReport::Denied { reason, .. } => ToolOutcome::Denied { reason },
-//!             DispatchReport::Failed { error, retryable, .. } => {
-//!                 ToolOutcome::Failed { error, retryable }
+//!             DispatchReport::Denied { reason, .. } => DispatchOutcome::Denied { reason },
+//!             DispatchReport::Failed { class, error, .. } => {
+//!                 DispatchOutcome::Failed { class, message: error }
 //!             }
 //!         }
 //!     }
 //! }
 //! ```
+//!
+//! Le puits rend des **faits**, jamais un texte déjà filtré : il ne mentionne ni
+//! `ToolOutcome` ni le niveau de confidentialité. C'est le runtime IA qui
+//! applique celui-ci, parce qu'il appartient à la connexion et que lui seul le
+//! connaît ([I-04](../../../CLAUDE.md#i-04)). Un puits qui filtrerait de son
+//! côté serait un second endroit où l'oublier.
 //!
 //! Les quatre règles du contrat de `CommandSink` sont tenues par
 //! [`Executor::dispatch`] lui-même : reclassification avant décision, `Actor`
@@ -59,7 +67,8 @@ use std::fmt;
 use std::sync::Arc;
 
 use oxyn_core::{
-    Actor, AgentId, AgentSessionId, CancelToken, Command, CommandId, ExecStats, OxynError,
+    Actor, AgentId, AgentSessionId, CancelToken, Command, CommandId, ErrorClass, ExecStats,
+    OxynError,
 };
 
 use crate::executor::{Executor, Outcome};
@@ -112,14 +121,21 @@ pub enum DispatchReport {
     Failed {
         /// La commande.
         command: CommandId,
-        /// Le message, tel qu'il sera montré : celui du serveur, code compris.
-        error: String,
-        /// L'opération est-elle rejouable telle quelle ?
+        /// La famille de l'erreur, portée comme **donnée**.
         ///
-        /// Une erreur ambiguë ne se retente jamais (I-13) : une expiration
-        /// pendant une écriture vaut `false`, parce que le serveur a peut-être
-        /// appliqué.
-        retryable: bool,
+        /// Sans elle, un appelant devrait la redeviner à partir du message —
+        /// ce que le contrat de driver interdit explicitement, parce qu'un
+        /// message change et qu'un appelant qui l'analysait casse en silence
+        /// ([DRIVER-CONTRACT §4](../../../docs/DRIVER-CONTRACT.md)).
+        class: ErrorClass,
+        /// Le message, tel qu'il sera montré **à l'utilisateur** : celui du
+        /// serveur, code compris.
+        ///
+        /// Ce qu'un agent en voit est une autre question, et elle ne se décide
+        /// pas ici : le niveau de confidentialité appartient à la connexion, et
+        /// c'est le runtime IA qui l'applique ([I-04](../../../CLAUDE.md#i-04)).
+        /// Ce rapport porte les faits ; il ne filtre pas.
+        error: String,
     },
 }
 
@@ -183,8 +199,8 @@ impl DispatchReport {
     fn from_error(command: CommandId, error: &OxynError) -> Self {
         Self::Failed {
             command,
+            class: error.class(),
             error: error.to_string(),
-            retryable: error.is_retryable(),
         }
     }
 }
@@ -299,9 +315,8 @@ impl ExecutorSink {
         }
         Some(DispatchReport::Denied {
             command: id,
-            reason: "cet acteur n'est pas celui de la conversation : \
-                     une commande d'agent ne peut pas être présentée comme venant de \
-                     l'utilisateur"
+            reason: "this actor is not the one bound to the conversation: \
+                     an agent command cannot be presented as coming from the user"
                 .to_owned(),
         })
     }
@@ -468,10 +483,13 @@ mod tests {
             &CancelToken::new(),
         ));
 
-        let DispatchReport::Failed { retryable, .. } = rapport else {
+        let DispatchReport::Failed { class, .. } = rapport else {
             panic!("{rapport:?}");
         };
-        assert!(retryable, "une session fermée se rouvre");
+        assert!(
+            class.is_retryable(),
+            "une session fermée se rouvre : {class:?}"
+        );
     }
 
     #[test]

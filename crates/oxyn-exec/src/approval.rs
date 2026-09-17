@@ -103,18 +103,18 @@ pub enum ApprovalError {
     ///
     /// Soit l'accord a déjà été donné — une approbation ne sert qu'une fois —,
     /// soit la demande a été rejetée entre-temps.
-    #[error("aucune commande n'attend d'accord sous cet identifiant")]
+    #[error("no command is awaiting approval under this identifier")]
     Unknown,
 
     /// La demande a expiré. **Rien n'a été exécuté.**
-    #[error("la demande d'approbation a expiré après {after:?} : rien n'a été exécuté")]
+    #[error("the approval request expired after {after:?}: nothing was executed")]
     Expired {
         /// Délai au bout duquel la demande a cessé d'être valable.
         after: Duration,
     },
 
     /// La file d'attente est pleine.
-    #[error("trop de commandes attendent un accord ({limit}) : répondez aux demandes en cours")]
+    #[error("too many commands are awaiting approval ({limit}): answer the pending requests")]
     QueueFull {
         /// La borne atteinte.
         limit: usize,

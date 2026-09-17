@@ -65,6 +65,7 @@ use oxyn_driver::{Cursor, DriverRegistry};
 use oxyn_store::{Document, HistoryRecord, JournalRecord, Store};
 use parking_lot::RwLock;
 
+use crate::abandon::{AbandonGuard, AbandonedOutcomes, OutcomeGuard};
 use crate::approval::{ApprovalRegistry, PendingCommand};
 use crate::cancel::{CancelRegistry, CancelReport, RunningStatement};
 use crate::events::EventBus;
@@ -163,6 +164,10 @@ pub enum Outcome {
     HistoryEntryRead {
         entry: Box<oxyn_store::HistoryEntry>,
     },
+    /// A bounded page of the connections history recorded, removed ones included.
+    HistoryConnectionsListed {
+        page: oxyn_store::history::HistoryConnectionPage,
+    },
     /// A document was closed or deleted locally.
     DocumentClosed { document: DocumentId },
     /// The same retained buffer, without an execution event.
@@ -203,6 +208,59 @@ pub enum Outcome {
     ConnectionSaved {
         /// La connexion.
         connection: ConnectionId,
+    },
+
+    /// The AI providers declared on this machine, in label order.
+    ///
+    /// An empty list is the default installation, not a failure: it is what
+    /// decides whether the AI workspace exists at all. No reach is reported —
+    /// classification is recomputed elsewhere, never stored
+    /// ([ADR-0023](../../../docs/adr/0023-fournisseurs-declares-et-provenance.md)).
+    AiProvidersListed {
+        /// Declarations, without any key. Boxed nowhere: the list is short and
+        /// bounded by what the user typed.
+        providers: Vec<oxyn_core::AiProviderConfig>,
+    },
+
+    /// An AI provider declaration was written locally.
+    AiProviderSaved {
+        /// The declaration that now exists.
+        provider: oxyn_core::ProviderId,
+    },
+
+    /// An AI provider declaration was removed locally.
+    ///
+    /// Documents keep the provenance they were written with: it says where a
+    /// text came from, not which provider is still declared.
+    AiProviderRemoved {
+        /// The declaration asked for.
+        provider: oxyn_core::ProviderId,
+        /// Did it exist?
+        existed: bool,
+    },
+
+    /// The external agents declared on this machine, in label order.
+    ///
+    /// No reach is reported, and unlike a provider it is not because the value
+    /// would go stale: an external agent's reach is **unknowable**
+    /// ([ADR-0026](../../../docs/adr/0026-agents-externes-acp.md)).
+    ExternalAgentsListed {
+        /// Declarations. There is no key to withhold: this mode holds none.
+        agents: Vec<oxyn_core::ExternalAgentConfig>,
+    },
+
+    /// An external agent declaration was written locally.
+    ExternalAgentSaved {
+        /// The declaration that now exists.
+        agent: oxyn_core::ProviderId,
+    },
+
+    /// An external agent declaration was removed locally.
+    ExternalAgentRemoved {
+        /// The declaration asked for.
+        agent: oxyn_core::ProviderId,
+        /// Did it exist?
+        existed: bool,
     },
 
     /// Une connexion a été supprimée du workspace.
@@ -292,6 +350,7 @@ pub struct Executor {
     connections: RwLock<HashMap<ConnectionId, ConnectionConfig>>,
     workspace: WorkspaceId,
     memory_budget: usize,
+    abandoned: AbandonedOutcomes,
 }
 
 impl Executor {
@@ -492,7 +551,11 @@ impl Executor {
         // éternelle, alors qu'elle n'a jamais été soumise au serveur.
         let en_cours = self.history_start(actor, &command);
         let debut = Instant::now();
+        // A caller that drops this future skips everything after the `.await`:
+        // the guard queues the audit outcome the lines below would have written.
+        let guard = OutcomeGuard::new(&self.abandoned, id, actor, &command, approved_by);
         let issue = self.execute_command(id, &command, cancel).await;
+        guard.settle();
         let duree = debut.elapsed();
         self.journal_result(id, actor, &command, &issue, duree, approved_by);
         self.history_finish(en_cours, &issue, duree);
@@ -593,7 +656,7 @@ impl Executor {
                         capability: "preview sort".to_owned(),
                     });
                 }
-                if !shape.filter.is_empty()
+                if shape.predicate().is_some()
                     && !capabilities.contains(oxyn_core::Capabilities::PREVIEW_FILTER)
                 {
                     return Err(OxynError::NotSupported {
@@ -603,8 +666,22 @@ impl Executor {
                 let request = slot.preview_request(&path, *limit, shape, cancel).await?;
                 let mut request = oxyn_query::reclassify(&request).qualify(request);
                 if request.is_mutating() {
+                    // Deux refus distincts, parce qu'ils demandent deux gestes
+                    // différents. `Unknown` veut dire « ce texte n'a pas pu être
+                    // classé », et sur un aperçu la seule part écrite à la main
+                    // est le prédicat : le dire « pas en lecture seule »
+                    // enverrait l'utilisateur chercher un droit manquant alors
+                    // qu'il a une faute de frappe. Le refus reste dans les deux
+                    // cas — un texte que le classificateur ne comprend pas
+                    // compte pour mutant, et c'est cette prudence qui protège.
+                    let reason = if request.intent == oxyn_core::StatementIntent::Unknown {
+                        "this preview filter could not be read as a condition; \
+                         check its syntax"
+                    } else {
+                        "driver preview request is not read-only"
+                    };
                     return Err(OxynError::PolicyDenied {
-                        reason: "driver preview request is not read-only".into(),
+                        reason: reason.to_owned(),
                     });
                 }
                 // Enforce the command contract even if a driver omitted its limits.
@@ -838,6 +915,19 @@ impl Executor {
                     entry: Box::new(entry),
                 })
             }
+            Command::ListHistoryConnections { workspace, filter } => {
+                self.check_workspace(*workspace)?;
+                filter.validate()?;
+                let store = self.store.clone();
+                let workspace = *workspace;
+                let filter = *filter;
+                let page = self
+                    .local_worker(cancel, move |cancel| {
+                        store.history().connections(workspace, &filter, &cancel)
+                    })
+                    .await?;
+                Ok(Outcome::HistoryConnectionsListed { page })
+            }
             Command::OpenRetainedResult { connection, result } => {
                 Ok(Outcome::RetainedResultOpened {
                     result: *result,
@@ -866,6 +956,74 @@ impl Executor {
             }
 
             Command::DeleteConnection { connection } => self.delete_connection(*connection).await,
+
+            // Les trois commandes de fournisseur restent locales : rien ici ne
+            // résout un nom ni n'ouvre de connexion vers un modèle. Le
+            // classement local/distant se recalcule à l'ouverture d'un runtime
+            // (ADR-0023), et une résolution DNS faite ici la ferait vieillir en
+            // base sous un autre nom.
+            Command::ListAiProviders => {
+                let store = self.store.clone();
+                let providers = self
+                    .local_worker(cancel, move |_cancel| store.providers().list())
+                    .await?;
+                Ok(Outcome::AiProvidersListed { providers })
+            }
+            Command::SaveAiProvider { config } => {
+                // Validée avant d'atteindre le pool : une URL portant des
+                // identifiants ne doit pas voyager plus loin que nécessaire.
+                config.validate()?;
+                let store = self.store.clone();
+                let config = (**config).clone();
+                let provider = config.id.clone();
+                self.local_worker(cancel, move |_cancel| store.providers().save(&config))
+                    .await?;
+                Ok(Outcome::AiProviderSaved { provider })
+            }
+            Command::RemoveAiProvider { id } => {
+                let store = self.store.clone();
+                let provider = id.clone();
+                let cible = id.clone();
+                let existed = self
+                    .local_worker(cancel, move |_cancel| store.providers().remove(&cible))
+                    .await?;
+                Ok(Outcome::AiProviderRemoved { provider, existed })
+            }
+
+            // Les trois mêmes gestes pour un agent externe. Aucune validation
+            // d'URL ici : il n'y en a pas. La validation de la déclaration est
+            // faite avant le pool, pour la raison qui vaut aussi pour les
+            // fournisseurs — une commande porteuse d'un caractère de contrôle ne
+            // doit pas voyager plus loin que nécessaire.
+            Command::ListExternalAgents => {
+                let store = self.store.clone();
+                let agents = self
+                    .local_worker(cancel, move |_cancel| store.external_agents().list())
+                    .await?;
+                Ok(Outcome::ExternalAgentsListed { agents })
+            }
+            Command::SaveExternalAgent { agent } => {
+                agent.validate()?;
+                let store = self.store.clone();
+                let declaration = (**agent).clone();
+                let identite = declaration.id.clone();
+                self.local_worker(cancel, move |_cancel| {
+                    store.external_agents().save(&declaration)
+                })
+                .await?;
+                Ok(Outcome::ExternalAgentSaved { agent: identite })
+            }
+            Command::RemoveExternalAgent { id } => {
+                let store = self.store.clone();
+                let agent = id.clone();
+                let cible = id.clone();
+                let existed = self
+                    .local_worker(cancel, move |_cancel| {
+                        store.external_agents().remove(&cible)
+                    })
+                    .await?;
+                Ok(Outcome::ExternalAgentRemoved { agent, existed })
+            }
         }
     }
 
@@ -1009,6 +1167,19 @@ impl Executor {
             .map(|state| Arc::clone(&state.cache))
     }
 
+    /// Marks a connection's whole catalog stale after a DDL succeeds.
+    ///
+    /// The scope is the whole connection, never the touched object: naming
+    /// that object would mean reconstructing an identifier from the executed
+    /// SQL text, which I-10 forbids. Data is kept, only marked
+    /// [`Invalidated`](oxyn_catalog::Freshness::Invalidated) — the next read
+    /// re-fetches it.
+    fn invalidate_catalog(&self, connection: ConnectionId) {
+        if let Some(state) = self.catalogs.read().get(&connection).cloned() {
+            state.cache.write().invalidate_all();
+        }
+    }
+
     async fn refresh_catalog(
         &self,
         id: CommandId,
@@ -1092,30 +1263,43 @@ impl Executor {
         // avant le driver.
         if request.is_mutating() && request.limits.read_only {
             return Err(OxynError::PolicyDenied {
-                reason: "cette exécution est bornée en lecture seule : \
-                         une écriture doit lever la borne explicitement"
+                reason: "this execution is bounded to read-only: \
+                         a write must lift that bound explicitly"
                     .to_owned(),
             });
         }
 
         let Some(slot) = self.sessions.get(session) else {
             return Err(OxynError::Connection(
-                "aucune session ouverte sous cet identifiant".to_owned(),
+                "no session is open under this identifier".to_owned(),
             ));
         };
         if slot.connection() != connection {
             return Err(OxynError::Internal(
-                "la session visée n'appartient pas à la connexion de la commande".to_owned(),
+                "the target session does not belong to the command's connection".to_owned(),
             ));
         }
 
         let limits = request.limits.clone();
+        // Capturé avant que `request` ne soit déplacé dans `slot.execute` :
+        // c'est le seul signal qu'on garde du texte exécuté (I-10).
+        let intent = request.intent;
         // Un jeton **fils** : annuler cette exécution n'annule pas l'onglet qui
         // l'a lancée, alors qu'annuler l'onglet l'annule bien.
         let ct = cancel.child();
 
         let operation = async {
-            let cursor = slot.execute(request, &ct).await?;
+            // Armed before the driver is called: a caller that drops this future
+            // at any `.await` below never reaches the cleanup written after it.
+            let mut guard =
+                AbandonGuard::new(&self.running, &self.events, id, connection, ct.clone());
+            let cursor = match slot.execute(request, &ct).await {
+                Ok(cursor) => cursor,
+                Err(erreur) => {
+                    guard.settle();
+                    return Err(erreur);
+                }
+            };
             let statement = cursor.handle();
             self.running.register(RunningStatement::new(
                 statement,
@@ -1140,6 +1324,7 @@ impl Executor {
                     buffer: Arc::clone(&buffer),
                 },
             );
+            guard.track(statement, Arc::clone(&buffer));
 
             // Le schéma est connu avant la première ligne : la grille dessine ses
             // colonnes pendant que les données arrivent.
@@ -1167,16 +1352,27 @@ impl Executor {
             if interrompue {
                 self.running.cancel(&self.sessions, statement).await;
             }
-            self.running.finish(statement);
+            guard.settle();
             self.prune_results();
 
             match issue {
                 Ok(sink) => {
                     let stats = buffer.stats();
+                    if sink != SinkOutcome::Cancelled && intent == oxyn_core::StatementIntent::Ddl {
+                        // Après un DDL confirmé par le serveur, pas avant : un
+                        // sink annulé peut n'avoir rien changé.
+                        self.invalidate_catalog(connection);
+                        self.events
+                            .publish(id, Some(connection), Event::CatalogUpdated);
+                    }
                     let event = if sink == SinkOutcome::Cancelled {
                         Event::Cancelled
                     } else {
-                        Event::Completed { result, stats }
+                        Event::Completed {
+                            result,
+                            stats,
+                            intent,
+                        }
                     };
                     self.events.publish(id, Some(connection), event);
                     Ok(Outcome::Executed {
@@ -1279,7 +1475,7 @@ impl Executor {
 
         let buffer = self
             .result(result)
-            .ok_or_else(|| OxynError::Config("ce résultat n'est plus disponible".to_owned()))?;
+            .ok_or_else(|| OxynError::Config("this result is no longer available".to_owned()))?;
 
         let fichier = File::create(destination)?;
         let resume = export(
@@ -1378,6 +1574,10 @@ impl Executor {
                     connection: doc.connection,
                     save_named: doc.is_saved,
                     is_open: doc.is_open,
+                    // Ce chemin réécrit le texte d'un document existant sans
+                    // rien savoir de son origine. `None` ne l'efface pas : la
+                    // provenance déjà posée reste (ADR-0023).
+                    provenance: None,
                 };
                 let saved = store
                     .documents()
@@ -1459,16 +1659,14 @@ impl Executor {
         duration: Duration,
         approved_by: Option<&str>,
     ) {
-        let decision = match approved_by {
-            Some(_) => Decision::approval("commande exécutée après accord explicite", None),
-            None => Decision::Allow,
-        };
-        let mut record = JournalRecord::new(actor, command, &decision)
-            .with_command_id(id)
-            .completed(duration, issue.as_ref().ok().and_then(Outcome::rows));
-        if let Some(who) = approved_by {
-            record = record.approved_by(who);
-        }
+        let mut record = outcome_record(
+            id,
+            actor,
+            command,
+            duration,
+            issue.as_ref().ok().and_then(Outcome::rows),
+            approved_by,
+        );
         if let Err(erreur) = issue {
             record = record.failed(erreur);
         }
@@ -1614,7 +1812,7 @@ impl Executor {
                 Ok(config)
             }
             None => Err(OxynError::Config(
-                "cette connexion n'existe pas dans le workspace".to_owned(),
+                "this connection does not exist in the workspace".to_owned(),
             )),
         }
     }
@@ -1735,6 +1933,10 @@ impl Executor {
     /// fermeture à cet instant : il est journalisé au niveau `warn`. Rend le
     /// nombre de sessions fermées.
     pub async fn shutdown(&self) -> usize {
+        // Before closing sessions: a caller usually bounds this call, and a
+        // server that never answers the close would cut it before the end —
+        // taking with it every outcome already queued.
+        self.journal_abandoned_off_runtime().await;
         for (_, catalog) in self.catalogs.write().drain() {
             catalog.closed.cancel();
         }
@@ -1747,7 +1949,104 @@ impl Executor {
                 tracing::warn!(error = %erreur, "the server refused a clean session close");
             }
         }
+        // Again, last: closing may have abandoned more, and nothing after this
+        // point runs the periodic writer.
+        self.journal_abandoned_off_runtime().await;
         sessions.len()
+    }
+
+    /// [`journal_abandoned`](Self::journal_abandoned) for an async caller.
+    ///
+    /// The queue is taken here, in memory; the writes go to the blocking pool.
+    /// Once taken, the records belong to the blocking task: dropping this future
+    /// does not cancel it, so they are written even if the caller gives up.
+    async fn journal_abandoned_off_runtime(&self) {
+        let records = self.abandoned.take();
+        if records.is_empty() {
+            return;
+        }
+        let store = Arc::clone(&self.store);
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => {
+                if runtime
+                    .spawn_blocking(move || append_outcomes(&store, records))
+                    .await
+                    .is_err()
+                {
+                    tracing::error!("the audit writer stopped during shutdown");
+                }
+            }
+            // No Tokio runtime means no runtime thread to block.
+            Err(_) => {
+                append_outcomes(&store, records);
+            }
+        }
+    }
+
+    /// Writes to the audit journal the outcomes of commands whose caller
+    /// dropped them before they ended, and returns how many were written.
+    ///
+    /// Such a command has its policy decision journaled but never reaches the
+    /// line that journals its outcome. Its record is built when its future is
+    /// dropped — same constructor as an ordinary outcome, marked
+    /// `abandoned by its caller; outcome unknown` and classed
+    /// [`Ambiguous`](oxyn_core::ErrorClass::Ambiguous) — and waits in memory
+    /// for this call.
+    ///
+    /// **Blocks on disk I/O**: call it from the blocking pool, next to
+    /// [`prune_results`](Self::prune_results), never from the UI thread.
+    /// [`shutdown`](Self::shutdown) calls it last.
+    ///
+    /// # Limits
+    /// A queued outcome lives in memory only until this runs. **It is lost if
+    /// the process dies before** — within the second that separates two calls
+    /// of the periodic writer, or when an application exits without
+    /// [`shutdown`](Self::shutdown). At most 256 outcomes wait at once; beyond,
+    /// or if the queue is being emptied at the instant of the drop, the outcome
+    /// is lost and `tracing::error!` reports the count, never the command.
+    pub fn journal_abandoned(&self) -> usize {
+        append_outcomes(&self.store, self.abandoned.take())
+    }
+}
+
+/// Appends queued abandoned outcomes; blocks on disk. Returns how many were written.
+fn append_outcomes(store: &Store, records: std::collections::VecDeque<JournalRecord>) -> usize {
+    let mut written = 0;
+    for record in records {
+        match store.journal().append(&record) {
+            Ok(_) => written += 1,
+            Err(erreur) => tracing::error!(
+                error = %erreur,
+                command = ?record.command_id,
+                "failed to journal the outcome of an abandoned command"
+            ),
+        }
+    }
+    written
+}
+
+/// The audit record of a command that ran, before its failure is known.
+///
+/// The one constructor for outcomes — ordinary and abandoned — so that both
+/// carry exactly the same fields, and no more.
+pub(crate) fn outcome_record(
+    id: CommandId,
+    actor: &Actor,
+    command: &Command,
+    duration: Duration,
+    rows: Option<u64>,
+    approved_by: Option<&str>,
+) -> JournalRecord {
+    let decision = match approved_by {
+        Some(_) => Decision::approval("command executed after explicit approval", None),
+        None => Decision::Allow,
+    };
+    let record = JournalRecord::new(actor, command, &decision)
+        .with_command_id(id)
+        .completed(duration, rows);
+    match approved_by {
+        Some(who) => record.approved_by(who),
+        None => record,
     }
 }
 
@@ -1893,6 +2192,7 @@ impl ExecutorBuilder {
             connections: RwLock::new(HashMap::new()),
             workspace: self.workspace,
             memory_budget: self.memory_budget,
+            abandoned: AbandonedOutcomes::default(),
         }
     }
 }
@@ -2107,7 +2407,7 @@ mod tests {
                 .record
                 .decision_reason
                 .as_deref()
-                .is_some_and(|motif| motif.contains("lecture seule")),
+                .is_some_and(|motif| motif.contains("read-only")),
             "{:?}",
             trace.record.decision_reason
         );
@@ -2596,3 +2896,11 @@ mod library_tests;
 #[cfg(test)]
 #[path = "session_close_tests.rs"]
 mod session_close_tests;
+
+#[cfg(test)]
+#[path = "provider_tests.rs"]
+mod provider_tests;
+
+#[cfg(test)]
+#[path = "abandon_tests.rs"]
+mod abandon_tests;
