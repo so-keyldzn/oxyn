@@ -26,6 +26,7 @@
 //! | `external_agents` | les agents externes déclarés — **par machine**, sans secret | oui |
 //! | `ai_conversations` | les fils de l'assistant, par connexion | oui, élagage et suppression |
 //! | `ai_conversation_turns` | leur transcription, **jamais** une valeur de la base | oui, avec leur fil |
+//! | `ai_conversation_nodes` | l'arbre des échanges ; un échange retenu ne garde que sa question | oui, avec leur fil |
 //! | `ai_egress` | ce qui est parti vers un destinataire IA — noms, jamais valeurs — **append-only** | **non** |
 //!
 //! # Pourquoi `STRICT`
@@ -535,6 +536,135 @@ BEGIN
 END;
 ";
 
+/// Migration 13 — l'arbre d'une conversation, et l'échange qui a reçu un
+/// échantillon.
+///
+/// La migration 10 rangeait une transcription **linéaire**. Le panneau tient un
+/// **arbre** : une régénération ou une édition crée une version sœur, et
+/// l'utilisateur navigue entre elles. `ai_conversation_nodes` porte un échange
+/// — sa question, son destinataire, son issue — et les tours existants s'y
+/// rattachent par `node`.
+///
+/// # Ce que le fichier rend impossible, plutôt que de le vérifier
+///
+/// * **Un cycle.** `parent < node` : un parent est toujours plus ancien que son
+///   enfant, et l'identifiant est attribué par le store à l'ajout. Aucune suite
+///   de parents ne peut revenir sur elle-même, `sqlite3` compris.
+/// * **Un parent d'une autre conversation.** La clé étrangère est composite,
+///   `(conversation_id, parent)` : le parent se cherche **dans la même
+///   conversation**, et nulle part ailleurs.
+/// * **Changer la structure après coup.** Un déclencheur refuse la mise à jour
+///   de `conversation_id`, `node` ou `parent` : une version qui changerait de
+///   parent réécrirait l'histoire qu'on a montrée.
+///
+/// # L'échange qui a reçu un échantillon ne garde que sa question
+///
+/// Décision de l'utilisateur : un échange dont un échantillon de lignes a été
+/// envoyé garde sa question, ses **compteurs** — lignes et colonnes, jamais les
+/// noms — et son issue. Jamais la réponse, le raisonnement, un appel d'outil ni
+/// un message d'erreur : la réponse peut citer les valeurs de l'échantillon, et
+/// le fichier de workspace est l'un des six canaux d'I-03.
+///
+/// La règle tient au fichier, pas à l'appelant :
+/// * un déclencheur refuse tout tour rattaché à un échange retenu, à
+///   l'insertion comme à la mise à jour ;
+/// * poser le marqueur **efface** les tours déjà écrits pour cet échange ;
+/// * le marqueur ne se retire pas.
+///
+/// L'effacement suppose `secure_delete`, que le store pose à l'ouverture : sans
+/// lui, SQLite laisse le texte supprimé dans ses pages libres, et le fichier le
+/// contiendrait encore. Un `sqlite3` lancé sans ce réglage peut poser le
+/// marqueur sans écraser les octets — la garantie « illisible sur le disque »
+/// vaut pour ce qu'Oxyn écrit.
+///
+/// # Anciennes lignes
+///
+/// Les tours de la migration 10 ont `node = NULL` et restent lisibles par
+/// `transcript_page`. Une conversation sans nœud n'a simplement pas de branche.
+const M0013_AI_CONVERSATION_TREE: &str = "CREATE TABLE ai_conversation_nodes (
+    conversation_id   TEXT NOT NULL REFERENCES ai_conversations(id) ON DELETE CASCADE,
+    node              INTEGER NOT NULL CHECK(node BETWEEN 0 AND 255),
+    parent            INTEGER CHECK(parent IS NULL OR (parent >= 0 AND parent < node)),
+    created_at        TEXT NOT NULL,
+    privacy_tier      TEXT NOT NULL CHECK(length(CAST(privacy_tier AS BLOB)) <= 16),
+    question          TEXT NOT NULL CHECK(length(CAST(question AS BLOB)) <= 1048576),
+    destination_kind  TEXT NOT NULL CHECK(length(CAST(destination_kind AS BLOB)) <= 16),
+    destination_id    TEXT CHECK(destination_id IS NULL OR length(CAST(destination_id AS BLOB)) <= 64),
+    destination_label TEXT NOT NULL CHECK(length(CAST(destination_label AS BLOB)) <= 128),
+    model             TEXT CHECK(model IS NULL OR length(CAST(model AS BLOB)) <= 128),
+    sample_withheld   INTEGER NOT NULL DEFAULT 0 CHECK(sample_withheld IN (0, 1)),
+    sample_rows       INTEGER CHECK(sample_rows IS NULL OR sample_rows BETWEEN 0 AND 1000),
+    sample_columns    INTEGER CHECK(sample_columns IS NULL OR sample_columns BETWEEN 0 AND 256),
+    outcome           TEXT CHECK(outcome IS NULL OR length(CAST(outcome AS BLOB)) <= 16),
+    outcome_detail    TEXT CHECK(outcome_detail IS NULL OR length(CAST(outcome_detail AS BLOB)) <= 32),
+    retryable         INTEGER CHECK(retryable IS NULL OR retryable IN (0, 1)),
+    CHECK(sample_withheld = 1 OR (sample_rows IS NULL AND sample_columns IS NULL)),
+    CHECK(outcome IS NOT NULL OR (outcome_detail IS NULL AND retryable IS NULL)),
+    PRIMARY KEY (conversation_id, node),
+    FOREIGN KEY (conversation_id, parent)
+        REFERENCES ai_conversation_nodes(conversation_id, node)
+) STRICT;
+
+ALTER TABLE ai_conversation_turns ADD COLUMN node INTEGER CHECK(node IS NULL OR node >= 0);
+CREATE INDEX ai_conversation_turns_by_node ON ai_conversation_turns (conversation_id, node, ordinal);
+ALTER TABLE ai_conversations ADD COLUMN selected_node INTEGER;
+
+CREATE TRIGGER ai_conversation_nodes_structure_is_final
+BEFORE UPDATE OF conversation_id, node, parent ON ai_conversation_nodes
+BEGIN
+    SELECT RAISE(ABORT, 'ai_conversation_nodes: a node never changes place');
+END;
+
+CREATE TRIGGER ai_conversation_nodes_withholding_is_final
+BEFORE UPDATE OF sample_withheld ON ai_conversation_nodes
+WHEN OLD.sample_withheld = 1 AND NEW.sample_withheld = 0
+BEGIN
+    SELECT RAISE(ABORT, 'ai_conversation_nodes: a withheld sample stays withheld');
+END;
+
+CREATE TRIGGER ai_conversation_nodes_withholding_erases_answers
+AFTER UPDATE OF sample_withheld ON ai_conversation_nodes
+WHEN NEW.sample_withheld = 1
+BEGIN
+    DELETE FROM ai_conversation_turns
+     WHERE conversation_id = NEW.conversation_id AND node = NEW.node;
+END;
+
+CREATE TRIGGER ai_conversation_turns_node_insert
+BEFORE INSERT ON ai_conversation_turns
+WHEN NEW.node IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM ai_conversation_nodes
+     WHERE conversation_id = NEW.conversation_id AND node = NEW.node AND sample_withheld = 0)
+BEGIN
+    SELECT RAISE(ABORT, 'ai_conversation_turns: unknown node, or a node whose sample is withheld');
+END;
+
+CREATE TRIGGER ai_conversation_turns_node_update
+BEFORE UPDATE ON ai_conversation_turns
+WHEN NEW.node IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM ai_conversation_nodes
+     WHERE conversation_id = NEW.conversation_id AND node = NEW.node AND sample_withheld = 0)
+BEGIN
+    SELECT RAISE(ABORT, 'ai_conversation_turns: unknown node, or a node whose sample is withheld');
+END;
+
+CREATE TRIGGER ai_conversations_selected_node_insert
+BEFORE INSERT ON ai_conversations
+WHEN NEW.selected_node IS NOT NULL
+BEGIN
+    SELECT RAISE(ABORT, 'ai_conversations: a new conversation has no node to select');
+END;
+
+CREATE TRIGGER ai_conversations_selected_node_update
+BEFORE UPDATE OF selected_node ON ai_conversations
+WHEN NEW.selected_node IS NOT NULL AND NOT EXISTS (
+    SELECT 1 FROM ai_conversation_nodes
+     WHERE conversation_id = NEW.id AND node = NEW.selected_node)
+BEGIN
+    SELECT RAISE(ABORT, 'ai_conversations: the selected node belongs to another conversation');
+END;
+";
+
 /// Toutes les migrations, dans l'ordre d'application.
 pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -596,6 +726,11 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 12,
         name: "ai_egress",
         sql: M0012_AI_EGRESS,
+    },
+    Migration {
+        version: 13,
+        name: "ai_conversation_tree",
+        sql: M0013_AI_CONVERSATION_TREE,
     },
 ];
 
@@ -686,6 +821,37 @@ pub fn migrate(conn: &mut Connection) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Builds a local state file **at exactly `version`**, for tests that need a
+/// file written by an earlier build.
+///
+/// Applying only the migrations up to `version` is the one form that does not
+/// rot: a test that instead opened a current file and undid the later
+/// migrations by hand broke every time a migration was added — twice already.
+///
+/// # Panics
+/// On any SQLite failure: this is test scaffolding, and a fixture that cannot
+/// be built is a broken test, not a condition to handle.
+#[cfg(test)]
+pub(crate) fn file_at_version(path: &std::path::Path, version: u32) -> Connection {
+    let mut conn = Connection::open(path).expect("fixture file opens");
+    conn.pragma_update(None, "foreign_keys", true)
+        .expect("foreign keys on the fixture");
+    conn.execute_batch(SCHEMA_VERSION_TABLE)
+        .expect("schema_version on the fixture");
+    for migration in MIGRATIONS.iter().filter(|m| m.version <= version) {
+        let tx = conn.transaction().expect("fixture transaction");
+        tx.execute_batch(migration.sql)
+            .expect("an earlier migration applies");
+        tx.execute(
+            "INSERT INTO schema_version (version, name, applied_at) VALUES (?1, ?2, ?3)",
+            rusqlite::params![migration.version, migration.name, chrono::Utc::now()],
+        )
+        .expect("fixture version recorded");
+        tx.commit().expect("fixture commit");
+    }
+    conn
 }
 
 #[cfg(test)]
@@ -983,6 +1149,7 @@ mod tests {
             "ai_conversations",
             "ai_conversation_turns",
             "ai_egress",
+            "ai_conversation_nodes",
             "schema_version",
         ] {
             let presente: i64 = conn
@@ -1011,6 +1178,7 @@ mod tests {
             "ai_conversations",
             "ai_conversation_turns",
             "ai_egress",
+            "ai_conversation_nodes",
         ] {
             let sql: String = conn
                 .query_row(

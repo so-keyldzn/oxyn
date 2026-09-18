@@ -42,8 +42,14 @@
 mod retention;
 #[cfg(test)]
 mod tests;
+mod tree;
 
 pub use retention::{PruneReport, RetentionPolicy};
+pub use tree::{
+    AnswerEnding, BranchPage, EXCHANGE_LAYOUT_BYTES, Exchange, ExchangeOutcome, ExchangeRecord,
+    FailureKind, MAX_DESTINATION_LABEL_BYTES, MAX_DESTINATION_MODEL_BYTES, MAX_EXCHANGE_PAGE,
+    MAX_EXCHANGES_PER_CONVERSATION, MAX_SAMPLE_COLUMNS, MAX_SAMPLE_ROWS, Version, WithheldSample,
+};
 
 use chrono::{DateTime, Utc};
 use oxyn_core::ai::{ReasoningBlock, Role, StopReason};
@@ -489,6 +495,12 @@ pub struct TurnRecord {
     /// and nothing ties a tool call in the transcript to the command that was
     /// authorised or refused.
     pub agent_session: Option<AgentSessionId>,
+    /// The exchange this turn belongs to, when the thread is a tree.
+    ///
+    /// `None` on every turn written before the migration 13, and they stay
+    /// readable. A turn cannot be attached to an exchange that received a
+    /// sample: [`Conversations::append`] refuses it, and so does the file.
+    pub node: Option<u32>,
     /// The text. Empty is legitimate for an assistant turn that only calls
     /// tools.
     pub text: String,
@@ -511,12 +523,20 @@ impl TurnRecord {
             role,
             tier,
             agent_session: None,
+            node: None,
             text: text.into(),
             reasoning: Vec::new(),
             tool_calls: Vec::new(),
             usage: TurnUsage::default(),
             stop: None,
         }
+    }
+
+    /// Attaches this turn to an exchange of the tree.
+    #[must_use]
+    pub fn in_exchange(mut self, node: u32) -> Self {
+        self.node = Some(node);
+        self
     }
 
     /// Ties this turn to the agent session that ran it.
@@ -613,6 +633,11 @@ pub struct Conversation {
     pub created_at: DateTime<Utc>,
     /// When it last had a turn. This is what the retention policy orders on.
     pub updated_at: DateTime<Utc>,
+    /// The leaf whose branch is shown, when one is selected.
+    ///
+    /// Written only by [`Conversations::select`]; [`Conversations::save`]
+    /// leaves it as it is.
+    pub selected: Option<u32>,
 }
 
 impl Conversation {
@@ -629,6 +654,7 @@ impl Conversation {
             title: title.into(),
             created_at: now,
             updated_at: now,
+            selected: None,
         }
     }
 
@@ -801,6 +827,20 @@ impl<'a> Conversations<'a> {
             if touched == 0 {
                 return Ok(None);
             }
+            // Checked here for a named refusal; the file refuses the same
+            // insert in a trigger, for whoever does not come through this API.
+            if let Some(node) = turn.node {
+                match tree::node_state(&transaction, id, node)? {
+                    None => {
+                        return Err(StoreError::Corrupted {
+                            field: "ai_conversation_turns.node",
+                            detail: "the node is not a node of this conversation".into(),
+                        });
+                    }
+                    Some(true) => return Err(StoreError::SampleWithheld { node }),
+                    Some(false) => {}
+                }
+            }
 
             let next: i64 = transaction.query_row(
                 "SELECT COALESCE(MAX(ordinal), -1) + 1 FROM ai_conversation_turns
@@ -820,8 +860,8 @@ impl<'a> Conversations<'a> {
                 "INSERT INTO ai_conversation_turns
                      (conversation_id, ordinal, ts, role, privacy_tier, agent_session_id, text,
                       reasoning, tool_calls, stop_reason, prompt_tokens, completion_tokens,
-                      cache_write_tokens, cache_read_tokens, reasoning_tokens)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                      cache_write_tokens, cache_read_tokens, reasoning_tokens, node)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
                 params![
                     id.to_string(),
                     next,
@@ -838,6 +878,7 @@ impl<'a> Conversations<'a> {
                     turn.usage.cache_write.map(i64::from),
                     turn.usage.cache_read.map(i64::from),
                     turn.usage.reasoning.map(i64::from),
+                    turn.node.map(i64::from),
                 ],
             )?;
             transaction.commit()?;
@@ -981,8 +1022,8 @@ impl<'a> Conversations<'a> {
 
 /// The header columns, shared by every header read.
 const HEADER_COLUMNS: &str = "SELECT id, workspace_id, connection_id, connection_name, \
-     destination_kind, destination_id, destination_label, model, title, created_at, updated_at \
-     FROM ai_conversations";
+     destination_kind, destination_id, destination_label, model, title, created_at, updated_at, \
+     selected_node FROM ai_conversations";
 
 /// The turn columns, shared by every transcript read.
 ///
@@ -993,8 +1034,8 @@ const TURN_COLUMNS: &str = "SELECT ordinal, ts, role, privacy_tier, agent_sessio
      reasoning, tool_calls, \
      CASE WHEN length(CAST(stop_reason AS BLOB)) <= 256 THEN stop_reason END AS stop_reason, \
      COALESCE(length(CAST(stop_reason AS BLOB)) > 256, 0) AS stop_reason_oversized, \
-     prompt_tokens, completion_tokens, cache_write_tokens, cache_read_tokens, reasoning_tokens \
-     FROM ai_conversation_turns";
+     prompt_tokens, completion_tokens, cache_write_tokens, cache_read_tokens, reasoning_tokens, \
+     node FROM ai_conversation_turns";
 
 /// Refuses a value that would not fit, naming the column and the bound.
 ///
@@ -1252,6 +1293,9 @@ fn conversation_from_row(row: &Row<'_>) -> Result<Conversation> {
         title: row.get("title")?,
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
+        selected: row
+            .get::<_, Option<i64>>("selected_node")?
+            .and_then(|node| u32::try_from(node).ok()),
     })
 }
 
@@ -1309,6 +1353,9 @@ fn turn_from_row(row: &Row<'_>) -> Result<Turn> {
                 row.get("agent_session_id")?,
                 "ai_conversation_turns.agent_session_id",
             )?,
+            node: row
+                .get::<_, Option<i64>>("node")?
+                .and_then(|node| u32::try_from(node).ok()),
             text: row.get("text")?,
             reasoning: decode_reasoning(row.get("reasoning")?),
             tool_calls: decode_tool_calls(row.get("tool_calls")?),

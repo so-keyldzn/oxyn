@@ -232,6 +232,7 @@ mod tests {
         assert_eq!(
             tables,
             [
+                "ai_conversation_nodes",
                 "ai_conversation_turns",
                 "ai_conversations",
                 "ai_egress",

@@ -248,6 +248,12 @@ impl Store {
         // Booléen — donc l'entier 1 — plutôt que la chaîne `ON` : le pragma
         // accepte les deux, l'entier ne dépend pas de la citation.
         conn.pragma_update(None, "foreign_keys", true)?;
+        // Without it, a deleted row stays readable in SQLite's free pages: an
+        // answer erased because its exchange received a sample, a purged
+        // history, a deleted conversation would all still be in the file for
+        // anyone with a hex editor. The cost is a write of zeros per freed
+        // page, on a store written in small touches.
+        conn.pragma_update(None, "secure_delete", true)?;
         Ok(())
     }
 

@@ -106,6 +106,18 @@ pub enum StoreError {
         limit: u64,
     },
 
+    /// Écriture d'une réponse, d'un raisonnement ou d'un appel d'outil pour un
+    /// échange qui a reçu un échantillon de lignes.
+    ///
+    /// Décision de l'utilisateur : un tel échange ne garde que sa question, ses
+    /// compteurs et son issue. Le refus est ici **et** dans un déclencheur du
+    /// fichier ; il n'y a rien à retenter, l'appelant ne devait pas écrire.
+    #[error("exchange {node} kept an approved sample: its answer is not stored")]
+    SampleWithheld {
+        /// L'échange visé.
+        node: u32,
+    },
+
     /// Un encodage ou un décodage JSON a échoué (paramètres de connexion,
     /// étiquette d'énumération, instantané de catalogue).
     #[error("local state JSON: {0}")]
@@ -132,7 +144,11 @@ impl From<StoreError> for OxynError {
             | StoreError::SecretInParams { .. }
             | StoreError::TooLarge { .. } => Self::Config(message),
             StoreError::Corrupted { .. } | StoreError::Json(_) => Self::Serialization(message),
-            StoreError::Sqlite(_) | StoreError::Migration { .. } => Self::Internal(message),
+            // Un appelant qui écrit la réponse d'un échange retenu a un défaut :
+            // l'utilisateur n'a rien à corriger.
+            StoreError::Sqlite(_)
+            | StoreError::Migration { .. }
+            | StoreError::SampleWithheld { .. } => Self::Internal(message),
         }
     }
 }

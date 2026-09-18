@@ -45,8 +45,8 @@ pub struct RetentionPolicy {
     pub max_age_days: Option<u32>,
     /// Total transcript bytes kept per workspace.
     ///
-    /// Counted on the text, the reasoning and the tool-call renderings — what
-    /// actually grows. Row overhead and indexes are not in it, so the file is a
+    /// Counted on the text, the reasoning, the tool-call renderings and the
+    /// exchanges' questions — what actually grows. Row overhead and indexes are not in it, so the file is a
     /// little larger than this number, never much.
     ///
     /// The most recently active conversation is admitted even when it alone
@@ -201,12 +201,16 @@ impl Conversations<'_> {
     pub fn bytes_held(&self, workspace: WorkspaceId) -> Result<u64> {
         self.store.with_connection(|connection| {
             let total: i64 = connection.query_row(
-                "SELECT COALESCE(SUM(length(CAST(t.text AS BLOB))
+                "SELECT COALESCE((SELECT SUM(length(CAST(t.text AS BLOB))
                                    + length(CAST(COALESCE(t.reasoning, '') AS BLOB))
-                                   + length(CAST(COALESCE(t.tool_calls, '') AS BLOB))), 0)
+                                   + length(CAST(COALESCE(t.tool_calls, '') AS BLOB)))
                    FROM ai_conversation_turns t
                    JOIN ai_conversations c ON c.id = t.conversation_id
-                  WHERE c.workspace_id = ?1",
+                  WHERE c.workspace_id = ?1), 0)
+                  + COALESCE((SELECT SUM(length(CAST(n.question AS BLOB)))
+                   FROM ai_conversation_nodes n
+                   JOIN ai_conversations c ON c.id = n.conversation_id
+                  WHERE c.workspace_id = ?1), 0)",
                 params![workspace.to_string()],
                 |row| row.get(0),
             )?;
@@ -225,7 +229,10 @@ fn weigh(connection: &rusqlite::Connection, workspace: WorkspaceId) -> Result<Ve
                                    + length(CAST(COALESCE(t.reasoning, '') AS BLOB))
                                    + length(CAST(COALESCE(t.tool_calls, '') AS BLOB)))
                             FROM ai_conversation_turns t
-                           WHERE t.conversation_id = c.id), 0) AS bytes
+                           WHERE t.conversation_id = c.id), 0)
+                + COALESCE((SELECT SUM(length(CAST(n.question AS BLOB)))
+                              FROM ai_conversation_nodes n
+                             WHERE n.conversation_id = c.id), 0) AS bytes
            FROM ai_conversations c
           WHERE c.workspace_id = ?1
           ORDER BY c.updated_at DESC, c.id DESC",

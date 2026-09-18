@@ -683,39 +683,33 @@ fn la_lecture_paginee_rend_tout_le_fil_et_rien_de_plus() {
 fn un_fichier_anterieur_aux_bornes_s_ouvre_et_se_relit() {
     let racine = tempfile::tempdir().expect("répertoire temporaire");
     let chemin = racine.path().join("oxyn.sqlite3");
-    let id;
+    let id = ConversationId::new();
     {
-        let store = Store::open_at(&chemin).expect("ouverture");
-        let workspace = store.workspaces().create("atelier").expect("workspace").id;
-        let connexion = ConnectionConfig::new("base", DriverId::postgres());
-        store
-            .connections()
-            .save(workspace, &connexion)
-            .expect("connexion");
-        id = fil(&store, workspace, connexion.id);
-        // Revenir à l'état d'un fichier en version 10 : sans les déclencheurs.
-        store
-            .with_connection(|conn| {
-                conn.execute_batch(
-                    "DROP TRIGGER ai_conversation_turns_bounds_insert;
-                     DROP TRIGGER ai_conversation_turns_bounds_update;
-                     DROP TABLE ai_egress;
-                     DELETE FROM schema_version WHERE version >= 11;",
-                )?;
-                conn.execute(
-                    "INSERT INTO ai_conversation_turns
-                         (conversation_id, ordinal, ts, role, privacy_tier, text, stop_reason)
-                     VALUES (?1, 0, ?2, 'assistant', 'metadata', 'réponse', ?3),
-                            (?1, 700, ?2, 'user', 'metadata', 'au-delà de la borne', NULL)",
-                    rusqlite::params![
-                        id.to_string(),
-                        Utc::now(),
-                        format!("{{\"Other\":\"{}\"}}", "x".repeat(8 * 1024 * 1024))
-                    ],
-                )?;
-                Ok(())
-            })
-            .expect("état d'une version antérieure");
+        // Un fichier en version 10 : ni bornes, ni arbre.
+        let conn = crate::schema::file_at_version(&chemin, 10);
+        let atelier = oxyn_core::WorkspaceId::new();
+        // La forme exacte qu'écrit rusqlite pour un `DateTime<Utc>`.
+        let quand = Utc::now().format("%F %T%.f%:z");
+        conn.execute_batch(&format!(
+            "INSERT INTO workspaces VALUES ('{atelier}', 'atelier', '{quand}', '{quand}');
+             INSERT INTO ai_conversations
+                 (id, workspace_id, destination_kind, destination_label, title,
+                  created_at, updated_at)
+             VALUES ('{id}', '{atelier}', 'provider', 'Anthropic', 'Fil', '{quand}', '{quand}');"
+        ))
+        .expect("fil d'une version antérieure");
+        conn.execute(
+            "INSERT INTO ai_conversation_turns
+                 (conversation_id, ordinal, ts, role, privacy_tier, text, stop_reason)
+             VALUES (?1, 0, ?2, 'assistant', 'metadata', 'réponse', ?3),
+                    (?1, 700, ?2, 'user', 'metadata', 'au-delà de la borne', NULL)",
+            rusqlite::params![
+                id.to_string(),
+                Utc::now(),
+                format!("{{\"Other\":\"{}\"}}", "x".repeat(8 * 1024 * 1024))
+            ],
+        )
+        .expect("tours d'une version antérieure");
     }
 
     let store = Store::open_at(&chemin).expect("l'ouverture ne doit pas échouer");

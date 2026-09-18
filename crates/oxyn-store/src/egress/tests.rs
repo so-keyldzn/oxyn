@@ -379,25 +379,21 @@ fn le_debug_montre_la_source_et_les_noms_seulement() {
 fn un_etat_local_en_v11_s_ouvre_et_gagne_un_journal_vide() {
     let racine = tempfile::tempdir().expect("répertoire temporaire");
     let chemin = racine.path().join("oxyn.sqlite3");
-    let connexion;
+    let connexion = ConnectionId::new();
     {
-        let store = Store::open_at(&chemin).expect("ouverture");
-        let workspace = store.workspaces().create("atelier").expect("workspace").id;
-        let config = ConnectionConfig::new("base client", DriverId::postgres());
-        store
-            .connections()
-            .save(workspace, &config)
-            .expect("connexion");
-        connexion = config.id;
-        store
-            .with_connection(|conn| {
-                conn.execute_batch(
-                    "DROP TABLE ai_egress;
-                     DELETE FROM schema_version WHERE version >= 12;",
-                )?;
-                Ok(())
-            })
-            .expect("état d'une version antérieure");
+        let conn = crate::schema::file_at_version(&chemin, 11);
+        let atelier = oxyn_core::WorkspaceId::new();
+        // La forme exacte qu'écrit rusqlite pour un `DateTime<Utc>`.
+        let quand = Utc::now().format("%F %T%.f%:z");
+        conn.execute_batch(&format!(
+            "INSERT INTO workspaces VALUES ('{atelier}', 'atelier', '{quand}', '{quand}');
+             INSERT INTO connections
+                 (id, workspace_id, name, driver, environment, params, read_only,
+                  created_at, updated_at)
+             VALUES ('{connexion}', '{atelier}', 'base client', 'postgres', 'production', '{{}}', 0,
+                     '{quand}', '{quand}');"
+        ))
+        .expect("état d'une version antérieure");
     }
 
     let store = Store::open_at(&chemin).expect("montée jusqu'à la version courante");
