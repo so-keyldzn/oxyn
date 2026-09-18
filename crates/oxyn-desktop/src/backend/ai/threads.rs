@@ -1,13 +1,17 @@
 //! The conversations of a window: what they said, and what they remember.
 //!
-//! # Held in memory, and why not persisted
+//! # Held here, written there
 //!
-//! Nothing in the store describes a conversation, and inventing a file for it
-//! here would be a closed format written on the side of the workspace
-//! ([I-11](../../../../../CLAUDE.md#i-11)). The history therefore lives as long
-//! as the process: it survives a webview reload, and not a restart. What it
-//! would take to persist it is a store table with an open schema, decided with
-//! the store — not this module.
+//! This module holds what a conversation is **while it runs**: its events, its
+//! provider session, the agent it keeps alive. What survives the process is
+//! written by `persistence` to the workspace's own tables, whose schema is
+//! open and readable without Oxyn ([I-11](../../../../../CLAUDE.md#i-11)).
+//!
+//! A thread's identity is the store's `ConversationId` from the first
+//! question, whether or not a row is ever written for it: the panel keeps that
+//! id across a restart. A conversation read back holds no provider session —
+//! nothing read from disk goes to a model — and its nodes are marked as such,
+//! so the next question starts over and says so.
 //!
 //! # What a node remembers
 //!
@@ -22,14 +26,14 @@ use std::cmp::Reverse;
 use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Instant;
 
 use oxyn_ai::AgentSession;
 use oxyn_ai::external::mcp::ToolTurns;
 use oxyn_ai::external::session::ExternalSession;
 use oxyn_core::{
-    Actor, AgentId, AgentSessionId, CancelToken, ConnectionId, Environment, PrivacyTier, ProviderId,
+    Actor, AgentId, AgentSessionId, CancelToken, ConnectionId, ConversationId, Environment,
+    PrivacyTier, ProviderId,
 };
 use oxyn_exec::Executor;
 use parking_lot::Mutex;
@@ -72,7 +76,6 @@ const MAX_TITLE_CHARS: usize = 80;
 #[derive(Default)]
 pub(crate) struct AiState {
     threads: Mutex<HashMap<ConnectionId, Vec<Arc<Thread>>>>,
-    next_id: AtomicU64,
     /// Row samples offered and not yet presented.
     pub(crate) samples: super::samples::SampleGrants,
 }
@@ -96,7 +99,9 @@ impl AiState {
             return self.find(connection, id);
         }
         let thread = Arc::new(Thread {
-            id: self.next_id.fetch_add(1, Ordering::Relaxed) + 1,
+            // The store's identity from the start, whether or not a row is
+            // ever written for it: the panel keeps this id across a restart.
+            id: ConversationId::new(),
             created_at_ms: now_ms(),
             state: Mutex::new(ThreadState::default()),
         });
@@ -117,7 +122,7 @@ impl AiState {
     }
 
     pub(crate) fn find(&self, connection: ConnectionId, id: &str) -> Result<Arc<Thread>, IpcError> {
-        let id: u64 = id
+        let id: ConversationId = id
             .parse()
             .map_err(|_| IpcError::invalid("This conversation does not exist"))?;
         self.threads
@@ -136,6 +141,51 @@ impl AiState {
             .unwrap_or_default();
         summaries.sort_by_key(|summary| Reverse(summary.updated_at_ms));
         summaries
+    }
+
+    /// Takes a conversation read from the workspace into this window.
+    ///
+    /// Replaces nothing: a conversation already open here is the live one, and
+    /// the caller looks it up first.
+    pub(crate) fn adopt(&self, connection: ConnectionId, restored: Restored) -> Arc<Thread> {
+        let mut state = ThreadState {
+            stored: true,
+            title: restored.title,
+            renamed: true,
+            updated_at_ms: restored.updated_at_ms,
+            ..ThreadState::default()
+        };
+        for (index, node) in restored.nodes.iter().enumerate() {
+            let own = u32::try_from(index).unwrap_or(u32::MAX);
+            state.stored_nodes.insert(own, node.stored);
+            let parent = node.parent.and_then(|stored| {
+                restored
+                    .nodes
+                    .iter()
+                    .position(|held| held.stored == stored)
+                    .and_then(|found| u32::try_from(found).ok())
+            });
+            state.selections.insert(parent, own);
+            state.nodes.push(Node {
+                parent,
+                question: node.question.clone(),
+                log: node.events.clone(),
+                memory: None,
+                loaded: true,
+                withheld: node.withheld,
+            });
+        }
+        let thread = Arc::new(Thread {
+            id: restored.id,
+            created_at_ms: restored.created_at_ms,
+            state: Mutex::new(state),
+        });
+        self.threads
+            .lock()
+            .entry(connection)
+            .or_default()
+            .push(Arc::clone(&thread));
+        thread
     }
 
     /// Removes a conversation, stopping what it runs and the agent it keeps.
@@ -180,7 +230,7 @@ impl AiState {
 
     /// Ends the external agents other conversations of this connection keep
     /// alive: one agent process per connection, not one per conversation.
-    pub(crate) fn release_agents_except(&self, connection: ConnectionId, keep: u64) {
+    pub(crate) fn release_agents_except(&self, connection: ConnectionId, keep: ConversationId) {
         let threads = self
             .threads
             .lock()
@@ -195,9 +245,29 @@ impl AiState {
     }
 }
 
+/// One exchange, as it comes back from the workspace.
+pub(crate) struct RestoredNode {
+    /// Its node in the store, which the window keeps mapped to its own.
+    pub(crate) stored: u32,
+    pub(crate) parent: Option<u32>,
+    pub(crate) question: String,
+    pub(crate) withheld: bool,
+    pub(crate) events: Vec<AiEvent>,
+}
+
+/// A conversation as it comes back from the workspace.
+pub(crate) struct Restored {
+    pub(crate) id: ConversationId,
+    pub(crate) title: String,
+    pub(crate) created_at_ms: u64,
+    pub(crate) updated_at_ms: u64,
+    /// The branch shown, root first.
+    pub(crate) nodes: Vec<RestoredNode>,
+}
+
 /// One conversation.
 pub(crate) struct Thread {
-    pub(crate) id: u64,
+    pub(crate) id: ConversationId,
     created_at_ms: u64,
     state: Mutex<ThreadState>,
 }
@@ -215,6 +285,15 @@ impl fmt::Debug for Thread {
 
 #[derive(Default)]
 struct ThreadState {
+    /// Whether the thread's header is in the store. Its identity is
+    /// [`Thread::id`] either way.
+    stored: bool,
+    /// This window's node, and the store's. They agree in the ordinary case
+    /// and diverge as soon as one write fails, which is why they are mapped
+    /// rather than assumed equal.
+    stored_nodes: HashMap<u32, u32>,
+    /// Whether the panel has already been told this thread is not being kept.
+    warned_unsaved: bool,
     title: String,
     renamed: bool,
     updated_at_ms: u64,
@@ -236,6 +315,9 @@ struct Node {
     question: String,
     log: Vec<AiEvent>,
     memory: Option<Memory>,
+    /// Read back from the workspace: it has no provider session, and the
+    /// question that follows it starts from a fresh context.
+    loaded: bool,
     /// This exchange used an approved sample: it leaves no memory, and the
     /// ones after it do not reach past it for an older one.
     withheld: bool,
@@ -342,6 +424,71 @@ impl Thread {
         self.id.to_string()
     }
 
+    /// The title the history shows, as it stands.
+    pub(crate) fn title(&self) -> String {
+        self.state.lock().title.clone()
+    }
+
+    /// The thread's row in the store, once its header is written.
+    pub(crate) fn conversation(&self) -> Option<ConversationId> {
+        self.state.lock().stored.then_some(self.id)
+    }
+
+    pub(crate) fn remember_conversation(&self) {
+        self.state.lock().stored = true;
+    }
+
+    /// The store's node for one of this window's, when it was written.
+    pub(crate) fn stored_node(&self, node: u32) -> Option<u32> {
+        self.state.lock().stored_nodes.get(&node).copied()
+    }
+
+    pub(crate) fn map_node(&self, node: u32, stored: u32) {
+        self.state.lock().stored_nodes.insert(node, stored);
+    }
+
+    /// Says once, per thread, that nothing of it is being written: a line the
+    /// user reads rather than a question refused.
+    pub(crate) fn warn_unsaved(&self) -> bool {
+        let mut state = self.state.lock();
+        let first = !state.warned_unsaved;
+        state.warned_unsaved = true;
+        first
+    }
+
+    /// The events of a node, as the panel showed them.
+    pub(crate) fn log_of(&self, node: u32) -> Vec<AiEvent> {
+        self.state
+            .lock()
+            .nodes
+            .get(node as usize)
+            .map(|found| found.log.clone())
+            .unwrap_or_default()
+    }
+
+    /// Whether the exchange a question follows was read back from the
+    /// workspace, and therefore left no session to continue.
+    pub(crate) fn memory_restored(&self, parent: Option<u32>) -> bool {
+        let state = self.state.lock();
+        parent
+            .and_then(|index| state.nodes.get(index as usize))
+            .is_some_and(|node| node.loaded)
+    }
+
+    /// Whether this exchange received an approved sample.
+    pub(crate) fn is_withheld(&self, node: u32) -> bool {
+        self.state
+            .lock()
+            .nodes
+            .get(node as usize)
+            .is_some_and(|found| found.withheld)
+    }
+
+    /// The agent session answering in this thread, when an agent does.
+    pub(crate) fn agent_session(&self) -> Option<AgentSessionId> {
+        self.state.lock().agent.as_ref().map(|link| link.actor.1)
+    }
+
     pub(crate) fn is_running(&self) -> bool {
         self.state.lock().running.is_some()
     }
@@ -394,6 +541,7 @@ impl Thread {
             question: question.to_owned(),
             log: Vec::new(),
             memory: None,
+            loaded: false,
             withheld: false,
         });
         state.selections.insert(parent, node);

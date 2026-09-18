@@ -183,6 +183,46 @@ function EntryView({
       )
     case "memoryReset":
       return <AssistantMemoryReset reason={entry.reason} />
+    case "notSaved":
+      return (
+        <Marker role="note" className="items-start text-xs">
+          <span>
+            This conversation is not being saved to the workspace. The assistant
+            still answers; nothing of it will be here next time.
+          </span>
+        </Marker>
+      )
+    case "olderNotLoaded":
+      return (
+        <Marker role="note" className="items-start text-xs">
+          <span>
+            Older exchanges of this conversation are in the workspace and not
+            loaded here.
+          </span>
+        </Marker>
+      )
+    case "answerNotKept":
+      return (
+        <Marker role="note" className="items-start text-xs">
+          <span>
+            This answer used a data sample and was not kept. The workspace holds
+            the question and the size of the sample, nothing else.
+          </span>
+        </Marker>
+      )
+    case "restoredCall":
+      return (
+        <Marker className="items-start text-xs">
+          <span className="min-w-0">
+            <span className="font-mono">{entry.tool}</span> · {entry.summary}
+            {entry.statement ? (
+              <span className="mt-1 block font-mono break-all opacity-80">
+                {entry.statement}
+              </span>
+            ) : null}
+          </span>
+        </Marker>
+      )
     case "sampleSent":
       return (
         <Marker role="note" className="items-start text-xs">

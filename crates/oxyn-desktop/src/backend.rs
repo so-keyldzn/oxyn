@@ -128,6 +128,18 @@ impl Backend {
         )
     }
 
+    /// A workspace on disk, for the tests that must read the file itself.
+    ///
+    /// # Errors
+    /// If the state cannot be created at `path`.
+    #[cfg(test)]
+    pub(crate) fn open_at(path: &std::path::Path) -> Result<Self> {
+        Self::assemble(
+            Arc::new(Store::open_at(path).context("opening workspace state")?),
+            Arc::new(oxyn_secrets::MemorySecretStore::new()),
+        )
+    }
+
     fn assemble(store: Arc<Store>, secrets: Arc<dyn SecretStore>) -> Result<Self> {
         let mut drivers = DriverRegistry::new();
         drivers

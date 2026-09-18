@@ -79,9 +79,8 @@ const STOP_GRACE: Duration = Duration::from_secs(2);
 /// cancelled, then their tasks aborted right after, without waiting: the
 /// executor cancels on the database server once its `drain` returns, so an
 /// aborted call reaches the server only through the executor's abandon guard.
-// TODO(2026-09-30, débloqué par la garde d'abandon de l'exécuteur, confiée à
-// `garde-abandon` dans `oxyn-exec`) : vérifier qu'un appel abandonné ici annule
-// bien sa requête sur le serveur, et ajouter le test de bout en bout.
+// TODO(2026-09-30, unblocked by the executor's abandon guard, now in oxyn-exec):
+// prove end to end that a call aborted here cancels its query on the server.
 struct CloseOnDrop(ToolTurns);
 
 impl Drop for CloseOnDrop {

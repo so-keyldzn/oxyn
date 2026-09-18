@@ -22,6 +22,7 @@ import type {
   MemoryReset,
   PlanEntry,
   SignInHelp,
+  ToolStatus,
 } from "@/lib/ipc/ai"
 import type { CommandOutcome, Environment, PrivacyTier } from "@/lib/ipc/types"
 
@@ -136,6 +137,21 @@ export type Entry =
   | { kind: "memoryReset"; key: string; reason: MemoryReset }
   /** Counts only: what the sample was is not kept, here or in the backend. */
   | { kind: "sampleSent"; key: string; rows: number; columns: number }
+  /** Said once per conversation: nothing of it is written to the workspace. */
+  | { kind: "notSaved"; key: string }
+  /** Reopened: what came before is on disk, and not loaded here. */
+  | { kind: "olderNotLoaded"; key: string }
+  /** Reopened: this exchange used a sample, so no answer was written. */
+  | { kind: "answerNotKept"; key: string }
+  | {
+      kind: "restoredCall"
+      key: string
+      tool: string
+      summary: string
+      statement: string | null
+      status: ToolStatus
+      errorClass: ErrorClass | null
+    }
   | { kind: "ended"; key: string; ending: Ending }
   | FailedEntry
 
@@ -280,6 +296,22 @@ export function reduce(current: Exchange, event: AiEvent): Exchange {
         kind: "memoryReset",
         key: `m-${at}`,
         reason: event.reason,
+      })
+    case "notSaved":
+      return push({ kind: "notSaved", key: `unsaved-${at}` })
+    case "olderNotLoaded":
+      return push({ kind: "olderNotLoaded", key: `older-${at}` })
+    case "answerNotKept":
+      return push({ kind: "answerNotKept", key: `notkept-${at}` })
+    case "restoredCall":
+      return push({
+        kind: "restoredCall",
+        key: `restored-${at}`,
+        tool: event.tool,
+        summary: event.summary,
+        statement: event.statement,
+        status: event.status,
+        errorClass: event.errorClass,
       })
     case "sampleApproved":
       return push({
@@ -755,4 +787,6 @@ export const MEMORY_RESET_LINES: Record<MemoryReset, string> = {
     "Someone else answers from here: the earlier answers are not part of what it knows.",
   sampleNotKept:
     "An approved sample served one question only: the assistant answers this one without the exchanges around it.",
+  restarted:
+    "This conversation was reopened from the workspace. What the assistant was told is not kept, so it starts over from here.",
 }

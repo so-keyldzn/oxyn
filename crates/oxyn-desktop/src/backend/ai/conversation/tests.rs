@@ -1062,7 +1062,16 @@ mod approved_samples {
 
     fn fixture() -> Fixture {
         let runtime = runtime();
-        let backend = Backend::open_temporary().expect("temporary backend");
+        let backend = {
+            let _guard = runtime.enter();
+            Backend::open_temporary().expect("temporary backend")
+        };
+        furnished(runtime, backend)
+    }
+
+    /// The `customers` and `wide` tables, the catalog read, a local provider
+    /// declared — on whichever workspace `backend` opened.
+    fn furnished(runtime: tokio::runtime::Runtime, backend: Backend) -> Fixture {
         let (open, connection, session, customers, wide, provider) = {
             let _guard = runtime.enter();
             let open = open(&runtime, &backend, Environment::Local);
@@ -1890,5 +1899,366 @@ mod approved_samples {
             "nothing reached the provider"
         );
         assert!(fixture.egress().is_empty());
+    }
+
+    #[test]
+    fn a_failed_read_says_so_without_the_servers_words() {
+        let fixture = fixture();
+        let _guard = fixture.runtime.enter();
+        let request = fixture.offer(None, None);
+        let config = fixture.config();
+        // Gone between the offer and the question: the preview fails on the
+        // server, whose message names what it could not read.
+        let drop = CommandId::new();
+        let outcome = fixture
+            .runtime
+            .block_on(fixture.backend.execute(
+                drop,
+                fixture.connection,
+                fixture.session,
+                "DROP TABLE customers".to_owned(),
+            ))
+            .expect("submitted");
+        if matches!(outcome, crate::ipc::CommandOutcome::NeedsApproval { .. }) {
+            fixture
+                .runtime
+                .block_on(fixture.backend.decide(drop, true))
+                .expect("approved");
+        }
+        let thread = fixture
+            .backend
+            .inner
+            .ai
+            .thread_for(fixture.connection, None)
+            .expect("a conversation");
+        let (channel, _received) = recording();
+        let node = fixture.begin(&thread, None, channel);
+        let cancel = CancelToken::new();
+        let run = Run {
+            inner: &fixture.backend.inner,
+            thread: &thread,
+            node,
+            parent: None,
+            connection: &config,
+            cancel: &cancel,
+        };
+        let Err(failed) = fixture.present(
+            &run,
+            &approval(&request, &["email"]),
+            None,
+            &fixture.stored(),
+        ) else {
+            panic!("the table is gone");
+        };
+        assert_eq!(failed.message, SAMPLE_READ_FAILED);
+        assert!(matches!(failed.category, FailureCategory::Refused));
+        assert!(fixture.egress().is_empty());
+    }
+
+    /// A fixture whose workspace is a real file, to read what was written.
+    struct OnDisk {
+        _home: tempfile::TempDir,
+        fixture: Fixture,
+    }
+
+    fn on_disk() -> OnDisk {
+        let home = tempfile::tempdir().expect("a temporary workspace");
+        let path = home.path().join("workspace.sqlite3");
+        let runtime = runtime();
+        let backend = {
+            let _guard = runtime.enter();
+            Backend::open_at(&path).expect("a workspace on disk")
+        };
+        OnDisk {
+            _home: home,
+            fixture: furnished(runtime, backend),
+        }
+    }
+
+    impl OnDisk {
+        fn bytes(&self) -> Vec<u8> {
+            let store = self.fixture.backend.inner.executor.store();
+            let path = store.path().expect("a file").to_path_buf();
+            // Everything committed sits in the file or its log; both are read.
+            let mut bytes = std::fs::read(&path).unwrap_or_default();
+            for suffix in ["-wal", "-shm"] {
+                let mut side = path.clone().into_os_string();
+                side.push(suffix);
+                bytes.extend(std::fs::read(std::path::PathBuf::from(side)).unwrap_or_default());
+            }
+            bytes
+        }
+    }
+
+    fn holds(bytes: &[u8], needle: &str) -> bool {
+        bytes
+            .windows(needle.len())
+            .any(|window| window == needle.as_bytes())
+    }
+
+    #[test]
+    fn a_withheld_exchange_leaves_no_answer_in_the_workspace_file() {
+        let disk = on_disk();
+        let fixture = &disk.fixture;
+        let _guard = fixture.runtime.enter();
+        let config = fixture.config();
+        let thread = fixture
+            .backend
+            .inner
+            .ai
+            .thread_for(fixture.connection, None)
+            .expect("a conversation");
+        let (channel, _received) = recording();
+        let node = fixture.begin(&thread, None, channel);
+        let resolved = fixture
+            .runtime
+            .block_on(fixture.backend.resolve_destination(
+                &DestinationChoice::Provider {
+                    id: fixture.provider.clone(),
+                    model: None,
+                    effort: None,
+                },
+                PrivacyTier::Sampled,
+            ))
+            .unwrap_or_else(|error| panic!("{}", error.message));
+        assert!(fixture.runtime.block_on(fixture.backend.save_question(
+            &thread,
+            &config,
+            &resolved,
+            None,
+            node,
+            "which plans do customers use?",
+        )));
+
+        // The answer an approved sample produces: the model quotes the rows,
+        // and a tool call carries them in its statement.
+        thread.withhold_memory(node);
+        thread.emit(
+            node,
+            AiEvent::SampleApproved {
+                rows: 5,
+                columns: 2,
+            },
+        );
+        thread.emit(
+            node,
+            AiEvent::TextDelta {
+                // Marks of the answer alone: the rows themselves are also in
+                // the file, written by the user's own `INSERT`.
+                text: "ANSWER-QUOTES-A-ROW".to_owned(),
+            },
+        );
+        thread.emit(
+            node,
+            AiEvent::ToolCall {
+                call: 0,
+                tool: "execute_query".to_owned(),
+                command: "Execute".to_owned(),
+                statement: Some(
+                    "SELECT secret FROM customers WHERE email = 'STATEMENT-QUOTES-A-ROW'"
+                        .to_owned(),
+                ),
+                connection: fixture.open.name.clone(),
+                environment: Some(fixture.open.environment),
+                mutating: false,
+            },
+        );
+        thread.emit(
+            node,
+            AiEvent::Finished {
+                ending: Ending::Answered {
+                    turns: 1,
+                    truncated: false,
+                    cut: None,
+                },
+            },
+        );
+        fixture
+            .runtime
+            .block_on(super::super::persistence::save_answer(
+                &fixture.backend.inner.executor,
+                &thread,
+                node,
+                PrivacyTier::Sampled,
+                None,
+            ));
+
+        let bytes = disk.bytes();
+        assert!(
+            holds(&bytes, "which plans do customers use?"),
+            "the question is kept"
+        );
+        assert!(
+            !holds(&bytes, "ANSWER-QUOTES-A-ROW"),
+            "the answer of a withheld exchange reached the file"
+        );
+        assert!(
+            !holds(&bytes, "STATEMENT-QUOTES-A-ROW"),
+            "a tool statement of a withheld exchange reached the file"
+        );
+
+        // Reopened, it says what happened and shows no answer.
+        fixture.backend.inner.ai.forget(fixture.connection);
+        let (channel, _live) = recording();
+        let view = fixture
+            .runtime
+            .block_on(
+                fixture
+                    .backend
+                    .ai_open_thread(fixture.connection, &thread.id(), channel),
+            )
+            .unwrap_or_else(|error| panic!("{}", error.message));
+        let reopened = serde_json::to_string(&view).expect("serializable");
+        assert!(reopened.contains(r#""kind":"answerNotKept""#), "{reopened}");
+        assert!(
+            reopened.contains(r#""kind":"sampleApproved","rows":5,"columns":2"#),
+            "{reopened}"
+        );
+        assert!(!reopened.contains("ANSWER-QUOTES-A-ROW"), "{reopened}");
+    }
+
+    #[test]
+    fn a_reopened_conversation_answers_from_a_fresh_context() {
+        let disk = on_disk();
+        let fixture = &disk.fixture;
+        let _guard = fixture.runtime.enter();
+        let config = fixture.config();
+        let thread = fixture
+            .backend
+            .inner
+            .ai
+            .thread_for(fixture.connection, None)
+            .expect("a conversation");
+        let (channel, _received) = recording();
+        let first = fixture.begin(&thread, None, channel);
+        let resolved = fixture
+            .runtime
+            .block_on(fixture.backend.resolve_destination(
+                &DestinationChoice::Provider {
+                    id: fixture.provider.clone(),
+                    model: None,
+                    effort: None,
+                },
+                PrivacyTier::Sampled,
+            ))
+            .unwrap_or_else(|error| panic!("{}", error.message));
+        assert!(fixture.runtime.block_on(fixture.backend.save_question(
+            &thread,
+            &config,
+            &resolved,
+            None,
+            first,
+            "how many customers?",
+        )));
+        thread.emit(
+            first,
+            AiEvent::TextDelta {
+                text: "EARLIER-ANSWER-MARK".to_owned(),
+            },
+        );
+        thread.emit(
+            first,
+            AiEvent::Finished {
+                ending: Ending::Answered {
+                    turns: 1,
+                    truncated: false,
+                    cut: None,
+                },
+            },
+        );
+        fixture
+            .runtime
+            .block_on(super::super::persistence::save_answer(
+                &fixture.backend.inner.executor,
+                &thread,
+                first,
+                PrivacyTier::Sampled,
+                None,
+            ));
+        thread.finish(first);
+
+        // As after a restart: this window knows nothing of it any more.
+        fixture.backend.inner.ai.forget(fixture.connection);
+        let (channel, received) = recording();
+        let view = fixture
+            .runtime
+            .block_on(fixture.backend.ai_open_thread(
+                fixture.connection,
+                &thread.id(),
+                channel.clone(),
+            ))
+            .unwrap_or_else(|error| panic!("{}", error.message));
+        assert_eq!(view.nodes.len(), 1, "the branch comes back");
+        let shown = serde_json::to_string(&view).expect("serializable");
+        assert!(shown.contains("EARLIER-ANSWER-MARK"), "{shown}");
+
+        let reopened = fixture
+            .backend
+            .inner
+            .ai
+            .find(fixture.connection, &thread.id())
+            .expect("adopted");
+        let next = fixture.begin(&reopened, Some(0), channel);
+        let run = Run {
+            inner: &fixture.backend.inner,
+            thread: &reopened,
+            node: next,
+            parent: Some(0),
+            connection: &config,
+            cancel: &CancelToken::new(),
+        };
+        let (dialogue, _) = run
+            .prepare_dialogue(
+                &sql_agent(),
+                fixture.session,
+                "and now?",
+                None,
+                PrivacyTier::Sampled,
+            )
+            .unwrap_or_else(|failure| panic!("{}", failure.message));
+        let prompt = prompt_of(&dialogue);
+        assert!(
+            !prompt.contains("EARLIER-ANSWER-MARK"),
+            "nothing read from disk goes back to a model: {prompt}"
+        );
+        let events = received.lock().join("\n");
+        assert!(events.contains(r#""reason":"restarted""#), "{events}");
+    }
+
+    #[test]
+    fn an_egress_entry_names_the_conversation_that_sent_it() {
+        let fixture = fixture();
+        let _guard = fixture.runtime.enter();
+        let (listener, port) = listening();
+        let provider = fixture.declare_at(port);
+        let request = fixture.offer_of(&fixture.customers, &provider);
+        let (started, received) = fixture.ask(question_with(
+            &fixture,
+            &provider,
+            approved(&request, &["email".to_owned()]),
+        ));
+        let started = started
+            .map_err(|error| error.message)
+            .expect("the question starts");
+        for _ in 0..400 {
+            if listener.accept().is_ok() {
+                break;
+            }
+            fixture
+                .runtime
+                .block_on(tokio::time::sleep(std::time::Duration::from_millis(25)));
+        }
+        let recorded = fixture.egress();
+        assert_eq!(recorded.len(), 1, "{}", received.lock().join("\n"));
+        assert_eq!(
+            recorded[0].conversation.map(|id| id.to_string()),
+            Some(started.thread.clone()),
+            "the entry names its conversation"
+        );
+        assert_eq!(recorded[0].node, Some(0));
+        fixture
+            .backend
+            .ai_cancel(fixture.connection, &started.thread)
+            .expect("cancelled");
     }
 }

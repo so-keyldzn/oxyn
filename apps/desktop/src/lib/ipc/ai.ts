@@ -363,6 +363,7 @@ export const MemoryReset = z.enum([
   "agentRestarted",
   "destinationChanged",
   "sampleNotKept",
+  "restarted",
 ])
 export type MemoryReset = z.infer<typeof MemoryReset>
 
@@ -488,6 +489,21 @@ export const AiEvent = z.discriminatedUnion("kind", [
     provenance: AgentProvenance.nullable(),
   }),
   z.object({ kind: z.literal("memoryReset"), reason: MemoryReset }),
+  /** This conversation is not written to the workspace; the question still left. */
+  z.object({ kind: z.literal("notSaved") }),
+  /** Reopened: older exchanges of this conversation were not loaded. */
+  z.object({ kind: z.literal("olderNotLoaded") }),
+  /** Reopened: this exchange used a sample, so its answer was never written. */
+  z.object({ kind: z.literal("answerNotKept") }),
+  /** A tool call as the workspace kept it: no connection, no environment, no write flag. */
+  z.object({
+    kind: z.literal("restoredCall"),
+    tool: z.string(),
+    summary: z.string(),
+    statement: z.string().nullable(),
+    status: ToolStatus,
+    errorClass: ErrorClass.nullable(),
+  }),
   /** Counts only: neither a value nor a column name is kept. */
   z.object({
     kind: z.literal("sampleApproved"),

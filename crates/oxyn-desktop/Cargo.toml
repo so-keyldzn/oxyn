@@ -53,3 +53,5 @@ futures.workspace = true
 rstest.workspace = true
 # An in-memory agent session, to hold an agent link the way a launch does.
 agent-client-protocol.workspace = true
+# A workspace on disk, to read the file a conversation is written to.
+tempfile.workspace = true

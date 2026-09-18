@@ -895,3 +895,63 @@ export const ASampleServedOneQuestion: Story = {
     ).toBeVisible()
   },
 }
+
+/** A conversation reopened from the workspace: shown whole, remembered by nobody. */
+export const ReopenedFromTheWorkspace: Story = {
+  args: {
+    state: assistantState(
+      threadOfEvents([
+        {
+          question,
+          events: [
+            { kind: "question", text: question },
+            { kind: "olderNotLoaded" },
+            { kind: "textDelta", text: answer },
+            {
+              kind: "restoredCall",
+              tool: "execute_query",
+              summary: "1 rows, 1 batches",
+              statement: "SELECT count(*) FROM public.clients",
+              status: "completed",
+              errorClass: null,
+            },
+            answered,
+          ],
+        },
+        {
+          question: "And their emails?",
+          events: [
+            { kind: "question", text: "And their emails?" },
+            { kind: "sampleApproved", rows: 5, columns: 2 },
+            { kind: "answerNotKept" },
+            answered,
+          ],
+        },
+        {
+          question: "And now?",
+          events: [
+            { kind: "question", text: "And now?" },
+            { kind: "memoryReset", reason: "restarted" },
+            { kind: "notSaved" },
+            started,
+            { kind: "textDelta", text: answer },
+            answered,
+          ],
+        },
+      ])
+    ),
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    await expect(
+      canvas.getByText(/used a data sample and was not kept/)
+    ).toBeVisible()
+    await expect(
+      canvas.getByText(/Older exchanges of this conversation/)
+    ).toBeVisible()
+    await expect(
+      canvas.getByText(/not being saved to the workspace/)
+    ).toBeVisible()
+    await expect(canvas.getByText(/reopened from the workspace/)).toBeVisible()
+  },
+}

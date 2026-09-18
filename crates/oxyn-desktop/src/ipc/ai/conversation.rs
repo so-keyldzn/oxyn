@@ -425,6 +425,10 @@ pub enum MemoryReset {
     /// An approved row sample serves one question: the exchange that used it
     /// is not remembered, and it does not remember the ones before (ADR-0006).
     SampleNotKept,
+    /// The exchange this one follows was read back from the workspace. What a
+    /// model was told is not written — the store keeps no tool arguments and
+    /// no results — so the conversation starts again from a fresh context.
+    Restarted,
 }
 
 /// An amount and its ISO 4217 currency, as the agent gives them.
@@ -669,6 +673,30 @@ pub enum AiEvent {
     /// The earlier exchanges are not part of this run.
     #[serde(rename_all = "camelCase")]
     MemoryReset { reason: MemoryReset },
+    /// This conversation is not being written to the workspace: the question
+    /// still leaves, and the panel says so once.
+    NotSaved,
+    /// Reopened from the workspace, and older exchanges of this conversation
+    /// were not loaded: the panel holds a bounded number of them.
+    OlderNotLoaded,
+    /// Reopened from the workspace: this exchange used an approved sample, so
+    /// its answer was never written.
+    AnswerNotKept,
+    /// A tool call as the workspace kept it — what the user read of it.
+    ///
+    /// Apart from `toolCall`, and not folded into it: a stored call has no
+    /// environment, no connection and no « writes » flag, because the store
+    /// has no column for them. Folding it in would mean inventing three facts
+    /// per call, and « does not write » is the one no reader should invent.
+    #[serde(rename_all = "camelCase")]
+    RestoredCall {
+        tool: String,
+        /// The report as it was shown.
+        summary: String,
+        statement: Option<String>,
+        status: ToolStatus,
+        error_class: Option<&'static str>,
+    },
     /// The user approved a row sample for this question. Its size only:
     /// neither a value nor a column name is kept in a conversation.
     #[serde(rename_all = "camelCase")]

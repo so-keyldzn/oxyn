@@ -38,6 +38,7 @@ use oxyn_llm::Reach;
 use oxyn_store::{EgressReach, EgressRecord};
 use tauri::ipc::Channel;
 
+use super::persistence;
 use super::samples::{self, Grant, Offer, Presented, Recipient, SampleRefused};
 use super::threads::{AgentLink, LinkedAgent, Memory, Scope, Thread, WithdrawOnRelease};
 use super::{Backend, check_endpoint};
@@ -453,6 +454,24 @@ fn translate(report: DispatchReport) -> DispatchOutcome {
     }
 }
 
+/// The destination as the store records it: the declaration answering this
+/// exchange, named even when it is later removed.
+fn stored_destination(resolved: &Resolved) -> oxyn_store::conversations::Destination {
+    match resolved {
+        Resolved::Provider { config, model, .. } => {
+            oxyn_store::conversations::Destination::provider(
+                config.id.clone(),
+                config.label.clone(),
+                model.clone(),
+            )
+        }
+        Resolved::Agent(agent) => oxyn_store::conversations::Destination::external_agent(
+            agent.id.clone(),
+            agent.label.clone(),
+        ),
+    }
+}
+
 /// Who answers, once resolved against what is declared.
 enum Resolved {
     Provider {
@@ -617,6 +636,17 @@ impl Backend {
             thread: thread.id(),
             node,
         };
+        // Written before the run starts, so an approved sample's egress entry
+        // can name the conversation it left for. A failure is said once per
+        // thread and holds nothing back: a transcript is a comfort, not a
+        // barrier.
+        if !self
+            .save_question(&thread, &config, &resolved, request.parent, node, &question)
+            .await
+            && thread.warn_unsaved()
+        {
+            thread.emit(node, AiEvent::NotSaved);
+        }
 
         let inner = Arc::clone(&self.inner);
         tauri::async_runtime::spawn(async move {
@@ -677,13 +707,89 @@ impl Backend {
                 }
             }
             .await;
+            let wrote = thread.wrote();
+            let failed = result
+                .as_ref()
+                .err()
+                .map(|failure| (failure.category, failure.retryable(wrote)));
             if let Err(failure) = result {
-                let wrote = thread.wrote();
                 thread.emit(node, failure.into_event(wrote));
             }
+            // After the last event of the run: what is written is what the
+            // panel showed.
+            persistence::save_answer(&inner.executor, &thread, node, config.privacy_tier, failed)
+                .await;
             thread.finish(node);
         });
         Ok(started)
+    }
+
+    /// Opens the thread in the store if needed, then writes the question.
+    ///
+    /// Answers whether the exchange is now written: a thread whose header or
+    /// question could not be written keeps answering, and says so once.
+    async fn save_question(
+        &self,
+        thread: &Arc<Thread>,
+        config: &ConnectionConfig,
+        resolved: &Resolved,
+        parent: Option<u32>,
+        node: u32,
+        question: &str,
+    ) -> bool {
+        // A question whose parent was never written would change branch: the
+        // exchange is left out rather than re-parented.
+        let parent_stored = match parent {
+            Some(parent) => match thread.stored_node(parent) {
+                Some(stored) => Some(stored),
+                None => return false,
+            },
+            None => None,
+        };
+        let destination = stored_destination(resolved);
+        let record = persistence::question_of(
+            parent_stored,
+            config.privacy_tier,
+            question,
+            destination.clone(),
+        );
+        let executor = Arc::clone(&self.inner.executor);
+        let id = thread.id;
+        let header = thread.conversation().is_none().then(|| {
+            let mut header = oxyn_store::conversations::Conversation::new(
+                executor.workspace(),
+                destination,
+                thread.title(),
+            )
+            .on_connection(config.id, config.name.clone());
+            // The window's thread and the store's row are one conversation.
+            header.id = id;
+            header
+        });
+        let written = tokio::task::spawn_blocking(move || {
+            let conversations = executor.store().conversations();
+            if let Some(header) = header {
+                conversations.save(&header)?;
+            }
+            let stored = conversations.append_exchange(id, &record)?;
+            // The branch a reopened conversation shows is the one being
+            // written: without it, the thread could not be read back.
+            if let Some(node) = stored {
+                conversations.select(id, Some(node))?;
+            }
+            Ok::<_, oxyn_store::StoreError>(stored)
+        })
+        .await;
+        match written {
+            Ok(Ok(Some(stored))) => {
+                thread.remember_conversation();
+                thread.map_node(node, stored);
+                true
+            }
+            // `None` is a thread deleted elsewhere, an error is a disk that
+            // refused: neither stops the question.
+            _ => false,
+        }
     }
 
     /// Stops what a conversation is running, if anything.
@@ -693,44 +799,120 @@ impl Backend {
 
     /// The conversations of a connection, most recent first.
     #[must_use]
-    pub fn ai_threads(&self, connection: ConnectionId) -> Vec<ThreadSummary> {
-        self.inner.ai.list(connection)
+    pub async fn ai_threads(&self, connection: ConnectionId) -> Vec<ThreadSummary> {
+        let live = self.inner.ai.list(connection);
+        let executor = Arc::clone(&self.inner.executor);
+        let saved =
+            tokio::task::spawn_blocking(move || persistence::history(&executor, connection))
+                .await
+                .unwrap_or_default();
+        // The window's own threads win: they know what is running, and a
+        // thread open here is the same conversation as its row.
+        let mut all = live;
+        let known: std::collections::HashSet<String> =
+            all.iter().map(|summary| summary.id.clone()).collect();
+        all.extend(
+            saved
+                .into_iter()
+                .filter(|summary| !known.contains(&summary.id)),
+        );
+        all.sort_by_key(|summary| std::cmp::Reverse(summary.updated_at_ms));
+        all
     }
 
     /// A whole conversation, and `channel` as its live stream from now on.
     ///
     /// A read: nothing is asked again. This is how the panel takes a
     /// conversation back after the webview reloaded.
-    pub fn ai_open_thread(
+    pub async fn ai_open_thread(
         &self,
         connection: ConnectionId,
         thread: &str,
         channel: Channel<AiUpdate>,
     ) -> Result<ThreadView, IpcError> {
-        Ok(self.inner.ai.find(connection, thread)?.view(Some(channel)))
+        if let Ok(live) = self.inner.ai.find(connection, thread) {
+            return Ok(live.view(Some(channel)));
+        }
+        // Not in this window: read back from the workspace, and shown without
+        // a memory — nothing read from disk goes to a model.
+        let restored = self.load_thread(connection, thread).await?;
+        Ok(self
+            .inner
+            .ai
+            .adopt(connection, restored)
+            .view(Some(channel)))
     }
 
-    pub fn ai_rename_thread(
+    /// One conversation of the workspace, as far back as the panel holds.
+    async fn load_thread(
+        &self,
+        connection: ConnectionId,
+        thread: &str,
+    ) -> Result<persistence::Restored, IpcError> {
+        let id: oxyn_core::ConversationId = thread
+            .parse()
+            .map_err(|_| IpcError::invalid("This conversation does not exist"))?;
+        let executor = Arc::clone(&self.inner.executor);
+        tokio::task::spawn_blocking(move || persistence::load(&executor, connection, id))
+            .await
+            .map_err(|_| IpcError::invalid("Reading this conversation failed"))?
+    }
+
+    pub async fn ai_rename_thread(
         &self,
         connection: ConnectionId,
         thread: &str,
         title: &str,
     ) -> Result<(), IpcError> {
-        self.inner.ai.find(connection, thread)?.rename(title)
+        let found = self.inner.ai.find(connection, thread)?;
+        found.rename(title)?;
+        let executor = Arc::clone(&self.inner.executor);
+        let (id, title) = (found.id, found.title());
+        // The title the store keeps is the one the panel shows: bounded there.
+        let _written = tokio::task::spawn_blocking(move || {
+            executor.store().conversations().rename(id, &title)
+        })
+        .await;
+        Ok(())
     }
 
-    pub fn ai_delete_thread(&self, connection: ConnectionId, thread: &str) -> Result<(), IpcError> {
-        self.inner.ai.delete(connection, thread)
+    pub async fn ai_delete_thread(
+        &self,
+        connection: ConnectionId,
+        thread: &str,
+    ) -> Result<(), IpcError> {
+        let id: oxyn_core::ConversationId = thread
+            .parse()
+            .map_err(|_| IpcError::invalid("This conversation does not exist"))?;
+        // A conversation open in this window is closed first; one that is only
+        // on disk is deleted all the same.
+        let _live = self.inner.ai.delete(connection, thread);
+        let executor = Arc::clone(&self.inner.executor);
+        // `ai_egress` is untouched: what left this machine outlives the
+        // conversation that sent it (SECURITY).
+        let _written =
+            tokio::task::spawn_blocking(move || executor.store().conversations().delete(id)).await;
+        Ok(())
     }
 
     /// Shows another version of an exchange.
-    pub fn ai_select_version(
+    pub async fn ai_select_version(
         &self,
         connection: ConnectionId,
         thread: &str,
         node: u32,
     ) -> Result<(), IpcError> {
-        self.inner.ai.find(connection, thread)?.select(node)
+        let found = self.inner.ai.find(connection, thread)?;
+        found.select(node)?;
+        let (Some(id), Some(stored)) = (found.conversation(), found.stored_node(node)) else {
+            return Ok(());
+        };
+        let executor = Arc::clone(&self.inner.executor);
+        let _written = tokio::task::spawn_blocking(move || {
+            executor.store().conversations().select(id, Some(stored))
+        })
+        .await;
+        Ok(())
     }
 
     /// Asks the external agent of a conversation to run one of its sign-in
@@ -836,10 +1018,10 @@ impl Backend {
                     "This relation is not in the catalog yet: open it in the explorer first.",
                 )
             })?;
-        // TODO(2026-12-31, unblocked by a column classification declared by a
-        // driver, owned by ia-tauri): leave out the columns a driver classifies
-        // as secret. None declares one yet, and no filter pretends to: the
-        // screen names every column, and the user unticks.
+        // TODO(2026-12-31, column classification declared by a driver): leave
+        // out the columns a driver classifies as secret; owned by ia-tauri.
+        // None declares one yet, and no filter pretends to: the screen names
+        // every column, and the user unticks.
         let fields: Vec<RelationField> = relation.fields.iter().map(RelationField::from).collect();
         let offered = fields.iter().map(|field| field.name.clone()).collect();
         let id = self.inner.ai.samples.issue(Offer {
@@ -922,6 +1104,10 @@ impl Backend {
         }
     }
 }
+
+/// Said when the read itself failed; the journal keeps the error.
+const SAMPLE_READ_FAILED: &str = "Reading the approved sample failed on the server, so nothing was sent. The command \
+     journal has the error.";
 
 /// A sample read and admitted, with what it was admitted under.
 pub(super) struct ApprovedSample {
@@ -1018,7 +1204,7 @@ impl Run<'_> {
         let Some(recipient) = recipient else {
             return Err(refused(SampleRefused::NotAProvider));
         };
-        let egress = EgressRecord::new(
+        let mut egress = EgressRecord::new(
             self.connection.id,
             path.to_string(),
             columns.clone(),
@@ -1028,6 +1214,14 @@ impl Run<'_> {
         )
         .read_by(preview)
         .with_model(&recipient.model);
+        // The audit names the conversation when there is one: a thread whose
+        // header could not be written still sends, and still records.
+        if let (Some(conversation), Some(node)) = (
+            self.thread.conversation(),
+            self.thread.stored_node(self.node),
+        ) {
+            egress = egress.in_conversation(conversation, Some(node));
+        }
         Ok(ApprovedSample {
             rows: oxyn_ai::context::RowSample::new(path, columns, rows),
             reach: recipient.reach,
@@ -1117,9 +1311,9 @@ impl Run<'_> {
             Ok(_) => Err(setup(
                 "reading the sample returned no rows; nothing was sent",
             )),
-            Err(error) => Err(setup(format!(
-                "reading the approved sample: {error}. Nothing was sent."
-            ))),
+            // Not the driver's words: a server error can quote the cell it
+            // refused, and this message is shown and kept (I-03).
+            Err(_) => Err(Failure::new(SAMPLE_READ_FAILED, FailureCategory::Refused)),
         }
     }
 
@@ -1164,6 +1358,12 @@ impl Run<'_> {
                 {
                     self.emit(AiEvent::MemoryReset {
                         reason: MemoryReset::SampleNotKept,
+                    });
+                } else if self.thread.memory_restored(self.parent) {
+                    // Read back from the workspace: what the model was told is
+                    // not written, so this question starts over.
+                    self.emit(AiEvent::MemoryReset {
+                        reason: MemoryReset::Restarted,
                     });
                 } else if self.parent.is_some() {
                     // An ancestor answered without leaving a provider session:

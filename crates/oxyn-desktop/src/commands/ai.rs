@@ -171,52 +171,60 @@ pub fn ai_withdraw_sample(
 }
 
 #[tauri::command]
-pub fn ai_threads(
+pub async fn ai_threads(
     backend: State<'_, Backend>,
     connection: String,
 ) -> Result<Vec<ThreadSummary>, IpcError> {
-    Ok(backend.ai_threads(self::connection(&connection)?))
+    Ok(backend.ai_threads(self::connection(&connection)?).await)
 }
 
 /// A read, not an action: the conversation so far comes back, and what follows
 /// streams on `channel`. Nothing is asked again.
 #[tauri::command]
-pub fn ai_open_thread(
+pub async fn ai_open_thread(
     backend: State<'_, Backend>,
     connection: String,
     thread: String,
     channel: Channel<AiUpdate>,
 ) -> Result<ThreadView, IpcError> {
-    backend.ai_open_thread(self::connection(&connection)?, &thread, channel)
+    backend
+        .ai_open_thread(self::connection(&connection)?, &thread, channel)
+        .await
 }
 
 #[tauri::command]
-pub fn ai_rename_thread(
+pub async fn ai_rename_thread(
     backend: State<'_, Backend>,
     connection: String,
     thread: String,
     title: String,
 ) -> Result<(), IpcError> {
-    backend.ai_rename_thread(self::connection(&connection)?, &thread, &title)
+    backend
+        .ai_rename_thread(self::connection(&connection)?, &thread, &title)
+        .await
 }
 
 #[tauri::command]
-pub fn ai_delete_thread(
+pub async fn ai_delete_thread(
     backend: State<'_, Backend>,
     connection: String,
     thread: String,
 ) -> Result<(), IpcError> {
-    backend.ai_delete_thread(self::connection(&connection)?, &thread)
+    backend
+        .ai_delete_thread(self::connection(&connection)?, &thread)
+        .await
 }
 
 #[tauri::command]
-pub fn ai_select_version(
+pub async fn ai_select_version(
     backend: State<'_, Backend>,
     connection: String,
     thread: String,
     node: u32,
 ) -> Result<(), IpcError> {
-    backend.ai_select_version(self::connection(&connection)?, &thread, node)
+    backend
+        .ai_select_version(self::connection(&connection)?, &thread, node)
+        .await
 }
 
 /// Asks the conversation's agent to sign its user in, by a method it offered.
