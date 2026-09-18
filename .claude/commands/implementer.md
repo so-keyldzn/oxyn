@@ -15,7 +15,7 @@ le contrat précis :
 |---|---|
 | Driver de base de données | [`/driver`](driver.md) |
 | Commande du command bus | [`/commande`](commande.md) |
-| Vue GPUI | [`/vue`](vue.md) |
+| Écran ou composant d'interface | [`/ecran`](ecran.md) |
 | Décision structurante | [`/adr`](adr.md) |
 
 Sinon : relire les documents d'autorité de la frontière touchée

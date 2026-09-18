@@ -61,21 +61,6 @@ def bash(commande: str) -> dict:
 
 
 CAS: list[tuple[str, str, dict, str | None]] = [
-    # ---- code_interdit : I-08, GPUI hors des crates d'interface -------------
-    ("I-08 attrape", "code_interdit.py",
-     ecriture("crates/oxyn-core/src/lib.rs", "use gpui::Context;\npub struct A;\n"), "deny"),
-    ("I-08 faux positif : mention en commentaire", "code_interdit.py",
-     ecriture("crates/oxyn-core/src/lib.rs", "// converti vers gpui::Rgba dans oxyn-ui\npub struct A;\n"), None),
-    ("I-08 faux positif : la crate UI a le droit", "code_interdit.py",
-     ecriture("crates/oxyn-ui/src/vue.rs", "use gpui::Context;\n"), None),
-    ("I-08 manifeste attrape", "code_interdit.py",
-     ecriture("crates/oxyn-driver/Cargo.toml", '[dependencies]\ngpui = "0.2.2"\n'), "deny"),
-    ("I-08 manifeste faux positif : oxyn-ui", "code_interdit.py",
-     ecriture("crates/oxyn-ui/Cargo.toml", '[dependencies]\ngpui = "0.2.2"\n'), None),
-
-    ("I-08 manifeste attrape : gpui dans un driver", "code_interdit.py",
-     ecriture("drivers/oxyn-driver-sqlite/Cargo.toml", "[dependencies]\ngpui.workspace = true\n"), "deny"),
-
     # ---- code_interdit : I-08, Tauri hors d'oxyn-desktop -------------------
     ("I-08 Tauri attrape", "code_interdit.py",
      ecriture("crates/oxyn-exec/src/lib.rs", "use tauri::State;\n"), "deny"),
@@ -88,7 +73,7 @@ CAS: list[tuple[str, str, dict, str | None]] = [
     ("I-08 Tauri manifeste attrape", "code_interdit.py",
      ecriture("crates/oxyn-core/Cargo.toml", "[dependencies]\ntauri.workspace = true\n"), "deny"),
     ("I-08 Tauri manifeste attrape : tauri-build", "code_interdit.py",
-     ecriture("crates/oxyn-app/Cargo.toml", "[build-dependencies]\ntauri-build.workspace = true\n"), "deny"),
+     ecriture("crates/oxyn-exec/Cargo.toml", "[build-dependencies]\ntauri-build.workspace = true\n"), "deny"),
     ("I-08 Tauri manifeste faux positif : oxyn-desktop", "code_interdit.py",
      ecriture("crates/oxyn-desktop/Cargo.toml", "[dependencies]\ntauri.workspace = true\n"), None),
 
@@ -128,12 +113,6 @@ CAS: list[tuple[str, str, dict, str | None]] = [
      ecriture("apps/desktop/src/components/ui/chart.tsx",
               "<style dangerouslySetInnerHTML={{ __html: css }} />\n"), None),
 
-    # ---- code_interdit : I-05, blocage du thread UI ------------------------
-    ("I-05 attrape", "code_interdit.py",
-     ecriture("crates/oxyn-ui/src/grille.rs", "fn a() { let r = block_on(f()); }\n"), "deny"),
-    ("I-05 faux positif : hors UI", "code_interdit.py",
-     ecriture("drivers/oxyn-driver-sqlite/src/lib.rs", "fn a() { let r = block_on(f()); }\n"), None),
-
     # ---- code_interdit : I-03, Debug dérivé sur un porteur de secret -------
     ("I-03 Debug attrape", "code_interdit.py",
      ecriture("crates/oxyn-core/src/cfg.rs", "#[derive(Clone, Debug)]\npub struct Credentials { pub pwd: String }\n"), "deny"),
@@ -144,15 +123,15 @@ CAS: list[tuple[str, str, dict, str | None]] = [
 
     # ---- code_interdit : I-03, secret en dur -------------------------------
     ("I-03 DSN attrape", "code_interdit.py",
-     ecriture("crates/oxyn-app/src/main.rs", 'let u = "postgres://bob:s3cr3t@db.prod:5432/app";\n'), "deny"),
+     ecriture("crates/oxyn-desktop/src/main.rs", 'let u = "postgres://bob:s3cr3t@db.prod:5432/app";\n'), "deny"),
     ("I-03 DSN faux positif : sans mot de passe", "code_interdit.py",
-     ecriture("crates/oxyn-app/src/main.rs", 'let u = "postgres://localhost:5432/app";\n'), None),
+     ecriture("crates/oxyn-desktop/src/main.rs", 'let u = "postgres://localhost:5432/app";\n'), None),
 
     # ---- code_interdit : unsafe et fourre-tout -----------------------------
     ("unsafe sans SAFETY", "code_interdit.py",
-     ecriture("crates/oxyn-ui/src/ffi.rs", "fn a() {\n    unsafe {\n        g();\n    }\n}\n"), "ask"),
+     ecriture("crates/oxyn-desktop/src/ffi.rs", "fn a() {\n    unsafe {\n        g();\n    }\n}\n"), "ask"),
     ("unsafe avec SAFETY", "code_interdit.py",
-     ecriture("crates/oxyn-ui/src/ffi.rs", "fn a() {\n    // SAFETY: g() ne lit que des champs initialisés par new().\n    unsafe {\n        g();\n    }\n}\n"), None),
+     ecriture("crates/oxyn-desktop/src/ffi.rs", "fn a() {\n    // SAFETY: g() ne lit que des champs initialisés par new().\n    unsafe {\n        g();\n    }\n}\n"), None),
     ("module fourre-tout", "code_interdit.py",
      ecriture("crates/oxyn-core/src/lib.rs", "pub mod utils;\n"), "ask"),
     ("module nommé par son sujet", "code_interdit.py",

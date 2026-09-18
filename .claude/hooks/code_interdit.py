@@ -20,9 +20,6 @@ import protocole_hook as p  # noqa: E402
 
 EVENEMENT = "PreToolUse"
 
-# Les seules crates autorisées à dépendre de GPUI (I-08 / ADR-0001).
-CRATES_UI = ("crates/oxyn-ui/", "crates/oxyn-app/")
-
 # La seule crate autorisée à dépendre de Tauri (I-08 / ADR-0029).
 CRATE_TAURI = "crates/oxyn-desktop/"
 
@@ -55,23 +52,9 @@ def _lignes_de_code(texte: str) -> list[tuple[int, str]]:
 def verifier_rust(rel: str, texte: str) -> None:
     lignes = _lignes_de_code(texte)
 
-    # I-08 — GPUI hors des deux crates d'interface.
+    # I-08 — Tauri hors de l'hôte desktop.
     # `drivers/` est couvert au même titre que `crates/` : les crates de driver
     # vivent à la racine du dépôt et n'ont pas moins besoin de l'invariant.
-    if (rel.startswith("crates/") or rel.startswith("drivers/")) and not rel.startswith(CRATES_UI):
-        for numero, ligne in lignes:
-            if re.search(r"\buse\s+gpui\b|\bgpui\s*::", ligne):
-                p.refuser(
-                    EVENEMENT,
-                    f"I-08 : {rel}:{numero} importe `gpui`, mais seules "
-                    "`crates/oxyn-ui/` et `crates/oxyn-app/` ont le droit d'en "
-                    "dépendre (ADR-0001, docs/ARCHITECTURE.md). Un type GPUI "
-                    "hors de ces crates supprime la possibilité de tests sans "
-                    "écran et fige le choix du toolkit. Définir le type dans "
-                    "`oxyn-core` et le convertir dans `oxyn-ui`.",
-                )
-
-    # I-08 — Tauri hors de l'hôte desktop.
     if (rel.startswith("crates/") or rel.startswith("drivers/")) and not rel.startswith(CRATE_TAURI):
         for numero, ligne in lignes:
             if re.search(r"\buse\s+tauri\w*\b|\btauri\w*\s*::", ligne):
@@ -102,18 +85,6 @@ def verifier_rust(rel: str, texte: str) -> None:
                 "fige la fenêtre. Écrire `async fn`, ou `#[tauri::command(async)]` "
                 "— sauf si le corps ne touche qu'un état en mémoire.",
             )
-
-    # I-05 — blocage sur le thread UI.
-    if rel.startswith(CRATES_UI):
-        for numero, ligne in lignes:
-            if re.search(r"\bblock_on\s*\(|\bblocking_(?:recv|send|lock|read|write)\s*\(", ligne):
-                p.refuser(
-                    EVENEMENT,
-                    f"I-05 : {rel}:{numero} bloque le thread UI. Une attente "
-                    "synchrone y fige toute la fenêtre et l'utilisateur conclut "
-                    "au plantage. Passer par les mécanismes asynchrones de GPUI "
-                    "(docs/ARCHITECTURE.md § modèle de threads).",
-                )
 
     # I-03 — Debug dérivé sur un porteur de secret.
     for bloc in re.finditer(
@@ -180,17 +151,6 @@ def verifier_manifeste(rel: str, texte: str) -> None:
                 "`crates/oxyn-desktop/` (ADR-0029). Le toolkit d'interface "
                 "entrerait dans le cœur, et c'est précisément ce qui a rendu "
                 "possible la sortie de GPUI.",
-            )
-        if rel.startswith(CRATES_UI):
-            continue
-        if re.match(r"\s*gpui\s*(?:=|\.)", ligne):
-            p.refuser(
-                EVENEMENT,
-                f"I-08 : {rel}:{numero} ajoute une dépendance `gpui` hors de "
-                "`crates/oxyn-ui/` et `crates/oxyn-app/` (ADR-0001). C'est le "
-                "premier pas d'une fuite du toolkit dans le cœur ; le refuser "
-                "ici évite de la découvrir quand il sera trop tard pour "
-                "l'annuler.",
             )
 
 

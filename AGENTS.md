@@ -34,7 +34,7 @@ les contient ; les chemins de commandes shell partent de la racine du dépôt.
 |---|---|
 | Tout fichier Rust | [rust](.claude/rules/rust.md) |
 | `drivers/oxyn-driver-*/**`, `crates/oxyn-driver/**`, `crates/oxyn-driver-*/**` | [drivers](.claude/rules/drivers.md) |
-| `crates/oxyn-ui/**`, `crates/oxyn-app/**` | [ui-gpui](.claude/rules/ui-gpui.md) |
+| `apps/desktop/**`, `crates/oxyn-desktop/**` | [front](.claude/rules/front.md) |
 | `crates/oxyn-ai/**` | [ia](.claude/rules/ia.md) |
 | Tout répertoire `tests/` ou `benches/` | [tests](.claude/rules/tests.md) |
 | Markdown, y compris les compétences de projet | [documentation](.claude/rules/documentation.md) |
@@ -45,8 +45,8 @@ les contient ; les chemins de commandes shell partent de la racine du dépôt.
 Les dix procédures communes de [.claude/commands/](.claude/commands/) sont
 accessibles par les compétences locales décrites dans
 [.agents/README.md](.agents/README.md), par exemple `$oxyn-driver`,
-`$oxyn-commande`, `$oxyn-vue` et `$oxyn-relire`.
-Pour un driver, une commande du bus ou une vue, lire la procédure spécialisée
+`$oxyn-commande` et `$oxyn-relire`.
+Pour un driver, une commande du bus ou un écran, lire la procédure spécialisée
 avant de coder, même si la demande n'invoque pas explicitement la compétence.
 
 Dans les procédures partagées :

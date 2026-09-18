@@ -29,10 +29,6 @@ qu'un appelant et qu'une commande Tauri nouvelle passe par
 retry : si c'est tentant en TypeScript, c'est que la commande Tauri ne renvoie
 pas encore ce qu'il faut. On la corrige, on ne compense pas dans la webview.
 
-**GPUI ne reçoit plus d'écran.** `oxyn-ui` et `oxyn-app` restent jusqu'à la parité
-([ADR-0029](../../docs/adr/0029-interface-tauri-shadcn.md)) ; leur maintenance est
-le travail d'`interfacier`, pas le tien.
-
 ## Ta mémoire
 
 Des **pièges d'outillage** : un comportement de Vite sous la CSP de Tauri, une

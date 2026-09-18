@@ -28,10 +28,10 @@ env:
 
 jobs:
   qualite:
-    # macOS et pas Linux : `oxyn-ui` dépend de GPUI, dont la cible de référence
-    # est macOS (ADR-0001), et `make app` produit un paquet `.app`. Construire
-    # ailleurs vérifierait un sous-ensemble du dépôt en laissant croire au
-    # contraire.
+    # macOS et pas Linux : la cible de référence de l'application est macOS
+    # (ADR-0029), et `oxyn-desktop` y compile avec WebKit et le trousseau du
+    # système. Construire ailleurs vérifierait une autre application en
+    # laissant croire au contraire.
     runs-on: macos-latest
     timeout-minutes: 60
 

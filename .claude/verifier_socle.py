@@ -19,12 +19,6 @@ from pathlib import Path
 RACINE = Path(__file__).resolve().parents[1]
 CLAUDE_MD = RACINE / "CLAUDE.md"
 
-# I-08 : les deux seules crates qui ont le droit de connaître GPUI. La liste est
-# indexée par RÉPERTOIRE et non par nom de paquet — `crates/oxyn-app` publie un
-# paquet nommé `oxyn`, et une liste par nom de paquet aurait laissé passer
-# exactement le cas qu'elle prétend couvrir.
-REPERTOIRES_UI = {"oxyn-ui", "oxyn-app"}
-
 # I-08 : la seule crate qui a le droit de connaître Tauri (ADR-0029). Le préfixe
 # couvre `tauri-build` et les `tauri-plugin-*`, qui tirent `tauri` avec eux.
 REPERTOIRE_TAURI = "oxyn-desktop"
@@ -176,9 +170,9 @@ def controler_graphe_dependances() -> list[str]:
     passent, clippy se tait, et le coût n'apparaît qu'au moment où il est trop
     tard pour l'annuler.
 
-    - un `gpui` hors de `oxyn-ui`/`oxyn-app`, ou un `tauri*` hors de
-      `oxyn-desktop`, ferme définitivement la CLI, les tests sans écran, et le
-      changement d'interface que l'ADR-0029 vient justement de faire ;
+    - un `tauri*` hors de `oxyn-desktop` ferme définitivement la CLI, les tests
+      sans écran et le prochain changement d'interface ; `gpui`, retiré avec
+      l'ancienne interface (ADR-0029), ne revient nulle part ;
     - un manifeste sans `[lints] workspace = true` retire à sa crate TOUS les
       lints du dépôt, `unsafe_code = "deny"` compris ;
     - une dépendance déclarée avec sa propre version fait entrer deux copies de
@@ -215,11 +209,10 @@ def controler_graphe_dependances() -> list[str]:
             )
 
         for section, nom, declaration in _dependances(manifeste):
-            if nom == "gpui" and repertoire not in REPERTOIRES_UI:
+            if nom == "gpui":
                 erreurs.append(
-                    f"I-08 : {rel} dépend de `gpui` en [{section}]. Seules "
-                    f"{' et '.join(sorted(REPERTOIRES_UI))} le peuvent "
-                    "(ADR-0001)"
+                    f"I-08 : {rel} dépend de `gpui` en [{section}]. L'interface "
+                    "GPUI a été retirée au profit de Tauri (ADR-0029)"
                 )
             if nom.startswith("tauri") and repertoire != REPERTOIRE_TAURI:
                 erreurs.append(

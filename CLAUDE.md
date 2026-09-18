@@ -40,10 +40,9 @@ Vérifié le 2026-09-05, interface le 2026-09-15 — [détail et sources](docs/R
 | | Version | À savoir |
 |---|---|---|
 | Rust | épinglé par `rust-toolchain.toml` ([ADR-0008](docs/adr/0008-chaine-outils-rust.md)) | la machine de dev est en `1.89.0`, la stable en `1.98.1` |
-| Édition | **2024** | imposée par `gpui` ; exige Rust ≥ 1.85 |
+| Édition | **2024** | exige Rust ≥ 1.85 |
 | Interface | **Tauri 2** + TanStack Start en **mode SPA** + shadcn/ui sur **Base UI** ([ADR-0029](docs/adr/0029-interface-tauri-shadcn.md)) | `apps/desktop` (pnpm) servi par `crates/oxyn-desktop` ; aucun serveur, le backend est Rust |
 | Tests de composants | Storybook 10 + `addon-vitest` + `addon-a11y` | une story est un test, axe compris ; Vitest reste en **4** |
-| GPUI | `0.2.2`, **en sortie** ([ADR-0029](docs/adr/0029-interface-tauri-shadcn.md)) | `oxyn-ui` et `oxyn-app` restent jusqu'à la parité ; n'y ajouter aucun écran |
 | Résultats | Apache Arrow ([ADR-0002](docs/adr/0002-arrow-result-model.md)) | `RecordBatch` de bout en bout |
 
 Aucune version ne s'écrit de mémoire : voir [I-12](#i-12).
@@ -56,7 +55,7 @@ Aucune version ne s'écrit de mémoire : voir [I-12](#i-12).
 | `make desktop-dev` | l'application Tauri avec rechargement à chaud, sur un workspace temporaire |
 | `script/nouvelle-crate` | crée une crate déjà conforme — voir le piège des règles plus bas |
 | [`/plan`](.claude/commands/plan.md) [`/implementer`](.claude/commands/implementer.md) [`/relire`](.claude/commands/relire.md) | le cycle courant |
-| [`/driver`](.claude/commands/driver.md) [`/commande`](.claude/commands/commande.md) [`/ecran`](.claude/commands/ecran.md) [`/vue`](.claude/commands/vue.md) | les gestes qui ont un contrat à respecter — `/vue` ne corrige que GPUI |
+| [`/driver`](.claude/commands/driver.md) [`/commande`](.claude/commands/commande.md) [`/ecran`](.claude/commands/ecran.md) | les gestes qui ont un contrat à respecter |
 | [`/adr`](.claude/commands/adr.md) [`/versions`](.claude/commands/versions.md) [`/benchmark`](.claude/commands/benchmark.md) [`/securite`](.claude/commands/securite.md) | les gestes rares et faciles à rater |
 
 Liste complète : [.claude/README.md](.claude/README.md).
@@ -107,11 +106,11 @@ Y compris ce qui « ne fait que lire » : `EXPLAIN ANALYZE` exécute réellement
 requête qu'il analyse, `DELETE` compris.
 → [AI-PROVIDERS](docs/AI-PROVIDERS.md#ce-quon-fait-des-réponses)
 
-<a id="i-08"></a>**I-08 — Aucune crate hors `oxyn-desktop` ne dépend de `tauri`, et
-aucune hors `oxyn-ui` et `oxyn-app` ne dépend de `gpui`.** Un type de toolkit
-importé dans `oxyn-core` « juste pour un champ » supprime définitivement la
-possibilité d'une CLI, des tests sans écran, et d'un changement d'interface — celui
-que [ADR-0029](docs/adr/0029-interface-tauri-shadcn.md) vient de faire.
+<a id="i-08"></a>**I-08 — Aucune crate hors `oxyn-desktop` ne dépend de `tauri`.**
+Un type de toolkit importé dans `oxyn-core` « juste pour un champ » supprime
+définitivement la possibilité d'une CLI, des tests sans écran, et d'un changement
+d'interface — celui que [ADR-0029](docs/adr/0029-interface-tauri-shadcn.md) a
+fait en retirant GPUI sans toucher au cœur.
 → [ARCHITECTURE](docs/ARCHITECTURE.md#le-sens-des-dépendances)
 
 <a id="i-09"></a>**I-09 — Aucun `unwrap`, `expect`, `panic!`, `unreachable!`,
@@ -173,7 +172,6 @@ quand Claude **lit** un fichier correspondant à leur `paths:`.
 |---|---|
 | [rust.md](.claude/rules/rust.md) | `**/*.rs` |
 | [drivers.md](.claude/rules/drivers.md) | `drivers/oxyn-driver-*/**`, `crates/oxyn-driver/**` |
-| [ui-gpui.md](.claude/rules/ui-gpui.md) | `crates/oxyn-ui/**`, `crates/oxyn-app/**` |
 | [front.md](.claude/rules/front.md) | `apps/desktop/**`, `crates/oxyn-desktop/**` |
 | [ia.md](.claude/rules/ia.md) | `crates/oxyn-ai/**`, `crates/oxyn-llm/**` |
 | [tests.md](.claude/rules/tests.md) | `**/*_tests.rs`, `**/tests.rs`, `**/tests/**`, `**/benches/**` |
@@ -203,7 +201,7 @@ aucun contrôle de son côté :
 | Ce qui refuse | L'invariant tenu |
 |---|---|
 | [clippy.toml](clippy.toml) | les chemins d'appel interdits ([I-03](#i-03), [I-05](#i-05), [I-09](#i-09)) |
-| `.claude/verifier_socle.py` | `gpui` ou `tauri*` hors de leur crate, un manifeste hors du workspace ([I-08](#i-08)) |
+| `.claude/verifier_socle.py` | `tauri*` hors d'`oxyn-desktop`, `gpui` où que ce soit, un manifeste hors du workspace ([I-08](#i-08)) |
 | `make front` | un composant sans story passante, une violation d'accessibilité, un type ou un lint faux dans `apps/desktop` |
 | `script/verifier-todo` | une marque de travail restant sans échéance |
 | [renovate.json5](renovate.json5) | une version recopiée de mémoire ([I-12](#i-12)) |

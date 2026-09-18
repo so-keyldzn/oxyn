@@ -32,7 +32,6 @@ oxyn-secrets  = { path = "crates/oxyn-secrets" }
 oxyn-llm      = { path = "crates/oxyn-llm" }
 oxyn-ai       = { path = "crates/oxyn-ai" }
 oxyn-plugin   = { path = "crates/oxyn-plugin" }
-oxyn-ui       = { path = "crates/oxyn-ui" }
 oxyn-driver-sqlite   = { path = "drivers/oxyn-driver-sqlite" }
 oxyn-driver-postgres = { path = "drivers/oxyn-driver-postgres" }
 
@@ -114,8 +113,6 @@ wasmtime      = "48.0.1"
 toml          = "0.9.8"
 
 # --- UI ----------------------------------------------------------------------
-# gpui reste tant qu'oxyn-ui et oxyn-app n'ont pas été retirés (ADR-0029).
-gpui          = "0.2.2"
 # Tauri n'est une dépendance que d'oxyn-desktop : la règle d'isolation de
 # l'ADR-0001, transposée par l'ADR-0029. Versions relevées sur crates.io le
 # 2026-09-15, voir RESEARCH-NOTES.

@@ -19,7 +19,6 @@ redémarrer la session dans le dépôt.
 | `/implementer` | [$oxyn-implementer](skills/oxyn-implementer/SKILL.md) |
 | `/driver` | [$oxyn-driver](skills/oxyn-driver/SKILL.md) |
 | `/commande` | [$oxyn-commande](skills/oxyn-commande/SKILL.md) |
-| `/vue` | [$oxyn-vue](skills/oxyn-vue/SKILL.md) |
 | `/adr` | [$oxyn-adr](skills/oxyn-adr/SKILL.md) |
 | `/versions` | [$oxyn-versions](skills/oxyn-versions/SKILL.md) |
 | `/benchmark` | [$oxyn-benchmark](skills/oxyn-benchmark/SKILL.md) |
@@ -52,7 +51,7 @@ Les profils restent consultables selon la tâche :
 - Écriture : [architecte](../.claude/agents/architecte.md),
   [rustacien](../.claude/agents/rustacien.md),
   [driveriste](../.claude/agents/driveriste.md),
-  [interfacier](../.claude/agents/interfacier.md),
+  [frontiste](../.claude/agents/frontiste.md),
   [ia-workspace](../.claude/agents/ia-workspace.md),
   [documentaliste](../.claude/agents/documentaliste.md),
   [performance](../.claude/agents/performance.md).

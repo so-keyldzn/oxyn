@@ -60,18 +60,6 @@
   ],
 
   packageRules: [
-    // gpui épingle plusieurs dépendances système avec `=` (cocoa,
-    // core-foundation). Une montée de gpui peut donc rendre le graphe
-    // insoluble, et ce n'est pas une PR à regarder distraitement un lundi
-    // matin : ADR-0009 fait autorité sur la source, RESEARCH-NOTES sur les
-    // épinglages.
-    {
-      matchPackageNames: ["gpui"],
-      addLabels: ["frontière"],
-      prBodyNotes: [
-        "gpui épingle `cocoa` et `core-foundation` avec `=`. Vérifier `cargo update --dry-run` avant toute chose : un graphe insoluble se manifeste par une erreur de résolution qui ne nomme pas gpui.",
-      ],
-    },
     // Les crates qui parlent à un serveur ou à un fournisseur IA changent le
     // comportement sur une frontière externe. Elles se relisent, elles ne se
     // survolent pas.

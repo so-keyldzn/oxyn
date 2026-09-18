@@ -32,16 +32,6 @@ référence par `{ workspace = true }`. Deux versions du même crate dans le gra
 c'est deux fois le code compilé et des types incompatibles entre eux — le
 message d'erreur qui en résulte est célèbre pour son opacité.
 
-## Les épinglages de GPUI
-
-`gpui 0.2.2` épingle plusieurs dépendances avec `=`, dont `cocoa =0.26.0`,
-`cocoa-foundation =0.2.0`, `core-foundation =0.10.0`
-([RESEARCH-NOTES](../../docs/RESEARCH-NOTES.md#gpui)).
-
-**Vérifier avant, pas après.** Ajouter une crate qui touche aux API système
-macOS peut rendre le graphe insoluble : Cargo échoue au lieu d'unifier, et le
-message ne désigne pas GPUI comme responsable.
-
 ## `rust-toolchain.toml`
 
 Version **exacte**, avec `rustfmt` et `clippy`
@@ -80,7 +70,7 @@ en local : on découvrirait son existence en le voyant échouer.
 
 Un invariant qui se ramène à un chemin d'appel appartient à `clippy.toml`, pas à
 une relecture. `clippy.toml` vaut pour **tout** le workspace : un interdit qui ne
-doit valoir que pour `oxyn-ui` n'y a pas sa place.
+doit valoir que pour une crate n'y a pas sa place.
 
 ## Une crate ne se crée pas à la main
 

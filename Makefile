@@ -6,11 +6,10 @@
 #
 # Voir .claude/rules/manifestes.md et .claude/checklists/fin-de-tache.md.
 
-.PHONY: qualite format lint test doc todo hooks socle aide app lancer front desktop desktop-dev
+.PHONY: qualite format lint test doc todo hooks socle aide front desktop desktop-dev
 
 CARGO := cargo
 PROFIL ?= debug
-APP := target/$(PROFIL)/Oxyn.app
 
 # nextest applique le profil de .config/nextest.toml : exécution sérialisée des
 # tests qui partagent un serveur, et arrêt d'un test qui pend. Il n'est pas
@@ -31,8 +30,6 @@ aide:
 	@echo "make socle     vérifie le socle Claude et Codex (utilisable sans code Rust)"
 	@echo "make hooks     rejoue les tests des hooks"
 	@echo "make todo      refuse une marque de travail restant sans échéance"
-	@echo "make app       assemble target/\$$PROFIL/Oxyn.app (PROFIL=release pour publier)"
-	@echo "make lancer    assemble puis ouvre l'application"
 	@echo "make front     contrôle le front : format, lint, types, tests, stories, build"
 	@echo "make desktop-dev  lance l'application Tauri avec rechargement à chaud"
 	@echo "make desktop   construit l'application Tauri (PROFIL=release pour publier)"
@@ -40,27 +37,6 @@ aide:
 	@echo "script/nouvelle-crate <nom> <description>   crée une crate conforme"
 
 # --- L'application ------------------------------------------------------------
-# Un binaire nu lancé depuis un terminal n'a pas d'identifiant de paquet : macOS
-# le traite comme un accessoire, sans Dock ni activation propre, et aucun outil
-# ne sait le désigner. Le paquet est la forme normale d'une application macOS,
-# pas une étape de publication.
-app:
-ifeq ($(PROFIL),release)
-	$(CARGO) build --release -p oxyn
-else
-	$(CARGO) build -p oxyn
-endif
-	@rm -rf "$(APP)"
-	@mkdir -p "$(APP)/Contents/MacOS" "$(APP)/Contents/Resources"
-	@cp crates/oxyn-app/Oxyn.app.plist "$(APP)/Contents/Info.plist"
-	@cp "target/$(PROFIL)/oxyn" "$(APP)/Contents/MacOS/oxyn"
-	@cp assets/brand/Oxyn.icns "$(APP)/Contents/Resources/Oxyn.icns"
-	@printf 'APPL????' > "$(APP)/Contents/PkgInfo"
-	@echo "$(APP)"
-
-lancer: app
-	@open "$(APP)"
-
 # La CSP de développement est relâchée par tauri.dev.json5, et par lui seul :
 # un build n'utilise jamais ce fichier.
 desktop-dev: $(TAURI)

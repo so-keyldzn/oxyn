@@ -14,7 +14,7 @@ Un workflow n'est pas une procédure à suivre mécaniquement. C'est l'ordre qui
    de coder
 3. [`/commande`](../commands/commande.md) — la commande du bus d'abord
 4. [`/implementer`](../commands/implementer.md) ou l'agent du domaine
-5. [`/vue`](../commands/vue.md) si une interface est concernée
+5. [`/ecran`](../commands/ecran.md) si une interface est concernée
 6. [`/relire`](../commands/relire.md)
 7. [`.claude/checklists/fin-de-tache.md`](../checklists/fin-de-tache.md)
 

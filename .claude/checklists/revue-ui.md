@@ -50,8 +50,8 @@ Conventions dans [front.md](../rules/front.md), geste dans
 
 ## Grille et résultats
 
-- [ ] GPUI : lecture directe des `RecordBatch`, sans conversion en lignes ·
-      Tauri : pages bornées de `result_page`, pour la seule fenêtre visible
+- [ ] Grille : pages bornées de `result_page`, pour la seule fenêtre visible,
+      jamais le résultat entier
 - [ ] Le défilement au-delà du budget mémoire lit une page disque et **ne relance
       jamais la requête**
 - [ ] Aucun décodage de gros lot sur le thread UI
@@ -69,9 +69,9 @@ Conventions dans [front.md](../rules/front.md), geste dans
 - [ ] L'ordre de tabulation suit l'ordre de lecture
 - [ ] Aucune information portée par la seule couleur
 
-Ce n'est pas une finition : `docs/adr/0001-ui-toolkit.md` identifie
-l'accessibilité comme un risque structurel de GPUI. Rattraper après coup coûte
-une réécriture.
+Ce n'est pas une finition : Base UI fournit le clavier, le focus et l'ARIA d'un
+composant, mais pas ceux d'une grille, d'un arbre ou d'un éditeur écrits pour
+Oxyn. Rattraper après coup coûte une réécriture.
 
 ## Performance
 

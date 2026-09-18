@@ -40,26 +40,20 @@ prouve [I-10](../../CLAUDE.md#i-10).
 
 ## Les tests d'interface
 
-Trois niveaux, qui ne prouvent pas la même chose.
+Deux niveaux, qui ne prouvent pas la même chose.
 
-**1. La logique, sans GPUI.** Ce qu'une vue calcule avant de dessiner — fenêtre
-de colonnes visibles, découpe des lignes, position du curseur, largeur d'une
-piste — vit dans une fonction libre et se teste sans fenêtre ni contexte. C'est
-le niveau le plus rentable, et le seul qui survit à une sortie de GPUI
-([ADR-0001](../../docs/adr/0001-ui-toolkit.md)). Une vue dont rien ne se teste à
-ce niveau porte trop de logique dans son `render` : c'est un signal de découpage.
+**1. La logique, sans DOM.** Ce qu'un composant calcule avant de dessiner —
+fenêtre de lignes visibles, bornes du focus, largeur d'une colonne, réduction
+d'un flux d'événements — vit dans une fonction libre et se teste en Vitest
+unitaire, sans rendu. C'est le niveau le plus rentable, et le seul qui survit à
+un changement de bibliothèque. Un composant dont rien ne se teste à ce niveau
+porte trop de logique dans son rendu : c'est un signal de découpage.
 
-**2. Les vues et les interactions.** `gpui` expose une feature `test-support` :
-`#[gpui::test]`, `VisualTestContext`, simulation du clavier, de la souris, du
-redimensionnement et des actions — sans fenêtre, sans GPU. Surface exacte et
-limites : [RESEARCH-NOTES](../../docs/RESEARCH-NOTES.md#gpui).
-
-Elle se déclare en **`[dev-dependencies]`**, jamais en dépendance normale : le
-harnais n'a rien à faire dans le binaire livré, et `resolver = "3"` ne le fait
-pas remonter dans une compilation ordinaire.
-
-Ce qui mérite ce niveau, c'est ce dont la régression est **silencieuse** — les
-points bloquants de [revue-ui](../checklists/revue-ui.md) :
+**2. Les composants et les interactions : les stories.** Chaque composant de
+`apps/desktop/src/components/oxyn` a une story par état, rendue dans Chromium
+avec axe en mode `error` ([front.md](front.md)). Ce qui mérite un `play`, c'est
+ce dont la régression est **silencieuse** — les points bloquants de
+[revue-ui](../checklists/revue-ui.md) :
 
 - la confirmation qui **nomme** la connexion avant une écriture sur `production`,
   et le bouton par défaut qui n'est pas l'action destructrice
@@ -71,20 +65,14 @@ points bloquants de [revue-ui](../checklists/revue-ui.md) :
 Aucune de ces quatre régressions ne casse une compilation ni ne rougit un test
 existant. C'est précisément le critère qui en fait des tests.
 
-**3. La fidélité visuelle.** Hors de portée par ce chemin : le harnais installe
-un système de texte fictif et ne rasterise aucun pixel. Ni capture d'image, ni
-comparaison de rendu.
+**Le piège**, et il est vicieux : `toBeVisible` ne tient pas compte de ce qu'une
+zone de défilement coupe. Une ligne dessinée hors de la zone visible reste
+« visible » pour le test. Ce qui s'asserte, ce sont les positions et les
+hauteurs qu'Oxyn **décide** lui-même, mesurées par rapport au conteneur.
 
-**Le piège qui en découle**, et il est vicieux : ne jamais asserter une dimension
-qui dépend de la largeur d'un texte — colonne ajustée au contenu, troncature,
-ellipse. La métrique du harnais est déterministe *et* fausse : le test est vert,
-l'interface est décalée chez l'utilisateur. Ce qui s'asserte, ce sont les
-dimensions qu'Oxyn **décide** lui-même.
-
-Deux choses qui ne sont pas des tests d'interface : vérifier qu'une vue se
-construit — il ne peut échouer que sur une panique, et il restera vert le jour où
-la vue n'affiche plus rien — et appeler `run_until_parked` sans rien affirmer
-ensuite.
+Une chose qui n'est pas un test d'interface : vérifier qu'un composant se rend.
+Il ne peut échouer que sur une exception, et il restera vert le jour où le
+composant n'affichera plus rien.
 
 ## Bancs d'essai
 
@@ -96,8 +84,8 @@ Deux choses qui ne sont **pas** des bancs d'essai :
 
 - une mesure contre une base réelle — le réseau et l'état du serveur dominent le
   signal ; ce qui se mesure, c'est le temps passé *dans* Oxyn ;
-- un banc `criterion` sur du GPUI — il ne mesure rien d'utile ; les budgets de
-  trame se mesurent avec les instruments du système.
+- un banc `criterion` sur l'interface — il ne mesure rien d'utile ; les budgets
+  de trame se mesurent avec les instruments du navigateur et du système.
 
 Une optimisation arrive avec son chiffre avant et après, dans le message de
 commit ([`/benchmark`](../commands/benchmark.md)).

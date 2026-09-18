@@ -5,9 +5,9 @@
 # l'être ici, parce que `-D warnings` en fait alors un mur et non un rappel.
 #
 # Ce fichier vaut pour TOUT le workspace : clippy le résout une seule fois, à la
-# racine. Un interdit qui ne doit valoir que pour `oxyn-ui` — « aucun I/O sur le
-# thread UI » au sens large — n'a donc pas sa place ici ; il demande un lint
-# écrit à la main. Ne sont listées que des méthodes qu'AUCUNE crate n'appelle
+# racine. Un interdit qui ne doit valoir que pour une crate — « aucun I/O dans
+# une commande Tauri synchrone », par exemple — n'a donc pas sa place ici ; il
+# demande un lint écrit à la main, ou un hook. Ne sont listées que des méthodes qu'AUCUNE crate n'appelle
 # aujourd'hui : ajouter un interdit déjà violé transformerait la porte de
 # qualité en dette, et la première réaction serait de le retirer.
 #

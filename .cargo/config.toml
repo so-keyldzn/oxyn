@@ -6,15 +6,15 @@
 
 [build]
 # Le schéma v0 conserve les noms de types dans les symboles, y compris à travers
-# les fermetures. Une trace GPUI sans lui est une suite de
-# `{{closure}}::{{closure}}` : l'application est presque entièrement écrite en
-# fermetures passées à `on_click`, `cx.spawn` et consorts, donc la trace ne
-# désigne rien. C'est le mode de panne qu'on cherche à lire dans un rapport
-# d'utilisateur, où l'on n'a rien d'autre.
+# les fermetures. Une trace sans lui est une suite de `{{closure}}::{{closure}}` :
+# le backend est écrit en futurs et en fermetures passées à `spawn` et aux
+# commandes Tauri, donc la trace ne désigne rien. C'est le mode de panne qu'on
+# cherche à lire dans un rapport d'utilisateur, où l'on n'a rien d'autre.
 rustflags = ["-C", "symbol-mangling-version=v0"]
 
 [env]
-# 13.0 comme `LSMinimumSystemVersion` dans `crates/oxyn-app/Oxyn.app.plist` :
+# 13.0 comme `bundle.macOS.minimumSystemVersion` dans
+# `crates/oxyn-desktop/tauri.conf.json`, qui devient le `LSMinimumSystemVersion` :
 # les deux valeurs disent la même chose et doivent bouger ensemble. Sans
 # celle-ci, le binaire est lié pour la version de macOS de la machine qui
 # construit — un paquet assemblé sur une machine récente refuse alors de
