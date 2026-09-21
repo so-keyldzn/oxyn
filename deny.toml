@@ -16,6 +16,22 @@
 # arbitrage humain.
 yanked = "deny"
 unmaintained = "workspace"
+# Un avis d'« unsoundness » est informatif pour `cargo-deny`, et sa valeur par
+# défaut est `none` : sans cette ligne, RUSTSEC-2024-0429 traversait la porte
+# sans un mot, alors que GitHub l'affichait. `all` le fait voir, y compris sur
+# une dépendance transitive — c'est là qu'il se trouve.
+unsound = "all"
+
+# Chaque entrée porte sa raison : un avis ignoré sans motif écrit devient un
+# avis oublié. La revoir est le geste de `/versions`.
+ignore = [
+    # `glib::VariantStrIter` peut produire une référence pendante. La chaîne est
+    # `tauri` → `gtk 0.18` → `atk` → `glib 0.18`, uniquement sur Linux : la
+    # correction est dans `glib 0.20`, que `gtk 0.18` refuse. Rien à monter ici
+    # tant que Tauri n'a pas changé de GTK, et rien de compilé sur macOS, la
+    # seule cible livrée aujourd'hui. Oxyn n'appelle pas cet itérateur.
+    { id = "RUSTSEC-2024-0429", reason = "glib 0.18 via gtk 0.18 de Tauri ; corrigé en 0.20, que gtk 0.18 refuse ; code Linux, non compilé sur la cible livrée" },
+]
 
 [licenses]
 # Les licences permissives que ce dépôt accepte sans discussion. Toute autre

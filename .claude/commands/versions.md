@@ -41,6 +41,13 @@ Pour chaque écart :
    `docs/RESEARCH-NOTES.md`, dans le même commit que la modification du
    `Cargo.toml`. Séparer les deux, c'est garantir que l'un des deux sera oublié.
 
+## Les avis écartés
+
+Les exceptions de `[advisories] ignore` dans `deny.toml` se relisent ici : un
+avis écarté parce que l'amont ne proposait rien reste écarté longtemps après que
+l'amont a corrigé. Pour chacun, vérifier si la version corrigée est devenue
+atteignable ; si oui, la monter et retirer l'exception.
+
 ## Vérifier
 
 ```bash

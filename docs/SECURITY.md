@@ -144,7 +144,14 @@ ce qui le maintiendra valide.
 - une dépendance qui n'est utilisée qu'à un seul endroit pour une seule fonction
   est un candidat à la réécriture, pas une évidence ;
 - une crate non maintenue sur une frontière externe est un risque à documenter,
-  pas à ignorer.
+  pas à ignorer ;
+- un avis de sécurité écarté l'est **dans `deny.toml`, avec sa raison écrite**.
+  Le seul aujourd'hui est RUSTSEC-2024-0429 — une *unsoundness* de
+  `glib::VariantStrIter`, atteinte par `tauri` → `gtk 0.18` → `atk` → `glib 0.18`.
+  La correction est dans `glib 0.20`, que `gtk 0.18` refuse : rien ne se monte
+  ici tant que Tauri n'a pas changé de GTK. Ce code est celui de Linux ; il
+  n'est pas compilé sur macOS, la seule cible livrée aujourd'hui, et Oxyn
+  n'appelle pas cet itérateur. À rouvrir à la prochaine montée de Tauri.
 
 Voir aussi [`/securite`](../.claude/commands/securite.md) et
 [la liste de contrôle](../.claude/checklists/revue-securite.md).
