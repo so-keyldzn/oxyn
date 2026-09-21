@@ -18,7 +18,7 @@ use crate::ipc::library::{
     RetainedResult,
 };
 
-/// The page size of every library list, as the GPUI library used it.
+/// The page size of every library list.
 pub const LIBRARY_PAGE: u16 = 100;
 
 impl Backend {

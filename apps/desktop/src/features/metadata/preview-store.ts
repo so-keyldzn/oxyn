@@ -113,8 +113,7 @@ export function createPreviewStore(effects: PreviewEffects) {
       return
     }
     if (outcome.type === "needsApproval") {
-      // A preview never waits for an approval: the console is where to run
-      // it (GPUI parity).
+      // A preview never waits for an approval: the console is where to run it.
       effects.refuse(outcome.command)
       update(key, (current) => ({
         ...current,

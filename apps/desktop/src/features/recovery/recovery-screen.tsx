@@ -48,7 +48,7 @@ export function RecoveryScreen() {
       }),
   })
 
-  // After a crash every working copy starts selected, as in the GPUI screen.
+  // After a crash every working copy starts selected.
   React.useEffect(() => {
     if (selectedOnce.current || !page.data) return
     selectedOnce.current = true

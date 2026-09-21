@@ -8,7 +8,7 @@
 
 /*
  * Oxyn palette. Values come from the Figma file `Yviemi4brBczzdRdBp1ONv`, the
- * same ones `crates/oxyn-ui/src/theme.rs` cites node by node
+ * ones the handoff index cites node by node
  * (docs/RESEARCH-NOTES.md, « Jetons de la maquette Figma »). They are mapped
  * onto shadcn's semantic tokens so every component picks them up without a
  * per-component override.

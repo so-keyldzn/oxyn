@@ -1776,7 +1776,7 @@ impl Executor {
     ///
     /// **Ne remplace pas l'enregistrement auprès de la politique.**
     /// [`PolicyGate`] n'expose aucune méthode d'enregistrement — c'est une
-    /// frontière, pas un registre —, donc `oxyn-app` appelle aussi
+    /// frontière, pas un registre —, donc `oxyn-desktop` appelle aussi
     /// [`DefaultPolicy::register`](oxyn_core::DefaultPolicy::register).
     pub fn register_connection(&self, config: &ConnectionConfig) {
         self.connections.write().insert(config.id, config.clone());

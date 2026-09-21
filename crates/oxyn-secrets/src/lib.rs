@@ -110,7 +110,7 @@ mod tests {
 
     #[test]
     fn le_trajet_complet_d_une_connexion() {
-        // Ce que fait `oxyn-app` à la création d'une connexion, puis à chaque
+        // Ce que fait `oxyn-desktop` à la création d'une connexion, puis à chaque
         // ouverture : écrire le secret sous une référence, ne persister que la
         // référence, la relire, retrouver le secret.
         let trousseau = MemorySecretStore::new();

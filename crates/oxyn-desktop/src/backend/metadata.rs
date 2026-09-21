@@ -26,7 +26,7 @@ use crate::ipc::metadata::{
 };
 use crate::ipc::{CatalogAddress, CatalogNode, CommandOutcome, IpcError, RelationDetail};
 
-/// Results one catalog search returns, the GPUI tree's bound.
+/// Results one catalog search returns, the catalog tree's bound.
 pub const SEARCH_LIMIT: usize = 200;
 
 /// The longest search text accepted. A filter is a few words.

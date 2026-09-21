@@ -218,7 +218,7 @@ where
 }
 
 /// Scalar type a user can pick and type text for — the bound-parameter editor
-/// (`oxyn-ui`'s `ParameterEditor`) and anything else that turns typed text
+/// (the front's parameter editor) and anything else that turns typed text
 /// into a [`ScalarValue`].
 ///
 /// This is a strict subset of the type space [`ScalarValue`] can hold.

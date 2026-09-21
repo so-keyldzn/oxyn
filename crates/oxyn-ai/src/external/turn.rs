@@ -39,7 +39,7 @@ use crate::privacy::PrivacyTier;
 ///
 /// Le vocabulaire d'Oxyn, **pas celui du protocole** : `StopReason` ne traverse
 /// pas cette frontière. C'est le même parti qu'`oxyn-llm`, qui ne laisse pas
-/// fuir son transport — sans quoi `oxyn-app` devrait dépendre de la crate du
+/// fuir son transport — sans quoi `oxyn-desktop` devrait dépendre de la crate du
 /// protocole pour lire une fin de conversation, et le choix de ce protocole
 /// cesserait d'être réversible.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

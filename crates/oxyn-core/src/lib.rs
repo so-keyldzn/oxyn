@@ -1,6 +1,6 @@
 //! Le vocabulaire du domaine d'Oxyn.
 //!
-//! `oxyn-core` **ne dépend d'aucune autre crate du workspace**, ni de `gpui`, ni
+//! `oxyn-core` **ne dépend d'aucune autre crate du workspace**, ni de `tauri`, ni
 //! d'un client de base de données. C'est la couche qui se teste sans machine :
 //! aucune entrée-sortie, aucun réseau, aucun fichier ouvert. Tout le reste du
 //! workspace importe ces types, donc leur nommage est un engagement.

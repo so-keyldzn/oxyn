@@ -40,7 +40,7 @@
 //! plugins n'a pas à savoir qu'un runtime d'agents existe. [`PluginAgentSpec`]
 //! est donc la **forme de fichier** ; la conversion vers `oxyn_ai::AgentSpec`,
 //! avec l'attribution de l'identifiant et la validation contre le registre
-//! d'outils réel, appartient à `oxyn-app`, qui connaît les deux.
+//! d'outils réel, appartient à `oxyn-desktop`, qui connaît les deux.
 
 use std::fs;
 use std::path::Path;

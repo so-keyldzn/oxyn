@@ -507,7 +507,7 @@ impl PluginRegistry {
 
     /// Les protocoles revendiqués par les plugins de type driver **approuvés**.
     ///
-    /// Sert à `oxyn-app` pour refuser un plugin qui revendiquerait un
+    /// Sert à `oxyn-desktop` pour refuser un plugin qui revendiquerait un
     /// identifiant déjà tenu par un driver natif, avant d'exécuter la moindre
     /// instruction du composant.
     #[must_use]

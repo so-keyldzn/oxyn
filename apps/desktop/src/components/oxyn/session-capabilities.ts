@@ -1,5 +1,4 @@
-// What a session declares, turned into what the screen may say about it — the
-// port of `crates/oxyn-ui/src/session_capabilities.rs`.
+// What a session declares, turned into what the screen may say about it.
 //
 // An absent capability is announced; it is never emulated (ADR-0003). The list
 // is returned whole, supported entries included: a list that only ever shows

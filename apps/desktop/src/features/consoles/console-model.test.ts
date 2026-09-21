@@ -12,7 +12,7 @@ import {
 } from "./console-model"
 
 describe("console model", () => {
-  it("names consoles like the GPUI workspace", () => {
+  it("names consoles with a counter that never goes back", () => {
     expect(consoleTitle(3)).toBe("console_3.sql")
     expect(tabTitle({ title: " ", fromAgent: true })).toBe(
       "AI · Untitled query"

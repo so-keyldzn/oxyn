@@ -1,7 +1,7 @@
 //! Results the backend holds: windows of rows, search, value pages, export.
 //!
 //! A result is never re-run to be read again (ADR-0012, ADR-0017). Rows already
-//! in memory are formatted from the buffer, as the GPUI grid reads them; a
+//! in memory are formatted from the buffer, as the grid reads them; a
 //! batch that spilled to disk is brought back by `Command::ReadResultPage`,
 //! which checks that the result belongs to the connection. Formatting and disk
 //! reads happen on the blocking pool, never on the thread that runs the window
@@ -39,8 +39,8 @@ pub const MAX_PAGE_BYTES: usize = 4 * 1024 * 1024;
 
 /// Results the front is showing that the backend holds open at once.
 ///
-/// `oxyn-exec` prunes a retained result whose buffer nobody holds — in GPUI
-/// the grid held the `Arc`, so what was on screen was never idle. A webview
+/// `oxyn-exec` prunes a retained result whose buffer nobody holds — a native
+/// grid held the `Arc` itself, so what was on screen was never idle. A webview
 /// holds nothing, so the backend holds it for it. Bounded, or a session of
 /// filters and sorts would pin every result it ever produced
 /// ([I-06](../../../../CLAUDE.md#i-06)).

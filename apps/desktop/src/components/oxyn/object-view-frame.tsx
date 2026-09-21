@@ -17,7 +17,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 
-/** The object view's tabs, in the GPUI order. */
+/** The object view's tabs, in the order UX-SPEC lists them. */
 export type ObjectTab =
   "data" | "structure" | "indexes" | "constraints" | "relations" | "definition"
 

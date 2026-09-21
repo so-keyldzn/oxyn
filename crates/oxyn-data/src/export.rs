@@ -194,7 +194,7 @@ pub fn export<W: Write>(
         // TODO(phase 1, ouvert le 2026-09-05) : Parquet attend l'ajout de la
         // crate `parquet` au manifeste du workspace ; SQL attend la citation
         // d'identifiants de `oxyn-query` (I-10) ; Markdown attend la mise en
-        // forme décidée par `oxyn-ui`. Aucun des trois n'est un manque de code
+        // forme décidée par l'interface. Aucun des trois n'est un manque de code
         // ici : chacun attend une dépendance qui n'existe pas encore.
         autre => {
             return Err(DataError::UnsupportedFormat {

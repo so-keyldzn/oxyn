@@ -105,7 +105,7 @@ function Workspace({ open }: { open: OpenConnection | null }) {
 
 function RootDocument({ children }: { children: React.ReactNode }) {
   return (
-    // Dark until the saved preference is read, as the GPUI workspace was: a
+    // Dark until the saved preference is read: a
     // database tool is used for hours, often next to a terminal.
     // `useAppearance` then owns the `dark` class and `data-density`.
     <html

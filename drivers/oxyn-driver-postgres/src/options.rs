@@ -34,7 +34,7 @@
 //! héritées de l'environnement.
 //
 // TODO(phase 1) : demander en amont un constructeur `PgConnectOptions` sans
-// lecture d'environnement, ou porter le nettoyage dans `oxyn-app` avant le
+// lecture d'environnement, ou porter le nettoyage dans `oxyn-desktop` avant le
 // démarrage du runtime. Débloque : la suppression de `LEAKY_ENV`.
 
 use std::fmt;

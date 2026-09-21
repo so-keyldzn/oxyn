@@ -89,7 +89,7 @@ export function ParameterEditor({
                   aria-label={`Parameter ${position} value`}
                   value={row.text}
                   // NULL binds no text: the field stays read-only until a type
-                  // is chosen, as in the GPUI editor.
+                  // is chosen.
                   readOnly={row.type === "null"}
                   placeholder={row.type === "null" ? "NULL" : undefined}
                   autoComplete="off"

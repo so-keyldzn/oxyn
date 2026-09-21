@@ -157,7 +157,7 @@ mod tests {
     /// Le driver s'enregistre, se déclare, et sa déclaration tient debout.
     ///
     /// C'est le seul trajet de la crate qui ne demande pas de serveur, et c'est
-    /// celui qu'`oxyn-app` empruntera au démarrage.
+    /// celui qu'`oxyn-desktop` empruntera au démarrage.
     #[test]
     fn le_driver_s_enregistre_et_annonce_ce_qu_il_sait_faire() {
         let mut registre = DriverRegistry::new();

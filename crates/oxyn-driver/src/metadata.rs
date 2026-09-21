@@ -5,7 +5,7 @@
 //! ici, et l'interface les rend. Ce n'est pas une économie de code : c'est ce
 //! qui garantit qu'un champ de mot de passe reste un champ de mot de passe dans
 //! les quatorze drivers, qu'il ne se retrouve jamais dans un fichier de
-//! workspace, et qu'ajouter un driver ne demande pas de toucher à `oxyn-ui`.
+//! workspace, et qu'ajouter un driver ne demande pas de toucher à l'interface.
 //!
 //! # La règle que ce module fait respecter
 //!

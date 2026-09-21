@@ -95,8 +95,8 @@ impl LocalWork {
 
 /// Whether a command writes local state the shutdown must wait for.
 ///
-/// The same list as the GPUI backend: without a provider declaration here, a
-/// ⌘Q in the second after « Save » writes a clean close over lost work.
+/// Without a provider declaration here, a ⌘Q in the second after « Save »
+/// writes a clean close over lost work.
 pub(crate) const fn is_local_write(command: &Command) -> bool {
     matches!(
         command,

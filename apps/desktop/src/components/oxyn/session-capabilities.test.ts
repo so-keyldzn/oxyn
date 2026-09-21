@@ -43,7 +43,7 @@ describe("surfaces", () => {
     }
   })
 
-  it("keeps the rollback wording of the GPUI screen", () => {
+  it("keeps the rollback wording", () => {
     const transactions = surfaces([]).find(
       (surface) => surface.surface === "Transactions"
     )

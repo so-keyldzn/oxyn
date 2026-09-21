@@ -7,7 +7,7 @@
 //!
 //! # Ce que ce banc mesure, et ce qu'il ne mesure pas
 //!
-//! Il mesure la lecture seule. Il ne mesure ni le rendu GPUI, ni l'aller-retour
+//! Il mesure la lecture seule. Il ne mesure ni le rendu de l'interface, ni l'aller-retour
 //! d'introspection — le premier n'est pas mesurable par `criterion` et le
 //! second n'est pas « déjà en cache ». Autrement dit : ce banc dit ce que coûte
 //! la part que nous contrôlons, et sa marge sous les 50 ms dit combien il reste

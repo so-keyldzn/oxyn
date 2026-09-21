@@ -1,7 +1,7 @@
 //! Le registre des drivers disponibles.
 //!
 //! C'est le seul endroit où l'application apprend qu'un protocole existe.
-//! `oxyn-app` y enregistre les drivers compilés dans le binaire ; la phase 4 y
+//! `oxyn-desktop` y enregistre les drivers compilés dans le binaire ; la phase 4 y
 //! ajoutera ceux qui viennent d'un plugin WASM
 //! ([ADR-0005](../../../docs/adr/0005-wasm-plugins.md)) et ceux qui tournent en
 //! sidecar ([ADR-0007](../../../docs/adr/0007-driver-sidecar.md)). Le registre

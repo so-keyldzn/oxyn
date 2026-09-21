@@ -47,7 +47,7 @@ export function draftDiffers(draft: string, applied: string | null) {
 
 /**
  * The sentence under the bar: what it cannot say in its own width. Pure, so it
- * is tested without a DOM. The wording is the GPUI workspace's.
+ * is tested without a DOM.
  */
 export function previewNotice({
   status,

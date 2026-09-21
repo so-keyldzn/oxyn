@@ -15,7 +15,7 @@
 //! `Cargo.toml`), et le contrat de dépendances est un choix d'architecture
 //! arrêté. Le trait ne peut donc pas être implémenté ici. Ce module fournit
 //! l'exécution complète et un [`DispatchReport`] dont la forme est celle de
-//! `DispatchOutcome`, pour que le câblage dans `oxyn-app` — qui dépend des
+//! `DispatchOutcome`, pour que le câblage dans `oxyn-desktop` — qui dépend des
 //! deux — soit une traduction sans logique :
 //!
 //! ```ignore

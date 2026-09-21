@@ -5,8 +5,7 @@
 //! turns `near "ANALYZE": syntax error` into a sentence naming the capability.
 //!
 //! **Not an authorisation**: the `PolicyGate` decides what may run. A keyword
-//! this does not recognise passes, and the server answers. Ported from the GPUI
-//! workspace, which leaves with it (ADR-0029).
+//! this does not recognise passes, and the server answers.
 
 use oxyn_core::{Capabilities, SqlDialect};
 use oxyn_query::split::{split, words};

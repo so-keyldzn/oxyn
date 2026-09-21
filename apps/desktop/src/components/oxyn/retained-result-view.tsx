@@ -34,7 +34,7 @@ export type RetainedResultState =
   | { status: "expired" }
   | { status: "error"; message: string; retryable: boolean }
 
-/** What these rows are, in the words of the GPUI library. */
+/** What these rows are, in the words of the library screen. */
 export function retainedNotice(
   state: Extract<RetainedResultState, { status: "open" }>
 ) {

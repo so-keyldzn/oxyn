@@ -15,7 +15,7 @@
 //! # Ce qui n'est pas ici
 //!
 //! **Le trousseau.** `oxyn-exec` ne dépend pas de `oxyn-secrets` : les
-//! identifiants arrivent par [`CredentialResolver`], que `oxyn-app` câble sur le
+//! identifiants arrivent par [`CredentialResolver`], que `oxyn-desktop` câble sur le
 //! trousseau du système. Ce n'est pas une abstraction spéculative — c'est la
 //! frontière qui empêche l'ordonnanceur d'aller lire un mot de passe lui-même,
 //! et qui rend les tests possibles sans trousseau.
@@ -38,7 +38,7 @@ use tokio::sync::RwLock as AsyncRwLock;
 
 /// Ce qui sait retrouver les identifiants d'une connexion.
 ///
-/// Implémenté par `oxyn-app` au-dessus de `oxyn-secrets`. La méthode est
+/// Implémenté par `oxyn-desktop` au-dessus de `oxyn-secrets`. La méthode est
 /// **synchrone** : les trousseaux du système le sont, et prétendre le contraire
 /// masquerait qu'elle bloque.
 ///

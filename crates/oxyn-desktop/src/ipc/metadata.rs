@@ -20,7 +20,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::ipc::{CatalogAddress, IpcError, RelationDetail};
 
-/// Rows one preview reads, the bound of the GPUI workspace and of UX-SPEC.
+/// Rows one preview reads, the bound UX-SPEC sets.
 pub const PREVIEW_ROWS: u32 = 200;
 
 /// Sort keys one preview may carry. A composed order longer than this is not a

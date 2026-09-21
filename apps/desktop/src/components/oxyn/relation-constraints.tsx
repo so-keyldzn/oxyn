@@ -15,7 +15,7 @@ import {
 import type { ConstraintRow, IndexRow } from "@/lib/ipc/metadata"
 import type { RelationDetail } from "@/lib/ipc/types"
 
-/** `primary_key` → `PRIMARY KEY`, as the GPUI list writes it. */
+/** `primary_key` → `PRIMARY KEY`, as the constraint list writes it. */
 export function constraintKind(kind: string) {
   return kind.replaceAll("_", " ").toUpperCase()
 }

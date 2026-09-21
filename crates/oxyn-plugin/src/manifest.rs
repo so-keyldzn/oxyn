@@ -830,7 +830,7 @@ impl PluginPermissions {
 /// Ce qu'un plugin de type [`Driver`](PluginKind::Driver) déclare avant même
 /// d'être instancié.
 ///
-/// L'intérêt est concret : `oxyn-app` peut refuser un plugin qui revendique un
+/// L'intérêt est concret : `oxyn-desktop` peut refuser un plugin qui revendique un
 /// identifiant de driver déjà pris **avant** de faire tourner la moindre
 /// instruction du composant — même refus que
 /// [`DriverRegistry::register`](oxyn_driver::DriverRegistry::register), pour la

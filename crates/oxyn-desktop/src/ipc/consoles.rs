@@ -121,7 +121,7 @@ impl ParameterKind {
     }
 }
 
-/// The most values one run binds, as the GPUI editor bounded it.
+/// The most values one run binds.
 pub const MAX_PARAMETERS: usize = 128;
 /// The most bytes of value text one run binds.
 pub const MAX_PARAMETER_BYTES: usize = 1_048_576;

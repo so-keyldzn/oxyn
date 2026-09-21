@@ -151,7 +151,7 @@ pub struct ExportFormatChoice {
     pub supported: bool,
 }
 
-/// The formats, in the order the GPUI menu lists them.
+/// The formats, in the order the export menu lists them.
 pub const EXPORT_FORMATS: [(ExportFormat, &str, &str); 8] = [
     (ExportFormat::Csv, "csv", "CSV"),
     (ExportFormat::Tsv, "tsv", "TSV"),

@@ -149,7 +149,7 @@ disallowed_methods = "deny"
 disallowed_types   = "deny"
 
 [profile.dev]
-opt-level = 1              # le rendu GPUI est injouable en opt-level 0
+opt-level = 1              # opt-level 0 rend l'application trop lente pour s'en servir
 
 [profile.dev.package."*"]
 opt-level = 2              # dépendances toujours optimisées

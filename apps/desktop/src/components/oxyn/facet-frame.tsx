@@ -54,7 +54,7 @@ export function freshnessLabel(freshness: FacetFreshness): string {
  * « Stale » is said, not hidden: after a DDL sent from Oxyn the cache is
  * invalidated, and what is on screen is the read from before (ADR-0022). A
  * failed refresh keeps the previous read on screen and says it may be
- * outdated, as the GPUI definition panel does; it never retries on its own.
+ * outdated; it never retries on its own.
  */
 export function FacetFrame({
   label,

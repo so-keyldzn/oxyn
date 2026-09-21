@@ -14,7 +14,7 @@ export interface ConsoleTabInfo {
   unsaved: boolean
 }
 
-/** The GPUI naming: `console_1.sql`, a counter that never goes back. */
+/** The naming: `console_1.sql`, a counter that never goes back. */
 export function consoleTitle(counter: number) {
   return `console_${counter}.sql`
 }
