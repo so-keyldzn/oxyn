@@ -163,7 +163,7 @@ def verifier(jetons: list[str], commande_brute: str) -> None:
             EVENEMENT,
             f"{raison_ecriture}. Les écritures passant par le shell échappent "
             "aux vérifications d'invariants appliquées à Write et Edit : un "
-            "`use gpui` dans le cœur ou un secret en dur passerait sans être "
+            "`use tauri` dans le cœur ou un secret en dur passerait sans être "
             "vu. Préférer Write ou Edit ; si le shell est nécessaire, valider "
             "cette commande.",
         )

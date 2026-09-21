@@ -13,7 +13,7 @@ règle porte ce qui ne vaut que pour du code Rust.
 | Où | Quoi | Pourquoi |
 |---|---|---|
 | Crate de bibliothèque | `thiserror`, une énumération par frontière | l'appelant doit pouvoir distinguer les cas sans lire une chaîne |
-| `oxyn-app`, tests, bancs | `anyhow` | personne ne rattrape par variante en haut de la pile |
+| `oxyn-desktop`, tests, bancs | `anyhow` | personne ne rattrape par variante en haut de la pile |
 | Jamais | `Box<dyn Error>` dans une API publique | efface l'information au moment précis où elle sert |
 
 Une erreur de driver porte sa **classe** — transitoire, permanente, ambiguë

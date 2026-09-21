@@ -1,6 +1,6 @@
 ---
 name: frontiste
-description: Écrit l'interface Tauri — écrans et composants dans apps/desktop, commandes et pont IPC dans crates/oxyn-desktop, stories. À lancer pour tout nouvel écran ou composant d'interface ; GPUI n'en reçoit plus (ADR-0029).
+description: Écrit l'interface Tauri — écrans et composants dans apps/desktop, commandes et pont IPC dans crates/oxyn-desktop, stories. À lancer pour tout nouvel écran ou composant d'interface. C'est la seule interface depuis le retrait de GPUI (ADR-0029).
 tools: Read, Grep, Glob, Bash, Write, Edit, WebFetch, Skill
 model: inherit
 memory: project

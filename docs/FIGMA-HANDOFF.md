@@ -1,6 +1,10 @@
 # Index de la maquette pour l'implémentation
 
-État du relevé : 2026-09-07. Fichier Figma : `Yviemi4brBczzdRdBp1ONv`.
+État du relevé : 2026-09-07, avant le passage à Tauri. **Ce document est
+historique** : l'interface est aujourd'hui écrite avec shadcn/ui sur Base UI
+dans `apps/desktop` ([ADR-0029](adr/0029-interface-tauri-shadcn.md)), et ses
+jetons vivent dans `apps/desktop/src/styles.css`. Il se lit comme le relevé de
+ce que la maquette disait à sa date, non comme la source des écrans à livrer.
 Cet index localise les planches ; les comportements font autorité dans
 [UX-SPEC](UX-SPEC.md), et le périmètre de livraison dans
 [IMPLEMENTATION-PLAN](IMPLEMENTATION-PLAN.md).
@@ -152,7 +156,7 @@ listé ici sauf quand la valeur se vérifie ailleurs ; ce qui manquait l'est.
 
 | Maquette | Oxyn | Raison |
 |---|---|---|
-| `Explain` (96 px) | `Explain query` | plus explicite hors contexte, mais **plus large que le segment de 96 px** que la maquette dessine. L'effet réel sur la mise en page ne se mesure pas sans pixels : le harnais GPUI a une métrique de texte fictive, et une assertion de largeur y serait verte à tort ([tests.md](../.claude/rules/tests.md#les-tests-dinterface)). À trancher à la recette native |
+| `Explain` (96 px) | `Explain query` | plus explicite hors contexte, mais **plus large que le segment de 96 px** que la maquette dessine. L'effet réel sur la mise en page ne se mesure pas sans pixels : une story mesure la mise en page d'un DOM sans rendu, et une assertion de largeur y serait verte à tort ([tests.md](../.claude/rules/tests.md#les-tests-dinterface)). À trancher à la recette native |
 | `Run   ⌘↵` | `Run · ⌘Enter` | le raccourci en toutes lettres plutôt qu'en symboles ; même réserve de largeur |
 | `Restore selected drafts` | `Restore N selected items` | délibéré et déjà décrit plus haut : le bouton annonce son décompte |
 | `Start with an empty workspace` | `Continue without restoring` | dit ce que fait le geste plutôt que l'état d'arrivée ; rien ne se perd, les brouillons restent en base |
@@ -302,9 +306,10 @@ les valeurs de couleur et les styles typographiques préexistants. Les quatre
 états d'Attachment tronquent le nom sur une ligne ; les cellules de données
 absentes utilisent la variante `Kind=Null` et le libellé `∅ NULL`.
 
-La planche `223:29197`, page 03, présente les noms destinés à GPUI.
-Les alias de couleur reprennent les valeurs de `Palette` dans
-`crates/oxyn-ui/src/theme.rs`, sans modifier les couleurs préexistantes.
+La planche `223:29197`, page 03, présente les noms destinés au code. Les alias
+de couleur reprenaient alors les valeurs de la `Palette` de l'interface GPUI ;
+depuis son retrait, les jetons équivalents sont ceux de
+`apps/desktop/src/styles.css`.
 Les variables de dimensions portent les noms de `Metrics` ; les mesures du
 workbench disposent également de noms explicites.
 
@@ -378,7 +383,7 @@ Le contrôle final des pages 06, 08, 09 et 22 relève 1 178 liaisons sans
 destination manquante. Les 15 pièces jointes des pages 04, 08 et 09 ne
 débordent plus et conservent leurs 15 actions de retrait local.
 Ces vérifications statiques ne constituent pas une recette au clavier dans
-le lecteur Figma ou dans GPUI.
+le lecteur Figma ni dans l'application.
 
 ### Contrôles antérieurs et textes protégés
 
@@ -389,7 +394,7 @@ de style ou de structure. Les repères permanents suivent
 
 Les vérifications de maquette portent sur les captures, dimensions, propriétés
 et destinations des interactions Figma. Elles ne valident pas l'exécution
-GPUI, le réseau, une base réelle ni la restauration après plantage.
+de l'application, le réseau, une base réelle ni la restauration après plantage.
 
 Recette antérieure à ces corrections : le trajet Table → Structure → Constraints
 a été cliqué et contrôlé visuellement dans Figma Desktop. Le contrôle statique

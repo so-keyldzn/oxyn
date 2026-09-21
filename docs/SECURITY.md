@@ -125,8 +125,8 @@ Lever ce refus est une décision d'architecture, pas un `#[allow]` local :
 - la crate qui l'expose derrière une API sûre documente les conditions de cette
   sûreté.
 
-Les dépendances externes, elles, en contiennent — GPUI et les FFI de pilotes en
-imposent. Le refus porte sur **ce que ce dépôt écrit**.
+Les dépendances externes, elles, en contiennent — Tauri, ses
+webviews et les FFI de pilotes en imposent. Le refus porte sur **ce que ce dépôt écrit**.
 
 Un `// SAFETY:` qui paraphrase le code (« on déréférence un pointeur valide »)
 ne vaut rien : il doit dire **pourquoi** le pointeur est valide à cet endroit et

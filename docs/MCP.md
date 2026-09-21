@@ -25,7 +25,7 @@ la même chose — donc une incertitude sur lequel est utilisé.
 
 **Pourquoi il n'est pas redondant avec `WebFetch`.** `WebFetch` convertit la page
 puis la fait résumer par un petit modèle : on reçoit une réponse à une question,
-pas le texte. Pour lire la signature exacte d'une fonction de `gpui` sur docs.rs
+pas le texte. Pour lire la signature exacte d'une fonction de `tauri` sur docs.rs
 ou la valeur exacte d'un paramètre dans la documentation de PostgreSQL, ce
 résumé est une perte : c'est précisément le genre d'approximation que
 [I-12](../CLAUDE.md#i-12) interdit. `fetch` renvoie le contenu.

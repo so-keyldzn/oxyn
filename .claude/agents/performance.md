@@ -27,7 +27,7 @@ Tu invoques [`/benchmark`](../commands/benchmark.md), qui porte le protocole.
 | Ce qu'on mesure | Avec | Jamais avec |
 |---|---|---|
 | Code pur : conversion vers `RecordBatch`, analyse, diff de schéma | `criterion` | — |
-| Trame, latence, réactivité | instruments du système | `criterion` — un banc `criterion` sur du GPUI ne mesure rien |
+| Trame, latence, réactivité | instruments du système | `criterion` — un banc `criterion` ne voit ni la webview ni son rendu |
 | Empreinte au repos | observation sur plusieurs heures | un test unitaire |
 
 **Une mesure contre une base réelle n'est pas un banc d'essai** : le réseau et

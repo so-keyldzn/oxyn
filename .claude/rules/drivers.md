@@ -55,7 +55,7 @@ Ce qui se perd le plus souvent, et le plus silencieusement :
 
 | Interdit | Pourquoi |
 |---|---|
-| Dépendre d'`oxyn-ui`, d'`oxyn-ai`, ou d'un autre driver | inverse le sens des dépendances. **`oxyn-core` est au contraire la dépendance attendue** — c'est le vocabulaire commun, et les deux drivers livrés en dépendent ([DRIVER-CONTRACT](../../docs/DRIVER-CONTRACT.md)) |
+| Dépendre d'`oxyn-desktop`, d'`oxyn-ai`, ou d'un autre driver | inverse le sens des dépendances. **`oxyn-core` est au contraire la dépendance attendue** — c'est le vocabulaire commun, et les deux drivers livrés en dépendent ([DRIVER-CONTRACT](../../docs/DRIVER-CONTRACT.md)) |
 | Lire une variable d'environnement, écrire un fichier | un driver reçoit sa configuration |
 | Retenter tout seul | la politique de reprise appartient à l'appelant, seul à savoir si l'opération est rejouable |
 | `SET`/`USE` non déclaré | change en silence le sens des requêtes suivantes de l'utilisateur |

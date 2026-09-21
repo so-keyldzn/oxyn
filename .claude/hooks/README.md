@@ -63,7 +63,7 @@ Un motif ajouté sans son faux positif dans `test_hooks.py` sera refusé en revu
 
 Le filtrage se fait sur les **mots** de la commande, jamais sur la ligne brute :
 sinon `echo "ne jamais faire git push --force"` se fait refuser. Pour le code, on
-ignore les lignes de commentaire, sinon une mention de `gpui` dans un `//` est
+ignore les lignes de commentaire, sinon une mention de `tauri` dans un `//` est
 prise pour un import.
 
 **Un faux positif bloque le travail à chaque tour, et le hook finit désactivé —

@@ -4,6 +4,11 @@
 > C'est le seul document qui parle de ce qui **reste à faire** — les documents
 > d'autorité décrivent ce qui est décidé.
 
+État au 2026-09-18 : l'interface est l'application Tauri (`apps/desktop` et
+`crates/oxyn-desktop`) ; l'interface GPUI a été retirée ce jour-là, voir
+[Migration vers l'interface Tauri](#migration-vers-linterface-tauri). Les états
+datés qui suivent décrivent le produit à leur date.
+
 État au 2026-09-10 : les quinze crates existent, avec une application GPUI,
 un formulaire de connexion et un parcours d'exécution SQL. L'intégration UI/UX
 reprend la maquette Figma : sidebar repliable, thèmes clair/sombre, Hugeicons et
@@ -81,7 +86,8 @@ résultats, avec persistance versionnée du thème, des panneaux, de l'indicateu
 NULL et du groupement numérique selon ADR-0013. Les erreurs de sauvegarde sont
 visibles et les écritures anciennes ne remplacent pas les nouvelles.
 La fermeture de la dernière fenêtre attend les écritures engagées ; les autres
-chemins d'arrêt natifs et le délai du hook GPUI restent à recetter.
+chemins d'arrêt natifs et le délai du hook GPUI restaient à recetter — ce hook
+a disparu avec l'interface GPUI le 2026-09-18.
 Les cellules absentes utilisent maintenant `∅ NULL` ; les cellules de grille
 reprennent Geist 13 px du nœud `190:1652`, ou 14 px en lecture confortable.
 Les en-têtes reprennent la ligne unique du nœud `190:1639`. Le prototype Figma ne valide ni la
@@ -169,18 +175,55 @@ de connexion, la console SQL (exécution, annulation, approbation, export), la g
 paginée, l'arbre du catalogue et la vue d'objet (Data, Structure) fonctionnent dans
 la fenêtre Tauri.
 
-Reste à faire avant de supprimer `oxyn-ui` et `oxyn-app` :
+La liste qui restait alors à faire avant de supprimer `oxyn-ui` et `oxyn-app` :
 
-- bascule compacte sous 1 200 px et menu `More` ([UX-SPEC](UX-SPEC.md#largeur-réduite)) ;
-- réglages d'affichage des cellules (`FormatOptions`) et thème clair commutable ;
-- restauration des brouillons après arrêt brutal ([UX-SPEC](UX-SPEC.md#restauration-après-un-arrêt-brutal)) ;
+- ~~bascule compacte sous 1 200 px et menu `More`~~ — fait (`COMPACT_BELOW_PX`, `features/workspace/use-compact.ts`) ;
+- ~~réglages d'affichage des cellules (`FormatOptions`) et thème clair commutable~~ — fait (`features/settings/`) ;
+- ~~restauration des brouillons après arrêt brutal~~ — fait (`features/recovery/`) ;
 - campagne de mesure des budgets de [PERFORMANCE](PERFORMANCE.md) **dans la webview**,
-  qui est la condition de reconsidération de l'ADR-0029 ;
-- vérification du rendu sous WebView2 et WebKitGTK.
+  qui est la condition de reconsidération de l'ADR-0029 — **non faite** ;
+- vérification du rendu sous WebView2 et WebKitGTK — **non faite**.
 
-**Porte de sortie** : chaque parcours de l'interface GPUI a son équivalent dans
-`apps/desktop`, avec ses stories ; alors `oxyn-ui`, `oxyn-app`, la dépendance `gpui`
-et l'ADR-0009 sont retirés dans un même commit.
+**Porte de sortie — franchie le 2026-09-18** (commit `6ecb8ce`) : chaque parcours
+de l'interface GPUI a son équivalent dans `apps/desktop`, avec ses stories ;
+`oxyn-ui`, `oxyn-app` et la dépendance `gpui` ont été retirés dans un même
+commit, avec les cibles `make app` et `make lancer` — `make desktop-dev` lance
+désormais l'application. `.claude/verifier_socle.py` refuse `gpui` partout.
+
+Ce qui reste ouvert après le retrait, sans qu'aucun de ces points ne soit tranché
+ici :
+
+- **les deux derniers points de la liste ci-dessus.** Ils étaient annoncés
+  « avant de supprimer » ; la porte de sortie, elle, ne les exigeait pas, et le
+  retrait a eu lieu sans eux. Tant que la campagne n'est pas faite, la condition
+  de reconsidération d'ADR-0029 n'a pas été évaluée, et les verdicts de trame, de
+  démarrage à froid et de mémoire au repos de
+  [PERFORMANCE](PERFORMANCE.md#confrontation-aux-budgets) portent sur
+  l'interface retirée ;
+- **le statut d'ADR-0009.** ADR-0029 le déclare remplacé « à la suppression des
+  crates GPUI » ; son fichier porte toujours `accepté`. Changer ce statut relève
+  de la [question ouverte n° 3](#3-vingt-adr-sur-vingt-six-sont-au-statut-proposé),
+  comme le passage d'ADR-0029 lui-même à `accepté` ;
+- **ce que l'interface GPUI faisait et qu'`apps/desktop` ne fait pas**, relevé en
+  réalignant [ARCHITECTURE](ARCHITECTURE.md) : le titre de fenêtre qui signalait
+  un `--temporary-workspace`, et le sélecteur de fichiers par `⌘O`, ou `⌘N` pour
+  une base SQLite à créer — le front n'offre qu'un `Browse…` vers un fichier
+  existant. Aucun document d'autorité hors ARCHITECTURE ne les exigeait : les
+  porter ou y renoncer est à décider ;
+- **`assets/fonts/` et `assets/ui/`**, que seul `oxyn-ui` lisait, n'ont plus de
+  lecteur ;
+- **des commentaires de code nomment encore `oxyn-app`, `oxyn-ui` ou GPUI** comme
+  s'ils existaient, dans `oxyn-core`, `oxyn-exec`, `oxyn-driver`, `oxyn-plugin`,
+  `oxyn-secrets`, `oxyn-ai`, `oxyn-data`, `oxyn-catalog`, le driver PostgreSQL,
+  `oxyn-desktop`, `apps/desktop` et le `[profile.dev]` du `Cargo.toml` racine.
+  `grep -rn -i "gpui\|oxyn-ui\|oxyn-app" crates drivers apps/desktop/src Cargo.toml`
+  en donne la liste.
+
+Les validations datées de ce document qui citent un « test GPUI » ou un test
+d'`oxyn-ui` décrivent l'état de leur date : ces tests ont été supprimés avec les
+deux crates. Côté front, [I-01](../CLAUDE.md#i-01) est désormais tenu par
+`.claude/hooks/code_interdit.py`, qui refuse tout appelant d'`invoke` hors de
+`apps/desktop/src/lib/ipc/client.ts`.
 
 ## D'où viennent ces phases
 
@@ -456,8 +499,8 @@ Parcours importants encore à raccorder, vérifiés dans le code :
 | Aperçu de table | Réalisé, selon [ADR-0020](adr/0020-apercu-trie-filtre-parcouru.md) : `PreviewSort` et `PreviewFilter` sont dans la commande, les capacités `PREVIEW_SORT` et `PREVIEW_FILTER` sont déclarées, les deux drivers composent la traduction citée, et la page suivante existe quand l'ordre est déterministe. Une réserve d'arbitrage subsiste sur le tri par défaut — voir les questions ouvertes en fin de document |
 | Reprise de session | Le marqueur d'arrêt est en place ([ADR-0021](adr/0021-marqueur-d-arret.md)) : un `⌘Q` ne déclenche plus la reprise, une session sans fermeture au battement vieilli si. La restauration de l'emplacement d'objet qu'[UX-SPEC](UX-SPEC.md#restauration-après-un-arrêt-brutal) promet est réalisée (`ObjectLocation`) |
 | Bibliothèque inter-workspaces | Réalisé : les filtres portent les connexions historiques supprimées ou extérieures au workspace courant, par `Command::ListHistoryConnections` |
-| Workspace IA | La fuite [I-04](../CLAUDE.md#i-04) est fermée : `ToolOutcome::Failed` porte un rapport aux champs privés dont le seul constructeur exige le niveau de la connexion, et le filtre s'applique **à la construction** — sous `Local`/`Metadata`, le message du serveur n'entre jamais dans la structure. `PrivacyTier` vit désormais sur la `ConnectionConfig`, comme sa documentation l'affirmait déjà. La configuration des fournisseurs, l'entrée conditionnelle `Ask AI` (`190:1549`), les propositions par le bus et la provenance persistante des documents sont réalisées, et `oxyn-ai` est une dépendance déclarée d'`oxyn-app` |
-| Recette produit | Rendu natif complet, accessibilité et mesures de performance, distincts des tests GPUI sans GPU |
+| Workspace IA | La fuite [I-04](../CLAUDE.md#i-04) est fermée : `ToolOutcome::Failed` porte un rapport aux champs privés dont le seul constructeur exige le niveau de la connexion, et le filtre s'applique **à la construction** — sous `Local`/`Metadata`, le message du serveur n'entre jamais dans la structure. `PrivacyTier` vit désormais sur la `ConnectionConfig`, comme sa documentation l'affirmait déjà. La configuration des fournisseurs, l'entrée conditionnelle `Ask AI` (`190:1549`), les propositions par le bus et la provenance persistante des documents sont réalisées, et `oxyn-ai` est une dépendance déclarée d'`oxyn-app` — d'`oxyn-desktop` depuis le retrait de GPUI |
+| Recette produit | Rendu natif complet, accessibilité et mesures de performance, distincts des tests GPUI sans GPU — aujourd'hui des stories Storybook, qui ne remplacent pas davantage la recette |
 
 Validation du lot rafraîchissement automatique : `make qualite` passe avec
 1 536 tests réussis, aucun échec et 39 ignorés. Les vues se relisent seules après
@@ -1383,8 +1426,10 @@ exécutables. Une phase 0 bâclée se paie sur toutes les suivantes.
 
 ## Phase 1 — Premier trajet visible
 
-- `oxyn-ui` : fenêtre, éditeur de requête, grille virtualisée sur `RecordBatch` ;
-- `oxyn-app` : câblage ;
+- fenêtre, éditeur de requête, grille virtualisée sur `RecordBatch` — livrés
+  d'abord en GPUI dans `oxyn-ui`, câblés par `oxyn-app`, puis portés dans
+  `apps/desktop` et `oxyn-desktop` ; les deux crates GPUI ont été retirées le
+  2026-09-18 ([ADR-0029](adr/0029-interface-tauri-shadcn.md)) ;
 - annulation de bout en bout, y compris côté serveur ;
 - les cinq états de vue ([UX-SPEC](UX-SPEC.md#états-dune-vue)).
 
@@ -1392,9 +1437,12 @@ exécutables. Une phase 0 bâclée se paie sur toutes les suivantes.
 **mesurés**, pas supposés — c'est la première campagne de mesure, et elle
 confirme ou amende les budgets par un ADR.
 
-> **[ADR]** C'est la dernière phase où la bascule vers egui reste une réécriture
+> **[ADR]** ~~C'est la dernière phase où la bascule vers egui reste une réécriture
 > de deux crates ([ADR-0001](adr/0001-ui-toolkit.md)). Après, le coût change de
-> nature. Si GPUI doit être remis en cause, c'est ici.
+> nature. Si GPUI doit être remis en cause, c'est ici.~~ — GPUI a été remis en
+> cause par [ADR-0029](adr/0029-interface-tauri-shadcn.md) et retiré le
+> 2026-09-18 ; ce sont désormais les conditions de reconsidération d'ADR-0029
+> qui valent.
 
 ## Phase 2 — Les protocoles qui comptent
 

@@ -29,7 +29,7 @@ compilation :
 
 ## Ce que tu ne fais jamais
 
-- importer `gpui` ou `tauri` ([I-08](../../CLAUDE.md#i-08)) ;
+- importer `tauri` hors d'`oxyn-desktop` ([I-08](../../CLAUDE.md#i-08)) ;
 - offrir un chemin vers un driver qui ne passe pas par le bus
   ([I-01](../../CLAUDE.md#i-01)) ;
 - `unwrap`, `expect`, `as` débordant sur un chemin atteignable depuis une

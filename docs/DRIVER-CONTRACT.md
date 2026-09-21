@@ -22,8 +22,8 @@ donnée non fiable : un type inconnu, un `NULL` là où le schéma dit `NOT NULL
 un entier hors bornes, un encodage invalide.
 
 **Panne concrète :** un serveur MySQL configuré avec un type spatial renvoie un
-BLOB qu'un `unwrap()` sur le décodage fait paniquer. GPUI n'attrape pas la
-panique du thread d'exécution : l'application meurt, et l'utilisateur perd ses
+BLOB qu'un `unwrap()` sur le décodage fait paniquer. Le profil `release`
+compile avec `panic = "abort"` : rien n'attrape la panique, l'application meurt, et l'utilisateur perd ses
 onglets et ses requêtes non sauvegardées.
 
 Interdits dans un chemin atteignable depuis une réponse serveur : `unwrap()`,
@@ -141,7 +141,7 @@ base. La corruption est invisible et permanente.
 
 | Interdit | Pourquoi |
 |---|---|
-| Dépendre d'`oxyn-exec`, `oxyn-store`, `oxyn-app`, `oxyn-ui`, `oxyn-ai` ou d'un autre driver | inverse le sens des dépendances. `oxyn-core` **est** au contraire la dépendance attendue : c'est le vocabulaire commun — `ExecRequest`, `OxynError`, `PreviewShape` —, et les deux drivers livrés en dépendent ([ARCHITECTURE](ARCHITECTURE.md#le-sens-des-dépendances)) |
+| Dépendre d'`oxyn-exec`, `oxyn-store`, `oxyn-desktop`, `oxyn-ai` ou d'un autre driver | inverse le sens des dépendances. `oxyn-core` **est** au contraire la dépendance attendue : c'est le vocabulaire commun — `ExecRequest`, `OxynError`, `PreviewShape` —, et les deux drivers livrés en dépendent ([ARCHITECTURE](ARCHITECTURE.md#le-sens-des-dépendances)) |
 | Exister en double pour deux produits parlant le même protocole | [ADR-0003](adr/0003-driver-capabilities.md) : Redshift ≡ PostgreSQL, MariaDB ≡ MySQL. La différence est une capacité, pas une crate |
 | Écrire dans un fichier, ouvrir une fenêtre, lire une variable d'environnement | un driver reçoit sa configuration, il ne va pas la chercher |
 | Journaliser une valeur de paramètre ou un identifiant de connexion | [I-03](../CLAUDE.md#i-03) |

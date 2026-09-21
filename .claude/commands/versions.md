@@ -41,14 +41,6 @@ Pour chaque écart :
    `docs/RESEARCH-NOTES.md`, dans le même commit que la modification du
    `Cargo.toml`. Séparer les deux, c'est garantir que l'un des deux sera oublié.
 
-## Le piège des épinglages de GPUI
-
-`gpui 0.2.2` épingle `cocoa =0.26.0`, `cocoa-foundation =0.2.0` et
-`core-foundation =0.10.0` avec `=`. Monter une de ces crates rend le graphe
-**insoluble** : Cargo échoue au lieu d'unifier, et le message ne désigne pas
-GPUI comme responsable. Vérifier avant d'ajouter toute crate touchant aux API
-système macOS.
-
 ## Vérifier
 
 ```bash

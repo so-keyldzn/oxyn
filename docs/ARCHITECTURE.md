@@ -11,7 +11,8 @@ depuis ADR-0018, ADR-0020 et ADR-0023. L'avancement se lit dans
 à faire — le répéter ici garantissait de le laisser pourrir.
 
 Ce document décrit le découpage **réellement implémenté**, réaligné sur les sources le
-2026-09-14. En cas de contradiction avec le code, c'est un bug — de l'un ou de l'autre.
+2026-09-14 ; les passages sur l'interface l'ont été sur `crates/oxyn-desktop` le
+2026-09-18, au retrait de GPUI. En cas de contradiction avec le code, c'est un bug — de l'un ou de l'autre.
 Les décisions sont justifiées dans les [ADR](adr/) ; ce document en dérive et ne les
 rejuge pas.
 
@@ -41,50 +42,20 @@ Le point 4 est la décision structurante la plus importante du document ; voir �
 
 ---
 
-## 2. Choix du toolkit UI : GPUI, remplacé par Tauri
+## 2. Le toolkit UI : de GPUI à Tauri
 
-> **Remplacé par [ADR-0029](adr/0029-interface-tauri-shadcn.md) le 2026-09-15.**
-> L'interface cible est `apps/desktop` — TanStack Start en mode SPA, shadcn/ui sur
-> Base UI, Storybook — servie par la crate `oxyn-desktop` (Tauri 2). `oxyn-ui` et
-> `oxyn-app` restent dans le workspace jusqu'à la parité, puis sont supprimées.
-> La section ci-dessous décrit l'interface GPUI tant qu'elle existe ; le pont IPC
-> est décrit au [§2 bis](#2-bis-linterface-tauri).
+L'interface a d'abord été écrite en GPUI ([ADR-0001](adr/0001-ui-toolkit.md)),
+dans deux crates, `oxyn-ui` et `oxyn-app`.
+[ADR-0029](adr/0029-interface-tauri-shadcn.md) l'a remplacée le 2026-09-15 par
+une application web servie par Tauri 2 ; les deux crates et la dépendance `gpui`
+ont été retirées le 2026-09-18, une fois la parité atteinte. Les raisons du
+premier choix et celles de son abandon vivent dans ces deux ADR, pas ici.
 
-Les deux candidats en Rust pur, GPU-accéléré, sans webview, étaient egui et GPUI.
-
-| Critère | egui | GPUI |
-|---|---|---|
-| Paradigme | Immediate mode | Retenu, arbre d'éléments + layout flexbox (taffy) |
-| Rendu de texte | Correct, sans crénage avancé ni ligatures | Excellent (moteur de Zed) |
-| Éditeur de code | À construire intégralement | Primitives d'éditeur éprouvées |
-| Grille virtualisée | `egui_table` | À construire, sur listes virtualisées natives |
-| macOS / Linux / Windows | Les trois solides | macOS excellent, Linux correct, **Windows fragile** |
-| Accessibilité | AccessKit intégré | Partielle |
-| Documentation | Bonne | Pauvre — lecture du code de Zed souvent nécessaire |
-
-**Décision : GPUI**, pour une raison décisive — les deux surfaces où l'utilisateur passe
-95 % de son temps sont l'éditeur de requêtes et la grille de résultats, et ce sont
-précisément celles où l'immediate mode coûte le plus cher.
-
-**Fait vérifié, contrairement à l'hypothèse initiale :** `gpui` est publié sur crates.io
-(**0.2.2**, non yanké). Il n'y a pas à vendorer le monorepo Zed ni à épingler un commit git.
-Le risque « API à vendorer depuis git » qui pesait sur cette décision est retiré ; le risque
-« API instable entre versions mineures » demeure et reste couvert par la règle suivante.
-
-`oxyn-app` ouvre effectivement une fenêtre sur macOS 26.2 / arm64 / Rust 1.98.1 :
-`Application::new().run(…)`, `cx.open_window(…)`, `impl Render`, et
-`Context::spawn` pour ramener les événements d'exécution vers les vues. Le piège
-rencontré à l'écriture : `App::new` vient du trait `AppContext`, apporté par
-`gpui::prelude::*` — sans le prélude, la création de la vue racine ne compile pas
-et l'erreur ne nomme pas le trait manquant.
-
-> ### Règle d'isolation du toolkit
-> Aucune crate en dehors de `oxyn-ui` et `oxyn-app` ne dépend de `gpui`. Le domaine, les
-> drivers, le catalogue, l'exécution, l'IA et les plugins ne connaissent que des types
-> Rust nus et des canaux. Changer de toolkit reste une réécriture de deux crates, pas du
-> produit.
-
-Voir [ADR-0001](adr/0001-ui-toolkit.md).
+Ce qui a survécu au changement est la **règle d'isolation**, et c'est elle qui
+l'a rendu possible : le commit de retrait n'a modifié aucune crate du cœur. Elle
+s'énonce désormais en [I-08](../CLAUDE.md#i-08) — aucune crate hors
+`oxyn-desktop` ne dépend de `tauri` — et `.claude/verifier_socle.py` refuse
+`gpui` où que ce soit.
 
 ---
 
@@ -98,20 +69,36 @@ apps/desktop/                     # le front : pnpm, Vite, TanStack Start (SPA)
 │                                 #   chacun avec ses stories, qui sont aussi ses tests
 ├── src/features/                 # écrans : connexion, workspace ; état de session
 └── .storybook/                   # atelier de composants ; addon-vitest + addon-a11y
-crates/oxyn-desktop/              # l'hôte Tauri
-├── src/commands.rs               # la surface IPC : parse, puis délègue au backend
-├── src/backend.rs                # assemblage de l'Executor ; toute action est une Command
-├── src/ipc.rs                    # ce qui traverse la frontière, plus étroit que le domaine
+crates/oxyn-desktop/              # l'hôte Tauri, binaire `oxyn-desktop`
+├── src/main.rs                   # journal, runtime Tokio, backend, puis la fenêtre
+├── src/commands.rs + commands/   # la surface IPC : parse, puis délègue au backend
+├── src/backend.rs + backend/     # assemblage de l'Executor ; toute action est une Command
+├── src/ipc.rs + ipc/             # ce qui traverse la frontière, plus étroit que le domaine
 ├── src/catalog.rs                # arbre du catalogue et commande d'expansion
+├── src/credentials.rs            # le seul point qui lit ou écrit le trousseau
 ├── capabilities/main.json        # permissions de la webview
 └── tauri.conf.json               # CSP de production ; tauri.dev.json5 la relâche en dev
 ```
+
+Chaque domaine — consoles, métadonnées, résultats, bibliothèque, reprise,
+réglages, IA — a son fichier dans chacun des trois répertoires `commands/`,
+`backend/` et `ipc/`. La convention d'ajout est dans
+[front.md](../.claude/rules/front.md).
 
 **Le pont ne crée aucun chemin d'exécution.** Chaque commande Tauri de
 `commands.rs` parse ce qu'envoie la webview et appelle `Backend`, qui émet une
 `Command` portant `Actor::Human` vers l'`Executor` ([I-01](../CLAUDE.md#i-01)). La
 seule écriture hors bus — les secrets d'un brouillon de connexion — passe par
-`credentials.rs`, comme dans `oxyn-app`.
+`credentials.rs` : un appel au trousseau par driver serait autant d'endroits à
+auditer au lieu d'un ([I-03](../CLAUDE.md#i-03)).
+
+**Une `Command` ne naît que dans `backend.rs`, `backend/` et `catalog.rs`.** Le
+front ne peut en construire aucune : il n'a que `invoke`, et un seul module
+l'appelle, `src/lib/ipc/client.ts` — `.claude/hooks/code_interdit.py` refuse
+tout autre appelant. La liste à jour des fichiers émetteurs se retrouve par
+`grep -rl "Command::" crates/oxyn-desktop/src`, seule forme qui ne se périme
+pas. Toutes passent par l'`Executor` — `dispatch` ou `dispatch_as` — et celles
+d'un agent y portent `Actor::Agent` ([I-07](../CLAUDE.md#i-07)).
 
 **Les résultats traversent l'IPC par pages formatées.** `result_page` lit au plus
 2 000 lignes du `ResultBuffer` et les formate avec `oxyn_data::format_cell`. La
@@ -134,13 +121,15 @@ vers la webview ([I-03](../CLAUDE.md#i-03)) ; des tests d'`ipc.rs` le vérifient
 
 ## 3. Le workspace Cargo
 
-16 crates, telles qu'elles existent :
+14 crates, telles qu'elles existent, plus le front `apps/desktop`
+([§2 bis](#2-bis-linterface-tauri)) :
 
 ```
 oxyn/
 ├── Cargo.toml                    # workspace : [workspace.dependencies] et lints partagés
 ├── rust-toolchain.toml           # 1.98.1, épinglé (ADR-0008)
-├── Makefile                      # `make qualite`, et `make app` qui produit Oxyn.app
+├── Makefile                      # `make qualite`, `make desktop-dev`, `make desktop`
+├── apps/desktop/                 # le front de la webview (pnpm) — §2 bis
 ├── crates/
 │   ├── oxyn-core/                # vocabulaire : ids, erreurs, capacités, valeurs,
 │   │                             #   Command bus, Policy gate, CancelToken. Zéro I/O.
@@ -154,65 +143,36 @@ oxyn/
 │   ├── oxyn-llm/                 # abstraction des fournisseurs de modèles
 │   ├── oxyn-ai/                  # runtime d'agents, outils, contexte, confidentialité
 │   ├── oxyn-plugin/              # hôte WASM (wasmtime derrière la feature `wasm-host`)
-│   ├── oxyn-ui/                  # GPUI : grille, éditeur, arbre, barre d'état, approbation,
-│   │                             #   formulaire de connexion, thème, contrôles, icônes,
-│   │                             #   réglages d'affichage
-│   ├── oxyn-app/                 # binaire `oxyn` : backend, vue racine, traduction, fenêtre
 │   └── oxyn-desktop/             # binaire `oxyn-desktop` : hôte Tauri et pont IPC (ADR-0029)
 ├── drivers/
 │   ├── oxyn-driver-sqlite/       # embarqué
 │   └── oxyn-driver-postgres/     # couvre aussi Redshift, TimescaleDB, pgvector
 ├── assets/
 │   ├── brand/                    # symbole, iconset, Oxyn.icns
-│   ├── fonts/                    # Geist, incluse à la compilation par oxyn-ui::icons
+│   ├── fonts/                    # Geist — plus lue par aucun code depuis le retrait de GPUI
 │   └── ui/                       # glyphes Hugeicons et logo, idem — provenance et licences
 │                                 #   dans provenance.json et docs/RESEARCH-NOTES.md
 └── docs/
 ```
 
-**`oxyn-app` tient en huit sujets, et chacun a une raison d'exister à part.**
-L'espace de travail en occupe plusieurs fichiers — `workspace/` porte le
-catalogue, le contenu, la disposition, l'export et le conditionnement aux
-capacités — parce qu'un seul fichier y porterait cinq sujets ; le sujet, lui,
-reste un.
+`assets/fonts/` et `assets/ui/` étaient inclus à la compilation par `oxyn-ui`.
+Le front charge Geist par `@fontsource-variable/geist` et ses icônes par le
+paquet Hugeicons : ces deux répertoires n'ont plus de lecteur. Leur sort n'est
+pas tranché ([IMPLEMENTATION-PLAN](IMPLEMENTATION-PLAN.md#migration-vers-linterface-tauri)).
 
-| Fichier | Sujet | Pourquoi il n'est pas ailleurs |
-|---|---|---|
-| `backend.rs` | ce qui n'est pas des pixels : état local, drivers, politique, ordonnanceur, runtime Tokio | le thread UI ne doit rien pouvoir en atteindre directement ([I-05](../CLAUDE.md#i-05)) |
-| `root.rs` | la vue racine : l'écran de connexion, puis l'espace de travail | c'est là qu'un brouillon de connexion devient `CreateConnection` puis `Connect` |
-| `workspace.rs` + `workspace/` | l'espace de travail sur une connexion ouverte | c'est là qu'un `Cmd+Entrée` devient `Command::Execute` |
-| `picker.rs` | traduction `DriverMetadata` → `DriverChoice` | seule crate à connaître `oxyn-driver` **et** `oxyn-ui` ; sans elle l'une dépendrait de l'autre |
-| `credentials.rs` | le seul point qui lit ou écrit le trousseau | un appel au trousseau par driver serait six endroits à auditer au lieu d'un ([I-03](../CLAUDE.md#i-03)) |
-| `recovery.rs` + `recovery/` | l'écran de reprise après un arrêt anormal | il émet ses propres `Command` de lecture et d'écriture de documents, hors ligne ([ADR-0021](adr/0021-marqueur-d-arret.md)) |
-| `ai.rs` + `ai/` | la jonction entre le runtime d'agents et l'ordonnanceur | seule crate à dépendre d'`oxyn-ai` **et** d'`oxyn-exec` ; le trait `CommandSink` ne peut être implémenté que là ([ADR-0023](adr/0023-fournisseurs-declares-et-provenance.md)) |
-| `main.rs` | les traces et la fenêtre | rien d'autre |
-
-**Une `Command` ne naît que dans `oxyn-app`** : un test d'`oxyn-ui` échoue si un
-composant y mentionne seulement ce type — et depuis le 2026-09-14, un second test
-vérifie que **toutes** les sources compilées d'`oxyn-ui` sont bien couvertes par
-ce garde-fou, deux y ayant échappé.
-
-Quatre **zones** l'émettent — `root.rs`, `workspace/`, `recovery.rs` pour ses
-lectures hors ligne, et `ai/` qui relaie celles d'un agent — **plus `backend/`**,
-où naissent `Connect`, `CreateConnection`, les préférences, les documents et la
-liste des fournisseurs. Une rédaction antérieure disait « quatre endroits, et pas
-un de plus » en omettant `backend/` : une relecture d'[I-01](../CLAUDE.md#i-01)
-qui s'y serait fiée aurait sauté le fichier où naissent les connexions.
-
-Toutes passent par [`Executor::dispatch_as`](#4-la-couche-driver) : il n'existe
-pas de second chemin d'exécution. La liste à jour se retrouve par
-`grep -rl "Command::" crates/oxyn-app/src`, qui est la seule forme qui ne se
-périme pas.
+`oxyn-desktop` est la seule crate à dépendre à la fois d'`oxyn-ai` et
+d'`oxyn-exec` : c'est donc là, dans `backend/ai/`, que le trait `CommandSink`
+est implémenté pour relayer les commandes d'un agent vers l'ordonnanceur
+([ADR-0023](adr/0023-fournisseurs-declares-et-provenance.md)).
 
 **Aucune connexion n'est ouverte d'office.** Le premier écran est le choix du
 type de base, alimenté par le registre de drivers et par lui seul : montrer un
 type que le registre ne connaît pas déplacerait l'échec au moment de la
 connexion, avec un message inexploitable
 ([ADR-0003](adr/0003-driver-capabilities.md)). Un champ de genre `Path` — celui
-de SQLite — ouvre le sélecteur de fichiers de la plateforme par `⌘O`, ou `⌘N`
-pour une base à créer. Ces actions sont aussi accessibles par des boutons.
-Les champs et l'éditeur SQL utilisent l'entrée de texte native GPUI et acceptent
-le placement du curseur et la sélection à la souris.
+de SQLite — porte un bouton `Browse…` qui ouvre le sélecteur de fichiers de la
+plateforme (`tauri-plugin-dialog`), limité à un fichier existant. L'éditeur SQL
+est CodeMirror 6, avec `@codemirror/lang-sql`.
 
 L'espace de travail conserve la session renvoyée par `Connect`. Une seule
 exécution est active par éditeur ; ses événements sont filtrés par identifiant
@@ -226,8 +186,11 @@ L'option explicite `--temporary-workspace` ouvre un état et un magasin de secre
 en mémoire pour les vérifications locales. Elle ne lit ni le workspace enregistré
 ni le trousseau et n'ouvre aucune base automatiquement. Les connexions choisies
 restent soumises au même command bus et au même `PolicyGate` ; l'option n'isole
-pas un serveur que l'utilisateur déciderait de contacter. Le titre de fenêtre
-signale le caractère temporaire.
+pas un serveur que l'utilisateur déciderait de contacter. `make desktop-dev`
+lance toujours l'application avec cette option. **Rien dans la fenêtre ne
+signale aujourd'hui le caractère temporaire** : l'interface GPUI le mettait dans
+le titre, `oxyn-desktop` ne le fait pas
+([IMPLEMENTATION-PLAN](IMPLEMENTATION-PLAN.md#migration-vers-linterface-tauri)).
 
 L'aperçu d'une table utilise `Command::PreviewRelation` avec connexion, session,
 niveaux d'identifiant et limite explicites. Le `PolicyGate` décide avant la
@@ -255,15 +218,14 @@ convertis en texte par le serveur pour cet aperçu ; ces colonnes sont donc
 annoncées comme texte. Les autres colonnes conservent leur type natif. Le SQL
 saisi dans l'éditeur reste inchangé et aucune erreur ne déclenche de rejeu.
 
-Le binaire nu ne suffit pas sur macOS : sans paquet `.app`, le système traite le
-processus comme un accessoire — ni Dock, ni activation propre, ni identifiant
-que l'outillage puisse désigner. `make app` assemble
-`target/<profil>/Oxyn.app` à partir de `crates/oxyn-app/Oxyn.app.plist` et de
-`assets/brand/Oxyn.icns`.
+Le paquet d'application est produit par `make desktop PROFIL=release`
+(`tauri build`), selon la section `bundle` de `crates/oxyn-desktop/tauri.conf.json` :
+icônes de `crates/oxyn-desktop/icons/`, macOS 13.0 au minimum. Sans
+`PROFIL=release`, `make desktop` construit le binaire sans paquet.
 
 Les préférences de lecture vivent dans `workspace_preferences`, ajoutée par
 la migration SQLite 4. Le payload est un JSON versionné de `WorkspacePreferences`
-(`oxyn-core`), sans type GPUI. Les deux commandes de lecture/écriture passent
+(`oxyn-core`), sans type d'interface. Les deux commandes de lecture/écriture passent
 par le bus et le pool bloquant. L'écriture est réservée à l'humain par la
 politique par défaut. La validation et la comparaison des révisions ont lieu
 dans la transaction locale ; un état illisible n'est jamais remplacé en silence.
@@ -603,7 +565,10 @@ Les privilèges, commentaires, données et dépendances externes ne font pas
 partie de cette portée ; elle n'est pas un dump de base. Les notes exposent les
 limitations et le contexte de résolution des expressions.
 
-Le lecteur GPUI a sa propre commande annulable, sans appel au driver. Les
+Dans l'interface, l'onglet DDL demande la définition par sa propre commande
+— `refresh_relation_facet`, qui émet `RefreshCatalogScope::Definition` sous
+l'identifiant choisi par le front, donc annulable —, puis la lit dans le cache
+par `relation_facets`, sans appel au driver. Les
 retours corrélés à un objet quitté ne remplacent pas la vue courante. Un échec
 de rafraîchissement conserve un texte explicitement marqué comme antérieur.
 Open DDL in console emprunte le trajet de copie vers une nouvelle console,
@@ -925,18 +890,44 @@ leur portée locale globale ; les documents sont filtrés par workspace.
 
 ```
 ┌──────────────────────────────────────────────────────────┐
-│  Thread principal — GPUI                                  │
-│  rendu, événements. Ne bloque jamais. Ne fait pas d'I/O.  │
+│  Webview — apps/desktop : rendu, saisie, état d'écran     │
 └────────────┬──────────────────────────▲──────────────────┘
-             │ Command                  │ Event (flux)
+             │ invoke                   │ réponse ; Channel (flux)
 ┌────────────▼──────────────────────────┴──────────────────┐
-│  oxyn-exec — Policy gate, ordonnanceur, journal            │
+│  Thread principal — boucle d'événements Tauri, fenêtre    │
+│  commandes synchrones seulement. Ne fait pas d'I/O.       │
+└────────────┬──────────────────────────▲──────────────────┘
+             │ commande async           │
+┌────────────▼──────────────────────────┴──────────────────┐
+│  oxyn-desktop — parse, puis Backend → Command             │
+│  oxyn-exec — Policy gate, ordonnanceur, journal           │
 └────────────┬──────────────────────────▲──────────────────┘
              │                          │ RecordBatch
 ┌────────────▼──────────────────────────┴──────────────────┐
-│  Runtime Tokio multi-thread — drivers, réseau, LLM         │
+│  Runtime Tokio multi-thread (fils `oxyn-exec`) — drivers, │
+│  réseau, LLM ; pool bloquant — store, trousseau, disque   │
 └──────────────────────────────────────────────────────────┘
 ```
+
+**Un seul runtime.** `main.rs` construit un runtime Tokio multi-thread et le
+confie à Tauri (`tauri::async_runtime::set`) : les commandes `async` et
+l'exécuteur tournent sur le même. Deux runtimes, c'était un résultat produit sur
+l'un et attendu depuis l'autre, et une panique à l'arrêt quand l'un est libéré
+dans le contexte de l'autre. L'assemblage du backend (`Backend::open`) est
+bloquant et tourne sur le thread principal, mais **avant** que la fenêtre
+n'existe : un échec y atteint l'utilisateur sur la sortie d'erreur, plutôt que
+par une fenêtre ouverte sur un backend cassé.
+
+**Une commande Tauri synchrone tourne sur le thread principal.** Elle n'y lit
+donc que de l'état déjà en mémoire ; toute autre est `async`, et ce qui lit le
+store, le trousseau ou un lot débordé passe en outre par le pool bloquant
+(`spawn_blocking`). La règle et son contrôle : [front.md](../.claude/rules/front.md).
+
+**Les événements d'exécution traversent par un `Channel` Tauri**
+(`subscribe_events`), alimenté par le canal de diffusion de l'exécuteur. Une
+webview lente en perd — c'est journalisé, jamais masqué —, mais l'issue de chaque
+commande revient comme réponse de son `invoke` : une perte d'événements
+intermédiaires ne laisse pas une vue bloquée.
 
 **Un second réacteur entre par les agents externes.** `agent-client-protocol`
 ([ADR-0026](adr/0026-agents-externes-acp.md)) tire `async-io` et `blocking` en
@@ -948,7 +939,7 @@ qu'un agent externe est déclaré, et [I-05](../CLAUDE.md#i-05) vaut pour les de
 réacteurs. Détail et mesure dans
 [RESEARCH-NOTES](RESEARCH-NOTES.md#agent-client-protocol--vérification-du-2026-09-14).
 
-* **Le thread UI ne fait aucune I/O et n'attend jamais un verrou tenu par une tâche.**
+* **Le thread principal ne fait aucune I/O et n'attend jamais un verrou tenu par une tâche.**
   L'état partagé se lit via `Arc<ResultBuffer>`.
 * **Annulation de bout en bout** — chaque commande porte un `CancelToken`. `Échap` annule
   côté client *et* émet l'annulation serveur quand `SERVER_SIDE_CANCEL` est disponible
@@ -991,10 +982,11 @@ vraiment.*
 > les budgets chiffrés à PERFORMANCE ; ce document renvoie désormais, au lieu de
 > concurrencer.
 
-> **Où on en est.** Les quinze crates existent, compilent, et `make qualite` passe :
-> format, `clippy -D warnings`, la suite de tests, `cargo doc -D warnings`. `make app`
-> produit `Oxyn.app`, la fenêtre s'ouvre, et `Cmd+Entrée` exécute réellement à travers
-> le command bus contre la session choisie dans le formulaire de connexion.
+> **Où on en est.** Les quatorze crates et le front existent, compilent, et
+> `make qualite` passe : front, format, `clippy -D warnings`, la suite de tests,
+> `cargo doc -D warnings`. `make desktop-dev` ouvre la fenêtre Tauri, et
+> `⌘Entrée` exécute réellement à travers le command bus contre la session choisie
+> dans le formulaire de connexion.
 >
 > **Le critère de sortie est partiellement mesuré.** Le catalogue est branché par
 > paliers sur le command bus. Ce qui est **mesuré** depuis, et consigné dans
@@ -1003,9 +995,9 @@ vraiment.*
 > établie à la valeur réelle du budget — 2 Gio traversent un tampon de 256 Mo
 > pour 195 Mio de croissance RSS. Ce qui **reste à produire** : le `SELECT` de
 > 10 M de lignes de bout en bout, et le défilement d'une grille peuplée sous
-> instrument. La coloration
-> syntaxique, la complétion et les curseurs multiples de l'éditeur restent le plus
-> gros poste de travail du projet.
+> instrument — désormais dans la webview. L'éditeur n'est plus à écrire : c'est
+> CodeMirror 6, coloré par dialecte, avec la complétion de base de `basicSetup` ;
+> une complétion nourrie du catalogue n'y est pas branchée.
 
 **Phase 1 — Le client se suffit à lui-même.** MySQL/MariaDB, DuckDB, ClickHouse. Export.
 Historique. Édition de données avec prévisualisation du DML. *À ce stade Oxyn est un bon
@@ -1029,9 +1021,9 @@ dictionnaires de données, comparaison de versions.
 
 | Risque | Gravité | Mitigation |
 |---|---|---|
-| API GPUI instable entre versions mineures | Moyenne | Règle d'isolation §2 ; version épinglée ; repli egui possible jusqu'à la fin de la phase 1. *Le risque « à vendorer depuis git » est retiré : gpui est sur crates.io.* |
-| Windows mal supporté par GPUI | Élevée | macOS et Linux d'abord, assumé publiquement ; réévaluation en phase 2 |
-| Grille + éditeur à construire à la main | Élevée | Poste de coût n° 1 ; ne pas commencer un troisième driver avant qu'ils tiennent |
+| Trois moteurs web — WKWebView, WebView2, WebKitGTK : un rendu vérifié sur l'un ne l'est pas sur les autres | non évaluée | Vérification sous WebView2 et WebKitGTK inscrite au [plan](IMPLEMENTATION-PLAN.md#migration-vers-linterface-tauri) ; WebKitGTK inutilisable est une condition de reconsidération d'[ADR-0029](adr/0029-interface-tauri-shadcn.md) |
+| Budgets de trame et de démarrage plus acquis par construction dans la webview | non évaluée | Campagne de mesure dans la webview, inscrite au plan ; la trame à 8 ms p99 au défilement est l'autre condition de reconsidération d'ADR-0029 |
+| Grille + éditeur au niveau d'un outil professionnel | Élevée | Assemblés depuis ADR-0029 — TanStack Table + Virtual, CodeMirror 6 — au lieu d'être écrits ; ne pas commencer un troisième driver avant qu'ils tiennent |
 | 30 systèmes à maintenir | Élevée | Un driver par protocole (~14 réels) ; drivers en plugins WASM dès la phase 4 |
 | `rusqlite` bloqué en 0.37 par `sqlx` | Faible | Documenté §3.1 et ADR-0010 ; à relever quand `sqlx` élargira sa borne `libsqlite3-sys` |
 | MSRV tiré vers le haut par les dépendances, dont une invisible | Faible | §3.1 ; `rust-version = "1.95"` couvre `wasm-host` même désactivée, et RESEARCH-NOTES tient la table des MSRV relevés |

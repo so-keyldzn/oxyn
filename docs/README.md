@@ -27,7 +27,7 @@ Pour localiser les planches et leurs états avant implémentation, consulter
 
 | # | Décision | Statut |
 |---|---|---|
-| [0001](adr/0001-ui-toolkit.md) | Toolkit UI : GPUI, avec isolation stricte | accepté |
+| [0001](adr/0001-ui-toolkit.md) | Toolkit UI : GPUI, avec isolation stricte | remplacé |
 | [0002](adr/0002-arrow-result-model.md) | Apache Arrow comme représentation universelle des résultats | accepté |
 | [0003](adr/0003-driver-capabilities.md) | Modèle de capacités plutôt que dénominateur commun | accepté |
 | [0004](adr/0004-command-bus.md) | Command bus unique et Policy gate | accepté |
@@ -82,7 +82,9 @@ Les ADR restent `proposé` jusqu'au premier commit de code qui les met en œuvre
 > [ADR-0029](adr/0029-interface-tauri-shadcn.md) **remplace**
 > [ADR-0001](adr/0001-ui-toolkit.md) : l'interface passe de GPUI à une
 > application web servie par Tauri. La règle d'isolation reste, transposée.
-> L'ADR-0009 cesse de s'appliquer à la suppression d'`oxyn-ui` et `oxyn-app`.
+> L'ADR-0009 a cessé de s'appliquer le 2026-09-18, avec la suppression
+> d'`oxyn-ui`, d'`oxyn-app` et de la dépendance `gpui` ; son fichier porte
+> encore `accepté` ([question ouverte](IMPLEMENTATION-PLAN.md#migration-vers-linterface-tauri)).
 
 > [ADR-0009](adr/0009-source-dependance-gpui.md) **précise**
 > [ADR-0001](adr/0001-ui-toolkit.md) sur un point : l'ADR-0001 mentionnait un

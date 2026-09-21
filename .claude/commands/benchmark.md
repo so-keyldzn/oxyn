@@ -23,7 +23,7 @@ contamine cinq signatures est une perte nette.
 | Ce qu'on mesure | Avec quoi | Pas avec |
 |---|---|---|
 | Code pur : conversion vers `RecordBatch`, analyse, formatage, diff de schéma | `criterion` | — |
-| Rendu, latence de trame, réactivité | les instruments du système (Instruments, `perf`) | `criterion` — un banc `criterion` sur du GPUI ne mesure rien d'utile |
+| Rendu, latence de trame, réactivité | les instruments du système (Instruments, `perf`) | `criterion` — un banc `criterion` ne voit ni la webview ni son rendu |
 | Empreinte mémoire au repos | observation sur plusieurs heures | un test unitaire — une fuite ne se voit pas en trois secondes |
 
 **Une mesure contre une base réelle n'est pas un banc d'essai.** Le réseau et

@@ -79,7 +79,8 @@ prouve pas la stabilité RSS.
   valeur de chaque ligne ([DRIVER-CONTRACT](DRIVER-CONTRACT.md#3-il-produit-des-recordbatch-arrow-en-flux)).
   C'est le premier endroit à mesurer, et le dernier à optimiser sans mesure.
 - **Les instruments du système** (Instruments, `perf`) pour le rendu et
-  l'interface. Un banc `criterion` sur du GPUI ne mesure rien d'utile.
+  l'interface. Un banc `criterion` ne voit pas le rendu de la webview : il ne
+  mesure rien d'utile sur l'interface.
 - **Aucune mesure de latence contre une base réelle n'est un banc d'essai** : le
   réseau et l'état du serveur dominent le signal. Ce qui se mesure, c'est le
   temps passé **dans Oxyn**, pas le temps d'aller-retour.
@@ -200,11 +201,19 @@ c'est l'analyse syntaxique de `sqlparser`, et c'est attendu.
 
 ### Confrontation aux budgets
 
+> **Trois verdicts portent sur l'interface retirée.** La trame, l'ouverture de
+> fenêtre à froid et l'application au repos ont été mesurées le 2026-09-11 sur
+> l'interface GPUI, retirée le 2026-09-18
+> ([ADR-0029](adr/0029-interface-tauri-shadcn.md)). Ils ne disent rien de la
+> webview Tauri, qui n'a pas encore été mesurée
+> ([plan](IMPLEMENTATION-PLAN.md#migration-vers-linterface-tauri)). Les autres
+> lignes mesurent le cœur, que le changement d'interface n'a pas touché.
+
 | Budget | Verdict | Sur quoi |
 |---|---|---|
 | Premières lignes affichées — **300 ms** | **confirmé** pour SQLite | 2,6 ms pour le premier lot, quelle que soit la taille de la table : 0,9 % du budget |
 | Retour visible après une frappe — **100 ms** | **confirmé pour la part `oxyn-query`** | 56 µs pour l'instruction courante sur un script de 200 instructions. La part interface n'est pas mesurée |
-| Trame pendant une interaction — **8 ms** p99 | **tenu** (2026-09-11) : 0 à-coup au repos et à la saisie, 1 sous redimensionnement continu. La saisie en produisait 17 dont un de 50 ms avant [ADR-0024](adr/0024-autosauvegarde-au-repos-de-frappe.md) | un banc `criterion` sur du GPUI ne mesure rien : il faut `xcrun xctrace record --template "Animation Hitches" --attach <pid>`, qui s'utilise sans interface graphique. La saisie **a** été couverte depuis, et c'est elle qui a révélé le dépassement corrigé par ADR-0024 : la phrase qui la disait « à couvrir » précédait la mesure. Ce qui reste non couvert est le **défilement d'une grille peuplée** — la relecture d'un lot débordé y coûte 4,5 µs (ligne suivante), mais l'enchaînement complet défilement + rendu n'a pas été observé sous instrument |
+| Trame pendant une interaction — **8 ms** p99 | **tenu** (2026-09-11) : 0 à-coup au repos et à la saisie, 1 sous redimensionnement continu. La saisie en produisait 17 dont un de 50 ms avant [ADR-0024](adr/0024-autosauvegarde-au-repos-de-frappe.md) | un banc `criterion` sur l'interface ne mesure rien : il faut `xcrun xctrace record --template "Animation Hitches" --attach <pid>`, qui s'utilise sans interface graphique. La saisie **a** été couverte depuis, et c'est elle qui a révélé le dépassement corrigé par ADR-0024 : la phrase qui la disait « à couvrir » précédait la mesure. Ce qui reste non couvert est le **défilement d'une grille peuplée** — la relecture d'un lot débordé y coûte 4,5 µs (ligne suivante), mais l'enchaînement complet défilement + rendu n'a pas été observé sous instrument |
 | Ouverture de fenêtre à froid — **1 s** | **235–274 ms** (2026-09-11, profil `dev`, trois lancements) | mesurée en horodatant entre le lancement du processus et le `window ready` du journal — aucun instrument spécialisé nécessaire |
 | Nœud de catalogue en cache — **50 ms** | **6,70 µs** à 10 000 relations (2026-09-11) | `cargo bench -p oxyn-catalog --bench cached_node` ; la lecture du cache consomme six millionièmes du budget, le goulot d'un nœud lent est donc ailleurs |
 | `ResultBuffer` — **256 Mo** puis débordement | **confirmé sur la RSS, à sa valeur réelle** (2026-09-15) : **2 Gio** poussés dans un tampon au budget par défaut de **256 Mo** font croître la RSS de **195 Mio** — sous le budget —, **1,84 Gio** partant sur disque | [mesure détaillée plus bas](#mesure-de-mémoire-du-2026-09-15). La mesure reste **manuelle** — l'automatiser demanderait une exception à [I-03](../CLAUDE.md#i-03) ou à `unsafe_code = "deny"`, arbitrage non tranché |
