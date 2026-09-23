@@ -3,8 +3,16 @@ import type { Meta, StoryObj } from "@storybook/react-vite"
 import { expect, fn, userEvent, waitFor, within } from "storybook/test"
 
 import { ConnectionScreenView } from "./connection-screen-view"
-import { homonyms, summaries } from "@/components/oxyn/connection-fixtures"
-import { postgresDriver, sqliteDriver } from "@/components/oxyn/fixtures"
+import {
+  homonyms,
+  manyConnections,
+  summaries,
+} from "@/components/oxyn/connection-fixtures"
+import {
+  catalogueDrivers,
+  postgresDriver,
+  sqliteDriver,
+} from "@/components/oxyn/fixtures"
 import type { DriverChoice, FormField } from "@/lib/ipc/types"
 
 const optional = (
@@ -132,7 +140,16 @@ export const FirstLaunch: Story = {
     await expect(
       canvas.queryByRole("button", { name: /Return to workspace/ })
     ).toBeNull()
-    await expect(canvas.getByText("No saved connection")).toBeVisible()
+    // Nothing to reopen: no empty list, the database types are the screen.
+    await expect(
+      canvas.getByRole("heading", { name: "Connect your first database" })
+    ).toBeVisible()
+    await expect(
+      canvas.queryByRole("region", { name: "Saved connections" })
+    ).toBeNull()
+    await expect(
+      canvas.getByRole("button", { name: /PostgreSQL/ })
+    ).toBeEnabled()
     // One mark only, in the title bar.
     await expect(canvasElement.querySelectorAll("img")).toHaveLength(1)
   },
@@ -243,7 +260,7 @@ export const ShortWindow: Story = {
   args: { driver: sqliteDriver, onReturnToWorkspace: fn() },
   play: async ({ canvasElement }) => {
     await reachConnect(canvasElement, sqliteDriver)
-    // The footnote is still there, below both columns.
+    // The footnote is still there, below the form.
     await expect(
       within(canvasElement).getByText(
         /Secrets are stored in the system keyring/
@@ -257,15 +274,9 @@ export const ManyFieldsShortWindow: Story = {
   args: { driver: postgresWithSsl, connections: [...summaries, ...homonyms] },
   play: async ({ canvasElement }) => {
     await reachConnect(canvasElement, postgresWithSsl)
-    // Each column scrolls on its own.
-    const scrollers = Array.from(
-      canvasElement.querySelectorAll<HTMLElement>("[role=region] *")
-    ).filter(
-      (element) =>
-        element.scrollHeight > element.clientHeight + 1 &&
-        getComputedStyle(element).overflowY === "auto"
-    )
-    await expect(scrollers.length).toBeGreaterThanOrEqual(1)
+    // The page scrolls as a whole; nothing inside it clips the form.
+    const main = canvasElement.querySelector("main")!
+    await expect(main.scrollHeight).toBeGreaterThan(main.clientHeight)
   },
 }
 
@@ -329,4 +340,14 @@ export const NarrowWindow: Story = {
   play: async ({ canvasElement }) => {
     await reachConnect(canvasElement, postgresWithSsl)
   },
+}
+
+/** A long-lived workspace on a build with the whole catalogue. */
+export const BusyWorkspace: Story = {
+  args: { connections: manyConnections, drivers: catalogueDrivers },
+}
+
+/** The whole catalogue on a first launch: the search is the screen. */
+export const FirstLaunchWholeCatalogue: Story = {
+  args: { connections: [], drivers: catalogueDrivers },
 }

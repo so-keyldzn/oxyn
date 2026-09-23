@@ -66,3 +66,17 @@ export const hostileNames: Array<ConnectionSummary> = [
     location: null,
   },
 ]
+
+/** A long-lived workspace: the list is filtered and folded past five. */
+export const manyConnections: Array<ConnectionSummary> = Array.from(
+  { length: 23 },
+  (_, index): ConnectionSummary => {
+    const base = summaries[index % summaries.length]!
+    const suffix = String(index + 1).padStart(2, "0")
+    return {
+      ...base,
+      id: `018f0000-0000-7000-8000-0000000001${suffix}`,
+      name: `${base.name} ${suffix}`,
+    }
+  }
+)

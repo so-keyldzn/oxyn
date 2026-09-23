@@ -329,3 +329,43 @@ export const invoicesDetail: RelationDetail = {
     },
   ],
 }
+
+/**
+ * The catalogue docs/VISION.md aims at, as a build registering all of it
+ * would list it: the start screen must stay a launcher at that size. Fields
+ * are borrowed from the two real drivers, by how each one is reached.
+ */
+export const catalogueDrivers: Array<DriverChoice> = [
+  postgresDriver,
+  ...(
+    [
+      ["mysql", "MySQL", "relational", 3306],
+      ["mariadb", "MariaDB", "relational", 3306],
+      ["sqlserver", "SQL Server", "relational", 1433],
+      ["oracle", "Oracle", "relational", 1521],
+      ["duckdb", "DuckDB", "analytical", null],
+      ["clickhouse", "ClickHouse", "analytical", 8123],
+      ["snowflake", "Snowflake", "analytical", null],
+      ["bigquery", "BigQuery", "analytical", null],
+      ["mongodb", "MongoDB", "document", 27017],
+      ["redis", "Redis", "key-value", 6379],
+      ["cassandra", "Cassandra", "wide-column", 9042],
+      ["dynamodb", "DynamoDB", "key-value", null],
+      ["couchbase", "Couchbase", "document", 8091],
+      ["milvus", "Milvus", "vector", 19530],
+      ["weaviate", "Weaviate", "vector", 8080],
+      ["pinecone", "Pinecone", "vector", null],
+      ["qdrant", "Qdrant", "vector", 6333],
+      ["chromadb", "ChromaDB", "vector", 8000],
+      ["neo4j", "Neo4j", "graph", 7687],
+      ["memgraph", "Memgraph", "graph", 7687],
+      ["elasticsearch", "Elasticsearch", "search", 9200],
+      ["opensearch", "OpenSearch", "search", 9200],
+    ] as const
+  ).map(([id, displayName, family, defaultPort]): DriverChoice =>
+    id === "duckdb"
+      ? { ...sqliteDriver, id, displayName, family }
+      : { ...postgresDriver, id, displayName, family, defaultPort }
+  ),
+  sqliteDriver,
+]

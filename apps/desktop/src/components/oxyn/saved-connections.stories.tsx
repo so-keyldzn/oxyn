@@ -1,7 +1,12 @@
 import type { Meta, StoryObj } from "@storybook/react-vite"
 import { expect, fn, userEvent, waitFor } from "storybook/test"
 
-import { homonyms, hostileNames, summaries } from "./connection-fixtures"
+import {
+  homonyms,
+  hostileNames,
+  manyConnections,
+  summaries,
+} from "./connection-fixtures"
 import { SavedConnections } from "./saved-connections"
 
 const meta = {
@@ -114,3 +119,42 @@ export const BackendAbsent: Story = {
 }
 
 export const Light: Story = { globals: { theme: "light" } }
+
+/** Past five, the list folds and gains a filter. */
+export const ManyConnections: Story = {
+  args: { connections: manyConnections },
+  play: async ({ canvas }) => {
+    await expect(canvas.getAllByRole("listitem")).toHaveLength(5)
+    const filter = canvas.getByRole("searchbox", {
+      name: "Filter saved connections",
+    })
+
+    // Location and driver match as well as the name.
+    await userEvent.type(filter, "scratch.sqlite")
+    await expect(canvas.getAllByRole("listitem")).toHaveLength(7)
+    await expect(canvas.queryByRole("button", { name: /Show all/ })).toBeNull()
+
+    await userEvent.clear(filter)
+    await userEvent.type(filter, "nothing like this")
+    await expect(canvas.getByText(/No connection matches/)).toBeVisible()
+    // Esc empties the filter instead of leaving the screen.
+    await userEvent.keyboard("{Escape}")
+    await expect(filter).toHaveValue("")
+
+    await userEvent.click(
+      canvas.getByRole("button", { name: "Show all 23 connections" })
+    )
+    await expect(canvas.getAllByRole("listitem")).toHaveLength(23)
+  },
+}
+
+/** The connection opening stays in view even when folded away. */
+export const OpeningAFoldedConnection: Story = {
+  args: { connections: manyConnections, opening: manyConnections[20]!.id },
+  play: async ({ canvas }) => {
+    await expect(canvas.getAllByRole("listitem")).toHaveLength(6)
+    await expect(
+      canvas.getByRole("button", { name: /Cancel opening/ })
+    ).toBeVisible()
+  },
+}

@@ -2,12 +2,14 @@ import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
   ArrowRight01Icon,
+  SearchIcon,
   DatabaseIcon,
   LockIcon,
 } from "@hugeicons/core-free-icons"
 
 import { BackendErrorAlert } from "@/components/oxyn/backend-error-alert"
 import type { BackendFailure } from "@/components/oxyn/backend-error-alert"
+import { DriverLogo } from "@/components/oxyn/driver-logo"
 import { EnvironmentBadge } from "@/components/oxyn/environment-badge"
 import { Button } from "@/components/ui/button"
 import {
@@ -26,10 +28,30 @@ import {
   ItemMedia,
   ItemTitle,
 } from "@/components/ui/item"
+import {
+  InputGroup,
+  InputGroupAddon,
+  InputGroupInput,
+} from "@/components/ui/input-group"
 import { Kbd } from "@/components/ui/kbd"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import type { ConnectionSummary } from "@/lib/ipc/settings"
+
+/**
+ * Beyond this many connections the list is filtered and folded: a workspace
+ * of forty connections must not push the database types off the screen.
+ */
+const SHOWN_FOLDED = 5
+
+function matches(connection: ConnectionSummary, query: string) {
+  const needle = query.trim().toLocaleLowerCase()
+  if (!needle) return true
+  return [connection.name, connection.driverName, connection.location ?? ""]
+    .join(" ")
+    .toLocaleLowerCase()
+    .includes(needle)
+}
 
 /**
  * The connections of the workspace. Opening one is always the user's click or
@@ -38,6 +60,9 @@ import type { ConnectionSummary } from "@/lib/ipc/settings"
  * Two connections may share a name: the driver and the location line — host,
  * database or file name, never a secret — tell them apart. While one opens,
  * the others are inert and the opening one offers Cancel (Esc).
+ *
+ * Past five, a filter (name, driver, location) sits above the list and only
+ * five rows show until « Show all ». The one opening always stays in view.
  */
 export function SavedConnections({
   connections,
@@ -57,6 +82,8 @@ export function SavedConnections({
   onRetry?: () => void
 }) {
   const listRef = React.useRef<HTMLDivElement>(null)
+  const [query, setQuery] = React.useState("")
+  const [expanded, setExpanded] = React.useState(false)
 
   React.useEffect(() => {
     if (opening === null || !onCancelOpening) return
@@ -108,6 +135,18 @@ export function SavedConnections({
     )
   }
 
+  const long = connections.length > SHOWN_FOLDED
+  const filtered = long
+    ? connections.filter((connection) => matches(connection, query))
+    : connections
+  const folded = !expanded && query.trim() === ""
+  const visible = folded
+    ? filtered.filter(
+        (connection, index) => index < SHOWN_FOLDED || connection.id === opening
+      )
+    : filtered
+  const hidden = filtered.length - visible.length
+
   const moveFocus = (event: React.KeyboardEvent) => {
     if (event.key !== "ArrowDown" && event.key !== "ArrowUp") return
     const buttons = Array.from(
@@ -126,9 +165,9 @@ export function SavedConnections({
     }
   }
 
-  return (
+  const list = (
     <ItemGroup ref={listRef} className="gap-2" onKeyDown={moveFocus}>
-      {connections.map((connection) => {
+      {visible.map((connection) => {
         const isOpening = opening === connection.id
         return (
           <div
@@ -150,7 +189,7 @@ export function SavedConnections({
               className="min-w-0 flex-1 text-left"
             >
               <ItemMedia variant="icon">
-                <HugeiconsIcon icon={DatabaseIcon} strokeWidth={2} />
+                <DriverLogo driver={connection.driver} className="size-4" />
               </ItemMedia>
               <ItemContent className="min-w-0">
                 <ItemTitle className="w-full min-w-0">
@@ -217,5 +256,53 @@ export function SavedConnections({
         )
       })}
     </ItemGroup>
+  )
+
+  if (!long) return list
+
+  return (
+    <div className="flex flex-col gap-3">
+      <InputGroup>
+        <InputGroupInput
+          type="search"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+          onKeyDown={(event) => {
+            // Esc empties the filter first; only an empty one lets it through.
+            if (event.key === "Escape" && query !== "") {
+              event.preventDefault()
+              setQuery("")
+            }
+          }}
+          placeholder={`Filter ${connections.length} connections…`}
+          aria-label="Filter saved connections"
+        />
+        <InputGroupAddon>
+          <HugeiconsIcon icon={SearchIcon} strokeWidth={2} />
+        </InputGroupAddon>
+      </InputGroup>
+      {filtered.length === 0 ? (
+        <div className="flex items-center justify-between gap-3 rounded-lg border border-dashed px-3 py-2.5 text-sm text-muted-foreground">
+          <span className="min-w-0 truncate">
+            No connection matches <bdi>“{query.trim()}”</bdi>.
+          </span>
+          <Button variant="ghost" size="sm" onClick={() => setQuery("")}>
+            Clear filter
+          </Button>
+        </div>
+      ) : (
+        list
+      )}
+      {hidden > 0 ? (
+        <Button
+          variant="ghost"
+          size="sm"
+          className="self-start"
+          onClick={() => setExpanded(true)}
+        >
+          Show all {connections.length} connections
+        </Button>
+      ) : null}
+    </div>
   )
 }
