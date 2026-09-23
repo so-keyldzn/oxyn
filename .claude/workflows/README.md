@@ -56,6 +56,19 @@ appelle un driver « en attendant », et ce second chemin ne disparaît jamais.
 6. Si un budget ne peut pas être tenu → [`/adr`](../commands/adr.md), jamais un
    ajustement silencieux du budget
 
+## Conformité shadcn
+
+1. [`/conformite-shadcn --releve`](../commands/conformite-shadcn.md) — relevé mécanique, puis relevé
+   par lots en parallèle par l'agent `shadcniste`
+2. Les écarts de risque `décision` (registre, jeton, composant de `ui/` à mettre
+   à jour) sont tranchés par l'utilisateur **avant** toute correction
+3. [`/conformite-shadcn`](../commands/conformite-shadcn.md) — correction par lots disjoints, trois à la
+   fois au plus
+4. `make qualite`, relevé à nouveau, puis agent `relecteur-invariants`
+
+**Un écran neuf ne passe pas par là** : il s'écrit conforme avec
+[`/ecran`](../commands/ecran.md). Cette passe rattrape l'existant.
+
 ## Évolution d'architecture
 
 1. Agent `architecte`

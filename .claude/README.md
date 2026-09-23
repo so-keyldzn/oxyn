@@ -40,6 +40,7 @@ d'un fichier.
 | [`/driver`](commands/driver.md) | implémenter un driver |
 | [`/commande`](commands/commande.md) | ajouter une commande au bus |
 | [`/ecran`](commands/ecran.md) | ajouter un écran à l'interface Tauri |
+| [`/conformite-shadcn`](commands/conformite-shadcn.md) | passe de conformité shadcn sur `apps/desktop`, par lots en parallèle |
 | [`/adr`](commands/adr.md) | écrire une décision |
 | [`/versions`](commands/versions.md) | re-vérifier les versions externes |
 | [`/benchmark`](commands/benchmark.md) | mesurer avant d'optimiser |
@@ -59,6 +60,7 @@ seul endroit profite partout.
 | [`rustacien`](agents/rustacien.md) | le cœur : tout ce qui n'est ni driver, ni interface, ni IA |
 | [`driveriste`](agents/driveriste.md) | `drivers/oxyn-driver-*`, traits d'`oxyn-driver` |
 | [`frontiste`](agents/frontiste.md) | `apps/desktop`, `oxyn-desktop` — tout nouvel écran |
+| [`shadcniste`](agents/shadcniste.md) | conformité shadcn de l'existant, en relevé ou en correction, sur un lot confié par `/conformite-shadcn` |
 | [`ia-workspace`](agents/ia-workspace.md) | `oxyn-ai` |
 | [`documentaliste`](agents/documentaliste.md) | `docs/` |
 | [`performance`](agents/performance.md) | mesures et optimisation |

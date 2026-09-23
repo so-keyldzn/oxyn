@@ -1,0 +1,7 @@
+- [cn importé du paquet](cn-importe-du-paquet.md) — la CLI écrit `from "cn"` ; basculer vers `@/lib/utils` hors de `ui/` seulement
+- [Carte de choix FieldLabel : dark: survit à cn](fieldlabel-choice-card-dark-survit-a-cn.md) — recolorer `has-data-checked:*` laisse gagner `dark:has-data-checked:*` du composant
+- [Select Base UI : faux positifs](base-ui-select-faux-positifs.md) — `SelectValue placeholder` valide en 1.8 ; sans `SelectGroup` les items perdent le `p-1` ; `MarkerIcon` masque un `Spinner`
+- [TooltipTrigger sans nativeButton](tooltiptrigger-sans-nativebutton.md) — Base UI 1.8 : `render={<span />}` sur un TooltipTrigger n'est pas un écart
+- [AlertDialogAction est un Button](alertdialogaction-est-un-button.md) — base-nova : aucun Close derrière, bascule mécanique ; eslint depuis `apps/desktop` seulement
+- [Classes d'enfant posées par le parent](classes-d-enfant-posees-par-le-parent.md) — `[&_svg]:size-4`, `*:data-[slot=…]:` : un className d'enfant peut être redondant ou perdant
+- [Alert porte role="alert"](alert-porte-role-alert.md) — migrer un encadré statique vers `Alert` crée une région live ; `role` se surcharge par props

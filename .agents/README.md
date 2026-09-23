@@ -52,6 +52,7 @@ Les profils restent consultables selon la tâche :
   [rustacien](../.claude/agents/rustacien.md),
   [driveriste](../.claude/agents/driveriste.md),
   [frontiste](../.claude/agents/frontiste.md),
+  [shadcniste](../.claude/agents/shadcniste.md),
   [ia-workspace](../.claude/agents/ia-workspace.md),
   [documentaliste](../.claude/agents/documentaliste.md),
   [performance](../.claude/agents/performance.md).

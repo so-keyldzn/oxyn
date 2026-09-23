@@ -55,7 +55,7 @@ Aucune version ne s'écrit de mémoire : voir [I-12](#i-12).
 | `make desktop-dev` | l'application Tauri avec rechargement à chaud, sur un workspace temporaire |
 | `script/nouvelle-crate` | crée une crate déjà conforme — voir le piège des règles plus bas |
 | [`/plan`](.claude/commands/plan.md) [`/implementer`](.claude/commands/implementer.md) [`/relire`](.claude/commands/relire.md) | le cycle courant |
-| [`/driver`](.claude/commands/driver.md) [`/commande`](.claude/commands/commande.md) [`/ecran`](.claude/commands/ecran.md) | les gestes qui ont un contrat à respecter |
+| [`/driver`](.claude/commands/driver.md) [`/commande`](.claude/commands/commande.md) [`/ecran`](.claude/commands/ecran.md) [`/conformite-shadcn`](.claude/commands/conformite-shadcn.md) | les gestes qui ont un contrat à respecter |
 | [`/adr`](.claude/commands/adr.md) [`/versions`](.claude/commands/versions.md) [`/benchmark`](.claude/commands/benchmark.md) [`/securite`](.claude/commands/securite.md) | les gestes rares et faciles à rater |
 
 Liste complète : [.claude/README.md](.claude/README.md).
