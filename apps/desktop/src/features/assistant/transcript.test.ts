@@ -115,6 +115,7 @@ describe("an exchange", () => {
         errorClass: null,
         withheld: false,
         rows: null,
+        result: null,
       },
       { kind: "textDelta", text: "Waiting for you." },
       {
@@ -146,6 +147,7 @@ describe("an exchange", () => {
         errorClass: null,
         withheld: false,
         rows: null,
+        result: null,
       },
     ])
     expect(denied.entries[0]).toMatchObject({ state: "denied" })
@@ -159,6 +161,7 @@ describe("an exchange", () => {
         errorClass: "ambiguous",
         withheld: false,
         rows: null,
+        result: null,
       },
     ])
     expect(cancelled.entries[0]).toMatchObject({ state: "cancelled" })
@@ -345,6 +348,7 @@ describe("what an answer touched", () => {
     errorClass: null,
     withheld: false,
     rows,
+    result: null,
   })
 
   it("cites completed commands only, by connection name, in order", () => {

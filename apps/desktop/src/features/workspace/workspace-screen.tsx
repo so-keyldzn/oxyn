@@ -38,6 +38,10 @@ import {
   objectOpenRequests,
   takeObjectOpenRequests,
 } from "@/features/workspace/object-requests"
+import {
+  resultOpenRequests,
+  takeResultOpenRequests,
+} from "@/features/workspace/result-requests"
 import { useCompact } from "@/features/workspace/use-compact"
 import { library } from "@/lib/ipc/library"
 import type { HistoryRow } from "@/lib/ipc/library"
@@ -55,11 +59,15 @@ interface ObjectTab {
   target?: OpenTarget
 }
 
-type RetainedRow = HistoryRow & { connection: string; result: string }
-
 interface ResultTab {
   key: string
-  row: RetainedRow
+  connection: string
+  result: string
+  title: string
+  /** The run ended without doubt. */
+  succeeded: boolean
+  /** The history run it came from; `null` for an agent's query. */
+  history: HistoryRow | null
 }
 
 /**
@@ -188,15 +196,33 @@ export function WorkspaceScreen({
     // `openObject` reads the tabs through a ref: the requests are the trigger.
   }, [objectRequests, open.connection])
 
-  const openResult = (row: RetainedRow) => {
-    const key = `result:${row.result}`
+  const openResult = (tab: Omit<ResultTab, "key">) => {
+    const key = `result:${tab.result}`
     setRetained((current) =>
-      current.some((tab) => tab.key === key)
+      current.some((held) => held.key === key)
         ? current
-        : [...current, { key, row }]
+        : [...current, { key, ...tab }]
     )
     activate(key)
   }
+
+  // Results an agent's query left, opened from the assistant: the retained
+  // rows, never a rerun. Another connection's requests stay for its screen.
+  const resultRequests = useStore(resultOpenRequests)
+  React.useEffect(() => {
+    if (resultRequests.length === 0) return
+    for (const request of takeResultOpenRequests(open.connection)) {
+      openResult({
+        connection: request.connection,
+        result: request.result,
+        title: "Agent result",
+        // Reported completed by the executor before the panel offered it.
+        succeeded: true,
+        history: null,
+      })
+    }
+    // `openResult` only sets state: the requests are the trigger.
+  }, [resultRequests, open.connection])
 
   const closeTab = (key: string) => {
     if (key.startsWith("console:")) {
@@ -307,7 +333,7 @@ export function WorkspaceScreen({
     ...retained.map((tab) => ({
       kind: "result" as const,
       key: tab.key,
-      title: `Result #${tab.row.id}`,
+      title: tab.title,
     })),
   ]
   const activeObject = objects.find((tab) => tab.key === active)
@@ -337,9 +363,11 @@ export function WorkspaceScreen({
               onOpenResult={(row) => {
                 if (row.connection !== null && row.result !== null)
                   openResult({
-                    ...row,
                     connection: row.connection,
                     result: row.result,
+                    title: `Result #${row.id}`,
+                    succeeded: row.status === "succeeded",
+                    history: row,
                   })
               }}
               onOpenCopy={(document, entry) =>
@@ -471,8 +499,18 @@ export function WorkspaceScreen({
             className="h-full min-h-0"
           >
             <RetainedResultTab
-              row={tab.row}
-              onOpenCopy={() => void openHistoryCopy(tab.row)}
+              connection={tab.connection}
+              result={tab.result}
+              succeeded={tab.succeeded}
+              // An agent's statement opens only with its provenance, from the
+              // assistant itself (ADR-0023): no unmarked copy from here.
+              onOpenCopy={
+                tab.history
+                  ? () => {
+                      if (tab.history) void openHistoryCopy(tab.history)
+                    }
+                  : undefined
+              }
             />
           </TabsContent>
         ))}

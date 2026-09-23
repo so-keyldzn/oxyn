@@ -225,6 +225,12 @@ fn report_call(thread: &Thread, node: u32, outcome: &DispatchOutcome, withheld: 
             },
         );
     }
+    // Addressed by the front with the conversation's own connection: a result
+    // of another one would be read under the wrong owner, so it is not shown.
+    let own_connection = matches!(
+        (current.connection, thread.scope()),
+        (Some(target), Some(scope)) if target == scope.connection
+    );
     let (status, detail, class) = match outcome {
         DispatchOutcome::Completed { summary } => (ToolStatus::Completed, summary.clone(), None),
         // What the model was told is its rendering, under the tier; the panel
@@ -269,6 +275,10 @@ fn report_call(thread: &Thread, node: u32, outcome: &DispatchOutcome, withheld: 
             rows: matches!(status, ToolStatus::Completed)
                 .then_some(current.rows)
                 .flatten(),
+            result: (matches!(status, ToolStatus::Completed) && own_connection)
+                .then_some(current.result)
+                .flatten()
+                .map(|result| result.to_string()),
         },
     );
 }
@@ -419,9 +429,13 @@ impl CommandSink for AgentSink {
                     },
                 );
             }
+            // The result goes to the thread, for the panel; `translate` below
+            // drops it, so the model never learns it exists.
             DispatchReport::Completed {
-                stats: Some(stats), ..
-            } => self.thread.record_rows(call, stats.rows),
+                stats: Some(stats),
+                result,
+                ..
+            } => self.thread.record_rows(call, stats.rows, *result),
             DispatchReport::Failed { .. } if cancel.is_cancelled() => {
                 self.thread.mark_cancelled(call);
             }
@@ -915,14 +929,28 @@ impl Backend {
         let id: oxyn_core::ConversationId = thread
             .parse()
             .map_err(|_| IpcError::invalid("This conversation does not exist"))?;
+        // The rows its calls left are released with it: nothing can show them
+        // once the conversation is gone.
+        let results = self
+            .inner
+            .ai
+            .find(connection, thread)
+            .map(|live| live.results())
+            .unwrap_or_default();
         // A conversation open in this window is closed first; one that is only
         // on disk is deleted all the same.
         let _live = self.inner.ai.delete(connection, thread);
         let executor = Arc::clone(&self.inner.executor);
         // `ai_egress` is untouched: what left this machine outlives the
         // conversation that sent it (SECURITY).
-        let _written =
-            tokio::task::spawn_blocking(move || executor.store().conversations().delete(id)).await;
+        let _written = tokio::task::spawn_blocking(move || {
+            // Forgetting may delete spill files: off the async workers.
+            for result in results {
+                executor.forget_result(result);
+            }
+            executor.store().conversations().delete(id)
+        })
+        .await;
         Ok(())
     }
 

@@ -39,6 +39,7 @@ import { useProviderModels } from "./use-provider-models"
 import { declaredEfforts, effortToSend } from "./reasoning-effort"
 import type { ExchangeNode } from "./thread"
 import { useAssistantAvailable } from "./use-assistant-available"
+import { ToolRows } from "./tool-rows"
 import { AssistantEntryButton } from "@/components/oxyn/assistant-entry-button"
 import type { AgentStartupControls } from "@/components/oxyn/assistant-agent-startup"
 import type { ModelListState } from "@/components/oxyn/assistant-header"
@@ -299,6 +300,15 @@ export function AssistantPanel({
         onOpenInConsole={onOpenInConsole}
         // In this connection's workspace, as a click in its catalog would.
         onOpenObject={(address) => openObject(open.connection, address)}
+        // The rows are read from this connection's executor, for the user.
+        renderToolRows={(call) =>
+          call.result === null ? null : (
+            <ToolRows
+              connection={open.connection}
+              entry={{ ...call, result: call.result }}
+            />
+          )
+        }
         onChangeAgentSetting={(intent) =>
           changeAgentSetting(open.connection, intent)
         }

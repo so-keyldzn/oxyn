@@ -20,6 +20,7 @@ const base: ToolCallEntry = {
   errorClass: null,
   withheld: false,
   rows: null,
+  result: null,
   approval: null,
 }
 

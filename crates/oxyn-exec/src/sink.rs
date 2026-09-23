@@ -68,7 +68,7 @@ use std::sync::Arc;
 
 use oxyn_core::{
     Actor, AgentId, AgentSessionId, CancelToken, Command, CommandId, ErrorClass, ExecStats,
-    OxynError,
+    OxynError, ResultId,
 };
 
 use crate::executor::{Executor, Outcome};
@@ -96,6 +96,14 @@ pub enum DispatchReport {
         /// Les mesures, quand la commande en produit — une exécution en
         /// produit, une ouverture de document non.
         stats: Option<ExecStats>,
+        /// Le résultat retenu par l'ordonnanceur, quand la commande en produit
+        /// un : c'est ce qui permet de montrer les lignes **à l'utilisateur**,
+        /// par le même chemin que la grille d'une console.
+        ///
+        /// Il ne dit rien au modèle et ne doit jamais lui parvenir : le
+        /// câblage vers `DispatchOutcome` l'ignore, et c'est voulu
+        /// ([I-04](../../../CLAUDE.md#i-04)).
+        result: Option<ResultId>,
     },
 
     /// Le catalogue local a été lu : la poignée du cache, pas un rendu.
@@ -178,7 +186,12 @@ impl DispatchReport {
     #[must_use]
     fn from_outcome(command: CommandId, outcome: Outcome) -> Self {
         match outcome {
-            Outcome::Executed { stats, sink, .. } => {
+            Outcome::Executed {
+                result,
+                stats,
+                sink,
+                ..
+            } => {
                 let mut summary = format!("{} rows, {} batches", stats.rows, stats.batches);
                 if stats.truncated || sink.is_truncated() {
                     // Dit explicitement au modèle que ce n'est pas tout : un
@@ -190,6 +203,7 @@ impl DispatchReport {
                     command,
                     summary,
                     stats: Some(stats),
+                    result: Some(result),
                 }
             }
 
@@ -205,6 +219,7 @@ impl DispatchReport {
                 command,
                 summary: summarize(&autre),
                 stats: None,
+                result: None,
             },
         }
     }

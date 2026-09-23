@@ -698,6 +698,9 @@ pub enum AiEvent {
         statement: Option<String>,
         status: ToolStatus,
         error_class: Option<&'static str>,
+        /// The call returned rows the panel showed, and the workspace kept
+        /// none of them: the panel says so rather than drawing an empty grid.
+        rows_not_kept: bool,
     },
     /// The user approved a row sample for this question. Its size only:
     /// neither a value nor a column name is kept in a conversation.
@@ -763,6 +766,14 @@ pub enum AiEvent {
         /// Rows produced or affected, when the command completed and measured
         /// them. Structured, never parsed from `detail`.
         rows: Option<u64>,
+        /// The result the executor retained, to read by pages with
+        /// `open_retained_result` and `read_result_page` on the conversation's
+        /// connection — the grid of a console, for the user alone.
+        ///
+        /// `None` when the command left no result, or targeted a connection
+        /// other than the conversation's. Nothing of it reaches the model: the
+        /// runtime's `DispatchOutcome` has no such field (ADR-0030 §4).
+        result: Option<String>,
     },
     /// A call refused before the bus: nothing ran.
     #[serde(rename_all = "camelCase")]

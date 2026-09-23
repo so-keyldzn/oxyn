@@ -318,12 +318,17 @@ pub(crate) fn restored_events(exchange: &Exchange, turns: &[Turn]) -> Vec<AiEven
             });
         }
         for call in &record.tool_calls {
+            let status = shown_as(call.status);
             events.push(AiEvent::RestoredCall {
                 tool: call.tool.clone(),
                 summary: call.summary.clone(),
                 statement: call.statement.clone(),
-                status: shown_as(call.status),
+                status,
                 error_class: call.error_class.and_then(class_word),
+                // No row is ever written with a conversation, and the result
+                // the panel read died with the process: said, not drawn.
+                rows_not_kept: matches!(status, ToolStatus::Completed)
+                    && call.tool == oxyn_ai::tools::EXECUTE_QUERY,
             });
         }
     }
@@ -618,6 +623,71 @@ mod tests {
             !turn.text.contains("users_secret"),
             "a failure message reached the transcript: {}",
             turn.text
+        );
+    }
+
+    #[test]
+    fn a_reopened_query_says_its_rows_were_not_kept_and_never_names_its_result() {
+        // The panel showed rows under this call; the workspace keeps none, and
+        // the result id died with the process. Reopened, the call must say so
+        // instead of drawing a grid it cannot fill (UX-SPEC).
+        let result = oxyn_core::ResultId::new().to_string();
+        let log = vec![
+            AiEvent::ToolCall {
+                call: 0,
+                tool: oxyn_ai::tools::EXECUTE_QUERY.to_owned(),
+                command: "Execute".to_owned(),
+                statement: Some("SELECT 1".to_owned()),
+                connection: "local".to_owned(),
+                environment: None,
+                mutating: false,
+            },
+            AiEvent::ToolReported {
+                call: 0,
+                status: ToolStatus::Completed,
+                detail: "1 rows, 1 batches".to_owned(),
+                error_class: None,
+                withheld: false,
+                rows: Some(1),
+                result: Some(result.clone()),
+            },
+        ];
+        let turn = answer_of(&log, PrivacyTier::Metadata, false, None, None)
+            .turn
+            .expect("a turn");
+        let call = turn.tool_calls.first().expect("the call is kept");
+        assert!(!call.summary.contains(&result));
+        assert!(!call.call_id.contains(&result));
+
+        let exchange = Exchange {
+            node: 0,
+            parent: None,
+            created_at: Default::default(),
+            tier: PrivacyTier::Metadata,
+            question: "one row".to_owned(),
+            destination: oxyn_store::conversations::Destination::external_agent(
+                oxyn_core::ProviderId::for_new_agent(),
+                "agent",
+            ),
+            sample: None,
+            outcome: None,
+        };
+        let events = restored_events(
+            &exchange,
+            &[Turn {
+                ordinal: 0,
+                record: turn,
+            }],
+        );
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                AiEvent::RestoredCall {
+                    rows_not_kept: true,
+                    ..
+                }
+            )),
+            "a reopened query does not say its rows are gone"
         );
     }
 }

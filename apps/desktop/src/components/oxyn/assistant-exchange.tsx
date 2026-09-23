@@ -79,12 +79,14 @@ function EntryView({
   openSqlDisabledReason,
   onReview,
   onCopy,
+  renderToolRows,
 }: {
   entry: Entry
   openSql: (sql: string) => void
   openSqlDisabledReason: string | null
   onReview: (entry: ToolCallEntry) => void
   onCopy: (text: string) => Promise<boolean> | boolean
+  renderToolRows?: AssistantViewProps["renderToolRows"]
 }) {
   switch (entry.kind) {
     case "answer":
@@ -113,7 +115,17 @@ function EntryView({
     case "toolDraft":
       return <AssistantToolDraft entry={entry} />
     case "tool":
-      return <AssistantToolCall entry={entry} onReview={onReview} />
+      return (
+        <AssistantToolCall
+          entry={entry}
+          onReview={onReview}
+          rows={
+            entry.state === "completed" && entry.result !== null
+              ? renderToolRows?.(entry)
+              : null
+          }
+        />
+      )
     case "agentTool":
       return <AssistantAgentTool tool={entry.tool} status={entry.status} />
     case "permissionRefused":
@@ -160,6 +172,12 @@ function EntryView({
             {entry.statement ? (
               <span className="mt-1 block font-mono break-all opacity-80">
                 {entry.statement}
+              </span>
+            ) : null}
+            {entry.rowsNotKept ? (
+              <span className="mt-1 block">
+                Result no longer available: the workspace keeps the statement,
+                never its rows. Nothing is rerun.
               </span>
             ) : null}
           </MarkerContent>
@@ -241,6 +259,7 @@ export function ExchangeView({
           openSqlDisabledReason={openSqlDisabledReason}
           onReview={(tool) => onReview(node.id, tool)}
           onCopy={view.onCopy}
+          renderToolRows={view.renderToolRows}
         />
       ))}
       {waiting ? (

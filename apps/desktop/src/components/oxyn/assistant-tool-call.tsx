@@ -1,3 +1,4 @@
+import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
   Alert02Icon,
@@ -95,9 +96,12 @@ function StateIcon({ state }: { state: ToolCallState }) {
 export function AssistantToolCall({
   entry,
   onReview,
+  rows,
 }: {
   entry: ToolCallEntry
   onReview?: (entry: ToolCallEntry) => void
+  /** The rows the call returned, drawn under its report (`AssistantToolRows`). */
+  rows?: React.ReactNode
 }) {
   const state = STATES[entry.state]
   return (
@@ -211,6 +215,7 @@ export function AssistantToolCall({
           ) : null}
         </div>
       ) : null}
+      {rows}
     </section>
   )
 }

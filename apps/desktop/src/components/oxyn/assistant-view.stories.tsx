@@ -2,6 +2,8 @@ import type { Meta, StoryObj } from "@storybook/react-vite"
 import { expect, fn, userEvent, waitFor, within } from "storybook/test"
 
 import { visibleAssistantField } from "./assistant-composer"
+import { AssistantToolRows } from "./assistant-tool-rows"
+import { invoiceColumns, syntheticPages } from "./fixtures"
 import { AssistantView } from "./assistant-view"
 import type { PlanEntry } from "./assistant-plan"
 import type { AssistantSource } from "./assistant-sources"
@@ -50,6 +52,7 @@ const answeredThread = threadOfEvents([
         errorClass: null,
         withheld: false,
         rows: 1,
+        result: "result-active-clients",
       },
       { kind: "textDelta", text: answer },
       {
@@ -546,6 +549,78 @@ export const AgentWorkingAndRefused: Story = {
   },
 }
 
+/**
+ * An external agent (Claude Code, Codex) ran `execute_query` through Oxyn's
+ * MCP server: its rows are drawn under the call exactly as for a provider. The
+ * agent's own tool steps stay apart, reduced to their kind.
+ */
+export const ExternalAgentQueryWithRows: Story = {
+  args: {
+    selected: destinations[1] ?? null,
+    model: null,
+    state: assistantState(
+      threadOfEvents([
+        {
+          question: "Show me the last three invoices",
+          events: [
+            { kind: "question", text: "Show me the last three invoices" },
+            agentStarted,
+            { kind: "agentTool", id: "t1", tool: "think", status: "completed" },
+            {
+              kind: "toolCall",
+              call: 0,
+              tool: "execute_query",
+              command: "Execute",
+              statement:
+                "SELECT * FROM public.invoices ORDER BY issued_at DESC LIMIT 3",
+              connection: "commerce-prod",
+              environment: "production",
+              mutating: false,
+            },
+            {
+              kind: "toolReported",
+              call: 0,
+              status: "completed",
+              detail: "3 rows, 1 batches",
+              errorClass: null,
+              withheld: false,
+              rows: 3,
+              result: "result-agent-invoices",
+            },
+            { kind: "textDelta", text: "Here are the last three invoices." },
+            answered,
+          ],
+        },
+      ])
+    ),
+    renderToolRows: (entry) => (
+      <AssistantToolRows
+        state={{
+          status: "open",
+          result: entry.result ?? "",
+          columns: invoiceColumns,
+          rows: entry.rows ?? 0,
+          truncated: false,
+        }}
+        fetchPage={syntheticPages(3, 0)}
+        onOpenAll={fn()}
+      />
+    ),
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    const call = canvas.getByRole("region", { name: /Command execute_query/ })
+    await expect(
+      await within(call).findByRole("grid", { name: "Rows the query returned" })
+    ).toBeVisible()
+    await expect(within(call).getByText("Initech")).toBeVisible()
+    await expect(within(call).getByText(/^3 rows$/)).toBeVisible()
+    await expect(
+      within(call).getByText(/shown to you only; the model got the count/)
+    ).toBeVisible()
+  },
+}
+
 export const TruncatedOffersToContinue: Story = {
   args: {
     state: assistantState(
@@ -668,6 +743,7 @@ export const PendingApproval: Story = {
               errorClass: null,
               withheld: false,
               rows: null,
+              result: null,
             },
             answered,
           ],
@@ -1155,6 +1231,7 @@ export const ReopenedFromTheWorkspace: Story = {
               statement: "SELECT count(*) FROM public.clients",
               status: "completed",
               errorClass: null,
+              rowsNotKept: true,
             },
             answered,
           ],
@@ -1194,5 +1271,41 @@ export const ReopenedFromTheWorkspace: Story = {
       canvas.getByText(/not being saved to the workspace/)
     ).toBeVisible()
     await expect(canvas.getByText(/reopened from the workspace/)).toBeVisible()
+    // The rows the panel showed then are gone: said, and no grid pretends.
+    await expect(
+      canvas.getByText(/Result no longer available: the workspace keeps/)
+    ).toBeVisible()
+    await expect(canvas.queryByRole("grid")).toBeNull()
+  },
+}
+
+/**
+ * The rows an agent's query returned, under its call — for the user only. The
+ * grid is drawn by `renderToolRows`, which the feature wires to the backend.
+ */
+export const AnsweredWithRows: Story = {
+  args: {
+    state: assistantState(answeredThread),
+    renderToolRows: (entry) => (
+      <AssistantToolRows
+        state={{
+          status: "open",
+          result: entry.result ?? "",
+          columns: invoiceColumns,
+          rows: 1,
+          truncated: false,
+        }}
+        fetchPage={syntheticPages(1, 0)}
+        onOpenAll={fn()}
+      />
+    ),
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    const call = canvas.getByRole("region", { name: /Command execute_query/ })
+    await expect(
+      await within(call).findByRole("grid", { name: "Rows the query returned" })
+    ).toBeVisible()
+    await expect(within(call).getByText("Acme SA")).toBeVisible()
   },
 }

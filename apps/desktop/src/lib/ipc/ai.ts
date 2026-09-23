@@ -520,6 +520,8 @@ export const AiEvent = z.discriminatedUnion("kind", [
     statement: z.string().nullable(),
     status: ToolStatus,
     errorClass: ErrorClass.nullable(),
+    /** The call returned rows the workspace did not keep: said, never drawn. */
+    rowsNotKept: z.boolean(),
   }),
   /** Counts only: neither a value nor a column name is kept. */
   z.object({
@@ -578,6 +580,12 @@ export const AiEvent = z.discriminatedUnion("kind", [
     withheld: z.boolean(),
     /** Rows produced or affected, measured by the executor; never parsed from `detail`. */
     rows: z.number().int().nonnegative().nullable(),
+    /**
+     * The result the executor retained, read by pages on the conversation's
+     * connection. For the user alone: the model is never told of it. Never
+     * rendered.
+     */
+    result: z.string().nullable(),
   }),
   z.object({
     kind: z.literal("callRejected"),

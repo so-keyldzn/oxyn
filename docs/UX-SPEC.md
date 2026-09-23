@@ -696,6 +696,43 @@ tout fournisseur honore le jeton d'annulation dans son flux — et un fournisseu
 qui ne le ferait pas rendrait l'annulation inopérante sans que rien d'autre ne
 le signale.
 
+### Les lignes d'une requête d'agent se lisent sous son appel
+
+Quand un agent — fournisseur interne ou agent externe par MCP — exécute
+`execute_query` et que la commande se termine, **l'utilisateur voit les lignes
+renvoyées** sous l'appel d'outil, dans une grille compacte. Le modèle, lui, n'en
+reçoit que la forme — nombre de lignes et de lots, troncature — et rien de ce
+que la grille montre ([ADR-0006](adr/0006-ai-privacy-tiers.md),
+[ADR-0030](adr/0030-outils-oxyn-exposes-a-un-agent-externe.md) §4) ; le pied
+de la grille le rappelle (« shown to you only; the model got the count »).
+
+* **Même chemin que la console.** Le `ResultId` retenu par l'ordonnanceur
+  remonte dans l'événement de fin d'appel, jamais dans ce qui part au modèle.
+  La grille ouvre le résultat par `OpenRetainedResult`, qui vérifie qu'il
+  appartient à la connexion de la conversation, puis lit des pages bornées par
+  `read_result_page` ; les cellules sont formatées en Rust. Un résultat produit
+  sur une autre connexion que celle de la conversation n'est pas proposé.
+* **Bornée.** La grille atteint au plus les 100 premières lignes, en affiche
+  huit avant de défiler, et dit « First 100 rows of N » quand il y en a plus.
+  `Open all rows` ouvre le résultat entier dans un onglet de résultat du
+  workspace — le tampon retenu, **jamais une réexécution**. Cet onglet n'offre
+  pas d'ouvrir l'instruction dans une console : elle n'y entre qu'avec sa
+  provenance, depuis la réponse de l'agent.
+* **États.** En cours de lecture ; peuplée ; **vide** (« The query returned no
+  rows. », sans alerte) ; erreur (le message du backend entier, `Try again`
+  seulement s'il est déclaré retentable) ; **expirée** (« Result no longer
+  available », sans rien proposer qui relance la requête).
+
+**Durée de vie.** Le résultat d'un agent est un résultat retenu sans lecteur :
+il vit jusqu'à ce que la rétention l'évince selon les bornes
+d'[ADR-0017](adr/0017-retention-resultats.md) — au plus 16 résultats sans
+lecteur, les plus anciens partant les premiers —, jusqu'à la suppression de la
+conversation — qui libère les résultats de ses appels —, ou jusqu'à la fin du
+processus. Rien n'en est écrit dans le fichier de workspace. Une conversation
+rouverte depuis le workspace ne montre donc aucune grille : sous un appel qui
+avait renvoyé des lignes, elle dit « Result no longer available: the workspace
+keeps the statement, never its rows ».
+
 ### Ce que le panneau montre d'un agent externe
 
 Un agent externe travaille avec ses propres outils, qui ne sont pas des `Command`

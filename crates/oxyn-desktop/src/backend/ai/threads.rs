@@ -33,7 +33,7 @@ use oxyn_ai::external::mcp::ToolTurns;
 use oxyn_ai::external::session::ExternalSession;
 use oxyn_core::{
     Actor, AgentId, AgentSessionId, CancelToken, ConnectionId, ConversationId, Environment,
-    ExternalAgentConfig, PrivacyTier, SessionId,
+    ExternalAgentConfig, PrivacyTier, ResultId, SessionId,
 };
 use oxyn_exec::Executor;
 use parking_lot::Mutex;
@@ -550,6 +550,12 @@ pub(crate) struct CurrentCall {
     /// Carried from `ExecStats`, never read back from the summary text: a
     /// wording change there would silently turn every count into `None`.
     pub(crate) rows: Option<u64>,
+    /// The result the executor retained for this call, for the user's eyes.
+    ///
+    /// Carried beside the report, never inside it: `DispatchOutcome` — and so
+    /// what the model is told — knows nothing of it
+    /// ([I-04](../../../../../CLAUDE.md#i-04)).
+    pub(crate) result: Option<ResultId>,
 }
 
 impl Thread {
@@ -1009,6 +1015,7 @@ impl Thread {
             announced: false,
             cancelled: false,
             rows: None,
+            result: None,
         });
     }
 
@@ -1026,6 +1033,7 @@ impl Thread {
             announced: false,
             cancelled: false,
             rows: None,
+            result: None,
         });
         current.announced = true;
         CurrentCallView {
@@ -1045,16 +1053,37 @@ impl Thread {
         }
     }
 
-    pub(crate) fn record_rows(&self, call: u32, rows: u64) {
+    /// What a completed call measured, and the result it left for the user.
+    pub(crate) fn record_rows(&self, call: u32, rows: u64, result: Option<ResultId>) {
         if let Some(current) = self.state.lock().run.current.as_mut()
             && current.id == call
         {
             current.rows = Some(rows);
+            current.result = result;
         }
     }
 
     pub(crate) fn take_call(&self) -> Option<CurrentCall> {
         self.state.lock().run.current.take()
+    }
+
+    /// The results this conversation's calls left in the executor, to release
+    /// with it: rows kept for a conversation nobody can open any more would
+    /// only push out results someone is reading.
+    pub(crate) fn results(&self) -> Vec<ResultId> {
+        self.state
+            .lock()
+            .nodes
+            .iter()
+            .flat_map(|node| &node.log)
+            .filter_map(|event| match event {
+                AiEvent::ToolReported {
+                    result: Some(shown),
+                    ..
+                } => shown.parse().ok(),
+                _ => None,
+            })
+            .collect()
     }
 }
 

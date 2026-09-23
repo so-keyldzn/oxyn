@@ -237,12 +237,15 @@ fn an_agent_on_a_local_only_connection_is_refused_before_launch() {
 #[derive(Debug)]
 struct ScriptedProvider {
     turns: Mutex<Vec<Vec<oxyn_llm::ChatEvent>>>,
+    /// Every message text each request carried: what left for the model.
+    sent: Mutex<Vec<String>>,
 }
 
 impl ScriptedProvider {
     fn new(turns: Vec<Vec<oxyn_llm::ChatEvent>>) -> Arc<Self> {
         Arc::new(Self {
             turns: Mutex::new(turns),
+            sent: Mutex::new(Vec::new()),
         })
     }
 }
@@ -259,9 +262,15 @@ impl oxyn_llm::LlmProvider for ScriptedProvider {
 
     async fn stream(
         &self,
-        _request: oxyn_llm::ChatRequest,
+        request: oxyn_llm::ChatRequest,
         _cancel: &CancelToken,
     ) -> oxyn_core::Result<futures::stream::BoxStream<'static, oxyn_llm::ChatEvent>> {
+        self.sent.lock().extend(
+            request
+                .messages
+                .iter()
+                .map(|message| message.content.clone()),
+        );
         let mut turns = self.turns.lock();
         let events = if turns.is_empty() {
             Vec::new()
@@ -392,6 +401,290 @@ fn a_tool_call_really_runs_the_query_on_the_database() {
         .collect();
     assert_eq!(reports.len(), 1, "{reports:?}");
     assert!(reports[0].contains(r#""rows":1"#), "{reports:?}");
+}
+
+#[test]
+fn the_rows_of_a_tool_call_reach_the_panel_and_never_the_model() {
+    // ADR-0006, ADR-0030 §4: the model learns the shape of a result, the user
+    // reads its rows. The regression this guards is a « helpful » change that
+    // puts the result id — or the rows it leads to — into what the model gets.
+    // Under `Sampled`, the tier that lets the most out: rows stay home even
+    // there, because no tier sends a tool's rows. The values are computed by
+    // the server, so that neither appears in the statement the model wrote.
+    const CANARY: &str = "canary-7f3a-row-value";
+    let runtime = runtime();
+    let _guard = runtime.enter();
+    let backend = Backend::open_temporary().expect("temporary backend");
+    let open = open(&runtime, &backend, Environment::Local);
+
+    let provider = ScriptedProvider::new(vec![
+        vec![
+            oxyn_llm::ChatEvent::ToolCallComplete(oxyn_llm::ToolCall::new(
+                "call-1",
+                "execute_query",
+                serde_json::json!({
+                    "statement": "SELECT 'canary-7f3a-' || 'row-value' AS who, 424240 + 2 AS n"
+                }),
+            )),
+            oxyn_llm::ChatEvent::Done {
+                stop_reason: oxyn_llm::StopReason::ToolCalls,
+            },
+        ],
+        vec![
+            oxyn_llm::ChatEvent::TextDelta("One row.".to_owned()),
+            oxyn_llm::ChatEvent::Done {
+                stop_reason: oxyn_llm::StopReason::EndTurn,
+            },
+        ],
+    ]);
+
+    let spec = oxyn_ai::sql_agent();
+    let engine = oxyn_ai::AgentRuntime::new(
+        spec.clone(),
+        Arc::clone(&provider) as Arc<dyn oxyn_llm::LlmProvider>,
+        oxyn_llm::Reach::Local,
+        oxyn_ai::ToolRegistry::builtin(),
+        "scripted",
+    )
+    .expect("a valid declaration");
+    let context = oxyn_ai::ContextBuilder::new(
+        &oxyn_catalog::CatalogCache::new(),
+        oxyn_core::PrivacyTier::Sampled,
+    )
+    .build();
+    let connection: ConnectionId = open.connection.parse().expect("connection id");
+    let scope = oxyn_ai::ToolScope::new(
+        connection,
+        open.session.parse().expect("session id"),
+        QueryLanguage::Sql(SqlDialect::Sqlite),
+    );
+    let mut session = oxyn_ai::AgentSession::new(&spec, &context, scope);
+    session.ask("show me the row");
+
+    let thread = backend
+        .inner
+        .ai
+        .thread_for(connection, None)
+        .expect("a conversation");
+    let (channel, received) = recording();
+    let (node, _) = thread
+        .begin(
+            None,
+            "show me the row",
+            channel,
+            Scope {
+                connection,
+                name: open.name.clone(),
+                environment: open.environment,
+            },
+        )
+        .expect("begins");
+    let sink = AgentSink {
+        sink: ExecutorSink::for_agent(Arc::clone(&backend.inner.executor), spec.id, session.id()),
+        executor: Arc::clone(&backend.inner.executor),
+        thread: Arc::clone(&thread),
+        node,
+        question: QuestionOpen::new(),
+    };
+    let observer = Observer {
+        thread: Arc::clone(&thread),
+        node,
+    };
+    runtime
+        .block_on(engine.run(&mut session, &sink, &observer, &CancelToken::new()))
+        .expect("the conversation runs");
+
+    // What the model was sent, every turn: the statement it wrote itself, the
+    // shape of the result — and not one value of the row, nor its result id.
+    let tool = session
+        .messages()
+        .iter()
+        .find(|message| message.role == oxyn_llm::Role::Tool)
+        .expect("the tool result reached the conversation");
+    assert!(tool.content.contains("1 rows"), "{:?}", tool.content);
+    assert!(!tool.content.contains(CANARY), "{:?}", tool.content);
+    assert!(!tool.content.contains("424242"), "{:?}", tool.content);
+
+    let report = received
+        .lock()
+        .iter()
+        .find(|json| json.contains(r#""kind":"toolReported""#))
+        .cloned()
+        .expect("the call was reported to the panel");
+    let payload: serde_json::Value = serde_json::from_str(&report).expect("json");
+    let result = payload["event"]["result"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the panel's report names a result: {report}"))
+        .to_owned();
+
+    let sent = provider.sent.lock().join("\n");
+    assert!(!sent.contains(CANARY), "a row value left for the model");
+    assert!(!sent.contains("424242"), "a row value left for the model");
+    assert!(!sent.contains(&result), "the result id left for the model");
+
+    // And the panel can read the rows through the console's own page call.
+    let window = runtime
+        .block_on(backend.read_result_page(connection, result.parse().expect("a result id"), 0, 10))
+        .expect("the page reads");
+    let shown = serde_json::to_string(&window).expect("json");
+    assert!(shown.contains(CANARY), "{shown}");
+    assert!(shown.contains("424242"), "{shown}");
+}
+
+#[test]
+fn an_external_agents_query_shows_its_rows_to_the_user_and_never_to_the_agent() {
+    // Claude Code or Codex reach the database through Oxyn's MCP server
+    // (ADR-0030), not through the internal loop. The panel must draw the same
+    // grid for them, and what goes back over MCP — to a model Oxyn cannot
+    // locate — must stay the shape of the result, never its values.
+    let runtime = runtime();
+    let _guard = runtime.enter();
+    let backend = Backend::open_temporary().expect("temporary backend");
+    let open = open(&runtime, &backend, Environment::Local);
+    let connection: ConnectionId = open.connection.parse().expect("connection id");
+
+    let thread = backend
+        .inner
+        .ai
+        .thread_for(connection, None)
+        .expect("a conversation");
+    let (channel, received) = recording();
+    let (node, _) = thread
+        .begin(
+            None,
+            "show me the row",
+            channel,
+            Scope {
+                connection,
+                name: open.name.clone(),
+                environment: open.environment,
+            },
+        )
+        .expect("begins");
+
+    // Wired as `ask_agent` wires it: the service the launch builds, and the
+    // sink and filtered observer each question opens.
+    let spec = oxyn_ai::sql_agent();
+    let (identity, conversation) = (AgentId::new(), AgentSessionId::new());
+    let service = ToolService::new(
+        ToolRegistry::builtin(),
+        spec.allowed_tools.clone(),
+        ToolScope::new(
+            connection,
+            open.session.parse().expect("session id"),
+            QueryLanguage::Sql(SqlDialect::Sqlite),
+        ),
+        Arc::new(StoredTier {
+            executor: Arc::clone(&backend.inner.executor),
+            connection,
+        }),
+        Actor::agent(identity, conversation),
+    );
+    let tools = ToolTurns::new(spec.max_turns, Arc::new(|| false));
+    let _question = tools.open(
+        Arc::new(AgentSink {
+            sink: ExecutorSink::for_agent(
+                Arc::clone(&backend.inner.executor),
+                identity,
+                conversation,
+            ),
+            executor: Arc::clone(&backend.inner.executor),
+            thread: Arc::clone(&thread),
+            node,
+            question: QuestionOpen::new(),
+        }),
+        Arc::new(AgentObserverFilter(Observer {
+            thread: Arc::clone(&thread),
+            node,
+        })),
+        CancelToken::new(),
+    );
+
+    let request = serde_json::json!({
+        "jsonrpc": "2.0",
+        "id": 7,
+        "method": "tools/call",
+        "params": {
+            "name": "execute_query",
+            "arguments": {
+                "statement": "SELECT 'canary-7f3a-' || 'row-value' AS who, 424240 + 2 AS n"
+            }
+        }
+    })
+    .to_string();
+    let answer = runtime
+        .block_on(service.respond(&request, &tools))
+        .expect("a tools/call is answered");
+
+    // What the agent — and whatever model it talks to — receives.
+    assert!(answer.contains("1 rows"), "{answer}");
+    assert!(!answer.contains("canary-7f3a-row-value"), "{answer}");
+    assert!(!answer.contains("424242"), "{answer}");
+
+    let report = received
+        .lock()
+        .iter()
+        .find(|json| json.contains(r#""kind":"toolReported""#))
+        .cloned()
+        .expect("the call was reported to the panel");
+    let payload: serde_json::Value = serde_json::from_str(&report).expect("json");
+    let result = payload["event"]["result"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the panel's report names a result: {report}"))
+        .to_owned();
+    assert!(
+        !answer.contains(&result),
+        "the result id left for the agent"
+    );
+
+    let window = runtime
+        .block_on(backend.read_result_page(connection, result.parse().expect("a result id"), 0, 10))
+        .expect("the page reads");
+    let shown = serde_json::to_string(&window).expect("json");
+    assert!(shown.contains("canary-7f3a-row-value"), "{shown}");
+    assert!(shown.contains("424242"), "{shown}");
+}
+
+#[test]
+fn deleting_a_conversation_releases_the_rows_its_calls_left() {
+    let runtime = runtime();
+    let _guard = runtime.enter();
+    let backend = Backend::open_temporary().expect("temporary backend");
+    let open = open(&runtime, &backend, Environment::Local);
+    let (sink, thread, actor, received) = sink_on(&backend, &open);
+
+    thread.open_call(
+        "execute_query",
+        "Execute",
+        open.connection.parse().ok(),
+        false,
+    );
+    let outcome = runtime.block_on(sink.dispatch(
+        actor,
+        execute(&open, "SELECT 1 AS one"),
+        &CancelToken::new(),
+    ));
+    report_call(&thread, sink.node, &outcome, false);
+    let report = received
+        .lock()
+        .iter()
+        .find(|json| json.contains(r#""kind":"toolReported""#))
+        .cloned()
+        .expect("reported");
+    let payload: serde_json::Value = serde_json::from_str(&report).expect("json");
+    let result: oxyn_core::ResultId = payload["event"]["result"]
+        .as_str()
+        .and_then(|id| id.parse().ok())
+        .unwrap_or_else(|| panic!("a result is named: {report}"));
+    assert!(backend.inner.executor.result(result).is_some());
+
+    runtime
+        .block_on(backend.ai_delete_thread(open.connection.parse().expect("id"), &thread.id()))
+        .expect("deleted");
+    assert!(
+        backend.inner.executor.result(result).is_none(),
+        "the rows of a deleted conversation are still held"
+    );
 }
 
 /// A conversation holding an agent link, as a launch leaves it. The returned

@@ -125,6 +125,13 @@ export interface AssistantViewProps {
    * is absent, not greyed (docs/UX-SPEC.md).
    */
   onOpenObject?: (address: CatalogAddress) => void
+  /**
+   * The rows a completed call returned, drawn under it — `AssistantToolRows`
+   * wired to the backend. Called only for a call that names a result.
+   *
+   * Optional: without it a call shows its report alone, as it did before.
+   */
+  renderToolRows?: (entry: ToolCallEntry) => React.ReactNode
   /** Unpins locally. Nothing is assembled or sent here. */
   onRemovePin?: (key: string) => void
   /**

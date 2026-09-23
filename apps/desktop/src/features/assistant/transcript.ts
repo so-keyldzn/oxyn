@@ -71,6 +71,12 @@ export interface ToolCallEntry {
   withheld: boolean
   /** Rows produced or affected, once completed. Never parsed from `detail`. */
   rows: number | null
+  /**
+   * The result the executor retained, to read by pages on the conversation's
+   * connection. `null` when the command left none. Never rendered, never sent
+   * to a model.
+   */
+  result: string | null
   approval: PendingApproval | null
 }
 
@@ -154,6 +160,8 @@ export type Entry =
       statement: string | null
       status: ToolStatus
       errorClass: ErrorClass | null
+      /** It returned rows the workspace did not keep. */
+      rowsNotKept: boolean
     }
   | { kind: "ended"; key: string; ending: Ending }
   | FailedEntry
@@ -315,6 +323,7 @@ export function reduce(current: Exchange, event: AiEvent): Exchange {
         statement: event.statement,
         status: event.status,
         errorClass: event.errorClass,
+        rowsNotKept: event.rowsNotKept,
       })
     case "sampleApproved":
       return push({
@@ -429,6 +438,7 @@ export function reduce(current: Exchange, event: AiEvent): Exchange {
             errorClass: null,
             withheld: false,
             rows: null,
+            result: null,
             approval: null,
           },
         ],
@@ -468,6 +478,7 @@ export function reduce(current: Exchange, event: AiEvent): Exchange {
                 errorClass: event.errorClass,
                 withheld: event.withheld,
                 rows: event.rows,
+                result: event.result,
               }
         ),
       }
