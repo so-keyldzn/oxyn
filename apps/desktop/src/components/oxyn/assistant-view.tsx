@@ -28,7 +28,7 @@ import { AssistantThinking } from "@/components/oxyn/assistant-thinking"
 import { AssistantToolCall } from "@/components/oxyn/assistant-tool-call"
 import { AssistantToolDraft } from "@/components/oxyn/assistant-tool-draft"
 import { AssistantUsage } from "@/components/oxyn/assistant-usage"
-import { Marker } from "@/components/ui/marker"
+import { Marker, MarkerContent } from "@/components/ui/marker"
 import { Message, MessageContent } from "@/components/ui/message"
 import {
   Empty,
@@ -165,7 +165,9 @@ function EntryView({
     case "turn":
       return (
         <Marker variant="separator" className="text-xs">
-          Turn {entry.turn} / {entry.maxTurns}
+          <MarkerContent>
+            Turn {entry.turn} / {entry.maxTurns}
+          </MarkerContent>
         </Marker>
       )
     case "toolDraft":
@@ -186,60 +188,60 @@ function EntryView({
     case "notSaved":
       return (
         <Marker role="note" className="items-start text-xs">
-          <span>
+          <MarkerContent>
             This conversation is not being saved to the workspace. The assistant
             still answers; nothing of it will be here next time.
-          </span>
+          </MarkerContent>
         </Marker>
       )
     case "olderNotLoaded":
       return (
         <Marker role="note" className="items-start text-xs">
-          <span>
+          <MarkerContent>
             Older exchanges of this conversation are in the workspace and not
             loaded here.
-          </span>
+          </MarkerContent>
         </Marker>
       )
     case "answerNotKept":
       return (
         <Marker role="note" className="items-start text-xs">
-          <span>
+          <MarkerContent>
             This answer used a data sample and was not kept. The workspace holds
             the question and the size of the sample, nothing else.
-          </span>
+          </MarkerContent>
         </Marker>
       )
     case "restoredCall":
       return (
         <Marker className="items-start text-xs">
-          <span className="min-w-0">
+          <MarkerContent>
             <span className="font-mono">{entry.tool}</span> · {entry.summary}
             {entry.statement ? (
               <span className="mt-1 block font-mono break-all opacity-80">
                 {entry.statement}
               </span>
             ) : null}
-          </span>
+          </MarkerContent>
         </Marker>
       )
     case "sampleSent":
       return (
         <Marker role="note" className="items-start text-xs">
-          <span>
+          <MarkerContent>
             {entry.rows} {entry.rows === 1 ? "row" : "rows"} and {entry.columns}{" "}
             {entry.columns === 1 ? "column" : "columns"} of an approved sample
             went with this question only. Oxyn keeps none of their values.
-          </span>
+          </MarkerContent>
         </Marker>
       )
     case "rejectedCall":
       return (
         <Marker className="items-start text-xs">
-          <span>
+          <MarkerContent>
             <span className="font-mono">{entry.tool}</span> · refused before the
             bus, nothing ran: {entry.error}
-          </span>
+          </MarkerContent>
         </Marker>
       )
     // Endings and failures are drawn after the exchange, with what they offer.
@@ -309,7 +311,9 @@ function ExchangeView({
       outcome?.kind === "ended" &&
       !saidSomething(exchange) ? (
         <Marker role="status" className="text-xs">
-          The model answered nothing. This is not a failure.
+          <MarkerContent>
+            The model answered nothing. This is not a failure.
+          </MarkerContent>
         </Marker>
       ) : null}
 

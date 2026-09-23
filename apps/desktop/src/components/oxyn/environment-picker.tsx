@@ -1,11 +1,11 @@
 import * as React from "react"
-import { cn } from "cn"
 
 import { EnvironmentBadge } from "@/components/oxyn/environment-badge"
 import { FieldDescription, FieldLegend, FieldSet } from "@/components/ui/field"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import { ENVIRONMENTS } from "@/lib/ipc/types"
 import type { Environment } from "@/lib/ipc/types"
+import { cn } from "@/lib/utils"
 
 const DETAILS: Record<Environment, string> = {
   production: "Every write asks for a review that names it",

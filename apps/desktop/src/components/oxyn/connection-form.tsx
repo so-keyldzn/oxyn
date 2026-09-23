@@ -1,6 +1,5 @@
 import * as React from "react"
 import { useForm, useStore } from "@tanstack/react-form"
-import { cn } from "cn"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { FolderOpenIcon } from "@hugeicons/core-free-icons"
 
@@ -36,6 +35,7 @@ import type {
   FormField,
   PrivacyTier,
 } from "@/lib/ipc/types"
+import { cn } from "@/lib/utils"
 
 export interface FormValues {
   name: string

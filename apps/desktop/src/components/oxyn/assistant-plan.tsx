@@ -6,7 +6,6 @@ import {
   CircleIcon,
   TaskDaily01Icon,
 } from "@hugeicons/core-free-icons"
-import { cn } from "cn"
 
 import {
   Collapsible,
@@ -19,6 +18,7 @@ import type {
   PlanEntryPriority,
   PlanEntryStatus,
 } from "@/lib/ipc/ai"
+import { cn } from "@/lib/utils"
 
 /**
  * The plan of a run, in the shape the Agent Client Protocol gives it.

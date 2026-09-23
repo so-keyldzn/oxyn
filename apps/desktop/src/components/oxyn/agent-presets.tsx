@@ -9,6 +9,7 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
 import type { AgentPresetDraft, AgentPresetId } from "@/lib/ipc/ai"
+import { cn } from "@/lib/utils"
 
 /** What « Detect » found for one preset, or why it could not. */
 export type PresetState =
@@ -29,11 +30,7 @@ function Found({ what, path }: { what: string; path: string | null }) {
       <HugeiconsIcon
         icon={path ? CheckmarkCircle02Icon : Alert02Icon}
         strokeWidth={2}
-        className={
-          path
-            ? "mt-0.5 size-3.5 shrink-0"
-            : "mt-0.5 size-3.5 shrink-0 text-destructive"
-        }
+        className={cn("mt-0.5 size-3.5 shrink-0", !path && "text-destructive")}
         aria-hidden
       />
       <span className="min-w-0">

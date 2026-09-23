@@ -1,6 +1,5 @@
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { cn } from "cn"
 import {
   ArrowDown01Icon,
   FloppyDiskIcon,
@@ -16,6 +15,7 @@ import { ButtonGroup } from "@/components/ui/button-group"
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuShortcut,
   DropdownMenuTrigger,
@@ -28,6 +28,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { cn } from "@/lib/utils"
 
 /** Where the named copy stands. `conflict` keeps the local text and offers a copy. */
 export type SaveState =
@@ -173,10 +174,12 @@ export function ConsoleToolbar({
               <HugeiconsIcon icon={ArrowDown01Icon} strokeWidth={2} />
             </DropdownMenuTrigger>
             <DropdownMenuContent align="start">
-              <DropdownMenuItem onClick={onRunAll}>
-                Run all
-                <DropdownMenuShortcut>⌘⇧↵</DropdownMenuShortcut>
-              </DropdownMenuItem>
+              <DropdownMenuGroup>
+                <DropdownMenuItem onClick={onRunAll}>
+                  Run all
+                  <DropdownMenuShortcut>⌘⇧↵</DropdownMenuShortcut>
+                </DropdownMenuItem>
+              </DropdownMenuGroup>
             </DropdownMenuContent>
           </DropdownMenu>
         </ButtonGroup>

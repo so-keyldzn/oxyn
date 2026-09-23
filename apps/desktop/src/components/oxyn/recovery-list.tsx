@@ -8,6 +8,13 @@ import {
 } from "@hugeicons/core-free-icons"
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import {
+  Breadcrumb,
+  BreadcrumbItem,
+  BreadcrumbList,
+  BreadcrumbPage,
+  BreadcrumbSeparator,
+} from "@/components/ui/breadcrumb"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Kbd } from "@/components/ui/kbd"
@@ -70,27 +77,30 @@ export function RecoveryList({
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 p-6">
       <header className="flex flex-col gap-1">
-        <nav
-          aria-label="Breadcrumb"
-          className="flex items-center gap-2 text-xs text-muted-foreground"
-        >
-          <Button
-            size="xs"
-            variant="ghost"
-            onClick={onBack}
-            aria-keyshortcuts="Escape Meta+BracketLeft"
-          >
-            <HugeiconsIcon
-              icon={ArrowLeft01Icon}
-              strokeWidth={2}
-              data-icon="inline-start"
-            />
-            {backLabel}
-            <Kbd>Esc</Kbd>
-          </Button>
-          <span aria-hidden>/</span>
-          <span aria-current="page">Recovery</span>
-        </nav>
+        <Breadcrumb>
+          <BreadcrumbList className="text-xs">
+            <BreadcrumbItem>
+              <Button
+                size="xs"
+                variant="ghost"
+                onClick={onBack}
+                aria-keyshortcuts="Escape Meta+BracketLeft"
+              >
+                <HugeiconsIcon
+                  icon={ArrowLeft01Icon}
+                  strokeWidth={2}
+                  data-icon="inline-start"
+                />
+                {backLabel}
+                <Kbd>Esc</Kbd>
+              </Button>
+            </BreadcrumbItem>
+            <BreadcrumbSeparator />
+            <BreadcrumbItem>
+              <BreadcrumbPage>Recovery</BreadcrumbPage>
+            </BreadcrumbItem>
+          </BreadcrumbList>
+        </Breadcrumb>
         <h1 className="text-xl font-semibold">Recover your workspace</h1>
         <p className="text-sm text-muted-foreground" role="status">
           {state.status === "loading"

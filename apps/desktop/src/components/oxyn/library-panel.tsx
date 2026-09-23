@@ -44,6 +44,7 @@ import type {
   HistoryRow,
   HistoryStatusChoice,
 } from "@/lib/ipc/library"
+import { cn } from "@/lib/utils"
 
 export type LibraryView = "history" | "saved"
 
@@ -290,7 +291,11 @@ export function LibraryPanel({
                 <div className="flex flex-wrap items-center gap-1.5">
                   {row.needsInspection ? (
                     <Badge variant="destructive">
-                      <HugeiconsIcon icon={Alert02Icon} strokeWidth={2} />
+                      <HugeiconsIcon
+                        icon={Alert02Icon}
+                        strokeWidth={2}
+                        data-icon="inline-start"
+                      />
                       Needs inspection
                     </Badge>
                   ) : (
@@ -320,11 +325,11 @@ export function LibraryPanel({
                     <Button
                       size="xs"
                       variant="ghost"
-                      className={
-                        onOpenResult && retainsResult(row, currentConnection)
-                          ? undefined
-                          : "ml-auto"
-                      }
+                      className={cn(
+                        !(
+                          onOpenResult && retainsResult(row, currentConnection)
+                        ) && "ml-auto"
+                      )}
                       onClick={() => onOpenHistory(row)}
                     >
                       <HugeiconsIcon

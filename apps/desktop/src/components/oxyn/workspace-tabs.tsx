@@ -10,7 +10,6 @@ import {
   TableIcon,
   ViewIcon,
 } from "@hugeicons/core-free-icons"
-import { cn } from "cn"
 
 import { Button } from "@/components/ui/button"
 import { Kbd, KbdGroup } from "@/components/ui/kbd"
@@ -23,6 +22,7 @@ import {
 } from "@/components/ui/tooltip"
 import { tabState, tabTitle } from "@/features/consoles/console-model"
 import type { ConsoleTabInfo } from "@/features/consoles/console-model"
+import { cn } from "@/lib/utils"
 
 export type WorkspaceTabItem =
   | ({ kind: "console" } & ConsoleTabInfo)

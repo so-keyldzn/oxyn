@@ -1,6 +1,5 @@
-import { cn } from "cn"
-
 import type { Cell } from "@/lib/ipc/types"
+import { cn } from "@/lib/utils"
 
 /** The text a cell copies to the clipboard: what is shown, as shown. */
 export function cellText(cell: Cell): string {

@@ -6,7 +6,6 @@ import {
   MessageMultiple01Icon,
   PencilEdit02Icon,
 } from "@hugeicons/core-free-icons"
-import { cn } from "cn"
 
 import {
   Alert,
@@ -37,6 +36,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import type { HistoryState } from "@/features/assistant/conversation-store"
 import type { ThreadSummary } from "@/lib/ipc/ai"
+import { cn } from "@/lib/utils"
 
 const UNTITLED = "Untitled conversation"
 

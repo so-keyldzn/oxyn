@@ -10,8 +10,8 @@ import { Badge } from "@/components/ui/badge"
  */
 export function ReadOnlyBadge() {
   return (
-    <Badge variant="outline" data-slot="read-only-badge" className="gap-1">
-      <HugeiconsIcon icon={LockIcon} strokeWidth={2} />
+    <Badge variant="outline" data-slot="read-only-badge">
+      <HugeiconsIcon icon={LockIcon} strokeWidth={2} data-icon="inline-start" />
       READ ONLY
     </Badge>
   )

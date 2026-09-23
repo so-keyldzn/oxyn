@@ -36,6 +36,7 @@ import {
   TableRow,
 } from "@/components/ui/table"
 import type { RelationDetail, RelationField } from "@/lib/ipc/types"
+import { cn } from "@/lib/utils"
 
 /** A structure row: one line of text, so the virtual list can size it. */
 const ROW_HEIGHT = 32
@@ -88,11 +89,10 @@ const columns: Array<ColumnDef<RelationField>> = [
     // spotted by a badge next to plain text.
     cell: ({ getValue }) => (
       <span
-        className={
-          getValue<boolean>()
-            ? "font-mono text-xs text-muted-foreground"
-            : "font-mono text-xs text-foreground"
-        }
+        className={cn(
+          "font-mono text-xs",
+          getValue<boolean>() ? "text-muted-foreground" : "text-foreground"
+        )}
       >
         {getValue<boolean>() ? "NULL" : "NOT NULL"}
       </span>

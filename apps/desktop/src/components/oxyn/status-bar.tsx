@@ -27,6 +27,7 @@ import {
 import { Separator } from "@/components/ui/separator"
 import { Spinner } from "@/components/ui/spinner"
 import type { Environment, PrivacyTier } from "@/lib/ipc/types"
+import { cn } from "@/lib/utils"
 
 export type ExecutionSummary =
   | { status: "idle" }
@@ -107,11 +108,10 @@ function SessionDetails({ capabilities }: { capabilities: Array<string> }) {
               <HugeiconsIcon
                 icon={surface.supported ? CheckmarkCircle02Icon : Cancel01Icon}
                 strokeWidth={2}
-                className={
-                  surface.supported
-                    ? "mt-0.5 size-3.5 shrink-0 text-success"
-                    : "mt-0.5 size-3.5 shrink-0 text-muted-foreground"
-                }
+                className={cn(
+                  "mt-0.5 size-3.5 shrink-0",
+                  surface.supported ? "text-success" : "text-muted-foreground"
+                )}
                 aria-hidden
               />
               <span>

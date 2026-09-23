@@ -7,6 +7,7 @@ import {
   DropdownMenu,
   DropdownMenuCheckboxItem,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuRadioGroup,
   DropdownMenuRadioItem,
   DropdownMenuSub,
@@ -17,6 +18,7 @@ import {
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectTrigger,
   SelectValue,
@@ -138,6 +140,10 @@ function ChoiceSelect({
   return (
     <Select
       value={current}
+      items={choices.map((choice) => ({
+        value: choice.id,
+        label: choice.name,
+      }))}
       disabled={disabled}
       onValueChange={(value) => {
         // Controlled on the agent's value: choosing sends, and the trigger keeps
@@ -154,7 +160,7 @@ function ChoiceSelect({
         title={`${name}: ${label}`}
         className="max-w-40 min-w-0 border-transparent px-2 shadow-none dark:bg-transparent"
       >
-        {pending ? <Spinner className="size-3.5" /> : null}
+        {pending ? <Spinner /> : null}
         <SelectValue className="min-w-0">
           {() => (
             <span dir="auto" className="truncate">
@@ -164,11 +170,13 @@ function ChoiceSelect({
         </SelectValue>
       </SelectTrigger>
       <SelectContent alignItemWithTrigger={false} className="max-w-80">
-        {choices.map((choice) => (
-          <SelectItem key={choice.id} value={choice.id}>
-            <ChoiceText choice={choice} />
-          </SelectItem>
-        ))}
+        <SelectGroup>
+          {choices.map((choice) => (
+            <SelectItem key={choice.id} value={choice.id}>
+              <ChoiceText choice={choice} />
+            </SelectItem>
+          ))}
+        </SelectGroup>
       </SelectContent>
     </Select>
   )
@@ -441,95 +449,100 @@ function MoreMenu({
         <HugeiconsIcon icon={MoreHorizontalIcon} strokeWidth={2} />
       </DropdownMenuTrigger>
       <DropdownMenuContent align="start" className="max-w-80 min-w-48">
-        {modes ? (
-          <DropdownMenuSub>
-            <DropdownMenuSubTrigger>
-              <span className="min-w-0 flex-1 truncate">Mode</span>
-              <span
-                dir="auto"
-                className="max-w-24 truncate text-xs text-muted-foreground"
-              >
-                {labelOf(modes.modes, modes.currentMode)}
-              </span>
-            </DropdownMenuSubTrigger>
-            <DropdownMenuSubContent className="max-w-80">
-              <DropdownMenuRadioGroup
-                value={modes.currentMode}
-                onValueChange={(value) => {
-                  if (typeof value === "string" && value !== modes.currentMode)
-                    onSend("Mode", { kind: "mode", mode: value })
-                }}
-              >
-                {modes.modes.map((mode) => (
-                  <DropdownMenuRadioItem key={mode.id} value={mode.id}>
-                    <ChoiceText choice={mode} />
-                  </DropdownMenuRadioItem>
-                ))}
-              </DropdownMenuRadioGroup>
-            </DropdownMenuSubContent>
-          </DropdownMenuSub>
-        ) : null}
-        {options.map((option) =>
-          option.value.type === "boolean" ? (
-            <DropdownMenuCheckboxItem
-              key={option.id}
-              checked={option.value.on}
-              onCheckedChange={(on) => {
-                if (option.value.type === "boolean" && on !== option.value.on)
-                  onSend(option.name, {
-                    kind: "boolean",
-                    option: option.id,
-                    on,
-                  })
-              }}
-            >
-              <span dir="auto" className="truncate" title={option.name}>
-                {option.name}
-              </span>
-            </DropdownMenuCheckboxItem>
-          ) : null
-        )}
-        {selects.map((option) => (
-          <DropdownMenuSub key={option.id}>
-            <DropdownMenuSubTrigger>
-              <span
-                dir="auto"
-                className="min-w-0 flex-1 truncate"
-                title={option.name}
-              >
-                {option.name}
-              </span>
-              <span
-                dir="auto"
-                className="max-w-24 truncate text-xs text-muted-foreground"
-              >
-                {labelOf(option.value.choices, option.value.current)}
-              </span>
-            </DropdownMenuSubTrigger>
-            <DropdownMenuSubContent className="max-w-80">
-              <DropdownMenuRadioGroup
-                value={option.value.current}
-                onValueChange={(value) => {
-                  if (
-                    typeof value === "string" &&
-                    value !== option.value.current
-                  )
+        <DropdownMenuGroup>
+          {modes ? (
+            <DropdownMenuSub>
+              <DropdownMenuSubTrigger>
+                <span className="min-w-0 flex-1 truncate">Mode</span>
+                <span
+                  dir="auto"
+                  className="max-w-24 truncate text-xs text-muted-foreground"
+                >
+                  {labelOf(modes.modes, modes.currentMode)}
+                </span>
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent className="max-w-80">
+                <DropdownMenuRadioGroup
+                  value={modes.currentMode}
+                  onValueChange={(value) => {
+                    if (
+                      typeof value === "string" &&
+                      value !== modes.currentMode
+                    )
+                      onSend("Mode", { kind: "mode", mode: value })
+                  }}
+                >
+                  {modes.modes.map((mode) => (
+                    <DropdownMenuRadioItem key={mode.id} value={mode.id}>
+                      <ChoiceText choice={mode} />
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+          ) : null}
+          {options.map((option) =>
+            option.value.type === "boolean" ? (
+              <DropdownMenuCheckboxItem
+                key={option.id}
+                checked={option.value.on}
+                onCheckedChange={(on) => {
+                  if (option.value.type === "boolean" && on !== option.value.on)
                     onSend(option.name, {
-                      kind: "select",
+                      kind: "boolean",
                       option: option.id,
-                      choice: value,
+                      on,
                     })
                 }}
               >
-                {option.value.choices.map((choice) => (
-                  <DropdownMenuRadioItem key={choice.id} value={choice.id}>
-                    <ChoiceText choice={choice} />
-                  </DropdownMenuRadioItem>
-                ))}
-              </DropdownMenuRadioGroup>
-            </DropdownMenuSubContent>
-          </DropdownMenuSub>
-        ))}
+                <span dir="auto" className="truncate" title={option.name}>
+                  {option.name}
+                </span>
+              </DropdownMenuCheckboxItem>
+            ) : null
+          )}
+          {selects.map((option) => (
+            <DropdownMenuSub key={option.id}>
+              <DropdownMenuSubTrigger>
+                <span
+                  dir="auto"
+                  className="min-w-0 flex-1 truncate"
+                  title={option.name}
+                >
+                  {option.name}
+                </span>
+                <span
+                  dir="auto"
+                  className="max-w-24 truncate text-xs text-muted-foreground"
+                >
+                  {labelOf(option.value.choices, option.value.current)}
+                </span>
+              </DropdownMenuSubTrigger>
+              <DropdownMenuSubContent className="max-w-80">
+                <DropdownMenuRadioGroup
+                  value={option.value.current}
+                  onValueChange={(value) => {
+                    if (
+                      typeof value === "string" &&
+                      value !== option.value.current
+                    )
+                      onSend(option.name, {
+                        kind: "select",
+                        option: option.id,
+                        choice: value,
+                      })
+                  }}
+                >
+                  {option.value.choices.map((choice) => (
+                    <DropdownMenuRadioItem key={choice.id} value={choice.id}>
+                      <ChoiceText choice={choice} />
+                    </DropdownMenuRadioItem>
+                  ))}
+                </DropdownMenuRadioGroup>
+              </DropdownMenuSubContent>
+            </DropdownMenuSub>
+          ))}
+        </DropdownMenuGroup>
       </DropdownMenuContent>
     </DropdownMenu>
   )

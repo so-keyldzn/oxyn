@@ -6,7 +6,6 @@ import {
   Unlink01Icon,
 } from "@hugeicons/core-free-icons"
 import { usePanelRef } from "react-resizable-panels"
-import { cn } from "cn"
 
 import { EnvironmentBadge } from "@/components/oxyn/environment-badge"
 import { ReadOnlyBadge } from "@/components/oxyn/read-only-badge"
@@ -31,6 +30,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import type { Environment } from "@/lib/ipc/types"
+import { cn } from "@/lib/utils"
 
 export type LeftView = "catalog" | "library"
 
@@ -286,7 +286,7 @@ export function WorkspaceLayout({
                 <>
                   <ResizableHandle
                     withHandle
-                    className={asideOpen ? undefined : "hidden"}
+                    className={cn(!asideOpen && "hidden")}
                   />
                   <ResizablePanel
                     id="aside"

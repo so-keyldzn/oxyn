@@ -1,7 +1,6 @@
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { ViewIcon } from "@hugeicons/core-free-icons"
-import { cn } from "cn"
 
 import { CellValue } from "@/components/oxyn/cell-value"
 import { Button } from "@/components/ui/button"
@@ -14,6 +13,7 @@ import {
 } from "@/components/ui/empty"
 import { Skeleton } from "@/components/ui/skeleton"
 import type { Cell, ResultColumn } from "@/lib/ipc/types"
+import { cn } from "@/lib/utils"
 
 /** The row the inspector follows. `cells` is null while its page loads. */
 export interface InspectedRow {

@@ -48,11 +48,7 @@ export function LibrarySidebar({
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" tooltip="Library">
               <div className="flex aspect-square size-8 items-center justify-center rounded-lg bg-primary text-primary-foreground">
-                <HugeiconsIcon
-                  icon={BookOpen01Icon}
-                  strokeWidth={2}
-                  className="size-4"
-                />
+                <HugeiconsIcon icon={BookOpen01Icon} strokeWidth={2} />
               </div>
               <div className="grid flex-1 text-left leading-tight">
                 <span className="truncate font-medium">Library</span>

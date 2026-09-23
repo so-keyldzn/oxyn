@@ -1,7 +1,6 @@
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { CheckmarkCircle02Icon, Cancel01Icon } from "@hugeicons/core-free-icons"
-import { cn } from "cn"
 
 import { Badge } from "@/components/ui/badge"
 import {
@@ -15,6 +14,7 @@ import {
 } from "@/components/ui/field"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
 import type { PrivacyTier } from "@/lib/ipc/types"
+import { cn } from "@/lib/utils"
 
 interface TierDescription {
   label: string

@@ -7,7 +7,6 @@ import {
   CommandLineIcon,
   StopCircleIcon,
 } from "@hugeicons/core-free-icons"
-import { cn } from "cn"
 
 import { EnvironmentBadge } from "@/components/oxyn/environment-badge"
 import { Badge } from "@/components/ui/badge"
@@ -18,6 +17,7 @@ import type {
   ToolCallState,
 } from "@/features/assistant/transcript"
 import type { ErrorClass } from "@/lib/ipc/ai"
+import { cn } from "@/lib/utils"
 
 const STATES: Record<
   ToolCallState,

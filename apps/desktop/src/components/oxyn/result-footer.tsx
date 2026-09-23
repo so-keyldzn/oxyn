@@ -1,10 +1,10 @@
 import type * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Alert02Icon, CancelCircleIcon } from "@hugeicons/core-free-icons"
-import { cn } from "cn"
 
 import { Button } from "@/components/ui/button"
 import { Spinner } from "@/components/ui/spinner"
+import { cn } from "@/lib/utils"
 
 export type ResultFooterState =
   | {

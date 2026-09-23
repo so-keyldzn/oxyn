@@ -3,6 +3,7 @@ import * as React from "react"
 import {
   Select,
   SelectContent,
+  SelectGroup,
   SelectItem,
   SelectTrigger,
   SelectValue,
@@ -79,11 +80,13 @@ export function AssistantReasoningEffort({
               </SelectValue>
             </SelectTrigger>
             <SelectContent alignItemWithTrigger={false}>
-              {efforts.map((effort) => (
-                <SelectItem key={effort} value={effort}>
-                  {EFFORT_LABELS[effort]}
-                </SelectItem>
-              ))}
+              <SelectGroup>
+                {efforts.map((effort) => (
+                  <SelectItem key={effort} value={effort}>
+                    {EFFORT_LABELS[effort]}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
             </SelectContent>
           </Select>
         </TooltipTrigger>

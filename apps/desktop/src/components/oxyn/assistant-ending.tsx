@@ -1,11 +1,11 @@
 import { HugeiconsIcon } from "@hugeicons/react"
 import { PlayIcon } from "@hugeicons/core-free-icons"
-import { cn } from "cn"
 
 import { Button } from "@/components/ui/button"
-import { Marker } from "@/components/ui/marker"
+import { Marker, MarkerContent } from "@/components/ui/marker"
 import { endingLine } from "@/features/assistant/transcript"
 import type { Ending } from "@/lib/ipc/ai"
+import { cn } from "@/lib/utils"
 
 /** Endings that ask for the reader's attention. */
 function notable(ending: Ending) {
@@ -50,7 +50,7 @@ export function AssistantEnding({
           attention && "text-env-staging"
         )}
       >
-        {endingLine(ending)}
+        <MarkerContent>{endingLine(ending)}</MarkerContent>
       </Marker>
       {onContinue ? (
         <Button

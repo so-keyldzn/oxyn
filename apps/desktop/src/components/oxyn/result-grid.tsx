@@ -3,7 +3,6 @@ import { useQueries } from "@tanstack/react-query"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Alert02Icon, Clock01Icon } from "@hugeicons/core-free-icons"
-import { cn } from "cn"
 
 import { CellValue, cellText } from "@/components/oxyn/cell-value"
 import {
@@ -30,6 +29,7 @@ import type {
   ResultPage,
   ResultWindow,
 } from "@/lib/ipc/types"
+import { cn } from "@/lib/utils"
 
 /**
  * Compact density (docs/UX-SPEC.md, « Lisibilité et hauteur de grille »): the

@@ -1,7 +1,6 @@
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { CodeIcon } from "@hugeicons/core-free-icons"
-import { cn } from "cn"
 
 import {
   isSqlBlock,
@@ -10,6 +9,8 @@ import {
 import type { Block, Inline } from "@/components/oxyn/assistant-markdown-model"
 import { AssistantCopyButton } from "@/components/oxyn/assistant-copy-button"
 import { Button } from "@/components/ui/button"
+import { Separator } from "@/components/ui/separator"
+import { cn } from "@/lib/utils"
 
 function InlineContent({ nodes }: { nodes: Array<Inline> }) {
   return (
@@ -207,7 +208,7 @@ function Blocks({
               </blockquote>
             )
           case "rule":
-            return <hr key={index} className="border-border" />
+            return <Separator key={index} />
           case "table":
             return (
               <div

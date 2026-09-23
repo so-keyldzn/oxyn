@@ -6,7 +6,6 @@ import {
   Cancel01Icon,
   Search01Icon,
 } from "@hugeicons/core-free-icons"
-import { cn } from "cn"
 
 import { Button } from "@/components/ui/button"
 import {
@@ -23,6 +22,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import type { FindAnswer } from "@/lib/ipc/results"
+import { cn } from "@/lib/utils"
 
 export type FindDirection = "first" | "next" | "previous"
 

@@ -1,9 +1,9 @@
 import type * as React from "react"
 import { cva } from "class-variance-authority"
-import { cn } from "cn"
 
 import { Badge } from "@/components/ui/badge"
 import type { Environment } from "@/lib/ipc/types"
+import { cn } from "@/lib/utils"
 
 const LABELS: Record<Environment, string> = {
   production: "PRODUCTION",

@@ -23,6 +23,7 @@ import {
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   AlertDialog,
+  AlertDialogAction,
   AlertDialogCancel,
   AlertDialogContent,
   AlertDialogDescription,
@@ -71,6 +72,7 @@ import type {
   ProviderDraft,
   ProviderKind,
 } from "@/lib/ipc/ai"
+import { cn } from "@/lib/utils"
 
 export type ModelsState =
   | { status: "loading" }
@@ -595,11 +597,10 @@ export function ProviderSettingsView({
                     </Badge>
                     <Badge
                       variant="outline"
-                      className={
-                        provider.reach === "local"
-                          ? ""
-                          : "border-env-staging text-env-staging"
-                      }
+                      className={cn(
+                        provider.reach !== "local" &&
+                          "border-env-staging text-env-staging"
+                      )}
                     >
                       {reachSummary(provider.reach, provider.measuredAtMs)}
                     </Badge>
@@ -607,11 +608,12 @@ export function ProviderSettingsView({
                   {listed ? (
                     <p
                       role="status"
-                      className={
+                      className={cn(
+                        "pt-1 text-xs",
                         listed.status === "error"
-                          ? "pt-1 font-mono text-xs text-destructive"
-                          : "pt-1 text-xs text-muted-foreground"
-                      }
+                          ? "font-mono text-destructive"
+                          : "text-muted-foreground"
+                      )}
                     >
                       {listed.status === "loading"
                         ? "Asking the endpoint…"
@@ -731,7 +733,7 @@ export function ProviderSettingsView({
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <Button
+            <AlertDialogAction
               variant="destructive"
               onClick={() => {
                 if (removal?.kind === "provider")
@@ -741,7 +743,7 @@ export function ProviderSettingsView({
               }}
             >
               Remove
-            </Button>
+            </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>

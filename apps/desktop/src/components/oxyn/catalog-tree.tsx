@@ -12,7 +12,6 @@ import {
   TableIcon,
   ViewOffIcon,
 } from "@hugeicons/core-free-icons"
-import { cn } from "cn"
 
 import { Badge } from "@/components/ui/badge"
 import {
@@ -33,6 +32,7 @@ import {
 import { Spinner } from "@/components/ui/spinner"
 import type { CatalogSearchHit } from "@/lib/ipc/metadata"
 import type { CatalogAddress, CatalogNode, PrivacyTier } from "@/lib/ipc/types"
+import { cn } from "@/lib/utils"
 
 /**
  * What decides whether an object can be pinned to the assistant's question.

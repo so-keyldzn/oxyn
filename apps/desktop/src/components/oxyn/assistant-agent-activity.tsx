@@ -6,12 +6,12 @@ import {
   InformationCircleIcon,
   SquareLock02Icon,
 } from "@hugeicons/core-free-icons"
-import { cn } from "cn"
 
-import { Marker } from "@/components/ui/marker"
+import { Marker, MarkerContent, MarkerIcon } from "@/components/ui/marker"
 import { Spinner } from "@/components/ui/spinner"
 import { MEMORY_RESET_LINES } from "@/features/assistant/transcript"
 import type { AgentToolStatus, MemoryReset } from "@/lib/ipc/ai"
+import { cn } from "@/lib/utils"
 
 const TOOL_STATUS: Record<AgentToolStatus, string> = {
   pending: "waiting",
@@ -41,19 +41,20 @@ export function AssistantAgentTool({
       role="status"
       className="text-xs"
     >
-      {status === "running" || status === "pending" ? (
-        <Spinner />
-      ) : (
-        <HugeiconsIcon
-          icon={
-            status === "completed" ? CheckmarkCircle02Icon : CancelCircleIcon
-          }
-          strokeWidth={2}
-          className={cn("size-3.5", status === "failed" && "text-destructive")}
-          aria-hidden
-        />
-      )}
-      <span className="font-mono">{`Agent step · ${kind} · ${TOOL_STATUS[status]}`}</span>
+      <MarkerIcon>
+        {status === "running" || status === "pending" ? (
+          <Spinner />
+        ) : (
+          <HugeiconsIcon
+            icon={
+              status === "completed" ? CheckmarkCircle02Icon : CancelCircleIcon
+            }
+            strokeWidth={2}
+            className={cn(status === "failed" && "text-destructive")}
+          />
+        )}
+      </MarkerIcon>
+      <MarkerContent className="font-mono">{`Agent step · ${kind} · ${TOOL_STATUS[status]}`}</MarkerContent>
     </Marker>
   )
 }
@@ -105,15 +106,15 @@ export function AssistantMemoryReset({ reason }: { reason: MemoryReset }) {
       role="note"
       className="items-start text-xs"
     >
-      <HugeiconsIcon
-        icon={
-          reason === "tierChanged" ? SquareLock02Icon : InformationCircleIcon
-        }
-        strokeWidth={2}
-        className="mt-0.5 size-3.5 shrink-0"
-        aria-hidden
-      />
-      <span>{MEMORY_RESET_LINES[reason]}</span>
+      <MarkerIcon>
+        <HugeiconsIcon
+          icon={
+            reason === "tierChanged" ? SquareLock02Icon : InformationCircleIcon
+          }
+          strokeWidth={2}
+        />
+      </MarkerIcon>
+      <MarkerContent>{MEMORY_RESET_LINES[reason]}</MarkerContent>
     </Marker>
   )
 }
@@ -122,13 +123,12 @@ export function AssistantMemoryReset({ reason }: { reason: MemoryReset }) {
 export function AssistantWaiting({ label }: { label: string }) {
   return (
     <Marker role="status" className="text-xs">
-      <HugeiconsIcon
-        icon={Clock01Icon}
-        strokeWidth={2}
-        className="size-3.5"
-        aria-hidden
-      />
-      <span className="shimmer motion-reduce:shimmer-none">{label}</span>
+      <MarkerIcon>
+        <HugeiconsIcon icon={Clock01Icon} strokeWidth={2} />
+      </MarkerIcon>
+      <MarkerContent className="shimmer motion-reduce:shimmer-none">
+        {label}
+      </MarkerContent>
     </Marker>
   )
 }

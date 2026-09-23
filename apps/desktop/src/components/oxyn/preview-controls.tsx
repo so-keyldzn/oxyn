@@ -8,7 +8,6 @@ import {
   Delete02Icon,
   Sorting05Icon,
 } from "@hugeicons/core-free-icons"
-import { cn } from "cn"
 
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -35,6 +34,7 @@ import type {
   PreviewShape,
   PreviewSortKey,
 } from "@/lib/ipc/metadata"
+import { cn } from "@/lib/utils"
 
 /** The state of the preview area, as the notice needs it. */
 export type PreviewStatus =

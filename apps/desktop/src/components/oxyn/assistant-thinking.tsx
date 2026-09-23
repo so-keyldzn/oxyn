@@ -1,7 +1,6 @@
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { AiBrain01Icon, ArrowDown01Icon } from "@hugeicons/core-free-icons"
-import { cn } from "cn"
 
 import {
   Collapsible,
@@ -9,6 +8,7 @@ import {
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
 import type { ThinkingEntry } from "@/features/assistant/transcript"
+import { cn } from "@/lib/utils"
 
 function seconds(ms: number) {
   const value = ms / 1000
