@@ -93,6 +93,8 @@ Les versions sont écrites **exactes** dans `apps/desktop/package.json` et le
 | `zod` | `4.6.5` | idem | relevé le 2026-09-16 ; valide les réponses IPC ([ADR-0031](adr/0031-validation-des-reponses-ipc.md)). Était déclaré depuis ADR-0029 et importé nulle part |
 | `@xyflow/react` | `12.11.6` | idem | relevé le 2026-09-24 (publiée le 2026-09-01) ; le diagramme des tables. Pairs `react >=17` |
 | `@dagrejs/dagre` | `3.1.1` | idem | relevé le 2026-09-24 (publiée le 2026-08-08) ; disposition du diagramme. **Pas** `dagre` 0.8, abandonné, ni `elkjs` |
+| `shiki` | `4.4.3` | idem | relevé le 2026-09-24 (publiée le 2026-08-10) ; coloration du code des réponses, en **moteur JavaScript** (`shiki/engine/javascript`) et jetons, jamais `codeToHtml` |
+| `mermaid` | `11.17.2` | `12.0.0` | relevé le 2026-09-24 (11.17.2 publiée le 2026-08-25, 12.0.0 le 2026-09-10). **La 12 vise Safari 17.4+ et ES2024**, alors que la cible est macOS 13.0 (`minimumSystemVersion`), livré avec Safari 16 : on reste sur la dernière 11.x. À rouvrir quand la cible minimale garantit un WebKit 17.4 |
 
 ### Faits qui ont décidé du code
 
@@ -106,6 +108,10 @@ Les versions sont écrites **exactes** dans `apps/desktop/package.json` et le
 | Une commande sans `async` s'exécute **sur le thread principal**, sauf déclarée `#[tauri::command(async)]` ; une commande `async` ne peut prendre `State<'_, T>` qu'en renvoyant un `Result` | `https://v2.tauri.app/develop/calling-rust/` | 2026-09-15 |
 | `@xyflow/react` met `pointer-events: none` sur un nœud ni sélectionnable ni déplaçable : un bouton dans le nœud ne reçoit plus le clic sans `pointer-events-auto` sur son contenu | constat, `vitest --project storybook`, 12.11.6 | 2026-09-24 |
 | L'attribution de React Flow (un lien vers reactflow.dev) ne se retire, selon ses auteurs, qu'avec un abonnement React Flow Pro : Oxyn la garde | `https://reactflow.dev/learn/troubleshooting/remove-attribution` | 2026-09-24 |
+| Le moteur par défaut de shiki est Oniguruma **compilé en WebAssembly** ; la CSP de production (`script-src 'self'`, sans `'wasm-unsafe-eval'`) le refuse. Le moteur JavaScript transpile les motifs en `RegExp` natives ; avec `target: 'auto'` (défaut) il n'emploie le drapeau `v` (ES2024) que si le moteur l'a, sinon le drapeau `u` | `https://shiki.style/guide/regex-engines` | 2026-09-24 |
+| mermaid 12 : « built to target Safari 17.4+ and ES2024 » ; ELK devient la disposition par défaut | `https://github.com/mermaid-js/mermaid/releases/tag/mermaid%4012.0.0` | 2026-09-24 |
+| mermaid 11.17.2 refuse qu'une directive ou l'en-tête d'un diagramme change une clé listée dans `secure` (par défaut `secure`, `securityLevel`, `startOnLoad`, `maxTextSize`, `suppressErrorRendering`, `maxEdges`), et assainit toute directive (`sanitizeDirective`) | sources de `mermaid@11.17.2`, `dist/chunks/mermaid.core/chunk-DU6HZSFF.mjs` | 2026-09-24 |
+| Sous la CSP de `tauri.conf.json` servie en en-tête, un build de production (cible `safari13`) colore le code, dessine mermaid en `data:` URL, le diagramme des tables et le graphique **sans aucune violation**, dans Chromium et WebKit 26.6 (Playwright 1.63.0). Non reproduit : les hashes que Tauri ajoute lui-même à la CSP, et le WebKit de macOS 13 | constat, harnais `vite build` + Playwright | 2026-09-24 |
 | `esbuild` et `unrs-resolver` livrent leur binaire en dépendance optionnelle : leurs scripts d'installation sont refusés (`allowBuilds`) | `pnpm install`, pnpm 11.1.2 | 2026-09-15 |
 
 ## GPUI

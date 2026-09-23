@@ -722,6 +722,18 @@ de la grille le rappelle (« shown to you only; the model got the count »).
   rows. », sans alerte) ; erreur (le message du backend entier, `Try again`
   seulement s'il est déclaré retentable) ; **expirée** (« Result no longer
   available », sans rien proposer qui relance la requête).
+* **Graphique.** Quand les colonnes comptent une date (`Date*`, `Timestamp`)
+  ou une catégorie (texte, booléen) et au moins une colonne numérique (entier,
+  flottant, décimal), le pied offre `Chart`, qui bascule entre la grille et un
+  graphique — en ligne sur un axe de dates, en barres sur un axe de catégories,
+  quatre séries au plus. Sans ces colonnes, le bouton **n'existe pas**. Le
+  graphique lit la même page bornée que la grille (100 lignes au plus), dans
+  l'ordre renvoyé par la requête : rien n'est trié ni agrégé dans la webview.
+  Les nombres sont relus depuis les cellules formatées par Rust, et seulement
+  s'ils en sont sans ambiguïté (chiffres, point décimal, exposant, séparateur
+  de milliers U+00A0) ; une colonne qui contient autre chose — une valeur
+  coupée, `NaN`, du texte — est laissée de côté **et nommée** sous le
+  graphique. Si aucune ne reste, il le dit (« Nothing to chart »).
 
 **Durée de vie.** Le résultat d'un agent est un résultat retenu sans lecteur :
 il vit jusqu'à ce que la rétention l'évince selon les bornes
@@ -773,6 +785,35 @@ diagramme redessiné à chaque nom arrivé se lirait comme un défaut.
 
 Pour qu'un modèle sache émettre ce bloc, l'invite système doit le décrire ;
 sans cela, il n'apparaît que si l'utilisateur le demande.
+
+### Le code et les diagrammes d'une réponse restent du texte jusqu'au bout
+
+Une réponse de modèle est une entrée hostile
+([SECURITY](SECURITY.md#surface-dentrée)) : rien de ce qu'elle écrit ne devient
+du balisage dans la page.
+
+* **Coloration.** Un bloc de code **fermé** est coloré par shiki, rendu en
+  jetons React (`<span>` et texte) — jamais en HTML. Les langages sont chargés
+  à la demande, au premier bloc qui les nomme : SQL et ses dialectes, JSON,
+  JavaScript, TypeScript, JSX, TSX, Python, shell, YAML, TOML, XML/HTML, diff,
+  Rust, Go ; un bloc sans langage est lu comme du SQL. Un autre langage, un
+  bloc de plus de 50 000 caractères ou une grammaire qui échoue restent en
+  texte brut. Les couleurs sont celles de l'éditeur SQL, en variables CSS :
+  elles suivent le thème clair ou sombre. Pendant que la réponse s'écrit, le
+  bloc ouvert reste en texte brut ; une fois coloré, un bloc n'est plus
+  recalculé (mémoire par contenu). `Copy code` et `Open in console` sont
+  inchangés.
+* **mermaid.** Un bloc `mermaid` **fermé** est dessiné ; mermaid n'est chargé
+  qu'à ce moment. Le dessin est affiché par une image
+  (`<img src="data:image/svg+xml;base64,…">`), qui n'exécute rien, ne charge
+  rien et ne reçoit aucun événement. mermaid tourne en `securityLevel:
+  "strict"`, `htmlLabels: false`, sans rendu automatique, avec 20 000
+  caractères et 500 arêtes au plus ; ces réglages sont déclarés `secure`, que
+  le diagramme ne peut pas modifier. Ses lignes de configuration —
+  directives `%%{init}%%` et en-tête `---` — sont retirées avant le rendu, et
+  le bloc le dit. `Show source` montre le texte. Un diagramme invalide affiche
+  l'erreur de mermaid, lisible, avec sa source. Le dessin suit le thème de
+  l'application au moment du rendu, et se redessine s'il change.
 
 ### Ce que le panneau montre d'un agent externe
 

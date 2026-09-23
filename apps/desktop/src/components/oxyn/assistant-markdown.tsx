@@ -1,10 +1,9 @@
 import * as React from "react"
-import { HugeiconsIcon } from "@hugeicons/react"
-import { CodeIcon } from "@hugeicons/core-free-icons"
 
+import { CodeBlock } from "@/components/oxyn/assistant-code-block"
 import {
   isErdBlock,
-  isSqlBlock,
+  isMermaidBlock,
   parseErdNames,
   parseMarkdown,
 } from "@/components/oxyn/assistant-markdown-model"
@@ -13,8 +12,7 @@ import type {
   ErdRequest,
   Inline,
 } from "@/components/oxyn/assistant-markdown-model"
-import { AssistantCopyButton } from "@/components/oxyn/assistant-copy-button"
-import { Button } from "@/components/ui/button"
+import { AssistantMermaid } from "@/components/oxyn/assistant-mermaid"
 import { Separator } from "@/components/ui/separator"
 import { cn } from "@/lib/utils"
 
@@ -80,65 +78,6 @@ function InlineContent({ nodes }: { nodes: Array<Inline> }) {
   )
 }
 
-function CodeBlock({
-  block,
-  onOpenSql,
-  openSqlDisabledReason,
-  onCopy,
-}: {
-  block: Extract<Block, { type: "code" }>
-  onOpenSql?: (sql: string) => void
-  openSqlDisabledReason?: string | null
-  onCopy?: (text: string) => Promise<boolean> | boolean
-}) {
-  const sql = onOpenSql !== undefined && isSqlBlock(block)
-  return (
-    <figure
-      data-slot="assistant-code"
-      className="flex min-w-0 flex-col overflow-hidden rounded-lg border bg-card"
-    >
-      {block.language !== "" || sql || onCopy ? (
-        <figcaption className="flex h-8 items-center justify-between gap-2 border-b px-2.5 text-xs text-muted-foreground">
-          <span className="font-mono">
-            {block.language || (sql ? "sql" : "code")}
-          </span>
-          {sql ? (
-            <Button
-              size="xs"
-              variant="ghost"
-              disabled={Boolean(openSqlDisabledReason)}
-              title={openSqlDisabledReason ?? undefined}
-              onClick={() => onOpenSql(block.text.trim())}
-            >
-              <HugeiconsIcon
-                icon={CodeIcon}
-                strokeWidth={2}
-                data-icon="inline-start"
-              />
-              Open in console
-            </Button>
-          ) : null}
-          {onCopy ? (
-            <AssistantCopyButton
-              text={block.text.trim()}
-              label="Copy code"
-              onCopy={onCopy}
-            />
-          ) : null}
-        </figcaption>
-      ) : null}
-      <pre
-        data-selectable
-        tabIndex={0}
-        aria-label={sql ? "Proposed SQL" : "Code"}
-        className="overflow-x-auto p-3 font-mono text-xs leading-5 whitespace-pre outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      >
-        <code>{block.text}</code>
-      </pre>
-    </figure>
-  )
-}
-
 function ErdBlock({
   block,
   renderErd,
@@ -199,6 +138,9 @@ function Blocks({
               return (
                 <ErdBlock key={index} block={block} renderErd={renderErd} />
               )
+            // Closed only, for the same reason; and loaded only then.
+            if (isMermaidBlock(block))
+              return <AssistantMermaid key={index} source={block.text} />
             return (
               <CodeBlock
                 key={index}

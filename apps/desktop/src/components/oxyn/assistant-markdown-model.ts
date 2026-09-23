@@ -94,6 +94,16 @@ export const ERD_MAX_NAMES = 20
 /** A line longer than this is not a table name, whatever it says. */
 const ERD_MAX_LINE = 256
 
+/** Is this a closed `mermaid` block, one the answer may draw? */
+export function isMermaidBlock(block: Block): block is CodeBlock {
+  return (
+    block.type === "code" &&
+    block.closed &&
+    block.language.toLowerCase() === "mermaid" &&
+    block.text.trim() !== ""
+  )
+}
+
 /** Is this a closed `erd` block, one the answer may draw as a diagram? */
 export function isErdBlock(block: Block): block is CodeBlock {
   return (
