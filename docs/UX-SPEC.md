@@ -733,6 +733,47 @@ rouverte depuis le workspace ne montre donc aucune grille : sous un appel qui
 avait renvoyé des lignes, elle dit « Result no longer available: the workspace
 keeps the statement, never its rows ».
 
+### Un bloc `erd` se dessine depuis le catalogue, pas depuis la réponse
+
+Un bloc de code clôturé de langage `erd` dans une réponse liste des noms de
+tables, un par ligne, éventuellement qualifiés `schema.table` (citations SQL
+comprises : `"Ventes"."T1.totaux"`). Une fois le bloc **fermé**, le panneau le
+dessine en diagramme ; tant que la réponse s'écrit, il reste du texte — un
+diagramme redessiné à chaque nom arrivé se lirait comme un défaut.
+
+* **Les noms sont des demandes, pas des faits.** Chacun est cherché par
+  `search_catalog` parmi les objets qu'Oxyn a déjà lus : l'orthographe exacte
+  d'abord, puis sans casse si une seule table correspond. Un nom qui désigne
+  deux tables n'est pas tranché (« matches auth.users, public.users: not drawn
+  until qualified ») ; un nom introuvable est **dit**, jamais dessiné d'après son
+  orthographe (« Not found among the objects Oxyn has read »). La recherche
+  n'introspecte pas : une table d'un schéma jamais déplié n'est pas trouvée, et
+  le message le laisse entendre.
+* **Ce qui est dessiné vient du backend.** Colonnes, clé primaire et colonnes de
+  clé étrangère sont lues par les mêmes commandes que la vue d'objet
+  (`relation_facets`, puis `refresh_relation_facet` pour une facette jamais lue) ;
+  les arêtes sont les clés étrangères. Aux tables nommées s'ajoutent leurs
+  **voisines directes** par une clé, sortante ou entrante, et les clés entre
+  deux tables dessinées. Aucun modèle n'est consulté, et un même catalogue
+  donne le même diagramme (disposition dagre, de gauche à droite : la table qui
+  porte la clé avant celle qu'elle référence).
+* **Borné.** Un bloc est lu jusqu'à 20 noms, un diagramme s'arrête à 40 tables
+  et une table montre 12 colonnes, clés d'abord ; chaque surplus est compté et
+  dit. Quatre lectures au plus sont en vol à la fois.
+* **Navigable.** Déplacer à la souris, zoomer par les boutons, le pincement ou
+  le clavier (flèches, `+`, `-`, `0` pour ajuster) quand le diagramme a le
+  focus. La molette fait défiler la conversation, pas le diagramme. Un clic sur
+  le nom d'une table l'ouvre dans le workspace, comme depuis le catalogue ; rien
+  ne s'exécute. Les clés sont aussi écrites en liste pour un lecteur d'écran.
+* **États.** Lecture en cours ; dessiné ; rien à dessiner (tous les noms
+  introuvables) ; erreur — le message du backend entier, sans paraphrase, avec
+  `Try again`, qui relit sans rien écrire. Une lecture de métadonnées qui
+  exigerait une approbation est refusée et dite, comme dans la vue d'objet.
+* `Show source` montre le texte du bloc tel que le modèle l'a écrit.
+
+Pour qu'un modèle sache émettre ce bloc, l'invite système doit le décrire ;
+sans cela, il n'apparaît que si l'utilisateur le demande.
+
 ### Ce que le panneau montre d'un agent externe
 
 Un agent externe travaille avec ses propres outils, qui ne sont pas des `Command`

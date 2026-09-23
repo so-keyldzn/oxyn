@@ -18,6 +18,7 @@ import {
 import { AssistantHeader } from "@/components/oxyn/assistant-header"
 import type { ModelListState } from "@/components/oxyn/assistant-header"
 import { AssistantHistory } from "@/components/oxyn/assistant-history"
+import type { ErdRequest } from "@/components/oxyn/assistant-markdown-model"
 import { AssistantQueue } from "@/components/oxyn/assistant-queue"
 import { Button } from "@/components/ui/button"
 import {
@@ -132,6 +133,11 @@ export interface AssistantViewProps {
    * Optional: without it a call shows its report alone, as it did before.
    */
   renderToolRows?: (entry: ToolCallEntry) => React.ReactNode
+  /**
+   * A closed `erd` block of an answer, drawn from the catalog — the feature
+   * resolves the names. Optional: without it the block stays code.
+   */
+  renderErd?: (request: ErdRequest) => React.ReactNode
   /** Unpins locally. Nothing is assembled or sent here. */
   onRemovePin?: (key: string) => void
   /**

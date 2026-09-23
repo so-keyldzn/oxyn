@@ -80,6 +80,7 @@ function EntryView({
   onReview,
   onCopy,
   renderToolRows,
+  renderErd,
 }: {
   entry: Entry
   openSql: (sql: string) => void
@@ -87,6 +88,7 @@ function EntryView({
   onReview: (entry: ToolCallEntry) => void
   onCopy: (text: string) => Promise<boolean> | boolean
   renderToolRows?: AssistantViewProps["renderToolRows"]
+  renderErd?: AssistantViewProps["renderErd"]
 }) {
   switch (entry.kind) {
     case "answer":
@@ -98,6 +100,7 @@ function EntryView({
               onOpenSql={openSql}
               openSqlDisabledReason={openSqlDisabledReason}
               onCopy={onCopy}
+              renderErd={renderErd}
             />
           </MessageContent>
         </Message>
@@ -260,6 +263,7 @@ export function ExchangeView({
           onReview={(tool) => onReview(node.id, tool)}
           onCopy={view.onCopy}
           renderToolRows={view.renderToolRows}
+          renderErd={view.renderErd}
         />
       ))}
       {waiting ? (

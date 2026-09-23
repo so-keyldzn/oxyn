@@ -91,6 +91,8 @@ Les versions sont écrites **exactes** dans `apps/desktop/package.json` et le
 | `playwright` | `1.63.0` | idem | Chromium seul, pour les stories |
 | `@uiw/react-codemirror` · `@codemirror/lang-sql` | `4.25.11` · `6.10.0` | idem | — |
 | `zod` | `4.6.5` | idem | relevé le 2026-09-16 ; valide les réponses IPC ([ADR-0031](adr/0031-validation-des-reponses-ipc.md)). Était déclaré depuis ADR-0029 et importé nulle part |
+| `@xyflow/react` | `12.11.6` | idem | relevé le 2026-09-24 (publiée le 2026-09-01) ; le diagramme des tables. Pairs `react >=17` |
+| `@dagrejs/dagre` | `3.1.1` | idem | relevé le 2026-09-24 (publiée le 2026-08-08) ; disposition du diagramme. **Pas** `dagre` 0.8, abandonné, ni `elkjs` |
 
 ### Faits qui ont décidé du code
 
@@ -102,6 +104,8 @@ Les versions sont écrites **exactes** dans `apps/desktop/package.json` et le
 | Tauri injecte nonces et hashes dans la CSP **aussi en développement** ; un nonce annule `'unsafe-inline'`, et les scripts inline de Vite sont bloqués : la fenêtre reste blanche sans erreur visible | `https://v2.tauri.app/reference/config/` et constat sur macOS 26.2 | 2026-09-15 |
 | `@storybook/tanstack-react@10.6.0` embarque `@tanstack/router-core@1.171.30` ; avec `react-router@1.170.36`, toute story échoue sur `path.endsWith is not a function` | constat, `vitest --project storybook` | 2026-09-15 |
 | Une commande sans `async` s'exécute **sur le thread principal**, sauf déclarée `#[tauri::command(async)]` ; une commande `async` ne peut prendre `State<'_, T>` qu'en renvoyant un `Result` | `https://v2.tauri.app/develop/calling-rust/` | 2026-09-15 |
+| `@xyflow/react` met `pointer-events: none` sur un nœud ni sélectionnable ni déplaçable : un bouton dans le nœud ne reçoit plus le clic sans `pointer-events-auto` sur son contenu | constat, `vitest --project storybook`, 12.11.6 | 2026-09-24 |
+| L'attribution de React Flow (un lien vers reactflow.dev) ne se retire, selon ses auteurs, qu'avec un abonnement React Flow Pro : Oxyn la garde | `https://reactflow.dev/learn/troubleshooting/remove-attribution` | 2026-09-24 |
 | `esbuild` et `unrs-resolver` livrent leur binaire en dépendance optionnelle : leurs scripts d'installation sont refusés (`allowBuilds`) | `pnpm install`, pnpm 11.1.2 | 2026-09-15 |
 
 ## GPUI

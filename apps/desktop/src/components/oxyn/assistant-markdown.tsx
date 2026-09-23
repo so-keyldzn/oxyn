@@ -3,10 +3,16 @@ import { HugeiconsIcon } from "@hugeicons/react"
 import { CodeIcon } from "@hugeicons/core-free-icons"
 
 import {
+  isErdBlock,
   isSqlBlock,
+  parseErdNames,
   parseMarkdown,
 } from "@/components/oxyn/assistant-markdown-model"
-import type { Block, Inline } from "@/components/oxyn/assistant-markdown-model"
+import type {
+  Block,
+  ErdRequest,
+  Inline,
+} from "@/components/oxyn/assistant-markdown-model"
 import { AssistantCopyButton } from "@/components/oxyn/assistant-copy-button"
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
@@ -133,16 +139,34 @@ function CodeBlock({
   )
 }
 
+function ErdBlock({
+  block,
+  renderErd,
+}: {
+  block: Extract<Block, { type: "code" }>
+  renderErd: (request: ErdRequest) => React.ReactNode
+}) {
+  // Parsed once per text: a closed block no longer changes while the rest of
+  // the answer streams.
+  const request = React.useMemo(() => {
+    const { names, dropped } = parseErdNames(block.text)
+    return { names, ignoredNames: dropped, source: block.text }
+  }, [block.text])
+  return <>{renderErd(request)}</>
+}
+
 function Blocks({
   blocks,
   onOpenSql,
   openSqlDisabledReason,
   onCopy,
+  renderErd,
 }: {
   blocks: Array<Block>
   onOpenSql?: (sql: string) => void
   openSqlDisabledReason?: string | null
   onCopy?: (text: string) => Promise<boolean> | boolean
+  renderErd?: (request: ErdRequest) => React.ReactNode
 }) {
   return (
     <>
@@ -169,6 +193,12 @@ function Blocks({
             )
           }
           case "code":
+            // Only once closed: a half-written list would draw, then redraw,
+            // a diagram of the tables named so far.
+            if (renderErd && isErdBlock(block))
+              return (
+                <ErdBlock key={index} block={block} renderErd={renderErd} />
+              )
             return (
               <CodeBlock
                 key={index}
@@ -204,7 +234,7 @@ function Blocks({
                 key={index}
                 className="flex flex-col gap-2 border-l-2 pl-3 text-muted-foreground"
               >
-                <Blocks blocks={block.blocks} />
+                <Blocks blocks={block.blocks} renderErd={renderErd} />
               </blockquote>
             )
           case "rule":
@@ -264,6 +294,7 @@ export function AssistantMarkdown({
   onOpenSql,
   openSqlDisabledReason,
   onCopy,
+  renderErd,
   className,
 }: {
   text: string
@@ -272,6 +303,11 @@ export function AssistantMarkdown({
   openSqlDisabledReason?: string | null
   /** Offers to copy each code block; resolves to whether it worked. */
   onCopy?: (text: string) => Promise<boolean> | boolean
+  /**
+   * Draws a closed `erd` block — the feature resolves its names against the
+   * catalog. Without it the block stays code, as any other.
+   */
+  renderErd?: (request: ErdRequest) => React.ReactNode
   className?: string
 }) {
   const blocks = React.useMemo(() => parseMarkdown(text), [text])
@@ -288,6 +324,7 @@ export function AssistantMarkdown({
         onOpenSql={onOpenSql}
         openSqlDisabledReason={openSqlDisabledReason}
         onCopy={onCopy}
+        renderErd={renderErd}
       />
     </div>
   )
