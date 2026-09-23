@@ -13,4 +13,5 @@
 - [axe ne teste pas le contraste non textuel](axe-ne-teste-pas-le-contraste-non-textuel.md) — garde dans `theme-contrast.stories.tsx` ; mesurer par canvas, jamais par regex sur `rgba()`
 - [Passe visuelle sans serveur](passe-visuelle-sans-serveur.md) — build statique + Playwright qui s'arrête seul ; le clair et les largeurs échappent aux stories
 - [wrap-anywhere dans une grille](wrap-anywhere-dans-une-grille.md) — `break-words` n'abaisse pas la min-content : un long identifiant élargit la page
+- [Couleurs calculées en OKLCH](couleurs-calculees-en-oklch.md) — `getComputedStyle` rend `oklch(...)` : mesurer par canvas, jamais par regex `rgb()` ; vérifier un statut sur sa propre teinte
 - [prettier écrit un octet NUL](prettier-ecrit-un-octet-nul.md) — `"\u0000"` dans une chaîne TS devient un NUL réel dans le source

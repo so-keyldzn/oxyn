@@ -7,17 +7,29 @@
 @custom-variant dark (&:is(.dark *));
 
 /*
- * Oxyn palette. Values come from the Figma file `Yviemi4brBczzdRdBp1ONv`, the
- * ones the handoff index cites node by node
- * (docs/RESEARCH-NOTES.md, « Jetons de la maquette Figma »). They are mapped
- * onto shadcn's semantic tokens so every component picks them up without a
- * per-component override.
+ * Oxyn palette: verdigris — the green of weathered copper — over deep
+ * blue-green slate, written in OKLCH like shadcn's own themes and modelled on
+ * tweakcn's « Perpetuity » (https://tweakcn.com/r/themes/perpetuity.json,
+ * read on 2026-09-23), pulled from its cyan towards green: neutrals that
+ * carry the hue, hovers tinted with it, and a light verdigris under dark text
+ * in the dark theme. It replaced on 2026-09-23 the warm stone and clay orange
+ * of the Figma file `Yviemi4brBczzdRdBp1ONv` (docs/RESEARCH-NOTES.md,
+ * « Jetons de la maquette Figma »), and the Oxyn mark changed with it: its
+ * accent is this verdigris and its tile this slate (assets/brand/README.md).
+ * `--success` leans yellow-green, so a status never reads as the brand.
+ * Surfaces climb one lightness step per elevation, so depth reads from tone
+ * rather than from borders. With the
+ * inset sidebar, `--sidebar` is the window shell and `--background` the
+ * working panel set on it; cards, then popovers, rise above the panel.
+ * Everything goes through shadcn's semantic tokens, so no component carries
+ * its own colour.
  *
- * Where a Figma colour is used as TEXT and misses WCAG AA (4.5:1) against the
- * surfaces it sits on, the text token is shifted in the same hue until it
- * passes; axe fails `make qualite` otherwise. Fills keep the Figma value:
- * `--primary` stays #bf4c22 behind white text (4.92:1), and `--primary-text`
- * is the orange that can be read on the backgrounds themselves.
+ * Every TEXT token clears WCAG AA (4.5:1) on each surface it can sit on, and
+ * a status colour also on its own tint (`bg-destructive/10` in light, `/20`
+ * in dark); axe fails `make qualite` otherwise. `--primary` is the verdigris
+ * of buttons — under white text in light, under dark text in dark — and
+ * `--primary-text` the verdigris that can be read on the backgrounds
+ * themselves.
  *
  * The same holds for what identifies a CONTROL (WCAG 1.4.11, 3:1), which axe
  * does not measure: `--input` draws the edge of every checkbox, radio and
@@ -99,105 +111,142 @@
   --radius-2xl: calc(var(--radius) * 2);
   --radius-3xl: calc(var(--radius) * 2.5);
   --radius-4xl: calc(var(--radius) * 3);
+
+  /* Elevation: soft and slate-tinted in light, deeper in dark where tone
+     carries it. */
+  --shadow-2xs: var(--shadow-2xs);
+  --shadow-xs: var(--shadow-xs);
+  --shadow-sm: var(--shadow-sm);
+  --shadow: var(--shadow-sm);
+  --shadow-md: var(--shadow-md);
+  --shadow-lg: var(--shadow-lg);
+  --shadow-xl: var(--shadow-xl);
 }
 
 :root {
   --radius: 0.5rem;
 
-  --background: #eeebea;
-  --foreground: #1c1b1a;
-  --card: #f7f5f3;
-  --card-foreground: #1c1b1a;
-  --popover: #f7f5f3;
-  --popover-foreground: #1c1b1a;
-  --primary: #bf4c22;
-  --primary-foreground: #ffffff;
-  --secondary: #e3deda;
-  --secondary-foreground: #1c1b1a;
-  --muted: #e3deda;
-  --muted-foreground: #625751;
-  --accent: #e3deda;
-  --accent-foreground: #1c1b1a;
-  --destructive: #a8262f;
-  --border: #d5ccc6;
-  /* Figma #d5ccc6 gave checkbox edges 1.45:1; this one gives ≥ 3.21:1. */
-  --input: #847870;
-  /* Not the primary: an orange ring on an orange button disappears. Near the
-     foreground, so that `ring-ring/50` in ui/ still reaches ≥ 3.06:1. */
-  --ring: #1c1b1a;
-  --chart-1: #bf4c22;
-  --chart-2: #1a7f5a;
-  --chart-3: #9a6b00;
-  --chart-4: #6e625c;
-  --chart-5: #c0323c;
-  --sidebar: #f7f5f3;
-  --sidebar-foreground: #1c1b1a;
-  --sidebar-primary: #bf4c22;
-  --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #e3deda;
-  --sidebar-accent-foreground: #1c1b1a;
-  --sidebar-border: #d5ccc6;
-  --sidebar-ring: #1c1b1a;
+  /* Surface ladder: shell (`--sidebar`) < panel < card < popover. */
+  --background: oklch(0.986 0.005 195);
+  --foreground: oklch(0.26 0.035 210);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.26 0.035 210);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.26 0.035 210);
+  --primary: oklch(0.52 0.1 180);
+  --primary-foreground: oklch(1 0 0);
+  /* Secondary, accent and the sidebar's hover carry the verdigris, faintly:
+     a hovered row reads as belonging to the brand, not as grey. */
+  --secondary: oklch(0.93 0.028 185);
+  --secondary-foreground: oklch(0.26 0.035 210);
+  --muted: oklch(0.953 0.01 195);
+  --muted-foreground: oklch(0.49 0.035 205);
+  --accent: oklch(0.932 0.03 185);
+  --accent-foreground: oklch(0.3 0.05 190);
+  --destructive: oklch(0.435 0.16 25);
+  --border: oklch(0.9 0.018 195);
+  /* Draws the edge of every checkbox, radio and field: ≥ 3:1 on each surface,
+     which `--border` is not meant to reach. */
+  --input: oklch(0.62 0.03 200);
+  /* Verdigris, but much deeper than the primary: `ring-ring/50` in ui/ must
+     still reach 3:1, and a ring the colour of the button would vanish on it. */
+  --ring: oklch(0.25 0.05 185);
+  --chart-1: oklch(0.52 0.1 180);
+  --chart-2: oklch(0.6 0.09 200);
+  --chart-3: oklch(0.62 0.12 75);
+  --chart-4: oklch(0.55 0.1 145);
+  --chart-5: oklch(0.55 0.12 30);
+  --sidebar: oklch(0.955 0.01 195);
+  --sidebar-foreground: oklch(0.26 0.035 210);
+  --sidebar-primary: oklch(0.52 0.1 180);
+  --sidebar-primary-foreground: oklch(1 0 0);
+  --sidebar-accent: oklch(0.912 0.035 185);
+  --sidebar-accent-foreground: oklch(0.26 0.035 210);
+  --sidebar-border: oklch(0.9 0.018 195);
+  --sidebar-ring: oklch(0.25 0.05 185);
 
-  --success: #146546;
-  --warning: #7d5700;
-  --grid-header: #e3deda;
-  --grid-stripe: rgb(28 27 26 / 2.5%);
-  --grid-line: #d5ccc6;
-  --null: #625751;
-  --env-production: #a8262f;
-  --env-staging: #7d5700;
-  --env-development: #146546;
-  --env-local: #625751;
-  --primary-text: #9c3e1b;
+  --shadow-2xs: 0 1px 0 oklch(0.3 0.04 210 / 5%);
+  --shadow-xs: 0 1px 2px oklch(0.3 0.04 210 / 7%);
+  --shadow-sm:
+    0 1px 2px oklch(0.3 0.04 210 / 7%), 0 1px 3px oklch(0.3 0.04 210 / 9%);
+  --shadow-md:
+    0 2px 4px oklch(0.3 0.04 210 / 6%), 0 4px 10px oklch(0.3 0.04 210 / 10%);
+  --shadow-lg:
+    0 4px 8px oklch(0.3 0.04 210 / 6%), 0 12px 28px oklch(0.3 0.04 210 / 12%);
+  --shadow-xl:
+    0 8px 16px oklch(0.3 0.04 210 / 7%), 0 24px 48px oklch(0.3 0.04 210 / 14%);
+
+  --success: oklch(0.44 0.1 145);
+  --warning: oklch(0.44 0.095 70);
+  --grid-header: oklch(0.962 0.01 195);
+  --grid-stripe: oklch(0.26 0.035 210 / 2.5%);
+  --grid-line: oklch(0.915 0.014 195);
+  --null: oklch(0.49 0.035 205);
+  --env-production: oklch(0.435 0.16 25);
+  --env-staging: oklch(0.44 0.095 70);
+  --env-development: oklch(0.44 0.1 145);
+  --env-local: oklch(0.49 0.035 205);
+  --primary-text: oklch(0.46 0.09 180);
 }
 
 .dark {
-  --background: #151413;
-  --foreground: #eeebea;
-  --card: #1c1b1a;
-  --card-foreground: #eeebea;
-  --popover: #1c1b1a;
-  --popover-foreground: #eeebea;
-  --primary: #bf4c22;
-  --primary-foreground: #ffffff;
-  --secondary: #262422;
-  --secondary-foreground: #eeebea;
-  --muted: #262422;
-  --muted-foreground: #b9ada5;
-  --accent: #262422;
-  --accent-foreground: #eeebea;
-  --destructive: #f68b92;
-  --border: #443c37;
-  /* Figma #443c37 gave checkbox edges 1.59:1; this one gives ≥ 3.31:1. The
-     ring already reaches 3.66:1 at half opacity. */
-  --input: #7d726b;
-  --ring: #d9cfc9;
-  --chart-1: #bf4c22;
-  --chart-2: #4ec9a5;
-  --chart-3: #e0b155;
-  --chart-4: #b9ada5;
-  --chart-5: #f2616b;
-  --sidebar: #1c1b1a;
-  --sidebar-foreground: #eeebea;
-  --sidebar-primary: #bf4c22;
-  --sidebar-primary-foreground: #ffffff;
-  --sidebar-accent: #262422;
-  --sidebar-accent-foreground: #eeebea;
-  --sidebar-border: #443c37;
-  --sidebar-ring: #d9cfc9;
+  --background: oklch(0.185 0.022 212);
+  --foreground: oklch(0.93 0.02 190);
+  --card: oklch(0.215 0.026 210);
+  --card-foreground: oklch(0.93 0.02 190);
+  --popover: oklch(0.235 0.028 210);
+  --popover-foreground: oklch(0.93 0.02 190);
+  /* A light verdigris with dark text, as in tweakcn's night themes: a deep
+     green under white text sinks into a dark background. */
+  --primary: oklch(0.78 0.11 178);
+  --primary-foreground: oklch(0.18 0.03 200);
+  --secondary: oklch(0.29 0.045 195);
+  --secondary-foreground: oklch(0.93 0.02 190);
+  --muted: oklch(0.255 0.03 205);
+  --muted-foreground: oklch(0.74 0.035 195);
+  --accent: oklch(0.305 0.05 190);
+  --accent-foreground: oklch(0.93 0.02 190);
+  --destructive: oklch(0.86 0.08 20);
+  --border: oklch(0.31 0.035 205);
+  --input: oklch(0.57 0.04 200);
+  --ring: oklch(0.88 0.07 180);
+  --chart-1: oklch(0.78 0.11 178);
+  --chart-2: oklch(0.7 0.08 205);
+  --chart-3: oklch(0.82 0.12 80);
+  --chart-4: oklch(0.78 0.12 145);
+  --chart-5: oklch(0.74 0.12 30);
+  --sidebar: oklch(0.16 0.018 215);
+  --sidebar-foreground: oklch(0.93 0.02 190);
+  --sidebar-primary: oklch(0.78 0.11 178);
+  --sidebar-primary-foreground: oklch(0.18 0.03 200);
+  --sidebar-accent: oklch(0.27 0.04 195);
+  --sidebar-accent-foreground: oklch(0.93 0.02 190);
+  --sidebar-border: oklch(0.31 0.035 205);
+  --sidebar-ring: oklch(0.88 0.07 180);
 
-  --success: #4ec9a5;
-  --warning: #e0b155;
-  --grid-header: #262422;
-  --grid-stripe: rgb(238 235 234 / 2%);
-  --grid-line: #443c37;
-  --null: #b9ada5;
-  --env-production: #f68b92;
-  --env-staging: #e0b155;
-  --env-development: #4ec9a5;
-  --env-local: #b9ada5;
-  --primary-text: #e07448;
+  --shadow-2xs: 0 1px 0 oklch(0.08 0.02 215 / 30%);
+  --shadow-xs: 0 1px 2px oklch(0.08 0.02 215 / 35%);
+  --shadow-sm:
+    0 1px 2px oklch(0.08 0.02 215 / 35%), 0 1px 3px oklch(0.08 0.02 215 / 40%);
+  --shadow-md:
+    0 2px 4px oklch(0.08 0.02 215 / 35%), 0 4px 10px oklch(0.08 0.02 215 / 45%);
+  --shadow-lg:
+    0 4px 8px oklch(0.08 0.02 215 / 35%), 0 12px 28px oklch(0.08 0.02 215 / 55%);
+  --shadow-xl:
+    0 8px 16px oklch(0.08 0.02 215 / 40%),
+    0 24px 48px oklch(0.08 0.02 215 / 60%);
+
+  --success: oklch(0.84 0.12 145);
+  --warning: oklch(0.84 0.11 80);
+  --grid-header: oklch(0.22 0.027 210);
+  --grid-stripe: oklch(0.93 0.02 190 / 2%);
+  --grid-line: oklch(0.27 0.03 208);
+  --null: oklch(0.74 0.035 195);
+  --env-production: oklch(0.86 0.08 20);
+  --env-staging: oklch(0.84 0.11 80);
+  --env-development: oklch(0.84 0.12 145);
+  --env-local: oklch(0.74 0.035 195);
+  --primary-text: oklch(0.82 0.1 178);
 }
 
 /*
@@ -234,9 +283,9 @@
 
 /*
  * Inactive tab labels. The generated trigger writes `text-foreground/60` in
- * the light theme, which lands at 4.27:1 on `--background` and 4.4:1 on
- * `--sidebar` — under AA, in every tab list of the application, and invisible
- * to the stories that only run axe in dark. `--muted-foreground` is the token
+ * the light theme, which lands just under AA on `--background` and
+ * `--sidebar` — in every tab list of the application, and invisible to the
+ * stories that only run axe in dark. `--muted-foreground` is the token
  * the palette tuned for secondary text on both surfaces. Unlayered, like the
  * rule above; hover and the active tab keep their own colour.
  */
@@ -265,6 +314,14 @@
        stray drag across the chrome. Content areas opt back in. */
     user-select: none;
     -webkit-user-select: none;
+  }
+  h1,
+  h2,
+  h3 {
+    @apply font-heading tracking-tight;
+  }
+  ::selection {
+    background-color: color-mix(in oklch, var(--primary) 24%, transparent);
   }
   #root,
   [data-app-root] {
