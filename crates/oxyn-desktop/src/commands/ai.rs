@@ -185,6 +185,22 @@ pub fn ai_withdraw_sample(
     Ok(())
 }
 
+/// The user's answer to an agent's request for a row sample: the columns
+/// ticked, or `null` to decline. The **only** way such a request is approved
+/// (ADR-0034): the agent's call waits on it, and does the read itself.
+///
+/// In memory only, and synchronous for that: it hands the answer to the call
+/// waiting on it and returns — the read runs on that call's task.
+#[tauri::command]
+pub fn ai_answer_sample(
+    backend: State<'_, Backend>,
+    connection: String,
+    request: String,
+    columns: Option<Vec<String>>,
+) -> Result<(), IpcError> {
+    backend.ai_answer_sample(self::connection(&connection)?, &request, columns.as_deref())
+}
+
 #[tauri::command]
 pub async fn ai_threads(
     backend: State<'_, Backend>,

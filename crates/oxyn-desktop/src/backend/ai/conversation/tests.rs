@@ -95,6 +95,7 @@ fn sink_on(
         thread: Arc::clone(&thread),
         node,
         question: QuestionOpen::new(),
+        sampling: None,
     };
     (sink, thread, Actor::agent(agent, session), received)
 }
@@ -364,6 +365,7 @@ fn a_tool_call_really_runs_the_query_on_the_database() {
         thread: Arc::clone(&thread),
         node,
         question: QuestionOpen::new(),
+        sampling: None,
     };
 
     let observer = Observer {
@@ -485,6 +487,7 @@ fn the_rows_of_a_tool_call_reach_the_panel_and_never_the_model() {
         thread: Arc::clone(&thread),
         node,
         question: QuestionOpen::new(),
+        sampling: None,
     };
     let observer = Observer {
         thread: Arc::clone(&thread),
@@ -592,6 +595,7 @@ fn an_external_agents_query_shows_its_rows_to_the_user_and_never_to_the_agent() 
             thread: Arc::clone(&thread),
             node,
             question: QuestionOpen::new(),
+            sampling: None,
         }),
         Arc::new(AgentObserverFilter(Observer {
             thread: Arc::clone(&thread),
@@ -1533,11 +1537,11 @@ mod approved_samples {
 
         /// The recipient the fixture's offers name.
         fn local(&self) -> Recipient {
-            Recipient {
-                provider: self.provider.parse().expect("a provider id"),
-                model: "llama3".to_owned(),
-                reach: Reach::Local,
-            }
+            Recipient::provider(
+                self.provider.parse().expect("a provider id"),
+                "llama3".to_owned(),
+                Reach::Local,
+            )
         }
 
         fn stored(&self) -> StoredTier {
@@ -1561,7 +1565,7 @@ mod approved_samples {
                 approval,
                 grant,
                 asked_in,
-                Some(&self.local()),
+                &self.local(),
                 tiers,
             ))
         }
@@ -2667,7 +2671,7 @@ mod approved_samples {
             };
             fixture
                 .runtime
-                .block_on(run.ask_agent(fixture.session, &declared, question))
+                .block_on(run.ask_agent(fixture.session, &declared, question, None))
                 .map_err(|failure| failure.message)
                 .expect("the agent answers");
             thread.finish(node);
@@ -2768,6 +2772,7 @@ mod approved_samples {
             thread: Arc::clone(&thread),
             node,
             question: QuestionOpen::new(),
+            sampling: None,
         };
 
         // The internal assistant: a provider whose model asks for the tool.
@@ -2937,4 +2942,12 @@ mod approved_samples {
             "nothing of the structure left: {refused}"
         );
     }
+
+    /// ADR-0034: an agent asks for a sample, and an approved sample reaches
+    /// an external agent — on this fixture's rows.
+    mod agent_asks;
+
+    /// What bounds an agent's asking: one screen per answer, none over a
+    /// pending write, and nothing recorded that did not leave.
+    mod asks_bounded;
 }

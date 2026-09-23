@@ -36,6 +36,11 @@
 //!   écrirait où il veut sur le disque de l'utilisateur.
 //! * [`Command::Cancel`] — annuler est un geste de l'utilisateur ; et la
 //!   poignée d'exécution n'est jamais dans la conversation.
+//! * [`Command::PreviewRelation`] **en direct** — un agent qui lirait des
+//!   lignes les verrait arriver dans la grille, jamais dans sa conversation ;
+//!   il n'y gagnerait rien. Il ne la déclenche que par [`REQUEST_SAMPLE`], qui
+//!   la fait précéder de l'approbation de l'utilisateur, colonne par colonne
+//!   ([ADR-0034](../../../docs/adr/0034-echantillon-pour-toute-destination.md)).
 //! * [`Command::OpenDocument`] et [`Command::WriteDocument`] —
 //!   `// TODO(phase 4)` : elles demandent un `DocumentId` que le scope devrait
 //!   porter, ce qui n'a de sens qu'une fois les documents de workspace écrits.
@@ -50,8 +55,8 @@
 use std::fmt;
 
 use oxyn_core::{
-    Command, ConnectionId, ExecLimits, ExecRequest, MAX_CATALOG_FOCUS_BYTES, QueryLanguage,
-    SessionId,
+    Command, ConnectionId, ExecLimits, ExecRequest, MAX_CATALOG_FOCUS_BYTES, PreviewShape,
+    QueryLanguage, SessionId,
 };
 use oxyn_llm::{ToolCall, ToolSpec};
 use schemars::{JsonSchema, SchemaGenerator, generate::SchemaSettings};
@@ -68,6 +73,31 @@ pub const REFRESH_CATALOG: &str = "refresh_catalog";
 
 /// Nom de l'outil qui décrit la structure de la base, depuis le catalogue local.
 pub const DESCRIBE_SCHEMA: &str = "describe_schema";
+
+/// Nom de l'outil par lequel un agent **demande** un échantillon de lignes.
+///
+/// Demander n'est pas lire : rien n'est lu ni envoyé avant que l'utilisateur
+/// ait coché, dans le panneau, les colonnes qui partent
+/// ([ADR-0034](../../../docs/adr/0034-echantillon-pour-toute-destination.md)).
+pub const REQUEST_SAMPLE: &str = "request_sample";
+
+/// Lignes demandées quand l'agent n'en dit rien : celles d'un échantillon que
+/// l'utilisateur épingle lui-même. De quoi illustrer une forme de données.
+pub const DEFAULT_SAMPLE_ROWS: u32 = 5;
+
+/// Le plus de lignes qu'un échantillon demandé porte, quoi que l'agent écrive.
+///
+/// Borne de produit : un échantillon illustre des valeurs, il ne sert pas à
+/// extraire une table. Chaque ligne est une ligne qui sort de la machine.
+pub const MAX_SAMPLE_ROWS: u32 = 20;
+
+/// Le plus de colonnes qu'une demande peut nommer. Au-delà, l'agent demande
+/// toute la relation en omettant `columns`, et l'utilisateur coche.
+pub const MAX_SAMPLE_COLUMNS: usize = 64;
+
+/// La plus longue désignation acceptée — un nom de relation, d'espace de noms
+/// ou de colonne —, en octets. Des noms, jamais du texte de requête.
+pub const MAX_SAMPLE_NAME_BYTES: usize = 256;
 
 /// Ce que l'appelant impose, et que le modèle ne choisit pas.
 ///
@@ -143,6 +173,50 @@ pub struct DescribeSchemaArgs {
     pub search: Option<String>,
 }
 
+/// Arguments de [`REQUEST_SAMPLE`].
+///
+/// Des **noms**, jamais du texte de requête : la relation et les colonnes sont
+/// cherchées dans le catalogue local, et la lecture est composée par le driver,
+/// qui cite chaque identifiant ([I-10](../../../CLAUDE.md#i-10)). La connexion
+/// vient du [`ToolScope`].
+///
+/// Le schéma annonce les bornes que la traduction applique : un agent qui ne
+/// les voit pas les dépasse, se fait refuser, et ne sait pas de combien
+/// corriger. Les chiffres des attributs sont des littéraux — `schemars` n'accepte
+/// pas une constante dans une description —, et un test les tient alignés sur
+/// [`MAX_SAMPLE_ROWS`], [`MAX_SAMPLE_COLUMNS`] et [`MAX_SAMPLE_NAME_BYTES`]. La
+/// borne des noms s'écrit en octets dans la description : `maxLength` compte
+/// des caractères, et ne dirait pas la même chose que le refus.
+#[derive(Debug, Clone, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RequestSampleArgs {
+    #[schemars(
+        description = "The table, view or collection to sample, exactly as describe_schema \
+                       names it, without quotes. At most 256 bytes of UTF-8."
+    )]
+    pub relation: String,
+    #[schemars(
+        description = "Its schema or namespace, without quotes, when several objects share \
+                       the name. Omit it otherwise. At most 256 bytes of UTF-8."
+    )]
+    #[serde(default)]
+    pub namespace: Option<String>,
+    #[schemars(
+        description = "The columns you need, without quotes. Omit it to let the user choose \
+                       among all of them. At most 64 columns, each name at most 256 bytes \
+                       of UTF-8.",
+        length(max = 64)
+    )]
+    #[serde(default)]
+    pub columns: Option<Vec<String>>,
+    #[schemars(
+        description = "How many rows: 5 when omitted, from 1 to 20.",
+        range(min = 1, max = 20)
+    )]
+    #[serde(default)]
+    pub rows: Option<u32>,
+}
+
 /// Arguments de [`REFRESH_CATALOG`] : aucun.
 ///
 /// La connexion vient du [`ToolScope`]. Un objet vide plutôt qu'une absence de
@@ -151,8 +225,74 @@ pub struct DescribeSchemaArgs {
 #[serde(deny_unknown_fields)]
 pub struct RefreshCatalogArgs {}
 
-/// Traduit des arguments validés en commande.
-type Translate = fn(&serde_json::Value, &ToolScope) -> Result<Command, AiError>;
+/// Traduit des arguments validés en demande.
+type Translate = fn(&serde_json::Value, &ToolScope) -> Result<ToolRequest, AiError>;
+
+/// Ce qu'un appel d'outil demande au puits, une fois traduit.
+///
+/// Deux formes, et **une seule commande** au bout de chacune : il n'existe pas
+/// de demande qui n'en porte pas ([I-01](../../../CLAUDE.md#i-01)).
+#[derive(Debug, Clone, PartialEq)]
+#[non_exhaustive]
+pub enum ToolRequest {
+    /// Une commande à soumettre telle quelle.
+    Dispatch(Command),
+    /// Un échantillon à faire approuver, puis lire.
+    Sample(SampleAsk),
+}
+
+impl ToolRequest {
+    /// La commande que la demande porte — pour un échantillon, la lecture qui
+    /// ne partira qu'après l'approbation.
+    #[must_use]
+    pub const fn command(&self) -> &Command {
+        match self {
+            Self::Dispatch(command) => command,
+            Self::Sample(ask) => &ask.command,
+        }
+    }
+}
+
+/// Un échantillon demandé par un agent : la lecture, et les colonnes voulues.
+///
+/// La lecture est une [`Command::PreviewRelation`] bornée — la commande même
+/// qu'emprunte l'échantillon épinglé par l'utilisateur. Elle ne s'exécute
+/// **qu'après** l'approbation, que le puits obtient de l'utilisateur ; les
+/// colonnes nommées ici ne sont qu'une demande, que l'approbation restreint.
+///
+/// Les noms sont écrits par le modèle : ils n'ont pas encore été confrontés au
+/// catalogue. C'est le puits qui le fait, avant de rien montrer
+/// ([ADR-0034](../../../docs/adr/0034-echantillon-pour-toute-destination.md)).
+#[derive(Clone, PartialEq)]
+pub struct SampleAsk {
+    /// La lecture : `PreviewRelation`, bornée à [`MAX_SAMPLE_ROWS`].
+    pub command: Command,
+    /// Les colonnes voulues, dans l'ordre de l'agent ; vide pour « toutes,
+    /// au choix de l'utilisateur ».
+    pub columns: Vec<String>,
+}
+
+// Des noms de colonnes : des métadonnées, mais tenues hors des journaux quand
+// même — un nom de colonne peut être la donnée (`hiv_status`).
+impl fmt::Debug for SampleAsk {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SampleAsk")
+            .field("command", &self.command.name())
+            .field("columns", &self.columns.len())
+            .finish()
+    }
+}
+
+impl SampleAsk {
+    /// Le nombre de lignes demandé, déjà borné par la traduction.
+    #[must_use]
+    pub const fn rows(&self) -> u32 {
+        match &self.command {
+            Command::PreviewRelation { limit, .. } => *limit,
+            _ => 0,
+        }
+    }
+}
 
 /// Produit le schéma JSON des arguments d'un outil.
 type Schema = fn() -> serde_json::Value;
@@ -261,6 +401,21 @@ impl ToolRegistry {
                     translate: translate_describe_schema,
                 },
                 ToolDefinition {
+                    name: REQUEST_SAMPLE,
+                    description: "Ask the user to share real rows of one table, view or \
+                                  collection with you — when the structure is not enough, \
+                                  for instance to see how values are written. Nothing is read \
+                                  until the user approves, column by column, in Oxyn; you \
+                                  receive only the columns they approve, or `the user \
+                                  declined`. Allowed only when the connection's privacy tier \
+                                  is `sampled`: under any other tier it is refused, and asking \
+                                  again changes nothing. Ask once per answer, for the columns \
+                                  you need.",
+                    command: "PreviewRelation",
+                    schema: schema_of::<RequestSampleArgs>,
+                    translate: translate_request_sample,
+                },
+                ToolDefinition {
                     name: REFRESH_CATALOG,
                     description: "Re-read the structure of the database from the server. \
                                   Use it after a schema change, or when the schema shown to \
@@ -322,15 +477,44 @@ impl ToolRegistry {
     /// La commande rendue n'a **rien exécuté** : elle doit encore traverser le
     /// `PolicyGate` en portant `Actor::Agent` (I-07).
     ///
+    /// **[`REQUEST_SAMPLE`] est refusé ici.** Sa lecture n'existe qu'après
+    /// l'approbation de l'utilisateur, que seul
+    /// [`CommandSink::request_sample`](crate::runtime::CommandSink::request_sample)
+    /// obtient : la rendre nue ferait de cette fonction publique un second
+    /// chemin vers une lecture de valeurs sans consentement. Un appelant qui
+    /// doit servir cet outil passe par [`ToolRegistry::request`].
+    ///
     /// # Erreurs
-    /// [`AiError::UnknownTool`], [`AiError::ToolNotAllowed`] ou
-    /// [`AiError::InvalidArguments`].
+    /// [`AiError::UnknownTool`], [`AiError::ToolNotAllowed`] — y compris pour
+    /// [`REQUEST_SAMPLE`] — ou [`AiError::InvalidArguments`].
     pub fn translate(
         &self,
         call: &ToolCall,
         allowed: &[String],
         scope: &ToolScope,
     ) -> Result<Command, AiError> {
+        match self.request(call, allowed, scope)? {
+            ToolRequest::Dispatch(command) => Ok(command),
+            ToolRequest::Sample(_) => Err(AiError::ToolNotAllowed {
+                name: call.name.clone(),
+            }),
+        }
+    }
+
+    /// Traduit un appel du modèle en demande au puits : une commande, ou un
+    /// échantillon à faire approuver.
+    ///
+    /// Les mêmes refus, dans le même ordre, que [`ToolRegistry::translate`].
+    ///
+    /// # Erreurs
+    /// [`AiError::UnknownTool`], [`AiError::ToolNotAllowed`] ou
+    /// [`AiError::InvalidArguments`].
+    pub fn request(
+        &self,
+        call: &ToolCall,
+        allowed: &[String],
+        scope: &ToolScope,
+    ) -> Result<ToolRequest, AiError> {
         let Some(tool) = self.get(&call.name) else {
             return Err(AiError::UnknownTool {
                 name: call.name.clone(),
@@ -396,7 +580,10 @@ fn parse_args<T: DeserializeOwned>(
 }
 
 /// [`EXECUTE_QUERY`] → [`Command::Execute`].
-fn translate_execute_query(raw: &serde_json::Value, scope: &ToolScope) -> Result<Command, AiError> {
+fn translate_execute_query(
+    raw: &serde_json::Value,
+    scope: &ToolScope,
+) -> Result<ToolRequest, AiError> {
     let args: ExecuteQueryArgs = parse_args(EXECUTE_QUERY, raw)?;
     let statement = args.statement.trim();
     if statement.is_empty() {
@@ -426,11 +613,11 @@ fn translate_execute_query(raw: &serde_json::Value, scope: &ToolScope) -> Result
         .with_risk(analysis.risk)
         .with_limits(limits);
 
-    Ok(Command::Execute {
+    Ok(ToolRequest::Dispatch(Command::Execute {
         connection: scope.connection,
         session: scope.session,
         request: Box::new(request),
-    })
+    }))
 }
 
 /// [`DESCRIBE_SCHEMA`] → [`Command::DescribeCatalog`].
@@ -441,7 +628,7 @@ fn translate_execute_query(raw: &serde_json::Value, scope: &ToolScope) -> Result
 fn translate_describe_schema(
     raw: &serde_json::Value,
     scope: &ToolScope,
-) -> Result<Command, AiError> {
+) -> Result<ToolRequest, AiError> {
     let args: DescribeSchemaArgs = parse_args(DESCRIBE_SCHEMA, raw)?;
     let focus = args
         .search
@@ -458,21 +645,98 @@ fn translate_describe_schema(
             detail: format!("`search` is limited to {MAX_CATALOG_FOCUS_BYTES} bytes"),
         });
     }
-    Ok(Command::DescribeCatalog {
+    Ok(ToolRequest::Dispatch(Command::DescribeCatalog {
         connection: scope.connection,
         focus,
-    })
+    }))
 }
 
 /// [`REFRESH_CATALOG`] → [`Command::RefreshCatalog`].
 fn translate_refresh_catalog(
     raw: &serde_json::Value,
     scope: &ToolScope,
-) -> Result<Command, AiError> {
+) -> Result<ToolRequest, AiError> {
     let _args: RefreshCatalogArgs = parse_args(REFRESH_CATALOG, raw)?;
-    Ok(Command::RefreshCatalog {
+    Ok(ToolRequest::Dispatch(Command::RefreshCatalog {
         connection: scope.connection,
-    })
+    }))
+}
+
+/// Un nom écrit par le modèle, borné et non vide. Aucun caractère n'est
+/// refusé : un nom légal pour le serveur doit rester demandable, et c'est la
+/// citation par le driver qui le rend inoffensif, pas un filtre ici.
+fn sample_name(field: &str, raw: &str) -> Result<String, AiError> {
+    let invalid = |detail: String| AiError::InvalidArguments {
+        name: REQUEST_SAMPLE.to_owned(),
+        detail,
+    };
+    if raw.trim().is_empty() {
+        return Err(invalid(format!("`{field}` is empty")));
+    }
+    if raw.len() > MAX_SAMPLE_NAME_BYTES {
+        return Err(invalid(format!(
+            "`{field}` is limited to {MAX_SAMPLE_NAME_BYTES} bytes"
+        )));
+    }
+    Ok(raw.to_owned())
+}
+
+/// [`REQUEST_SAMPLE`] → une [`SampleAsk`] portant [`Command::PreviewRelation`].
+///
+/// Les noms restent des **données** : la relation voyage en champ, jamais dans
+/// un texte d'instruction, et le driver la cite quand il compose la lecture
+/// ([I-10](../../../CLAUDE.md#i-10)). Les colonnes ne rejoignent aucune
+/// instruction : elles désignent ce qu'on recopie du résultat.
+fn translate_request_sample(
+    raw: &serde_json::Value,
+    scope: &ToolScope,
+) -> Result<ToolRequest, AiError> {
+    let args: RequestSampleArgs = parse_args(REQUEST_SAMPLE, raw)?;
+    let invalid = |detail: String| AiError::InvalidArguments {
+        name: REQUEST_SAMPLE.to_owned(),
+        detail,
+    };
+    let relation = sample_name("relation", &args.relation)?;
+    let namespace = args
+        .namespace
+        .as_deref()
+        .filter(|namespace| !namespace.trim().is_empty())
+        .map(|namespace| sample_name("namespace", namespace))
+        .transpose()?;
+    let requested = args.columns.unwrap_or_default();
+    if requested.len() > MAX_SAMPLE_COLUMNS {
+        return Err(invalid(format!(
+            "`columns` names at most {MAX_SAMPLE_COLUMNS} columns; omit it to offer all of them"
+        )));
+    }
+    let mut columns: Vec<String> = Vec::with_capacity(requested.len());
+    for column in &requested {
+        let column = sample_name("columns", column)?;
+        if !columns.contains(&column) {
+            columns.push(column);
+        }
+    }
+    let rows = match args.rows {
+        None => DEFAULT_SAMPLE_ROWS,
+        Some(rows) if (1..=MAX_SAMPLE_ROWS).contains(&rows) => rows,
+        Some(_) => {
+            return Err(invalid(format!(
+                "`rows` must be between 1 and {MAX_SAMPLE_ROWS}"
+            )));
+        }
+    };
+    Ok(ToolRequest::Sample(SampleAsk {
+        command: Command::PreviewRelation {
+            connection: scope.connection,
+            session: scope.session,
+            catalog: None,
+            namespace,
+            relation,
+            limit: rows,
+            shape: PreviewShape::unordered(),
+        },
+        columns,
+    }))
 }
 
 #[cfg(test)]
@@ -506,6 +770,7 @@ mod tests {
             "Connect",
             "Disconnect",
             "Execute",
+            "PreviewRelation",
             "Cancel",
             "RefreshCatalog",
             "DescribeCatalog",
@@ -717,7 +982,7 @@ mod tests {
     fn les_schemas_sont_transmissibles_a_un_fournisseur() {
         let registre = ToolRegistry::builtin();
         let specs = registre.specs_for(&tous()).expect("outils connus");
-        assert_eq!(specs.len(), 3);
+        assert_eq!(specs.len(), 4);
         for spec in &specs {
             let params = &spec.parameters;
             assert_eq!(params.get("type").and_then(|v| v.as_str()), Some("object"));
@@ -772,6 +1037,199 @@ mod tests {
         let trop = "é".repeat(MAX_CATALOG_FOCUS_BYTES / 2 + 1);
         let call = appel(DESCRIBE_SCHEMA, json!({ "search": trop }));
         assert!(registre.translate(&call, &tous(), &scope()).is_err());
+    }
+
+    #[test]
+    fn les_bornes_d_un_echantillon_sont_annoncees_au_modele() {
+        // Même panne que pour la recherche : une borne que le schéma tait est
+        // une borne que l'agent dépasse. Les chiffres des attributs sont des
+        // littéraux ; ce test les tient alignés sur les constantes qui refusent.
+        let specs = ToolRegistry::builtin()
+            .specs_for(&[REQUEST_SAMPLE.to_owned()])
+            .expect("outil connu");
+        let schema = &specs.first().expect("un outil").parameters;
+        let pointe = |pointer: &str| schema.pointer(pointer).cloned();
+        assert_eq!(
+            pointe("/properties/rows/minimum"),
+            Some(json!(1)),
+            "{schema}"
+        );
+        assert_eq!(
+            pointe("/properties/rows/maximum"),
+            Some(json!(MAX_SAMPLE_ROWS)),
+            "{schema}"
+        );
+        assert_eq!(
+            pointe("/properties/columns/maxItems"),
+            Some(json!(MAX_SAMPLE_COLUMNS)),
+            "{schema}"
+        );
+        let decrit = |champ: &str| {
+            schema
+                .pointer(&format!("/properties/{champ}/description"))
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or_default()
+                .to_owned()
+        };
+        for champ in ["relation", "namespace", "columns"] {
+            assert!(
+                decrit(champ).contains(&format!("at most {MAX_SAMPLE_NAME_BYTES} bytes of UTF-8"))
+                    || decrit(champ)
+                        .contains(&format!("At most {MAX_SAMPLE_NAME_BYTES} bytes of UTF-8")),
+                "{champ} : {}",
+                decrit(champ)
+            );
+        }
+        assert!(
+            decrit("columns").contains(&format!("At most {MAX_SAMPLE_COLUMNS} columns")),
+            "{}",
+            decrit("columns")
+        );
+        assert!(
+            decrit("rows").contains(&format!(
+                "{DEFAULT_SAMPLE_ROWS} when omitted, from 1 to {MAX_SAMPLE_ROWS}"
+            )),
+            "{}",
+            decrit("rows")
+        );
+
+        // Et les bornes annoncées sont celles qui refusent.
+        assert!(demande(json!({ "relation": "t", "rows": MAX_SAMPLE_ROWS })).is_ok());
+        assert!(demande(json!({ "relation": "t", "rows": MAX_SAMPLE_ROWS + 1 })).is_err());
+        assert!(demande(json!({ "relation": "t", "rows": 0 })).is_err());
+        let colonnes = |n: usize| (0..n).map(|i| format!("c{i}")).collect::<Vec<_>>();
+        assert!(
+            demande(json!({ "relation": "t", "columns": colonnes(MAX_SAMPLE_COLUMNS) })).is_ok()
+        );
+        assert!(
+            demande(json!({ "relation": "t", "columns": colonnes(MAX_SAMPLE_COLUMNS + 1) }))
+                .is_err()
+        );
+        assert!(demande(json!({ "relation": "a".repeat(MAX_SAMPLE_NAME_BYTES) })).is_ok());
+        assert!(demande(json!({ "relation": "é".repeat(MAX_SAMPLE_NAME_BYTES / 2 + 1) })).is_err());
+    }
+
+    #[test]
+    fn translate_ne_rend_jamais_la_lecture_d_un_echantillon() {
+        // L'API publique qui rend une `Command` nue ne doit pas rendre la
+        // lecture d'un échantillon : ce serait une lecture de valeurs sans
+        // l'écran d'approbation, à portée de tout appelant de la crate.
+        let call = appel(REQUEST_SAMPLE, json!({ "relation": "customers" }));
+        let refus = ToolRegistry::builtin()
+            .translate(&call, &tous(), &scope())
+            .expect_err("aucune commande pour un échantillon");
+        assert!(
+            matches!(&refus, AiError::ToolNotAllowed { name } if name == REQUEST_SAMPLE),
+            "{refus:?}"
+        );
+        // `request`, lui, rend la demande à faire approuver.
+        assert!(demande(json!({ "relation": "customers" })).is_ok());
+    }
+
+    fn demande(args: serde_json::Value) -> Result<SampleAsk, AiError> {
+        let call = appel(REQUEST_SAMPLE, args);
+        match ToolRegistry::builtin().request(&call, &tous(), &scope())? {
+            ToolRequest::Sample(ask) => Ok(ask),
+            ToolRequest::Dispatch(command) => {
+                panic!("request_sample doit demander une approbation, pas {command:?}")
+            }
+        }
+    }
+
+    #[test]
+    fn un_echantillon_demande_est_une_lecture_bornee_a_faire_approuver() {
+        let ask = demande(json!({"relation": "clients"})).expect("appel valide");
+        assert_eq!(ask.rows(), DEFAULT_SAMPLE_ROWS, "la valeur par défaut");
+        assert!(ask.columns.is_empty(), "toutes, au choix de l'utilisateur");
+        assert!(!ask.command.is_mutating());
+        let Command::PreviewRelation { shape, .. } = &ask.command else {
+            panic!("la lecture est un aperçu : {:?}", ask.command);
+        };
+        assert_eq!(
+            *shape,
+            PreviewShape::unordered(),
+            "ni filtre ni ordre : l'agent n'écrit aucun prédicat"
+        );
+
+        let ask = demande(json!({"relation": "clients", "rows": MAX_SAMPLE_ROWS}))
+            .expect("le plafond est permis");
+        assert_eq!(ask.rows(), MAX_SAMPLE_ROWS);
+        for trop in [0, MAX_SAMPLE_ROWS + 1] {
+            let refus =
+                demande(json!({"relation": "clients", "rows": trop})).expect_err("hors bornes");
+            assert!(matches!(refus, AiError::InvalidArguments { .. }), "{trop}");
+        }
+    }
+
+    #[test]
+    fn le_modele_ne_choisit_ni_la_connexion_ni_un_filtre_pour_un_echantillon() {
+        for invente in [
+            json!({"relation": "clients", "connection": "00000000-0000-0000-0000-000000000000"}),
+            json!({"relation": "clients", "predicate": "1=1"}),
+            json!({"relation": "clients", "approved": true}),
+        ] {
+            let refus = demande(invente.clone()).expect_err("champ hors schéma");
+            assert!(
+                matches!(refus, AiError::InvalidArguments { .. }),
+                "{invente}"
+            );
+        }
+        let perimetre = scope();
+        let call = appel(REQUEST_SAMPLE, json!({"relation": "clients"}));
+        let Ok(ToolRequest::Sample(ask)) =
+            ToolRegistry::builtin().request(&call, &tous(), &perimetre)
+        else {
+            panic!("appel valide");
+        };
+        assert_eq!(ask.command.target_connection(), Some(perimetre.connection));
+    }
+
+    /// I-10 : un nom hostile reste une **donnée**. Il voyage dans le champ
+    /// `relation` de la commande, tel quel, et aucun texte d'instruction n'est
+    /// composé ici — c'est le driver qui le citera.
+    #[test]
+    fn un_nom_hostile_reste_un_champ_et_n_entre_dans_aucune_instruction() {
+        let hostile = r#"users"; DROP TABLE audit; --"#;
+        let ask = demande(json!({
+            "relation": hostile,
+            "namespace": hostile,
+            "columns": [hostile, "email", "email"],
+        }))
+        .expect("un nom légal pour le serveur reste demandable");
+        assert_eq!(
+            ask.columns,
+            [hostile, "email"],
+            "dédoublonnées, dans l'ordre"
+        );
+        assert!(
+            ask.command.statement_text().is_none(),
+            "aucune instruction n'est composée à la traduction"
+        );
+        let Command::PreviewRelation {
+            relation,
+            namespace,
+            ..
+        } = &ask.command
+        else {
+            panic!("la lecture est un aperçu");
+        };
+        assert_eq!(relation, hostile);
+        assert_eq!(namespace.as_deref(), Some(hostile));
+    }
+
+    #[test]
+    fn les_noms_d_un_echantillon_sont_bornes() {
+        let long = "n".repeat(MAX_SAMPLE_NAME_BYTES + 1);
+        for args in [
+            json!({"relation": ""}),
+            json!({"relation": "   "}),
+            json!({"relation": long}),
+            json!({"relation": "clients", "columns": [long]}),
+            json!({"relation": "clients", "columns": [""]}),
+            json!({"relation": "clients", "columns": vec!["c"; MAX_SAMPLE_COLUMNS + 1]}),
+        ] {
+            assert!(demande(args.clone()).is_err(), "{args}");
+        }
     }
 
     #[test]

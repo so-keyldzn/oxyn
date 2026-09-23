@@ -34,6 +34,7 @@ use oxyn_core::{Actor, CancelToken, Command};
 
 use crate::observer::AgentObserver;
 use crate::runtime::{CommandSink, DispatchOutcome};
+use crate::tools::SampleAsk;
 
 /// Where an external agent's tool calls go, question by question.
 ///
@@ -260,6 +261,39 @@ impl CommandSink for WriteGate {
             DispatchOutcome::Failed {
                 class: oxyn_core::ErrorClass::Ambiguous,
                 message: QUESTION_CLOSED.to_owned(),
+            }
+        }
+    }
+
+    /// The same gate as a command: in order, never while a request of this
+    /// agent waits, and only for the question still open. The order lock is
+    /// held while the user decides — the agent waits for the answer anyway, and
+    /// a second call slipped in meanwhile would be a second screen.
+    async fn request_sample(
+        &self,
+        actor: Actor,
+        ask: SampleAsk,
+        cancel: &CancelToken,
+    ) -> DispatchOutcome {
+        let _in_order = self.turns.order.lock().await;
+        if !self.still_open() {
+            return DispatchOutcome::Denied {
+                reason: QUESTION_CLOSED.to_owned(),
+            };
+        }
+        if (self.turns.waiting)() {
+            return DispatchOutcome::Denied {
+                reason: ONE_REQUEST_AWAITING.to_owned(),
+            };
+        }
+        let outcome = self.inner.request_sample(actor, ask, cancel).await;
+        if self.still_open() {
+            outcome
+        } else {
+            // A read, so nothing to call ambiguous: the rows are dropped here,
+            // and the answer nobody reads does not carry them.
+            DispatchOutcome::Denied {
+                reason: QUESTION_CLOSED.to_owned(),
             }
         }
     }

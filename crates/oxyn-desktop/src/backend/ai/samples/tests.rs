@@ -9,11 +9,19 @@ fn offered() -> Vec<String> {
 }
 
 fn local() -> Recipient {
-    Recipient {
-        provider: "local-model".parse().expect("a provider id"),
-        model: "llama3".to_owned(),
-        reach: Reach::Local,
-    }
+    Recipient::provider(
+        "local-model".parse().expect("a provider id"),
+        "llama3".to_owned(),
+        Reach::Local,
+    )
+}
+
+fn claude() -> Recipient {
+    Recipient::agent(&oxyn_core::ExternalAgentConfig::new(
+        "claude-code".parse().expect("an agent id"),
+        "Claude Code",
+        "claude-code-acp",
+    ))
 }
 
 fn offer(connection: ConnectionId, thread: Option<&str>, parent: Option<u32>) -> Offer {
@@ -39,7 +47,7 @@ fn presented<'a>(
         parent: None,
         source,
         ticked,
-        recipient: Some(recipient),
+        recipient,
     }
 }
 
@@ -194,25 +202,150 @@ fn a_tier_lowered_since_the_offer_refuses_and_spends_the_grant() {
     }
 }
 
+/// ADR-0034: a sample approved for an agent goes to that agent, and to no
+/// provider — nor a provider's to an agent, even one declared under the same
+/// id: they are two declarations, and the screen named one.
 #[test]
-fn a_sample_goes_to_a_provider_only() {
+fn a_sample_goes_to_the_destination_approved_provider_or_agent() {
     let grants = SampleGrants::default();
     let connection = ConnectionId::new();
     let source = path("customers");
     let ticked = ["email".to_owned()];
-    let recipient = local();
+    let for_agent = || {
+        grants.issue(Offer {
+            recipient: claude(),
+            ..offer(connection, None, None)
+        })
+    };
+
+    let agent = claude();
+    assert!(
+        consume(
+            grants.take(&for_agent()),
+            &presented(connection, &source, &ticked, &agent),
+            SAMPLED
+        )
+        .is_ok()
+    );
+    let provider = local();
+    assert_eq!(
+        consume(
+            grants.take(&for_agent()),
+            &presented(connection, &source, &ticked, &provider),
+            SAMPLED
+        ),
+        Err(SampleRefused::OtherRecipient)
+    );
+    let namesake = Recipient {
+        provider: claude().provider,
+        ..local()
+    };
+    assert_eq!(
+        consume(
+            grants.take(&for_agent()),
+            &presented(connection, &source, &ticked, &namesake),
+            SAMPLED
+        ),
+        Err(SampleRefused::OtherRecipient),
+        "a provider that shares the agent's id is not the agent"
+    );
     let token = grants.issue(offer(connection, None, None));
     assert_eq!(
         consume(
             grants.take(&token),
-            &Presented {
-                recipient: None,
-                ..presented(connection, &source, &ticked, &recipient)
-            },
+            &presented(connection, &source, &ticked, &agent),
             SAMPLED
         ),
-        Err(SampleRefused::NotAProvider)
+        Err(SampleRefused::OtherRecipient)
     );
+}
+
+fn asks() -> std::sync::Arc<SampleAsks> {
+    std::sync::Arc::new(SampleAsks::default())
+}
+
+/// The user's answer reaches the call, restricted to what was offered, in
+/// catalog order — and spends the request.
+#[test]
+fn an_agents_request_is_answered_once_with_the_ticked_columns() {
+    let asks = asks();
+    let connection = ConnectionId::new();
+    let mut open = asks.open(connection, offered()).expect("opened");
+    let ticked = ["plan".to_owned(), "id".to_owned()];
+    assert_eq!(asks.answer(connection, &open.id, Some(&ticked)), Ok(()));
+    assert_eq!(
+        open.answer.try_recv().expect("answered"),
+        ["id", "plan"],
+        "catalog order"
+    );
+    assert_eq!(
+        asks.answer(connection, &open.id, Some(&ticked)),
+        Err(SampleRefused::UnknownOrUsed),
+        "spent"
+    );
+}
+
+/// Declining, or approving what was not offered, reads « declined » on the
+/// other end — and a malformed approval does not leave the screen open for a
+/// second try.
+#[test]
+fn a_declined_or_malformed_answer_declines_the_request() {
+    let asks = asks();
+    let connection = ConnectionId::new();
+
+    let mut declined = asks.open(connection, offered()).expect("opened");
+    assert_eq!(asks.answer(connection, &declined.id, None), Ok(()));
+    assert!(
+        declined.answer.try_recv().is_err(),
+        "no column reached the call"
+    );
+
+    for ticked in [vec!["secret".to_owned()], Vec::new()] {
+        let mut open = asks.open(connection, offered()).expect("opened");
+        assert!(asks.answer(connection, &open.id, Some(&ticked)).is_err());
+        assert!(open.answer.try_recv().is_err(), "{ticked:?}");
+        assert_eq!(
+            asks.answer(connection, &open.id, Some(&["id".to_owned()])),
+            Err(SampleRefused::UnknownOrUsed),
+            "spent by the malformed answer"
+        );
+    }
+}
+
+/// A request is answered on its own connection only, and a call that ended
+/// withdraws it: nothing stays approvable.
+#[test]
+fn an_agents_request_is_bound_to_its_connection_and_to_its_call() {
+    let asks = asks();
+    let connection = ConnectionId::new();
+    let open = asks.open(connection, offered()).expect("opened");
+    let id = open.id.clone();
+    assert_eq!(
+        asks.answer(ConnectionId::new(), &id, Some(&["id".to_owned()])),
+        Err(SampleRefused::UnknownOrUsed)
+    );
+    drop(open);
+    assert_eq!(
+        asks.answer(connection, &id, Some(&["id".to_owned()])),
+        Err(SampleRefused::UnknownOrUsed),
+        "withdrawn with its call"
+    );
+
+    let kept: Vec<_> = (0..MAX_ASKS_PER_CONNECTION)
+        .map(|_| asks.open(connection, offered()).expect("under the bound"))
+        .collect();
+    assert!(matches!(
+        asks.open(connection, offered()),
+        Err(SampleRefused::TooManyAsks)
+    ));
+    assert!(asks.open(ConnectionId::new(), offered()).is_ok());
+    asks.forget_connection(connection);
+    for mut open in kept {
+        assert!(
+            open.answer.try_recv().is_err(),
+            "declined with the connection"
+        );
+    }
 }
 
 #[test]
@@ -232,11 +365,11 @@ fn a_sample_approved_for_a_local_model_goes_nowhere_else() {
     };
 
     assert_eq!(present(&local()), Ok(()));
-    let remote = Recipient {
-        provider: "openai".parse().expect("a provider id"),
-        model: "gpt".to_owned(),
-        reach: Reach::Remote,
-    };
+    let remote = Recipient::provider(
+        "openai".parse().expect("a provider id"),
+        "gpt".to_owned(),
+        Reach::Remote,
+    );
     assert_eq!(present(&remote), Err(SampleRefused::OtherRecipient));
     assert_eq!(
         present(&Recipient {
@@ -330,7 +463,8 @@ fn buffer(rows: usize) -> ResultBuffer {
 fn only_ticked_columns_are_copied_and_never_more_than_the_backend_bound() {
     let read = buffer(50);
     let columns = ["id".to_owned(), "email".to_owned()];
-    let rows = copy_rows(&read, &columns, &CancelToken::new()).expect("columns present");
+    let rows =
+        copy_rows(&read, &columns, MAX_SAMPLE_ROWS, &CancelToken::new()).expect("columns present");
 
     assert_eq!(
         rows.len(),
@@ -350,5 +484,5 @@ fn only_ticked_columns_are_copied_and_never_more_than_the_backend_bound() {
 #[test]
 fn a_column_gone_since_the_offer_copies_nothing() {
     let columns = ["id".to_owned(), "renamed".to_owned()];
-    assert!(copy_rows(&buffer(3), &columns, &CancelToken::new()).is_none());
+    assert!(copy_rows(&buffer(3), &columns, MAX_SAMPLE_ROWS, &CancelToken::new()).is_none());
 }

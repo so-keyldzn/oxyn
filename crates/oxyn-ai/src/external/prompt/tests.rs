@@ -121,8 +121,14 @@ mod schema {
     fn l_agent_recoit_les_tables_et_les_colonnes_sous_metadata_et_sampled() {
         let cache = nbc();
         for tier in [PrivacyTier::Metadata, PrivacyTier::Sampled] {
-            let invite = AgentPrompt::with_schema(tier, "les 10 dernières lignes", &cache, SQLITE)
-                .expect("ce niveau admet un agent externe");
+            let invite = AgentPrompt::with_schema(
+                tier,
+                "les 10 dernières lignes",
+                &cache,
+                SQLITE,
+                Vec::new(),
+            )
+            .expect("ce niveau admet un agent externe");
             let texte = invite.as_str();
             for attendu in ["orders", "customers", "placed_at", "total", "REAL", "email"] {
                 assert!(
@@ -157,6 +163,7 @@ mod schema {
             "combien de clients ?",
             &nbc(),
             SQLITE,
+            Vec::new(),
         )
         .expect("invite valide");
         let texte = invite.as_str();
@@ -180,10 +187,10 @@ mod schema {
         assert!(encadre < question, "la question suit le schéma");
     }
 
-    /// Aucune valeur de ligne : le catalogue n'en porte pas, et ce constructeur
-    /// ne sait pas joindre d'échantillon. Le test en fait une propriété : ce
-    /// qui part n'est que ce que `ContextBuilder` rend sans échantillon, sous
-    /// le niveau le plus permissif qu'admet un agent externe.
+    /// Aucune valeur de ligne sans échantillon approuvé : le catalogue n'en
+    /// porte pas. Le test en fait une propriété : ce qui part n'est que ce que
+    /// `ContextBuilder` rend sans échantillon, sous le niveau le plus
+    /// permissif qu'admet un agent externe.
     #[test]
     fn sous_sampled_rien_d_autre_que_la_structure_ne_part() {
         let cache = nbc();
@@ -192,6 +199,7 @@ mod schema {
             "les 10 dernières lignes",
             &cache,
             SQLITE,
+            Vec::new(),
         )
         .expect("invite valide");
         let contexte = invite.context().expect("un schéma est joint");
@@ -209,6 +217,73 @@ mod schema {
             contexte.prompt_block(),
             attendu.prompt_block(),
             "le schéma est celui du point de passage, sans rien d'ajouté"
+        );
+    }
+
+    fn echantillon() -> crate::RowSample {
+        crate::RowSample::new(
+            CatalogPath::for_namespace(None, "main")
+                .and_then(|main| main.with_relation("customers"))
+                .expect("chemin valide"),
+            vec!["email".to_owned()],
+            vec![vec![oxyn_core::ScalarValue::Text(
+                "dupont@example.com".to_owned(),
+            )]],
+        )
+    }
+
+    /// Volet A d'ADR-0034 : l'échantillon approuvé atteint un agent externe
+    /// par la **même** porte que le fournisseur — encadré, et rendu par
+    /// `ContextBuilder::build` sans une ligne de plus ici.
+    #[test]
+    fn sous_sampled_l_echantillon_approuve_part_encadre_par_le_point_de_passage() {
+        let cache = nbc();
+        let invite = AgentPrompt::with_schema(
+            PrivacyTier::Sampled,
+            "comment sont écrits les courriels ?",
+            &cache,
+            SQLITE,
+            vec![echantillon()],
+        )
+        .expect("invite valide");
+        let texte = invite.as_str();
+        assert!(texte.contains("dupont@example.com"), "{texte}");
+        let valeur = texte.find("dupont@example.com").expect("la valeur est là");
+        let ouverture = texte
+            .rfind(untrusted::FENCE_OPEN)
+            .expect("un encadré ouvre les données");
+        let fermeture = texte
+            .rfind(untrusted::FENCE_CLOSE)
+            .expect("un encadré ferme les données");
+        assert!(ouverture < valeur && valeur < fermeture, "{texte}");
+
+        let attendu = ContextBuilder::new(&cache, PrivacyTier::Sampled)
+            .with_language(SQLITE)
+            .focused_on("comment sont écrits les courriels ?")
+            .with_samples(vec![echantillon()])
+            .build();
+        assert_eq!(
+            invite.context().map(crate::AgentContext::prompt_block),
+            Some(attendu.prompt_block()),
+            "un seul rendu : celui du point de passage"
+        );
+    }
+
+    /// Sous `Metadata`, le même appel n'envoie aucune valeur, et le dit.
+    #[test]
+    fn sous_metadata_l_echantillon_est_ecarte_et_compte() {
+        let invite = AgentPrompt::with_schema(
+            PrivacyTier::Metadata,
+            "comment sont écrits les courriels ?",
+            &nbc(),
+            SQLITE,
+            vec![echantillon()],
+        )
+        .expect("invite valide");
+        assert!(!invite.as_str().contains("dupont@example.com"));
+        assert_eq!(
+            invite.context().map(crate::AgentContext::dropped_samples),
+            Some(1)
         );
     }
 
@@ -243,9 +318,14 @@ mod schema {
                 .expect("le chemin nomme une relation");
         }
 
-        let invite =
-            AgentPrompt::with_schema(PrivacyTier::Metadata, "quelles tables ?", &cache, SQLITE)
-                .expect("invite valide");
+        let invite = AgentPrompt::with_schema(
+            PrivacyTier::Metadata,
+            "quelles tables ?",
+            &cache,
+            SQLITE,
+            Vec::new(),
+        )
+        .expect("invite valide");
         let contexte = invite.context().expect("un schéma est joint");
         let politique = crate::ContextPolicy::default();
         assert!(contexte.relations().len() <= politique.max_relations);
@@ -269,8 +349,9 @@ mod schema {
     /// Sous `Local`, le refus tombe avant que le moindre schéma ne soit rendu.
     #[test]
     fn sous_local_aucun_schema_n_est_rendu() {
-        let erreur = AgentPrompt::with_schema(PrivacyTier::Local, "tables ?", &nbc(), SQLITE)
-            .expect_err("une connexion locale ne parle pas à un agent externe");
+        let erreur =
+            AgentPrompt::with_schema(PrivacyTier::Local, "tables ?", &nbc(), SQLITE, Vec::new())
+                .expect_err("une connexion locale ne parle pas à un agent externe");
         let message = erreur.to_string();
         assert!(message.contains("local-only"), "{message}");
         assert!(!message.contains("orders"), "{message}");
@@ -285,6 +366,7 @@ mod schema {
             "le total des commandes",
             &nbc(),
             SQLITE,
+            Vec::new(),
         )
         .expect("invite valide");
         let rendu = format!("{invite:?}");

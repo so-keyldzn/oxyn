@@ -136,6 +136,7 @@ fn main() -> Result<()> {
             commands::ai::ai_stop_agent_start,
             commands::ai::ai_request_sample,
             commands::ai::ai_withdraw_sample,
+            commands::ai::ai_answer_sample,
             commands::ai::ai_forget,
             commands::ai::ai_propose_schema_change,
         ])

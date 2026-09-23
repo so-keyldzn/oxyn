@@ -336,13 +336,348 @@ fn the_tools_handed_to_external_agents_are_frozen_here() {
     // `DescribeCatalog`, a read of the local cache that contacts no server and
     // carries no row value; its answer is rendered by `ContextBuilder::build`
     // under the tier read at the call. Pending review by `relecteur-securite`.
+    //
+    // 2026-09-24: `request_sample` added (ADR-0034). It is the only tool
+    // whose answer can carry row values: refused outside `sampled` before the
+    // user is asked, read only after the user ticks columns in Oxyn, rendered
+    // by `ContextBuilder::build`. Pending review by `relecteur-securite`.
     assert_eq!(
         crate::sql_agent().allowed_tools,
         vec![
             crate::tools::EXECUTE_QUERY.to_owned(),
             crate::tools::DESCRIBE_SCHEMA.to_owned(),
+            crate::tools::REQUEST_SAMPLE.to_owned(),
         ]
     );
+}
+
+mod request_sample {
+    use oxyn_catalog::{CatalogHandle, CatalogPath, SharedCatalog};
+
+    use super::*;
+    use crate::context::RowSample;
+    use crate::runtime::{SampleReceipt, SampleRelease};
+    use crate::tools::{MAX_SAMPLE_COLUMNS, MAX_SAMPLE_ROWS, REQUEST_SAMPLE, SampleAsk};
+
+    /// What the user does with the approval screen, in this test.
+    #[derive(Debug, Clone, Copy)]
+    enum User {
+        Declines,
+        /// Ticks `email` only, whatever the agent asked for.
+        TicksEmail,
+        /// Ticks every column of a wide table: more than the context holds.
+        TicksEverything,
+    }
+
+    /// The sink's release, counted: it stands for the audit and the panel's
+    /// « sent », which only a sample that really leaves may reach.
+    struct Tally {
+        released: Mutex<usize>,
+        recorded: bool,
+    }
+
+    #[async_trait]
+    impl SampleRelease for Tally {
+        async fn release(&self) -> bool {
+            *self.released.lock().expect("no panic held the lock") += 1;
+            self.recorded
+        }
+    }
+
+    fn customers() -> CatalogPath {
+        CatalogPath::for_namespace(None, "main")
+            .and_then(|main| main.with_relation("customers"))
+            .expect("a relation path")
+    }
+
+    /// `email` of one customer, as a sink reports it once the user approved.
+    fn sampled(receipt: SampleReceipt) -> DispatchOutcome {
+        DispatchOutcome::Sampled {
+            catalog: CatalogHandle::new(SharedCatalog::default()),
+            sample: RowSample::new(
+                customers(),
+                vec!["email".to_owned()],
+                vec![vec![oxyn_core::ScalarValue::Text(
+                    "dupont@example.com".to_owned(),
+                )]],
+            ),
+            receipt,
+        }
+    }
+
+    /// The widest sample a request can bring back, every value at the
+    /// rendering's cap: past the context budget.
+    fn oversized(receipt: SampleReceipt) -> DispatchOutcome {
+        let columns: Vec<String> = (0..MAX_SAMPLE_COLUMNS).map(|n| format!("c{n}")).collect();
+        let row: Vec<_> = columns
+            .iter()
+            .map(|_| oxyn_core::ScalarValue::Text("dupont@example.com".repeat(8)))
+            .collect();
+        let rows = (0..MAX_SAMPLE_ROWS).map(|_| row.clone()).collect();
+        DispatchOutcome::Sampled {
+            catalog: CatalogHandle::new(SharedCatalog::default()),
+            sample: RowSample::new(customers(), columns, rows),
+            receipt,
+        }
+    }
+
+    /// A sink that plays the user: it records every sample asked of it, and
+    /// answers as the user would — the approved columns only.
+    struct Desk {
+        user: User,
+        asked: Mutex<Vec<(Actor, SampleAsk)>>,
+        dispatched: Mutex<usize>,
+        tally: Arc<Tally>,
+    }
+
+    impl Desk {
+        fn new(user: User) -> Arc<Self> {
+            Self::recording(user, true)
+        }
+
+        /// `recorded`: whether the audit accepts the sample.
+        fn recording(user: User, recorded: bool) -> Arc<Self> {
+            Arc::new(Self {
+                user,
+                asked: Mutex::new(Vec::new()),
+                dispatched: Mutex::new(0),
+                tally: Arc::new(Tally {
+                    released: Mutex::new(0),
+                    recorded,
+                }),
+            })
+        }
+
+        fn released(&self) -> usize {
+            *self.tally.released.lock().expect("no panic held the lock")
+        }
+
+        fn receipt(&self) -> SampleReceipt {
+            SampleReceipt::new(Arc::clone(&self.tally) as Arc<dyn SampleRelease>)
+        }
+
+        fn asked(&self) -> Vec<(Actor, SampleAsk)> {
+            self.asked.lock().expect("no panic held the lock").clone()
+        }
+    }
+
+    #[async_trait]
+    impl CommandSink for Desk {
+        async fn dispatch(&self, _: Actor, _: Command, _: &CancelToken) -> DispatchOutcome {
+            *self.dispatched.lock().expect("no panic held the lock") += 1;
+            DispatchOutcome::Completed {
+                summary: "1 rows, 1 batches".to_owned(),
+            }
+        }
+
+        async fn request_sample(
+            &self,
+            actor: Actor,
+            ask: SampleAsk,
+            _: &CancelToken,
+        ) -> DispatchOutcome {
+            self.asked
+                .lock()
+                .expect("no panic held the lock")
+                .push((actor, ask));
+            match self.user {
+                User::Declines => DispatchOutcome::Denied {
+                    reason: "the user declined".to_owned(),
+                },
+                User::TicksEmail => sampled(self.receipt()),
+                User::TicksEverything => oversized(self.receipt()),
+            }
+        }
+    }
+
+    fn served(tier: PrivacyTier) -> ToolService {
+        ToolService::new(
+            ToolRegistry::builtin(),
+            crate::sql_agent().allowed_tools,
+            ToolScope::new(ConnectionId::new(), SessionId::new(), QueryLanguage::SQL),
+            crate::external::mcp::TierCell::holding(tier),
+            actor(),
+        )
+    }
+
+    fn call(desk: &Arc<Desk>, service: &ToolService, arguments: Value) -> Value {
+        let turns = ToolTurns::new(8, Arc::new(|| false));
+        let _turn = turns.open(
+            Arc::clone(desk) as Arc<dyn CommandSink>,
+            Arc::new(()),
+            CancelToken::new(),
+        );
+        let message = json!({
+            "jsonrpc": "2.0",
+            "id": 7,
+            "method": "tools/call",
+            "params": { "name": REQUEST_SAMPLE, "arguments": arguments },
+        })
+        .to_string();
+        let reply = block_on(service.respond(&message, &turns)).expect("a request is answered");
+        serde_json::from_str(&reply).expect("the reply is JSON")
+    }
+
+    fn text(reply: &Value) -> String {
+        reply["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned()
+    }
+
+    /// Under `Metadata`, the call is refused before anyone is asked: no
+    /// approval screen opens, nothing is read, and the refusal says why.
+    #[test]
+    fn under_metadata_the_call_is_refused_before_the_user_is_asked() {
+        let desk = Desk::new(User::TicksEmail);
+        let reply = call(
+            &desk,
+            &served(PrivacyTier::Metadata),
+            json!({ "relation": "customers" }),
+        );
+        let said = text(&reply);
+        assert!(said.contains("status: denied"), "{said}");
+        assert!(said.contains("`metadata`"), "{said}");
+        assert!(!said.contains("dupont@example.com"), "{said}");
+        assert!(desk.asked().is_empty(), "the user was asked under Metadata");
+        assert_eq!(*desk.dispatched.lock().expect("lock"), 0);
+    }
+
+    /// A refusal — or an approval that expired — gives the agent the words
+    /// « the user declined », and no value.
+    #[test]
+    fn a_refusal_answers_declined_and_carries_no_value() {
+        let desk = Desk::new(User::Declines);
+        let reply = call(
+            &desk,
+            &served(PrivacyTier::Sampled),
+            json!({ "relation": "customers", "columns": ["email"] }),
+        );
+        let said = text(&reply);
+        assert!(said.contains("the user declined"), "{said}");
+        assert!(!said.contains("dupont@example.com"), "{said}");
+        assert_eq!(desk.asked().len(), 1);
+    }
+
+    /// Approved: the agent receives the approved column, fenced as database
+    /// content, rendered by the point of passage — and the ask carried the
+    /// agent's actor, the scope's connection and a bounded read.
+    #[test]
+    fn an_approved_sample_reaches_the_agent_fenced() {
+        let desk = Desk::new(User::TicksEmail);
+        let service = served(PrivacyTier::Sampled);
+        let reply = call(
+            &desk,
+            &service,
+            json!({ "relation": "customers", "columns": ["email", "secret"], "rows": 3 }),
+        );
+        assert_eq!(reply["result"]["isError"], json!(false), "{reply}");
+        let said = text(&reply);
+        assert!(said.contains("status: completed"), "{said}");
+        let value = said.find("dupont@example.com").expect("the value arrived");
+        let open = said
+            .rfind(crate::untrusted::FENCE_OPEN)
+            .expect("a fence opens the data");
+        let close = said
+            .rfind(crate::untrusted::FENCE_CLOSE)
+            .expect("a fence closes the data");
+        assert!(open < value && value < close, "{said}");
+        assert!(said.contains("row sample approved by the user"), "{said}");
+        assert_eq!(desk.released(), 1, "what left is recorded, once");
+
+        let asked = desk.asked();
+        let [(who, ask)] = asked.as_slice() else {
+            panic!("one ask: {asked:?}");
+        };
+        assert!(who.is_agent());
+        assert_eq!(ask.rows(), 3);
+        assert_eq!(ask.columns, ["email", "secret"]);
+        let Command::PreviewRelation {
+            relation, limit, ..
+        } = &ask.command
+        else {
+            panic!("the read is a PreviewRelation: {:?}", ask.command);
+        };
+        assert_eq!(relation, "customers");
+        assert_eq!(*limit, 3);
+    }
+
+    /// The tier lowered between the approval and the rendering: the rows are
+    /// dropped by the point of passage, and the agent is told nothing left.
+    #[test]
+    fn a_sample_rendered_under_metadata_becomes_a_refusal() {
+        let desk = Desk::new(User::TicksEmail);
+        let outcome = crate::runtime::ToolOutcome::from_dispatch(
+            PrivacyTier::Metadata,
+            sampled(desk.receipt()),
+            QueryLanguage::SQL,
+            None,
+        );
+        let said = outcome.render();
+        assert!(said.contains("status: denied"), "{said}");
+        assert!(!said.contains("dupont@example.com"), "{said}");
+    }
+
+    /// A sample the point of passage drops for the budget did not leave: the
+    /// sink's release is never called — nothing recorded, nothing announced —
+    /// and the agent reads a refusal, not « completed ».
+    #[test]
+    fn a_sample_over_the_budget_is_neither_released_nor_sent() {
+        let desk = Desk::new(User::TicksEverything);
+        let reply = call(
+            &desk,
+            &served(PrivacyTier::Sampled),
+            json!({ "relation": "customers" }),
+        );
+        let said = text(&reply);
+        assert!(said.contains("status: denied"), "{said}");
+        assert!(said.contains("did not fit the context budget"), "{said}");
+        assert!(!said.contains("dupont@example.com"), "{said}");
+        assert_eq!(desk.released(), 0, "a dropped sample was recorded as sent");
+    }
+
+    /// The audit refused the sample: nothing leaves, and the agent is told
+    /// so rather than handed the rows.
+    #[test]
+    fn a_sample_the_audit_cannot_record_is_not_sent() {
+        let desk = Desk::recording(User::TicksEmail, false);
+        let reply = call(
+            &desk,
+            &served(PrivacyTier::Sampled),
+            json!({ "relation": "customers", "columns": ["email"] }),
+        );
+        let said = text(&reply);
+        assert!(said.contains("status: denied"), "{said}");
+        assert!(said.contains("audit trail"), "{said}");
+        assert!(!said.contains("dupont@example.com"), "{said}");
+        assert_eq!(desk.released(), 1);
+    }
+
+    /// A sink that cannot show the approval screen refuses: the trait's
+    /// default reads nothing.
+    #[test]
+    fn a_sink_without_an_approval_screen_refuses() {
+        let bus = Arc::new(Bus::completed());
+        let service = served(PrivacyTier::Sampled);
+        let turns = ToolTurns::new(8, Arc::new(|| false));
+        let _turn = turns.open(
+            Arc::clone(&bus) as Arc<dyn CommandSink>,
+            Arc::new(()),
+            CancelToken::new(),
+        );
+        let message = json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": { "name": REQUEST_SAMPLE, "arguments": { "relation": "customers" } },
+        })
+        .to_string();
+        let reply: Value =
+            serde_json::from_str(&block_on(service.respond(&message, &turns)).expect("answered"))
+                .expect("JSON");
+        assert!(text(&reply).contains("cannot ask the user"), "{reply}");
+        assert!(bus.commands().is_empty(), "nothing was dispatched");
+    }
 }
 
 #[test]

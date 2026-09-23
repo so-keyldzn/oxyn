@@ -45,18 +45,27 @@
 //! le même code, sous le même niveau, avec le même budget que pour l'assistant
 //! interne. Ce module ne rend rien lui-même ; il place un bloc déjà rendu.
 //!
-//! Et il ne sait pas joindre d'échantillon : aucun argument ne le permet. La
-//! session d'un agent survit à la question, et rien ne dit ce qu'il garde d'une
-//! ligne qu'on lui aurait montrée ; le chemin fournisseur, lui, sait marquer
-//! un échange comme sans mémoire. Sous `Sampled`, un agent externe reçoit donc
-//! la structure, et aucune valeur.
+//! # L'échantillon approuvé, et par la même porte
+//!
+//! Un échantillon que l'utilisateur a approuvé colonne par colonne entre dans
+//! l'invite par le **même** appel : [`AgentPrompt::with_schema`] le passe à
+//! [`ContextBuilder::with_samples`], qui l'écarte sous tout niveau autre que
+//! `Sampled`. Ce module ne rend aucune valeur lui-même
+//! ([ADR-0034](../../../../docs/adr/0034-echantillon-pour-toute-destination.md)).
+//!
+//! La mémoire de l'agent n'est pas l'affaire de ce type, et c'est pourquoi
+//! [`AgentPrompt::from_user`] ne prend pas d'échantillon : une invite qui
+//! **continue** une session parle à un processus qui se souvient, et une valeur
+//! montrée là y resterait. L'appelant qui joint un échantillon ouvre une session
+//! neuve — `with_schema` est le constructeur d'ouverture — et la relâche après
+//! l'échange, qui ne laisse aucune mémoire.
 
 use std::fmt;
 
 use oxyn_catalog::CatalogCache;
 use oxyn_core::{OxynError, QueryLanguage};
 
-use crate::context::{AgentContext, ContextBuilder};
+use crate::context::{AgentContext, ContextBuilder, RowSample};
 use crate::privacy::PrivacyTier;
 use crate::untrusted;
 
@@ -163,8 +172,12 @@ impl AgentPrompt {
     /// dans le message système de l'assistant interne : un modèle qui lit la
     /// consigne après les données a déjà lu les données.
     ///
-    /// Aucun échantillon ne peut y entrer : ce constructeur n'en reçoit pas
-    /// (voir l'en-tête du module).
+    /// `samples` sont les échantillons que l'utilisateur a approuvés pour
+    /// **cette** question. Ils entrent par [`ContextBuilder::with_samples`], et
+    /// n'en sortent que sous `Sampled` : sous tout autre niveau ils sont
+    /// écartés, et [`AgentContext::dropped_samples`] le dit. L'appelant qui en
+    /// joint ouvre une session neuve et la relâche après l'échange (voir
+    /// l'en-tête du module).
     ///
     /// # Erreurs
     ///
@@ -175,11 +188,13 @@ impl AgentPrompt {
         question: &str,
         cache: &CatalogCache,
         language: QueryLanguage,
+        samples: Vec<RowSample>,
     ) -> Result<Self, OxynError> {
         let asked = Self::from_user(tier, question)?;
         let context = ContextBuilder::new(cache, tier)
             .with_language(language)
             .focused_on(asked.text.clone())
+            .with_samples(samples)
             .build();
         let text = format!(
             "{}\n\n{}\n\n{}\n\n{QUESTION_HEADER}\n{}",

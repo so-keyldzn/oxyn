@@ -78,6 +78,9 @@ pub(crate) struct AiState {
     threads: Mutex<HashMap<ConnectionId, Vec<Arc<Thread>>>>,
     /// Row samples offered and not yet presented.
     pub(crate) samples: super::samples::SampleGrants,
+    /// Row samples agents asked for, waiting for the user's answer. Shared
+    /// with the sinks whose calls wait on them.
+    pub(crate) asks: Arc<super::samples::SampleAsks>,
     /// The external agent started before its first question, per connection:
     /// the panel opened on it, and its first question takes it
     /// ([`AiState::take_waiting`]) rather than launching another.
@@ -252,6 +255,7 @@ impl AiState {
     /// Drops every conversation of a connection: they belong to it.
     pub(crate) fn forget(&self, connection: ConnectionId) {
         self.samples.forget_connection(connection);
+        self.asks.forget_connection(connection);
         self.release_waiting(connection, None);
         if let Some(list) = self.threads.lock().remove(&connection) {
             for thread in list {

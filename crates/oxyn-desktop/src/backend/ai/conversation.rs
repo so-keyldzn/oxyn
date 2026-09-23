@@ -23,6 +23,7 @@ use oxyn_ai::external::mcp::{TierSource, ToolService, ToolTurns};
 use oxyn_ai::external::prompt::AgentPrompt;
 use oxyn_ai::external::session::{AgentReady, ExternalError, ExternalSession, ToolBridge};
 use oxyn_ai::external::turn::TurnEnd;
+use oxyn_ai::tools::SampleAsk;
 use oxyn_ai::{
     AgentEvent, AgentObserver, AgentOutcome, AgentRuntime, AgentSession, AiError, CommandSink,
     ContextBuilder, DispatchOutcome, ToolRegistry, ToolScope, sql_agent,
@@ -39,7 +40,7 @@ use oxyn_store::{EgressReach, EgressRecord};
 use tauri::ipc::Channel;
 
 use super::persistence;
-use super::samples::{self, Grant, Offer, Presented, Recipient, SampleRefused};
+use super::samples::{self, Grant, Offer, Presented, Recipient, RecipientKind, SampleRefused};
 use super::threads::{AgentLink, LinkedAgent, Memory, Scope, Thread, WithdrawOnRelease};
 use super::{Backend, check_endpoint};
 use crate::backend::Inner;
@@ -51,6 +52,7 @@ use crate::ipc::ai::{
 };
 use crate::ipc::ai::{SampleApproval, SampleRequest};
 use crate::ipc::{CatalogAddress, IpcError, RelationField};
+use sampling::Sampling;
 
 /// The longest question accepted.
 ///
@@ -183,6 +185,15 @@ fn name_target(
     }
 }
 
+/// « 1 row », « 5 rows ».
+fn counted(count: usize, noun: &str) -> String {
+    if count == 1 {
+        format!("1 {noun}")
+    } else {
+        format!("{count} {noun}s")
+    }
+}
+
 /// Announces the open call with its statement. Returns its id and target.
 fn announce_call(
     thread: &Thread,
@@ -238,6 +249,17 @@ fn report_call(thread: &Thread, node: u32, outcome: &DispatchOutcome, withheld: 
         DispatchOutcome::CatalogRead { .. } => (
             ToolStatus::Completed,
             "read the structure from Oxyn's local catalog".to_owned(),
+            None,
+        ),
+        // Counts only, like `sampleApproved`: neither a value nor a column
+        // name is kept in a conversation.
+        DispatchOutcome::Sampled { sample, .. } => (
+            ToolStatus::Completed,
+            format!(
+                "sent {} of {} you approved",
+                counted(sample.rows.len(), "row"),
+                counted(sample.columns.len(), "column")
+            ),
             None,
         ),
         DispatchOutcome::AwaitingApproval { reason } => {
@@ -329,6 +351,9 @@ pub(super) struct AgentSink {
     thread: Arc<Thread>,
     node: u32,
     question: QuestionOpen,
+    /// What an agent's request for a sample needs to reach the user. `None`
+    /// refuses every request: without a screen, there is no path to a value.
+    sampling: Option<Sampling>,
 }
 
 /// Whether the question a sink reports into still waits for its answer.
@@ -443,6 +468,17 @@ impl CommandSink for AgentSink {
         }
         drop(open);
         translate(report)
+    }
+
+    /// The user decides, on the approval screen; then the read goes through
+    /// [`CommandSink::dispatch`]'s own sink. See [`sampling`].
+    async fn request_sample(
+        &self,
+        actor: Actor,
+        ask: SampleAsk,
+        cancel: &CancelToken,
+    ) -> DispatchOutcome {
+        self.sample(actor, ask, cancel).await
     }
 }
 
@@ -709,14 +745,14 @@ impl Backend {
                 let sample = match (&approval, grant) {
                     (Some(approval), Some(grant)) => {
                         let recipient = match &resolved {
-                            Resolved::Provider { config, model, .. } => Some(Recipient {
-                                provider: config.id.clone(),
-                                model: model.clone(),
+                            Resolved::Provider { config, model, .. } => Recipient::provider(
+                                config.id.clone(),
+                                model.clone(),
                                 // Classified again: an address edited since the
                                 // offer must not inherit its approval.
-                                reach: classify(&config.base_url).await?,
-                            }),
-                            Resolved::Agent(_) => None,
+                                classify(&config.base_url).await?,
+                            ),
+                            Resolved::Agent(agent) => Recipient::agent(agent),
                         };
                         let tiers = StoredTier {
                             executor: Arc::clone(&inner.executor),
@@ -728,7 +764,7 @@ impl Backend {
                                 approval,
                                 grant,
                                 asked_in.as_deref(),
-                                recipient.as_ref(),
+                                &recipient,
                                 &tiers,
                             )
                             .await?,
@@ -747,7 +783,7 @@ impl Backend {
                     }
                     Resolved::Agent(agent) => {
                         inner.ai.release_agents_except(connection, thread.id);
-                        run.ask_agent(session, &agent, &question).await
+                        run.ask_agent(session, &agent, &question, sample).await
                     }
                 }
             }
@@ -1041,13 +1077,16 @@ impl Backend {
     /// conversation — never a value, only what would be read and where it
     /// would go.
     ///
-    /// Offered under `Sampled` only, and to a built-in provider only: under
-    /// any other tier the offer does not exist, and an external agent receives
-    /// the question alone. The grant it issues is checked again, tier first,
-    /// when the question presents it.
+    /// Offered under `Sampled` only: under any other tier the offer does not
+    /// exist. Offered for a built-in provider and for an external agent alike
+    /// — the sample enters either prompt through the `ContextBuilder`
+    /// ([ADR-0034](../../../../../docs/adr/0034-echantillon-pour-toute-destination.md)).
+    /// The grant it issues is checked again, tier first, when the question
+    /// presents it.
     ///
     /// # Errors
-    /// Another tier, an agent, a relation absent from the catalog.
+    /// Another tier, an unknown destination, a relation absent from the
+    /// catalog.
     pub async fn ai_request_sample(
         &self,
         connection: ConnectionId,
@@ -1063,19 +1102,26 @@ impl Backend {
                  Nothing was read.",
             ));
         }
-        let Resolved::Provider {
-            config: provider,
-            model,
-            ..
-        } = self
+        let (recipient, label) = match self
             .resolve_destination(&destination, config.privacy_tier)
             .await?
-        else {
-            return Err(IpcError::invalid(SampleRefused::NotAProvider.to_string()));
+        {
+            Resolved::Provider {
+                config: provider,
+                model,
+                ..
+            } => {
+                let reach = classify(&provider.base_url)
+                    .await
+                    .map_err(|failure| IpcError::invalid(failure.message))?;
+                (
+                    Recipient::provider(provider.id.clone(), model, reach),
+                    provider.label,
+                )
+            }
+            Resolved::Agent(agent) => (Recipient::agent(&agent), agent.label),
         };
-        let reach = classify(&provider.base_url)
-            .await
-            .map_err(|failure| IpcError::invalid(failure.message))?;
+        let reach = recipient.reach;
         let path = address.to_path()?;
         let relation = self
             .inner
@@ -1099,19 +1145,17 @@ impl Backend {
             parent,
             source: path.clone(),
             offered,
-            recipient: Recipient {
-                provider: provider.id.clone(),
-                model,
-                reach,
-            },
+            recipient,
         });
         Ok(SampleRequest {
             id,
+            // The user pinned it: nobody else asked.
+            requested_by: None,
             source: path.to_string(),
             address: CatalogAddress::of(&path),
             rows: samples::MAX_SAMPLE_ROWS,
             fields,
-            destination: provider.label,
+            destination: label,
             reach: reach.into(),
         })
     }
@@ -1120,6 +1164,29 @@ impl Backend {
     /// presented.
     pub fn ai_withdraw_sample(&self, connection: ConnectionId, request: &str) {
         self.inner.ai.samples.withdraw(connection, request);
+    }
+
+    /// The user's answer to an agent's request for a sample: the ticked
+    /// columns, or `None` to decline. The call waiting on it reads the rows —
+    /// or says « declined » — itself.
+    ///
+    /// The only way an agent's request is approved: this is a Tauri command,
+    /// the user's gesture, and nothing an agent sends reaches it.
+    ///
+    /// # Errors
+    /// The request is unknown, answered, expired or of another connection;
+    /// or the columns were not offered — which declines it.
+    pub fn ai_answer_sample(
+        &self,
+        connection: ConnectionId,
+        request: &str,
+        columns: Option<&[String]>,
+    ) -> Result<(), IpcError> {
+        self.inner
+            .ai
+            .asks
+            .answer(connection, request, columns)
+            .map_err(|refused| IpcError::invalid(refused.to_string()))
     }
 
     /// Closes a connection's conversations. To call when the connection closes.
@@ -1199,6 +1266,16 @@ const fn egress_reach(reach: Reach) -> EgressReach {
     }
 }
 
+/// Appends to `ai_egress`, off the async workers: the store is SQLite. Answers
+/// whether it was written — never the store's words, nor the record: a name
+/// can be the data.
+async fn append_egress(executor: &Arc<Executor>, record: EgressRecord) -> bool {
+    let executor = Arc::clone(executor);
+    let written =
+        tokio::task::spawn_blocking(move || executor.store().egress().append(&record)).await;
+    matches!(written, Ok(Ok(_)))
+}
+
 /// Classifies a provider's address, off the async workers: it resolves a name.
 async fn classify(base_url: &str) -> Result<Reach, Failure> {
     let base_url = base_url.to_owned();
@@ -1245,7 +1322,7 @@ impl Run<'_> {
         approval: &SampleApproval,
         grant: Result<Grant, SampleRefused>,
         asked_in: Option<&str>,
-        recipient: Option<&Recipient>,
+        recipient: &Recipient,
         tiers: &dyn TierSource,
     ) -> Result<ApprovedSample, Failure> {
         let refused =
@@ -1270,9 +1347,6 @@ impl Run<'_> {
         let Some(tier @ PrivacyTier::Sampled) = tiers.current().await else {
             return Err(refused(SampleRefused::TierLowered));
         };
-        let Some(recipient) = recipient else {
-            return Err(refused(SampleRefused::NotAProvider));
-        };
         let mut egress = EgressRecord::new(
             self.connection.id,
             path.to_string(),
@@ -1281,8 +1355,12 @@ impl Run<'_> {
             recipient.provider.clone(),
             egress_reach(recipient.reach),
         )
-        .read_by(preview)
-        .with_model(&recipient.model);
+        .read_by(preview);
+        // An agent chooses its model itself: none is recorded rather than one
+        // invented.
+        if recipient.kind == RecipientKind::Provider {
+            egress = egress.with_model(&recipient.model);
+        }
         // The audit names the conversation when there is one: a thread whose
         // header could not be written still sends, and still records.
         if let (Some(conversation), Some(node)) = (
@@ -1299,13 +1377,9 @@ impl Run<'_> {
         })
     }
 
-    /// Appends to `ai_egress`, off the async workers: the store is SQLite.
+    /// Appends to `ai_egress` before a sample leaves.
     async fn record_egress(&self, record: EgressRecord) -> Result<(), Failure> {
-        let executor = Arc::clone(&self.inner.executor);
-        let written =
-            tokio::task::spawn_blocking(move || executor.store().egress().append(&record)).await;
-        // Neither the store's words nor the record: a name can be the data.
-        if !matches!(written, Ok(Ok(_))) {
+        if !append_egress(&self.inner.executor, record).await {
             return Err(Failure::new(
                 "Oxyn could not record this sample in its audit trail, so nothing was sent.",
                 FailureCategory::Refused,
@@ -1351,16 +1425,18 @@ impl Run<'_> {
                 };
                 let columns = columns.to_vec();
                 let cancel = self.cancel.clone();
-                tokio::task::spawn_blocking(move || samples::copy_rows(&buffer, &columns, &cancel))
-                    .await
-                    .map_err(|_| setup("copying the approved sample failed; nothing was sent"))?
-                    .ok_or_else(|| {
-                        Failure::new(
-                            "A column approved for the sample is no longer in this relation; \
+                tokio::task::spawn_blocking(move || {
+                    samples::copy_rows(&buffer, &columns, samples::MAX_SAMPLE_ROWS, &cancel)
+                })
+                .await
+                .map_err(|_| setup("copying the approved sample failed; nothing was sent"))?
+                .ok_or_else(|| {
+                    Failure::new(
+                        "A column approved for the sample is no longer in this relation; \
                              nothing was sent. Approve the sample again.",
-                            FailureCategory::Refused,
-                        )
-                    })
+                        FailureCategory::Refused,
+                    )
+                })
             }
             Ok(oxyn_exec::Outcome::NeedsApproval { command, .. }) => {
                 // Not left waiting: this read belongs to the sample the user
@@ -1570,6 +1646,14 @@ impl Run<'_> {
 
         dialogue.ask(question);
 
+        // Named as the approval screen names them, and recorded as the grant
+        // path records them: the same provider, model and reach.
+        let sampling = Sampling::new(
+            Arc::clone(&self.inner.ai.asks),
+            Recipient::provider(provider.id.clone(), model.clone(), reach),
+            provider.label.clone(),
+            format!("{} · {model}", provider.label),
+        );
         self.emit(AiEvent::Started {
             destination: Destination {
                 kind: "provider",
@@ -1599,6 +1683,7 @@ impl Run<'_> {
             node: self.node,
             // The internal loop awaits every call before its question ends.
             question: QuestionOpen::new(),
+            sampling: Some(sampling),
         };
         let outcome = runtime
             .run(&mut dialogue, &sink, &self.observer(), self.cancel)
@@ -1609,8 +1694,11 @@ impl Run<'_> {
             })?;
         // Only an exchange that ends on the model's own message is a base to
         // follow: a refusal leaves the question unanswered, a cancel or a turn
-        // limit leaves tool calls without their answer.
+        // limit leaves tool calls without their answer. An exchange where the
+        // model received a sample it asked for leaves none either: its session
+        // holds the rows (ADR-0034).
         if !sampled
+            && !self.thread.is_withheld(self.node)
             && matches!(
                 outcome,
                 AgentOutcome::Answered { .. } | AgentOutcome::Paused { .. }
@@ -1631,36 +1719,84 @@ impl Run<'_> {
     /// before launch ([ADR-0026](../../../../../docs/adr/0026-agents-externes-acp.md)).
     ///
     /// The agent's session is kept for the next question, as long as it follows
-    /// this answer, under the same tier.
+    /// this answer, under the same tier — **unless the exchange carried a
+    /// sample**, pinned by the user or asked for by the agent: the process
+    /// that saw the rows would still know them at the next question, so it is
+    /// released, and the next question starts another and says so
+    /// ([ADR-0034](../../../../../docs/adr/0034-echantillon-pour-toute-destination.md)).
     async fn ask_agent(
         &self,
         session: SessionId,
         agent: &ExternalAgentConfig,
         question: &str,
+        sample: Option<ApprovedSample>,
     ) -> Result<(), Failure> {
-        let tier = self.connection.privacy_tier;
-        let linked = self.thread.agent_for(agent, tier, self.parent);
+        let result = self.agent_exchange(session, agent, question, sample).await;
+        // Whatever the way out — answered, failed, stopped —, and whichever
+        // way the rows came in.
+        if self.thread.is_withheld(self.node) {
+            self.thread.link_agent(None);
+        }
+        result
+    }
+
+    async fn agent_exchange(
+        &self,
+        session: SessionId,
+        agent: &ExternalAgentConfig,
+        question: &str,
+        sample: Option<ApprovedSample>,
+    ) -> Result<(), Failure> {
+        let sampled = sample.is_some();
+        // A sampled question is governed by the tier read back after its
+        // sample: the one that let the rows through.
+        let tier = sample
+            .as_ref()
+            .map_or(self.connection.privacy_tier, |sample| sample.tier);
+        // First, before anything can fail: a sampled exchange leaves no
+        // memory whatever happens next.
+        if sampled {
+            self.thread.withhold_memory(self.node);
+        }
+        let egress = sample.as_ref().map(|sample| sample.egress.clone());
+        let counts = sample.as_ref().map(|sample| {
+            (
+                u32::try_from(sample.rows.rows.len()).unwrap_or(u32::MAX),
+                u32::try_from(sample.rows.columns.len()).unwrap_or(u32::MAX),
+            )
+        });
+        // A sampled question never continues a session: the process would
+        // carry the exchanges before it into the rows' prompt, and the rows
+        // into the questions after.
+        let linked = if sampled {
+            None
+        } else {
+            self.thread.agent_for(agent, tier, self.parent)
+        };
         // The prompt is born through the only gate that builds one, under the
         // tier (ADR-0027), before anything is launched. An agent session that
-        // starts here is told the structure of the database, rendered by the
-        // `ContextBuilder` as the internal assistant's is; one that follows an
-        // answer already has it, as a remembered provider session does.
+        // starts here is told the structure of the database — and the sample
+        // approved for this question —, rendered by the `ContextBuilder` as the
+        // internal assistant's is; one that follows an answer already has the
+        // structure, as a remembered provider session does.
         let prompt = match &linked {
             Some(_) => AgentPrompt::from_user(tier, question),
             None => {
                 let language = QueryLanguage::Sql(oxyn_query::dialect_for(&self.connection.driver));
+                let samples: Vec<_> = sample.map(|sample| sample.rows).into_iter().collect();
                 // From the local catalog only: an agent that fetched what it
                 // needs would bypass both the gate and the bus. No catalog yet
                 // is said to the agent as « 0 of 0 known relations ».
                 match self.inner.executor.catalog(self.connection.id) {
                     Some(catalog) => {
-                        AgentPrompt::with_schema(tier, question, &catalog.read(), language)
+                        AgentPrompt::with_schema(tier, question, &catalog.read(), language, samples)
                     }
                     None => AgentPrompt::with_schema(
                         tier,
                         question,
                         &oxyn_catalog::CatalogCache::new(),
                         language,
+                        samples,
                     ),
                 }
             }
@@ -1674,9 +1810,11 @@ impl Run<'_> {
         } = match linked {
             Some(linked) => linked,
             None => {
-                if self.parent.is_some() {
+                if let Some(parent) = self.parent {
                     self.emit(AiEvent::MemoryReset {
-                        reason: if self.thread.has_agent_link() {
+                        reason: if sampled || self.thread.is_withheld(parent) {
+                            MemoryReset::SampleNotKept
+                        } else if self.thread.has_agent_link() {
                             MemoryReset::AgentRestarted
                         } else {
                             MemoryReset::DestinationChanged
@@ -1714,6 +1852,19 @@ impl Run<'_> {
         let Some(ready) = self.start(agent, &session).await? else {
             return Ok(());
         };
+        // Written last before the send: a refusal or a failed start above
+        // leaves no entry, and no row leaves without one. A sample the gate
+        // dropped — over budget — did not leave, and is not recorded.
+        if let Some(record) = egress
+            && prompt
+                .context()
+                .is_some_and(|context| context.dropped_samples() == 0)
+        {
+            self.record_egress(record).await?;
+            if let Some((rows, columns)) = counts {
+                self.emit(AiEvent::SampleApproved { rows, columns });
+            }
+        }
         self.emit(AiEvent::Started {
             destination: Destination {
                 kind: "agent",
@@ -1745,6 +1896,12 @@ impl Run<'_> {
                 thread: Arc::clone(self.thread),
                 node: self.node,
                 question,
+                sampling: Some(Sampling::new(
+                    Arc::clone(&self.inner.ai.asks),
+                    Recipient::agent(agent),
+                    agent.label.clone(),
+                    agent.label.clone(),
+                )),
             }),
             Arc::clone(&observer),
             self.cancel.clone(),
@@ -2114,6 +2271,7 @@ fn category_of(error: &AiError) -> FailureCategory {
     }
 }
 
+mod sampling;
 mod startup;
 
 #[cfg(test)]

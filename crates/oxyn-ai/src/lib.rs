@@ -111,7 +111,8 @@ pub use observer::{
 };
 pub use privacy::PrivacyTier;
 pub use runtime::{
-    AgentOutcome, AgentRuntime, AgentSession, CommandSink, DispatchOutcome, ToolOutcome,
+    AgentOutcome, AgentRuntime, AgentSession, CommandSink, DispatchOutcome, SampleReceipt,
+    SampleRelease, ToolOutcome,
 };
 pub use spec::AgentSpec;
 pub use tools::{ToolDefinition, ToolRegistry, ToolScope};

@@ -71,12 +71,18 @@ impl fmt::Debug for SampleApproval {
 
 /// A row sample offered for approval — never a value.
 ///
-/// Answers `ai_request_sample`; drawn by `AssistantSampleApproval`.
+/// Answers `ai_request_sample`, or rides on [`AiEvent::SampleRequested`] when
+/// an agent asks; drawn by `AssistantSampleApproval` either way.
 #[derive(Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SampleRequest {
-    /// The grant's token: what the approval sends back. Never rendered.
+    /// The grant's token, or the agent's request: what the approval sends
+    /// back. Never rendered.
     pub id: String,
+    /// Who asked, by name, when an agent did; `None` when the user pinned the
+    /// relation. The screen says it: a request the user did not start must
+    /// never look like one they did.
+    pub requested_by: Option<String>,
     /// The relation, written to be read.
     pub source: String,
     /// The address the approval sends back, unchanged.
@@ -665,7 +671,8 @@ pub enum AiEvent {
     Started {
         destination: Destination,
         tier: PrivacyTier,
-        /// `None` for an external agent, which receives the question alone.
+        /// `None` when the question left alone — a follow-up in an external
+        /// agent's session, which already holds the structure.
         context: Option<ContextSummary>,
         /// What will sign a proposal opened from this answer
         /// ([ADR-0023](../../../../../docs/adr/0023-fournisseurs-declares-et-provenance.md)).
@@ -706,6 +713,15 @@ pub enum AiEvent {
     /// neither a value nor a column name is kept in a conversation.
     #[serde(rename_all = "camelCase")]
     SampleApproved { rows: u32, columns: u32 },
+    /// An agent asked for a row sample, through `call`: the approval screen
+    /// opens, and the call waits for `ai_answer_sample`. Nothing is read yet.
+    #[serde(rename_all = "camelCase")]
+    SampleRequested { call: u32, request: SampleRequest },
+    /// The agent's request was answered — or expired, or was withdrawn with
+    /// its call — and the screen closes. `approved` only when columns were
+    /// ticked; the rows read, if any, are said by `sampleApproved`.
+    #[serde(rename_all = "camelCase")]
+    SampleAnswered { request: String, approved: bool },
     #[serde(rename_all = "camelCase")]
     TurnStarted { turn: usize, max_turns: usize },
     /// A fragment of the model's reasoning: shown apart, folded.

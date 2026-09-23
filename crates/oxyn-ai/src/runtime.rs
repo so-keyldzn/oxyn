@@ -67,13 +67,13 @@ use oxyn_core::{
 use oxyn_llm::reasoning::ReasoningBlock;
 use oxyn_llm::{ChatEvent, ChatMessage, ChatRequest, LlmProvider, Reach, StopReason, ToolCall};
 
-use crate::context::{AgentContext, ContextBuilder};
+use crate::context::{AgentContext, ContextBuilder, ContextPolicy, RowSample};
 use crate::error::AiError;
 use crate::failure::FailureReport;
 use crate::observer::{AgentEvent, AgentObserver, TokenUsage};
 use crate::privacy::{self, PrivacyTier};
 use crate::spec::AgentSpec;
-use crate::tools::{ToolRegistry, ToolScope};
+use crate::tools::{MAX_SAMPLE_ROWS, SampleAsk, ToolRegistry, ToolRequest, ToolScope};
 use crate::untrusted;
 
 /// Ce que l'exécution d'une commande a donné, **avant** que le niveau de
@@ -84,13 +84,33 @@ use crate::untrusted;
 /// d'abord le faire passer par `ToolOutcome::from_dispatch`, qui est
 /// l'unique voie et qui exige un [`PrivacyTier`]. Un puits n'a donc rien à
 /// savoir de la confidentialité, et rien à pouvoir s'y tromper.
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq)]
 #[non_exhaustive]
 pub enum DispatchOutcome {
     /// La commande a été exécutée.
     Completed {
         /// Ce qu'il faut en dire au modèle : volumétrie, troncature.
         summary: String,
+    },
+    /// L'utilisateur a approuvé un échantillon demandé par l'agent, et il a
+    /// été lu. `sample` ne porte **que** les colonnes cochées : la lecture
+    /// (`PreviewRelation`) rapatrie toutes les colonnes de la relation, et le
+    /// puits ne recopie que les cochées avant de rendre ce variant.
+    ///
+    /// Des valeurs de lignes réelles. Ce que le modèle en reçoit est rendu par
+    /// `ContextBuilder::build`, sous le niveau de la connexion, dans
+    /// `ToolOutcome::from_dispatch` — la même fonction que pour un échantillon
+    /// épinglé par l'utilisateur ([I-04](../../../CLAUDE.md#i-04)).
+    Sampled {
+        /// Le cache de la connexion, pour que le rendu nomme la relation
+        /// comme le contexte la nomme.
+        catalog: CatalogHandle,
+        /// Les lignes approuvées.
+        sample: RowSample,
+        /// Ce que le puits fait quand l'échantillon part **réellement** :
+        /// inscrire la sortie, l'annoncer. Appelé par la boucle une fois le
+        /// rendu connu et retenu, jamais avant — voir [`SampleReceipt`].
+        receipt: SampleReceipt,
     },
     /// Le catalogue local a été lu : la poignée du cache, jamais un rendu.
     ///
@@ -123,6 +143,63 @@ pub enum DispatchOutcome {
     },
 }
 
+/// Ce qu'un puits fait d'un échantillon lu, une fois qu'il part pour de bon.
+///
+/// Le puits lit les lignes ; le rendu, lui, se fait après, dans
+/// `ToolOutcome::from_dispatch`, qui peut encore les écarter — budget dépassé,
+/// niveau abaissé. Inscrire la sortie dans le puits, avant ce rendu, inscrivait
+/// et annonçait comme envoyé un échantillon que le modèle ne recevait pas. Le
+/// puits confie donc ce geste à la boucle, qui ne l'accomplit qu'une fois le
+/// rendu retenu, **avant** de rendre le texte : si l'inscription échoue, rien
+/// ne part.
+///
+/// Une frontière : `oxyn-ai` décide quand, `oxyn-desktop` sait où inscrire.
+#[async_trait]
+pub trait SampleRelease: Send + Sync {
+    /// Inscrit la sortie de l'échantillon et l'annonce. Rend `false` si
+    /// l'inscription a échoué : l'échantillon ne part pas.
+    ///
+    /// Appelé au plus une fois par la boucle ; une implémentation qui en
+    /// reçoit un second n'inscrit rien de plus.
+    async fn release(&self) -> bool;
+}
+
+/// La poignée d'un [`SampleRelease`], portée par [`DispatchOutcome::Sampled`].
+///
+/// Deux reçus sont égaux s'ils désignent **le même** geste. Lâché sans être
+/// libéré — échantillon écarté, question close entre-temps —, il n'inscrit
+/// rien : c'est l'effet voulu.
+#[derive(Clone)]
+pub struct SampleReceipt(Arc<dyn SampleRelease>);
+
+impl SampleReceipt {
+    /// Enveloppe le geste du puits.
+    #[must_use]
+    pub fn new(release: Arc<dyn SampleRelease>) -> Self {
+        Self(release)
+    }
+
+    async fn release(&self) -> bool {
+        self.0.release().await
+    }
+}
+
+impl PartialEq for SampleReceipt {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl fmt::Debug for SampleReceipt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("SampleReceipt").finish_non_exhaustive()
+    }
+}
+
+/// Dit au modèle, et montré, quand l'inscription d'un échantillon a échoué.
+const SAMPLE_UNRECORDED: &str =
+    "Oxyn could not record this sample in its audit trail, so nothing was sent";
+
 /// `Debug` écrit à la main, et c'est le corollaire d'I-03 qui l'impose.
 ///
 /// [`Failed`](DispatchOutcome::Failed) porte le message du serveur **entier** —
@@ -148,6 +225,10 @@ impl fmt::Debug for DispatchOutcome {
                 .field("reason", reason)
                 .finish(),
             Self::CatalogRead { .. } => f.debug_struct("CatalogRead").finish_non_exhaustive(),
+            // `RowSample` masque déjà ses valeurs ; seul le compte sort.
+            Self::Sampled { sample, .. } => {
+                f.debug_struct("Sampled").field("sample", sample).finish()
+            }
             Self::Denied { reason } => f.debug_struct("Denied").field("reason", reason).finish(),
             Self::Failed { class, message } => f
                 .debug_struct("Failed")
@@ -235,6 +316,12 @@ pub enum ToolOutcome {
         /// c'est le même texte que le contexte d'une invite.
         block: String,
     },
+    /// Un échantillon approuvé, rendu par le point de passage.
+    Sampled {
+        /// Le bloc que `ContextBuilder::build` a produit, **déjà encadré** —
+        /// des valeurs de lignes réelles.
+        block: String,
+    },
     /// La commande attend l'accord de l'utilisateur. **Rien ne s'est exécuté.**
     AwaitingApproval {
         /// Le motif tel que le `PolicyGate` l'a rédigé.
@@ -284,11 +371,61 @@ impl ToolOutcome {
                     block: context.prompt_block().to_owned(),
                 }
             }
+            DispatchOutcome::Sampled {
+                catalog, sample, ..
+            } => Self::from_sample(tier, &catalog, sample, language),
             DispatchOutcome::AwaitingApproval { reason } => Self::AwaitingApproval { reason },
             DispatchOutcome::Denied { reason } => Self::Denied { reason },
             DispatchOutcome::Failed { class, message } => Self::Failed {
                 report: FailureReport::redact(tier, class, &message),
             },
+        }
+    }
+
+    /// Rend un échantillon approuvé par [`ContextBuilder::build`], sous `tier`.
+    ///
+    /// Aucune relation n'est décrite : l'agent a nommé celle qu'il voulait, et
+    /// la structure lui vient de `describe_schema`. Le budget sert donc tout
+    /// entier aux lignes, et le plafond de rendu est celui de la demande.
+    ///
+    /// Un échantillon que le point de passage écarte — un niveau qui ne laisse
+    /// plus sortir de valeurs, un budget dépassé — devient un **refus** : le
+    /// modèle ne doit pas croire avoir reçu ce qui n'est pas parti.
+    fn from_sample(
+        tier: PrivacyTier,
+        catalog: &CatalogHandle,
+        sample: RowSample,
+        language: QueryLanguage,
+    ) -> Self {
+        let rows = usize::try_from(MAX_SAMPLE_ROWS).unwrap_or(usize::MAX);
+        let context = {
+            let cache = catalog.catalog().read();
+            ContextBuilder::new(&cache, tier)
+                .with_policy(ContextPolicy {
+                    max_relations: 0,
+                    max_sample_rows: rows,
+                    ..ContextPolicy::default()
+                })
+                .with_language(language)
+                .with_samples(vec![sample])
+                .build()
+        };
+        if context.dropped_samples() > 0 {
+            return Self::Denied {
+                reason: if tier.allows_row_values() {
+                    "the approved sample did not fit the context budget, so nothing was sent; \
+                     ask for fewer rows or columns"
+                        .to_owned()
+                } else {
+                    format!(
+                        "this connection's privacy tier is now `{tier}`, which lets no row value \
+                         leave; nothing was sent"
+                    )
+                },
+            };
+        }
+        Self::Sampled {
+            block: context.prompt_block().to_owned(),
         }
     }
 
@@ -310,6 +447,12 @@ impl ToolOutcome {
             // Le catalogue ne porte aucune valeur de ligne : le niveau n'en a
             // rien retenu. Le budget, lui, se dit dans le bloc même.
             (Self::Described { .. }, DispatchOutcome::CatalogRead { .. }) => false,
+            // Ce qui a été approuvé est ce qui part : les colonnes non cochées
+            // ont été lues par l'aperçu, mais le puits ne les a pas recopiées —
+            // elles ne sont pas dans les faits, le niveau n'a donc rien à en
+            // retenir. Un échantillon écarté devient un refus, et tombe dans le
+            // cas désaccordé ci-dessous.
+            (Self::Sampled { .. }, DispatchOutcome::Sampled { .. }) => false,
             (
                 Self::AwaitingApproval { reason },
                 DispatchOutcome::AwaitingApproval { reason: facts },
@@ -335,7 +478,10 @@ impl ToolOutcome {
     /// suppose qu'un `INSERT` a eu lieu et enchaîne sur cette hypothèse.
     #[must_use]
     pub const fn is_completed(&self) -> bool {
-        matches!(self, Self::Completed { .. } | Self::Described { .. })
+        matches!(
+            self,
+            Self::Completed { .. } | Self::Described { .. } | Self::Sampled { .. }
+        )
     }
 
     /// Le texte renvoyé au modèle, **encadré comme contenu non fiable**.
@@ -355,7 +501,7 @@ impl ToolOutcome {
             // Le bloc sort du point de passage, qui l'a déjà encadré : le
             // ré-encadrer neutraliserait ses balises et le rendrait différent du
             // contexte d'une invite. Le statut, lui, est encadré comme les autres.
-            Self::Described { block } => {
+            Self::Described { block } | Self::Sampled { block } => {
                 format!("{}\n{block}", untrusted::fence("status: completed"))
             }
             _ => untrusted::fence(&self.to_string()),
@@ -369,7 +515,9 @@ impl fmt::Display for ToolOutcome {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Completed { summary } => write!(f, "status: completed\n{summary}"),
-            Self::Described { block } => write!(f, "status: completed\n{block}"),
+            Self::Described { block } | Self::Sampled { block } => {
+                write!(f, "status: completed\n{block}")
+            }
             Self::AwaitingApproval { reason } => write!(
                 f,
                 "status: awaiting_approval\n\
@@ -398,6 +546,10 @@ impl fmt::Debug for ToolOutcome {
                 .finish(),
             Self::Described { block } => f
                 .debug_struct("Described")
+                .field("block", &format_args!("<redacted, {} bytes>", block.len()))
+                .finish(),
+            Self::Sampled { block } => f
+                .debug_struct("Sampled")
                 .field("block", &format_args!("<redacted, {} bytes>", block.len()))
                 .finish(),
             Self::AwaitingApproval { reason } => f
@@ -439,6 +591,40 @@ pub trait CommandSink: Send + Sync {
         command: Command,
         cancel: &CancelToken,
     ) -> DispatchOutcome;
+
+    /// Demande à l'utilisateur d'approuver un échantillon, puis le lit.
+    ///
+    /// La lecture est la commande de `ask`, soumise **après** l'approbation,
+    /// avec `actor` et par le même chemin que [`CommandSink::dispatch`] : le
+    /// `PolicyGate` décide encore. Le contrat de l'implémentation, en plus des
+    /// quatre règles du trait :
+    ///
+    /// 1. relire le niveau de la connexion **maintenant**, et refuser sans rien
+    ///    montrer hors de `Sampled` ;
+    /// 2. confronter la relation et les colonnes au catalogue avant de rien
+    ///    montrer ;
+    /// 3. ne rien lire avant la décision de l'utilisateur — prise par un geste
+    ///    de l'utilisateur, jamais par l'agent —, borner l'attente dans le
+    ///    temps et la lâcher à l'annulation ;
+    /// 4. ne recopier que les colonnes cochées, et rendre
+    ///    [`DispatchOutcome::Sampled`] — jamais les valeurs dans un autre
+    ///    variant.
+    ///
+    /// **Le défaut refuse**, et c'est voulu : un puits qui ne sait pas montrer
+    /// l'écran d'approbation n'a pas de chemin vers une valeur. Rien n'est lu.
+    async fn request_sample(
+        &self,
+        actor: Actor,
+        ask: SampleAsk,
+        cancel: &CancelToken,
+    ) -> DispatchOutcome {
+        let _ = (actor, ask, cancel);
+        DispatchOutcome::Denied {
+            reason: "this destination cannot ask the user to approve a row sample; \
+                     nothing was read"
+                .to_owned(),
+        }
+    }
 }
 
 /// Comment une conversation s'est terminée.
@@ -880,8 +1066,8 @@ pub(crate) async fn run_tool_call(
     cancel: &CancelToken,
 ) -> Result<String, AiError> {
     {
-        let command = match tools.translate(call, allowed, scope) {
-            Ok(command) => command,
+        let request = match tools.request(call, allowed, scope) {
+            Ok(request) => request,
             // Un nom d'outil inventé ou des arguments mal formés se corrigent
             // au tour suivant : on le dit au modèle plutôt que d'interrompre.
             Err(err) if err.is_recoverable_by_model() => {
@@ -895,6 +1081,7 @@ pub(crate) async fn run_tool_call(
             Err(err) => return Err(err),
         };
 
+        let command = request.command();
         tracing::debug!(
             tool = %call.name,
             command = command.name(),
@@ -913,16 +1100,31 @@ pub(crate) async fn run_tool_call(
 
         // Les mots de recherche sont ceux que la commande porte — donc ceux que
         // le journal retient —, pas ceux de l'appel : il n'y a qu'une vérité.
-        let focus = match &command {
+        let focus = match command {
             Command::DescribeCatalog { focus, .. } => focus.clone(),
             _ => None,
         };
-        let dispatched = sink.dispatch(actor, command, cancel).await;
+        let dispatched = match request {
+            // Refusé ici, sous le niveau que la boucle tient, **avant** que
+            // l'utilisateur ne soit sollicité : une approbation demandée sous
+            // `Metadata` serait un écran qui ne peut que refuser. Le puits
+            // relit ensuite le niveau enregistré, qui peut avoir baissé depuis.
+            ToolRequest::Sample(_) if !tier.allows_row_values() => DispatchOutcome::Denied {
+                reason: format!(
+                    "row samples are shared only on a connection whose privacy tier is \
+                     `sampled`; this one is `{tier}`. Nothing was read or asked. Work from \
+                     the structure, and do not ask again"
+                ),
+            },
+            ToolRequest::Sample(ask) => sink.request_sample(actor, ask, cancel).await,
+            ToolRequest::Dispatch(command) => sink.dispatch(actor, command, cancel).await,
+        };
         // Le niveau de la session est celui de la connexion. C'est le seul
         // endroit du chemin d'erreur où il est connu, donc le seul où il peut
         // s'appliquer (I-04).
         let outcome =
             ToolOutcome::from_dispatch(tier, dispatched.clone(), scope.language, focus.as_deref());
+        let (outcome, dispatched) = settle_sample(outcome, dispatched).await;
         // L'utilisateur voit les faits ; le modèle voit `outcome`. L'écart est
         // porté par l'événement, constaté sur les deux valeurs qu'on tient ici
         // — le seul endroit où elles coexistent.
@@ -932,6 +1134,45 @@ pub(crate) async fn run_tool_call(
             withheld: outcome.withholds_from(&dispatched),
         });
         Ok(outcome.render())
+    }
+}
+
+/// Libère un échantillon rendu, ou dit ce qui est réellement arrivé.
+///
+/// Le rendu est connu : c'est maintenant, et seulement maintenant, que la
+/// sortie s'inscrit. Un échantillon que le rendu a écarté n'est pas libéré —
+/// rien ne s'inscrit, rien ne s'annonce —, et l'observateur apprend le refus
+/// que le modèle lit, pas « N lignes envoyées ».
+async fn settle_sample(
+    outcome: ToolOutcome,
+    dispatched: DispatchOutcome,
+) -> (ToolOutcome, DispatchOutcome) {
+    let DispatchOutcome::Sampled { receipt, .. } = &dispatched else {
+        return (outcome, dispatched);
+    };
+    match outcome {
+        ToolOutcome::Sampled { .. } => {
+            if receipt.release().await {
+                (outcome, dispatched)
+            } else {
+                let reason = SAMPLE_UNRECORDED.to_owned();
+                (
+                    ToolOutcome::Denied {
+                        reason: reason.clone(),
+                    },
+                    DispatchOutcome::Denied { reason },
+                )
+            }
+        }
+        ToolOutcome::Denied { reason } => (
+            ToolOutcome::Denied {
+                reason: reason.clone(),
+            },
+            DispatchOutcome::Denied { reason },
+        ),
+        // `from_sample` ne rend que ces deux-là ; une autre variante n'a rien
+        // envoyé, et ne libère rien.
+        other => (other, dispatched),
     }
 }
 
@@ -1285,7 +1526,7 @@ mod tests {
     ///
     /// Un observateur réel pousse dans un canal ; celui-ci retient, parce qu'un
     /// test doit pouvoir relire l'ordre autant que le contenu.
-    #[derive(Debug, Clone, PartialEq, Eq)]
+    #[derive(Debug, Clone, PartialEq)]
     enum Vu {
         Tour {
             turn: usize,
