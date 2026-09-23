@@ -10,7 +10,6 @@ import {
 import { useThrottledValue } from "@tanstack/react-pacer"
 
 import { EnvironmentBadge } from "@/components/oxyn/environment-badge"
-import { PrivacyTierBadge } from "@/components/oxyn/privacy-tier"
 import {
   isReadOnlySession,
   surfaces,
@@ -26,7 +25,7 @@ import {
 } from "@/components/ui/popover"
 import { Separator } from "@/components/ui/separator"
 import { Spinner } from "@/components/ui/spinner"
-import type { Environment, PrivacyTier } from "@/lib/ipc/types"
+import type { Environment } from "@/lib/ipc/types"
 import { cn } from "@/lib/utils"
 
 export type ExecutionSummary =
@@ -139,9 +138,10 @@ function SessionDetails({ capabilities }: { capabilities: Array<string> }) {
  * user. At reduced width the driver, the tier and the labels fold away; the
  * connection name and the execution state stay (« Largeur réduite »).
  *
- * `privacyTier` is passed only when an AI provider is declared: until then no
- * privacy badge appears anywhere (UX-SPEC « Le workspace IA n'existe que s'il
- * a été configuré »). It is the tier of **this** connection (I-04).
+ * The AI privacy tier is not here: it sits next to `Ask AI` in the connection
+ * bar, under the same condition as the entry, so the two read together and a
+ * narrow window does not fold it away (UX-SPEC « Le niveau se lit avant de
+ * parler »).
  */
 export function StatusBar({
   connectionName,
@@ -149,7 +149,6 @@ export function StatusBar({
   environment,
   readOnly,
   execution,
-  privacyTier = null,
   capabilities,
 }: {
   connectionName: string
@@ -157,7 +156,6 @@ export function StatusBar({
   environment: Environment
   readOnly: boolean
   execution: ExecutionSummary
-  privacyTier?: PrivacyTier | null
   capabilities?: Array<string>
 }) {
   // A session may refuse writes on its own, a replica for instance.
@@ -197,9 +195,6 @@ export function StatusBar({
           />
           <span className="@max-xl:sr-only">Read only</span>
         </span>
-      ) : null}
-      {privacyTier ? (
-        <PrivacyTierBadge tier={privacyTier} className="@max-2xl:hidden" />
       ) : null}
       <Separator orientation="vertical" className="h-4" />
       <span className="flex min-w-0 shrink-0 items-center gap-1.5 tabular-nums">

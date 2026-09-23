@@ -136,8 +136,11 @@ export function SettingsDialogView({
             ))}
           </TabsList>
 
-          <ScrollArea className="min-h-0 flex-1">
-            <div className="flex flex-col gap-4 pr-3 pb-1">
+          {/* `min-w-0`: a flex item is at least as wide as its content, and a
+              long command line in a settings page would widen the whole
+              dialog past its frame. */}
+          <ScrollArea className="min-h-0 min-w-0 flex-1">
+            <div className="flex min-w-0 flex-col gap-4 pr-3 pb-1">
               {loadError &&
               (current === "appearance" || current === "formats") ? (
                 <BackendErrorAlert

@@ -78,6 +78,8 @@ export const ExternalAgent = z.object({
   /** Names only: values never come back. */
   envNames: z.array(z.string()),
   preset: AgentPresetId.nullable(),
+  /** Confined at launch (ADR-0032); any other agent is shown with a warning. */
+  confined: z.boolean(),
 })
 export type ExternalAgent = z.infer<typeof ExternalAgent>
 
@@ -100,6 +102,8 @@ export const EnvVar = z.object({
 export type EnvVar = z.infer<typeof EnvVar>
 
 export const AgentDraft = z.object({
+  /** The declaration this one replaces, in one write; `null` declares. */
+  id: z.string().nullable(),
   label: z.string(),
   command: z.string(),
   args: z.array(z.string()),
@@ -335,11 +339,24 @@ export const FailureCategory = z
     "agentSignIn",
     "agentIncompatible",
     "agentExited",
+    "agentTimedOut",
     "agent",
     "unknown",
   ])
   .catch("unknown")
 export type FailureCategory = z.infer<typeof FailureCategory>
+
+/**
+ * What an agent's process said as it died. `output` is the end of its error
+ * output, every value Oxyn handed the process already replaced by a marker in
+ * the backend; it may still quote the question, so it is shown, never logged.
+ */
+export const AgentExit = z.object({
+  /** `null` when the process was stopped by a signal. */
+  code: z.number().int().nullable(),
+  output: z.string(),
+})
+export type AgentExit = z.infer<typeof AgentExit>
 
 export const SignInMethod = z.object({
   id: z.string(),
@@ -607,9 +624,41 @@ export const AiEvent = z.discriminatedUnion("kind", [
     retryable: z.boolean(),
     signIn: SignInHelp.nullable(),
     foundElsewhere: z.string().nullable(),
+    /** For `agentExited`: what the process said, when it said it in time. */
+    exit: AgentExit.nullable(),
   }),
 ])
 export type AiEvent = z.infer<typeof AiEvent>
+
+/** Starts the agent the next question would use, before it is asked. */
+export interface AgentStartRequest {
+  connection: string
+  session: string
+  /** The conversation shown: its own agent answers when it would answer next. */
+  thread: string | null
+  parent: number | null
+  agent: string
+}
+
+/** How a start ended. Tagged on `state`. Never retried by Oxyn. */
+export const AgentStart = z.discriminatedUnion("state", [
+  z.object({
+    state: z.literal("ready"),
+    version: z.string().nullable(),
+    settings: AgentSettingsState,
+  }),
+  /** Stopped before it was ready: by the user, or by a newer start. */
+  z.object({ state: z.literal("cancelled") }),
+  z.object({
+    state: z.literal("failed"),
+    message: z.string(),
+    category: FailureCategory,
+    signIn: SignInHelp.nullable(),
+    foundElsewhere: z.string().nullable(),
+    exit: AgentExit.nullable(),
+  }),
+])
+export type AgentStart = z.infer<typeof AgentStart>
 
 export const NodeView = z.object({
   id: z.number().int().nonnegative(),
@@ -720,14 +769,32 @@ export const ai = {
   selectVersion: (connection: string, thread: string, node: number) =>
     call("ai_select_version", Nothing, { connection, thread, node }),
 
-  /** The agent signs its user in; Oxyn sees no token. */
-  authenticate: (connection: string, thread: string, method: string) =>
+  /**
+   * The agent signs its user in; Oxyn sees no token. `thread` is `null` before
+   * the first question: the agent started for the connection is asked.
+   */
+  authenticate: (connection: string, thread: string | null, method: string) =>
     call("ai_authenticate", Nothing, { connection, thread, method }),
 
-  /** Asks the agent to change a mode or an option; the panel follows the agent's declaration, not this call. */
+  /**
+   * Starts the agent the next question would use and answers with what it
+   * declared. Refused under `local` before anything starts, like a question.
+   */
+  startAgent: (request: AgentStartRequest) =>
+    call("ai_start_agent", AgentStart, { request }),
+
+  /** Stops the agent started ahead of a question; `false` when none waited. */
+  stopAgentStart: (connection: string) =>
+    call("ai_stop_agent_start", z.boolean(), { connection }),
+
+  /**
+   * Asks the agent to change a mode or an option; the panel follows the
+   * agent's declaration, not this call. `thread` is `null` before the first
+   * question.
+   */
   setAgentSetting: (
     connection: string,
-    thread: string,
+    thread: string | null,
     change: AgentSettingChange
   ) =>
     call("ai_set_agent_setting", AgentSettingAnswer, {

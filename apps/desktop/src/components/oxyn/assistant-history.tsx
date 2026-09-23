@@ -32,6 +32,7 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty"
 import { Input } from "@/components/ui/input"
+import { Item } from "@/components/ui/item"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import type { HistoryState } from "@/features/assistant/conversation-store"
@@ -134,10 +135,11 @@ function Row({
         current && "bg-muted"
       )}
     >
-      <button
-        type="button"
+      <Item
+        size="xs"
+        render={<button type="button" />}
         aria-current={current ? "true" : undefined}
-        className="flex min-w-0 flex-1 flex-col items-start gap-0.5 rounded-md px-2 py-1.5 text-left outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        className="min-w-0 flex-1 flex-col items-start gap-0.5 px-2 py-1.5 text-left"
         onClick={onOpen}
       >
         <span className="flex w-full min-w-0 items-center gap-1.5">
@@ -146,7 +148,7 @@ function Row({
           </span>
           {item.running ? (
             <Badge variant="outline" className="shrink-0">
-              <Spinner data-icon="inline-start" />
+              <Spinner data-icon="inline-start" aria-hidden />
               Answering
             </Badge>
           ) : null}
@@ -154,7 +156,7 @@ function Row({
         <span className="text-xs text-muted-foreground tabular-nums">
           {when(item.updatedAtMs)} · {item.exchanges} exchange(s)
         </span>
-      </button>
+      </Item>
       <Button
         size="icon-xs"
         variant="ghost"
@@ -181,9 +183,11 @@ function Row({
 /**
  * The conversations of this connection, most recent first.
  *
- * Kept while Oxyn runs, not after: nothing in the store describes a
- * conversation yet, and a file invented for it would be a closed format
- * (I-11). The list says so rather than letting a restart surprise anyone.
+ * They are written to Oxyn's local store with the workspace and survive a
+ * restart (`oxyn-store`'s `conversations`). The list says what is kept and
+ * what is not — no query result, no answer that used a row sample — because
+ * a user who believes nothing is written makes the wrong call about what to
+ * ask.
  */
 export function AssistantHistory({
   history,
@@ -262,8 +266,8 @@ export function AssistantHistory({
             </EmptyMedia>
             <EmptyTitle>No conversation yet</EmptyTitle>
             <EmptyDescription>
-              Your conversations about this connection appear here while Oxyn
-              runs.
+              Your conversations about this connection appear here, and stay
+              after Oxyn quits.
             </EmptyDescription>
           </EmptyHeader>
         </Empty>
@@ -288,8 +292,14 @@ export function AssistantHistory({
         </ul>
       ) : null}
 
-      <p className="mt-auto text-xs text-muted-foreground">
-        Conversations are kept until Oxyn quits. They are not saved to disk.
+      <p
+        data-slot="assistant-history-retention"
+        className="mt-auto text-xs text-muted-foreground"
+      >
+        Conversations are saved with this workspace, on this machine. Oxyn keeps
+        the 200 most recent, and removes those idle for 90 days when it starts.
+        Query results are never saved, and an answer that used a data sample is
+        not kept: only its question, the sample's size and how it ended are.
       </p>
 
       <AlertDialog open={removalOpen} onOpenChange={setRemovalOpen}>

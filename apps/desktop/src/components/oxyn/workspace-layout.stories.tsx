@@ -4,6 +4,8 @@ import { expect, fn, userEvent, waitFor, within } from "storybook/test"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { DatabaseIcon, InformationCircleIcon } from "@hugeicons/core-free-icons"
 
+import { AssistantEntryButton } from "./assistant-entry-button"
+import { enabledEntry } from "./assistant-fixtures"
 import { ConsoleView } from "./console-view"
 import { invoiceColumns, syntheticPages } from "./fixtures"
 import { ObjectViewFrame } from "./object-view-frame"
@@ -205,6 +207,31 @@ export const Compact: Story = {
       expect(wrapper).toHaveAttribute("data-state", "expanded")
     )
     await expect(args.onSidebarOpenChange).not.toHaveBeenCalled()
+  },
+}
+
+/**
+ * The tier is read next to `Ask AI`, in the connection bar, and a narrow
+ * window keeps both: folding the badge away would let a question leave
+ * before its tier was seen.
+ */
+export const CompactWithTheAssistantEntry: Story = {
+  args: {
+    compact: true,
+    aiEntry: (
+      <AssistantEntryButton
+        entry={enabledEntry}
+        tier="metadata"
+        pressed={false}
+        onPressedChange={fn()}
+      />
+    ),
+  },
+  decorators: Compact.decorators,
+  play: async ({ canvasElement }) => {
+    const bar = within(barOf(canvasElement))
+    await expect(bar.getByText("AI · Metadata")).toBeVisible()
+    await expect(bar.getByRole("button", { name: "Ask AI" })).toBeVisible()
   },
 }
 

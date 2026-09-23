@@ -26,6 +26,11 @@ export interface DestinationOption {
   usable: boolean
   /** Why this tier refuses it. */
   reason: string | null
+  /**
+   * An agent Oxyn cannot confine — declared by hand, not from a preset — and
+   * so cannot keep from acting on the machine by itself (ADR-0032).
+   */
+  unconfined?: boolean
 }
 
 export type AssistantEntry =
@@ -85,6 +90,7 @@ export function destinationOptions(
       reach: "unresolved" as const,
       usable: remoteAllowed,
       reason: remoteAllowed ? null : AGENT_REFUSED,
+      unconfined: !agent.confined,
     })),
   ]
 }

@@ -1,6 +1,7 @@
 import { queryOptions } from "@tanstack/react-query"
 
 import { ai } from "@/lib/ipc/ai"
+import type { AgentPresetId } from "@/lib/ipc/ai"
 
 export const aiKeys = {
   all: ["ai"] as const,
@@ -8,6 +9,7 @@ export const aiKeys = {
   agents: ["ai", "agents"] as const,
   models: (provider: string) => ["ai", "models", provider] as const,
   presets: ["ai", "presets"] as const,
+  detected: (preset: string) => ["ai", "detected", preset] as const,
 }
 
 /**
@@ -38,6 +40,24 @@ export const presetsQuery = queryOptions({
   queryFn: () => ai.agentPresets(),
   staleTime: Number.POSITIVE_INFINITY,
 })
+
+/**
+ * What the machine has for one preset: a read of the usual directories, off the
+ * UI thread in the backend, which never runs the program nor saves anything.
+ *
+ * Refetched each time the settings screen opens, since installing an agent in
+ * a terminal while Oxyn runs is the ordinary way to get one.
+ */
+export function detectedAgentQuery(preset: AgentPresetId) {
+  return queryOptions({
+    queryKey: aiKeys.detected(preset),
+    queryFn: () => ai.detectAgent(preset),
+    staleTime: 0,
+    // Opening the screen is the moment, not coming back to the window.
+    refetchOnWindowFocus: false,
+    retry: false,
+  })
+}
 
 /** One request to the endpoint, made only when someone asks for the list. */
 export function modelsQuery(provider: string) {

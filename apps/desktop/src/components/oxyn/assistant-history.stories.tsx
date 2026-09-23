@@ -60,8 +60,14 @@ export const Listed: Story = {
     const canvas = within(canvasElement)
     await expect(canvas.getByText("Answering")).toBeVisible()
     await expect(canvas.getByText("Untitled conversation")).toBeVisible()
-    // Nothing is saved to disk, and the list says so (I-11).
-    await expect(canvas.getByText(/not saved to disk/)).toBeVisible()
+    // Conversations are written to the workspace: the list says so, and says
+    // what is never kept, rather than promising that nothing is.
+    const retention = canvasElement.querySelector(
+      "[data-slot=assistant-history-retention]"
+    )
+    await expect(retention).toHaveTextContent(/saved with this workspace/)
+    await expect(retention).toHaveTextContent(/used a data sample is not kept/)
+    await expect(canvasElement.textContent).not.toMatch(/not saved to disk/)
     await userEvent.click(
       canvas.getByRole("button", { name: /^Slowest queries/ })
     )

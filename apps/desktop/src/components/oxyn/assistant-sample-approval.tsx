@@ -21,36 +21,24 @@ import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
 import { Spinner } from "@/components/ui/spinner"
-import type { ProviderReach } from "@/lib/ipc/ai"
+import type { ProviderReach, SampleRequest as SampleOffer } from "@/lib/ipc/ai"
 import type { Environment, PrivacyTier, RelationField } from "@/lib/ipc/types"
 
-export interface SampleRequest {
-  /**
-   * The pending approval this screen answers — one per send, never rendered.
-   *
-   * It has the same source as `PendingApproval.id` for a write: the bus holds
-   * the send back and names it. It is what the screen's state is keyed on, so
-   * two sends on the same source are two decisions, never one remembered.
-   */
-  id: string
-  /** What the rows come from, written to be read — never to be run. */
-  source: string
-  /** How many rows would leave. Oxyn's own bound, never an estimate. */
-  rows: number
-  /**
-   * The columns of that source, exactly as the catalog reports them.
-   *
-   * `RelationField` is reused rather than reshaped: it already crosses the
-   * boundary validated, and it carries type, nullability, default and comment
-   * — all of it metadata. **It carries no value**, which is why it is the
-   * right type here (I-03).
-   */
-  fields: ReadonlyArray<RelationField>
-  /** Who would receive the sample, by name. */
-  destination: string
-  /** Whether that destination is off this machine. */
-  reach: ProviderReach
-}
+/**
+ * What the screen reads of the backend's offer — its schema's type, less the
+ * address, which only the approval sent back needs.
+ *
+ * - `id` is the pending approval this screen answers, one per send and never
+ *   rendered. The screen's state is keyed on it, so two sends on the same
+ *   source are two decisions, never one remembered.
+ * - `source` is written to be read, never to be run.
+ * - `rows` is Oxyn's own bound, never an estimate.
+ * - `fields` are `RelationField`s exactly as the catalog reports them: type,
+ *   nullability, default and comment — all metadata. **They carry no value**,
+ *   which is why they are the right type here (I-03).
+ * - `reach` says whether the destination is off this machine.
+ */
+export type SampleRequest = Omit<SampleOffer, "address">
 
 function whereItGoes(reach: ProviderReach) {
   // `unresolved` counts as remote for every decision, and is said as what it

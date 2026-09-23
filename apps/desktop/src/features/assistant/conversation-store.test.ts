@@ -177,6 +177,7 @@ describe("the assistant store", () => {
         retryable: true,
         signIn: null,
         foundElsewhere: null,
+        exit: null,
       },
     })
     await vi.waitFor(() => expect(getAssistant(id).thread.running).toBeNull())

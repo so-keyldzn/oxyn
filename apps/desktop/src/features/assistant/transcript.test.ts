@@ -37,6 +37,7 @@ const failed = (
   retryable,
   signIn: null,
   foundElsewhere: null,
+  exit: null,
 })
 
 describe("an exchange", () => {

@@ -24,6 +24,18 @@ type Story = StoryObj<typeof meta>
 
 export const Answered: Story = { args: { onContinue: undefined } }
 
+export const AnsweredButAwaitingReview: Story = {
+  args: { onContinue: undefined, awaitingReview: true },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    // A command still waits: « Answered » would say the work is done.
+    await expect(canvas.queryByText(/^Answered in/)).toBeNull()
+    await expect(canvas.getByText(/^Waiting for your review/)).toBeVisible()
+    // Not a live region: the panel announces its state once, elsewhere.
+    await expect(canvas.queryByRole("status")).toBeNull()
+  },
+}
+
 export const Truncated: Story = {
   args: {
     ending: { type: "answered", turns: 3, truncated: true, cut: "tokenLimit" },

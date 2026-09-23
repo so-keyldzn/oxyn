@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest"
+import { describe, expect, it, vi } from "vitest"
 
-import { getPinState, pinObject, unpin } from "./object-pin"
+import { chooseDestination, getPinState, pinObject, unpin } from "./object-pin"
 import { canPin } from "@/components/oxyn/catalog-tree"
 import type { PinToQuestion } from "@/components/oxyn/catalog-tree"
 import type { CatalogNode } from "@/lib/ipc/types"
@@ -35,6 +35,28 @@ describe("pinning an object to the question", () => {
     })
     unpin("pins-1")
     expect(getPinState("pins-1").pin).toBeNull()
+  })
+
+  it("remembers who answers per connection, beyond this window", () => {
+    chooseDestination("pins-2", "agent:claude-0000abcd")
+    expect(getPinState("pins-2").chosenKey).toBe("agent:claude-0000abcd")
+    // What a restarted window reads back: the stored key, and nothing of the
+    // other connections.
+    expect(localStorage.getItem("oxyn.assistant.destination.pins-2")).toBe(
+      "agent:claude-0000abcd"
+    )
+    expect(localStorage.getItem("oxyn.assistant.destination.pins-1")).toBeNull()
+  })
+
+  it("starts a new window on the destination chosen in the last one", async () => {
+    localStorage.setItem("oxyn.assistant.destination.pins-3", "provider:p-1")
+    vi.resetModules()
+    const fresh = await import("./object-pin")
+    expect(fresh.getPinState("pins-3")).toEqual({
+      chosenKey: "provider:p-1",
+      pin: null,
+    })
+    expect(fresh.getPinState("pins-4").chosenKey).toBeNull()
   })
 
   it("is offered only where a sample can follow", () => {

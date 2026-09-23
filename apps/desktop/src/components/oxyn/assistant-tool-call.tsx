@@ -45,7 +45,9 @@ function StateIcon({ state }: { state: ToolCallState }) {
   switch (state) {
     case "running":
     case "deciding":
-      return <Spinner data-icon="inline-start" />
+      // The label beside says the state; a spinner's own `status` would be
+      // one more live region in a panel that announces once.
+      return <Spinner data-icon="inline-start" aria-hidden />
     case "awaitingApproval":
       return (
         <HugeiconsIcon
@@ -105,7 +107,7 @@ export function AssistantToolCall({
       aria-label={`Command ${entry.tool} on ${entry.connection}: ${state.label}`}
       className={cn(
         "flex min-w-0 flex-col overflow-hidden rounded-lg border bg-card text-sm",
-        entry.state === "awaitingApproval" && "border-env-staging/60"
+        entry.state === "awaitingApproval" && "border-warning/60"
       )}
     >
       <header className="flex flex-wrap items-center gap-x-2 gap-y-1 border-b px-3 py-2">
@@ -124,7 +126,7 @@ export function AssistantToolCall({
         <span
           className={cn(
             "text-xs",
-            entry.mutating ? "text-env-staging" : "text-muted-foreground"
+            entry.mutating ? "text-warning" : "text-muted-foreground"
           )}
         >
           {entry.mutating ? "May change data" : "Read only"}
@@ -133,9 +135,8 @@ export function AssistantToolCall({
           variant={state.tone === "danger" ? "destructive" : "outline"}
           className={cn(
             "ml-auto",
-            state.tone === "warning" && "border-env-staging text-env-staging",
-            state.tone === "success" &&
-              "border-env-development text-env-development"
+            state.tone === "warning" && "border-warning text-warning",
+            state.tone === "success" && "border-success text-success"
           )}
         >
           <StateIcon state={entry.state} />

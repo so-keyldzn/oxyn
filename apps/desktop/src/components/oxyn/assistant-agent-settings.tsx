@@ -249,7 +249,10 @@ export function AssistantAgentSettings({
   disabledReason = null,
   onChange,
 }: {
-  /** The whole state as last received; replaced, never merged. */
+  /**
+   * The whole state as last received; replaced, never merged. Before any
+   * question, what the agent declared when the panel started it.
+   */
   settings: AgentSettings | null
   /** Why nothing can change now — a question running, for one. */
   disabledReason?: string | null
@@ -270,7 +273,6 @@ export function AssistantAgentSettings({
   >(null)
   const [failure, setFailure] = React.useState<string | null>(null)
   const reasonId = React.useId()
-
   if (settings === null) return null
 
   const reason =

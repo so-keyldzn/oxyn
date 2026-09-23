@@ -10,6 +10,7 @@
 import type { AssistantSource } from "@/components/oxyn/assistant-sources"
 import type {
   AgentChoice,
+  AgentExit,
   AgentOption,
   AgentProvenance,
   AgentToolStatus,
@@ -115,6 +116,8 @@ export interface FailedEntry {
   category: FailureCategory
   signIn: SignInHelp | null
   foundElsewhere: string | null
+  /** What the agent's process said as it died, when it did. */
+  exit: AgentExit | null
   /** Asking again can change the outcome. Never after a refusal. */
   retryable: boolean
 }
@@ -575,6 +578,7 @@ export function reduce(current: Exchange, event: AiEvent): Exchange {
             category: event.category,
             signIn: event.signIn,
             foundElsewhere: event.foundElsewhere,
+            exit: event.exit,
             // The backend's word, never deduced here from the category or the
             // message: only it knows the error's class and whether a write
             // ran before the failure (I-13, front.md).

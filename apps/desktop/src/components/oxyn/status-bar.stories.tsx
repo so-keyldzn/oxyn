@@ -103,7 +103,6 @@ export const Narrow: Story = {
   args: {
     connectionName: "production-eu-west-analytics-warehouse-primary",
     readOnly: true,
-    privacyTier: "metadata",
     execution: { status: "running", rows: 18_000 },
   },
   play: async ({ canvasElement }) => {
@@ -120,17 +119,9 @@ export const HostileName: Story = {
 }
 
 export const Light: Story = {
-  args: { privacyTier: "sampled", readOnly: true },
+  args: { readOnly: true },
   globals: { theme: "light" },
 }
-
-export const WithPrivacyTier: Story = {
-  args: { privacyTier: "local" },
-  play: async ({ canvas }) => {
-    await expect(canvas.getByText("AI · Local")).toBeVisible()
-  },
-}
-
 export const SessionCapabilities: Story = {
   play: async ({ canvas }) => {
     await userEvent.click(

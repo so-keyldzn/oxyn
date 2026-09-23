@@ -44,6 +44,7 @@ const agent: ExternalAgent = {
   argCount: 1,
   envNames: [],
   preset: null,
+  confined: false,
 }
 
 function wrapper({ children }: { children: React.ReactNode }) {

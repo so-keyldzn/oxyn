@@ -1,6 +1,9 @@
 import * as React from "react"
 import { useHotkeys } from "@tanstack/react-hotkeys"
+import { useStore } from "@tanstack/react-store"
 
+import { visibleAssistantField } from "@/components/oxyn/assistant-composer"
+import { AssistantEntryButton } from "@/components/oxyn/assistant-entry-button"
 import { addressKey } from "@/components/oxyn/catalog-tree"
 import type { OpenTarget } from "@/components/oxyn/catalog-tree"
 import { CloseConsoleDialog } from "@/components/oxyn/close-console-dialog"
@@ -10,7 +13,6 @@ import type { AsideItem } from "@/components/oxyn/workspace-aside"
 import { WorkspaceLayout } from "@/components/oxyn/workspace-layout"
 import type { LeftView } from "@/components/oxyn/workspace-layout"
 import { WorkspaceTabs, tabPanelValue } from "@/components/oxyn/workspace-tabs"
-import { AskAiButton } from "@/features/assistant/assistant-panel"
 import type { WorkspaceTabItem } from "@/components/oxyn/workspace-tabs"
 import { Button } from "@/components/ui/button"
 import {
@@ -22,6 +24,7 @@ import {
 } from "@/components/ui/empty"
 import { Kbd, KbdGroup } from "@/components/ui/kbd"
 import { TabsContent } from "@/components/ui/tabs"
+import { useAssistantAvailable } from "@/features/assistant/use-assistant-available"
 import { ConsolePanel } from "@/features/consoles/console-panel"
 import { flushAllDrafts } from "@/features/consoles/draft-registry"
 import { useConsoles } from "@/features/consoles/use-consoles"
@@ -31,6 +34,10 @@ import { inspectObject } from "@/features/metadata/inspection"
 import { setSqlDraft } from "@/features/session"
 import { CatalogSidebar } from "@/features/workspace/catalog-sidebar"
 import { ObjectView } from "@/features/workspace/object-view"
+import {
+  objectOpenRequests,
+  takeObjectOpenRequests,
+} from "@/features/workspace/object-requests"
 import { useCompact } from "@/features/workspace/use-compact"
 import { library } from "@/lib/ipc/library"
 import type { HistoryRow } from "@/lib/ipc/library"
@@ -123,6 +130,14 @@ export function WorkspaceScreen({
   // `Ask AI` exists only when the assistant panel does: the column composes
   // itself from what is declared (docs/UX-SPEC.md).
   const hasAssistant = aside.some((item) => item.id === "assistant")
+  const assistantEntry = useAssistantAvailable(open)
+  // Bumped by `Ask AI`: once the column is drawn, the question field takes
+  // the focus. An effect, because the field is hidden until the render that
+  // opens the column has been committed.
+  const [focusAssistant, setFocusAssistant] = React.useState(0)
+  React.useEffect(() => {
+    if (focusAssistant > 0) visibleAssistantField()?.focus()
+  }, [focusAssistant])
   const [objects, setObjects] = React.useState<Array<ObjectTab>>([])
   const [retained, setRetained] = React.useState<Array<ResultTab>>([])
   const [active, setActive] = React.useState<string | null>(null)
@@ -161,6 +176,17 @@ export function WorkspaceScreen({
     setObjects((current) => [...current, { key, node, target }])
     setActive(key)
   }
+
+  // Objects the assistant cites, opened from its sources as a click in the
+  // catalog would; another connection's requests stay for its own screen.
+  const objectRequests = useStore(objectOpenRequests)
+  React.useEffect(() => {
+    if (objectRequests.length === 0) return
+    for (const request of takeObjectOpenRequests(open.connection)) {
+      openObject(relatedNode(request.address))
+    }
+    // `openObject` reads the tabs through a ref: the requests are the trigger.
+  }, [objectRequests, open.connection])
 
   const openResult = (row: RetainedRow) => {
     const key = `result:${row.result}`
@@ -345,12 +371,14 @@ export function WorkspaceScreen({
         }
         aiEntry={
           hasAssistant ? (
-            <AskAiButton
-              open={open}
+            <AssistantEntryButton
+              entry={assistantEntry}
+              tier={open.privacyTier}
               pressed={asideOpen && asideActive === "assistant"}
               onPressedChange={(pressed) => {
                 setAsideActive("assistant")
                 setAsideOpen(pressed)
+                if (pressed) setFocusAssistant((count) => count + 1)
               }}
             />
           ) : null
@@ -379,7 +407,6 @@ export function WorkspaceScreen({
             driver={open.driver}
             environment={open.environment}
             readOnly={open.readOnly}
-            privacyTier={open.privacyTier}
             capabilities={
               activeEntry?.session.capabilities ?? open.capabilities
             }

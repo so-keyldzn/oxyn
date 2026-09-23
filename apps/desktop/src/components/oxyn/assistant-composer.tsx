@@ -10,6 +10,28 @@ import {
   InputGroupTextarea,
 } from "@/components/ui/input-group"
 import { Kbd } from "@/components/ui/kbd"
+import { cn } from "@/lib/utils"
+
+/** What the panel may do to the field from outside it. Nothing here sends. */
+export interface AssistantComposerHandle {
+  /** Replaces the draft and puts the caret at its end; the user still sends. */
+  fill: (text: string) => void
+  focus: () => void
+}
+
+/**
+ * Finds the question field `Ask AI` gives the focus to once the panel is
+ * shown. The panel stays mounted while hidden, so a focus on mount would
+ * happen once, and never on the next opening. A hidden workspace keeps its
+ * own field in the document: only a rendered one is returned.
+ */
+export function visibleAssistantField(root: ParentNode = document) {
+  return (
+    Array.from(
+      root.querySelectorAll<HTMLTextAreaElement>("[data-assistant-question]")
+    ).find((element) => element.getClientRects().length > 0) ?? null
+  )
+}
 
 /**
  * The question field.
@@ -21,6 +43,7 @@ import { Kbd } from "@/components/ui/kbd"
  * draft is kept, the refusal shown by the caller.
  */
 export function AssistantComposer({
+  ref,
   running,
   stopRequested = false,
   disabledReason = null,
@@ -28,6 +51,7 @@ export function AssistantComposer({
   onSubmit,
   onStop,
 }: {
+  ref?: React.Ref<AssistantComposerHandle>
   running: boolean
   stopRequested?: boolean
   /** Why nothing can be asked right now; the field stays readable. */
@@ -38,10 +62,30 @@ export function AssistantComposer({
 }) {
   const [value, setValue] = React.useState(initialValue)
   const [sending, setSending] = React.useState(false)
+  const field = React.useRef<HTMLTextAreaElement>(null)
   // A message typed while an answer runs is queued, not refused: it is sent
   // when the run ends, and it approves nothing meanwhile.
   const blocked = sending || disabledReason !== null
+  const unsendable = blocked || value.trim() === ""
   const hintId = React.useId()
+
+  React.useImperativeHandle(
+    ref,
+    () => ({
+      fill: (text) => {
+        setValue(text)
+        const element = field.current
+        if (!element) return
+        element.focus()
+        // After React has written the value, or the caret lands before it.
+        requestAnimationFrame(() =>
+          element.setSelectionRange(text.length, text.length)
+        )
+      },
+      focus: () => field.current?.focus(),
+    }),
+    []
+  )
 
   const send = async () => {
     const question = value.trim()
@@ -64,6 +108,8 @@ export function AssistantComposer({
     >
       <InputGroup>
         <InputGroupTextarea
+          ref={field}
+          data-assistant-question=""
           aria-label="Question for the assistant"
           aria-describedby={hintId}
           placeholder="Ask about this connection…"
@@ -120,12 +166,18 @@ export function AssistantComposer({
               <HugeiconsIcon icon={StopIcon} strokeWidth={2} />
             </InputGroupButton>
           ) : (
+            // `aria-disabled` rather than `disabled`, for the same dimming as
+            // the field; the look is changed by hand so a button that cannot
+            // send does not keep the colour of one that can.
             <InputGroupButton
               type="submit"
               size="icon-sm"
-              variant="default"
+              variant={unsendable ? "secondary" : "default"}
               aria-label="Send question"
-              aria-disabled={blocked || value.trim() === "" || undefined}
+              aria-disabled={unsendable || undefined}
+              className={cn(
+                unsendable && "cursor-not-allowed text-muted-foreground"
+              )}
             >
               <HugeiconsIcon icon={ArrowUp02Icon} strokeWidth={2} />
             </InputGroupButton>

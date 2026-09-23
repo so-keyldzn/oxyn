@@ -24,6 +24,14 @@ import {
   useAssistant,
 } from "./conversation-store"
 import type { AskTarget } from "./conversation-store"
+import {
+  signInStartedAgent,
+  startAgent,
+  startAgentAgain,
+  stopAgentStart,
+  useAgentStartup,
+} from "./agent-startup"
+import { activePath } from "./thread"
 import { destinationChoice, selectedDestination } from "./availability"
 import { chooseDestination, unpin, usePinState } from "./object-pin"
 import type { ObjectPin } from "./object-pin"
@@ -32,9 +40,12 @@ import { declaredEfforts, effortToSend } from "./reasoning-effort"
 import type { ExchangeNode } from "./thread"
 import { useAssistantAvailable } from "./use-assistant-available"
 import { AssistantEntryButton } from "@/components/oxyn/assistant-entry-button"
+import type { AgentStartupControls } from "@/components/oxyn/assistant-agent-startup"
+import type { ModelListState } from "@/components/oxyn/assistant-header"
 import { AssistantSampleApproval } from "@/components/oxyn/assistant-sample-approval"
 import { AssistantView } from "@/components/oxyn/assistant-view"
 import { toast } from "@/components/ui/toast"
+import { openObject } from "@/features/workspace/object-requests"
 import type {
   AgentProvenance,
   ReasoningEffort,
@@ -106,6 +117,68 @@ export function AssistantPanel({
       ? (chosenModels[selected.id] ?? selected.model)
       : null
   const models = useProviderModels(selected)
+  // `isPending` alone is also true for a query never enabled: an agent, or a
+  // provider the tier refuses, would read as « listing ».
+  const modelList: ModelListState | null = models.isError
+    ? { status: "error", message: models.error.message }
+    : models.isPending && models.fetchStatus !== "idle"
+      ? { status: "loading" }
+      : null
+
+  const startup = useAgentStartup(open.connection)
+  const running = state.thread.running !== null || state.sending
+  const parent = activePath(state.thread).at(-1)?.id ?? null
+  const agentToStart =
+    entry.status === "enabled" && selected?.kind === "agent" && selected.usable
+      ? { id: selected.id, label: selected.label }
+      : null
+  const agentId = agentToStart?.id ?? null
+  const agentLabel = agentToStart?.label ?? ""
+  // The agent the next question would use, started as soon as it is shown, so
+  // its models and options are offered before anything is asked. Not while a
+  // question runs — that one starts it — nor while a conversation is being
+  // taken back: its own agent may be the one that answers next. A start
+  // already made for the same agent, session and question is not made again,
+  // whatever its end (`startAgent`).
+  React.useEffect(() => {
+    if (agentId === null) {
+      void stopAgentStart(open.connection)
+      return
+    }
+    if (running || state.opening) return
+    void startAgent(
+      open.connection,
+      {
+        connection: open.connection,
+        session: open.session,
+        thread: state.thread.id,
+        parent,
+        agent: agentId,
+      },
+      agentLabel
+    )
+  }, [
+    open.connection,
+    open.session,
+    agentId,
+    agentLabel,
+    state.thread.id,
+    parent,
+    running,
+    state.opening,
+  ])
+  const agentStartup: AgentStartupControls | null =
+    agentId === null
+      ? null
+      : {
+          startup: startup.state,
+          signInStates: startup.signIn,
+          onCancel: () => void stopAgentStart(open.connection, true),
+          onStart: () => startAgentAgain(open.connection),
+          onSignIn: (method) =>
+            void signInStartedAgent(open.connection, method),
+          onCopy: copy,
+        }
 
   const target: AskTarget | null = selected
     ? {
@@ -207,6 +280,8 @@ export function AssistantPanel({
           if (selected?.kind === "provider")
             setChosenEfforts((all) => ({ ...all, [selected.id]: chosen }))
         }}
+        agentStartup={agentStartup}
+        modelList={modelList}
         pins={pin ? [{ key: pin.key, kind: "object", label: pin.label }] : []}
         onRemovePin={() => unpin(open.connection)}
         onAsk={(question) =>
@@ -222,6 +297,8 @@ export function AssistantPanel({
           void decideApproval(open.connection, node, approval, approved)
         }
         onOpenInConsole={onOpenInConsole}
+        // In this connection's workspace, as a click in its catalog would.
+        onOpenObject={(address) => openObject(open.connection, address)}
         onChangeAgentSetting={(intent) =>
           changeAgentSetting(open.connection, intent)
         }

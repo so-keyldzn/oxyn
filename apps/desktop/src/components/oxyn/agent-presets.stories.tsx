@@ -2,7 +2,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite"
 import { expect, fn, userEvent, within } from "storybook/test"
 
 import { AgentPresets } from "./agent-presets"
-import type { AgentPresetDraft } from "@/lib/ipc/ai"
+import type { AgentPresetDraft, ExternalAgent } from "@/lib/ipc/ai"
 
 const claude: AgentPresetDraft = {
   id: "claude-code",
@@ -38,6 +38,7 @@ const meta = {
   args: {
     presets: [claude, codex],
     states: {},
+    agents: [],
     declaring: null,
     onDetect: fn(),
     onDeclare: fn(),
@@ -127,6 +128,13 @@ export const CodexWithoutItsOwnCommand: Story = {
       canvas.getByText(/The adapter ships its own copy/)
     ).toBeVisible()
     await expect(canvas.getAllByText("codex login").length).toBeGreaterThan(0)
+    // The adapter's own copy is enough: its absence is not an error.
+    await expect(canvas.getByText("not found on this machine")).not.toHaveClass(
+      "text-destructive"
+    )
+    await expect(
+      canvas.getByRole("button", { name: "Declare Codex" })
+    ).toBeEnabled()
   },
 }
 
@@ -175,5 +183,40 @@ export const Declaring: Story = {
     await expect(
       within(canvasElement).getByRole("button", { name: /Declare Codex/ })
     ).toBeDisabled()
+  },
+}
+
+const declaredClaude: ExternalAgent = {
+  id: "agent-declared",
+  label: "Claude Code",
+  command: "/opt/homebrew/bin/npx",
+  argCount: 2,
+  envNames: ["PATH"],
+  preset: "claude-code",
+  confined: true,
+}
+
+export const AlreadyDeclared: Story = {
+  args: {
+    agents: [
+      declaredClaude,
+      // Not confined: not the declaration the preset makes, still proposed.
+      {
+        ...declaredClaude,
+        id: "agent-other",
+        preset: "codex",
+        confined: false,
+      },
+    ],
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    await expect(canvas.getByText("Already declared")).toBeVisible()
+    await expect(
+      canvas.queryByRole("button", { name: "Declare Claude Code" })
+    ).toBeNull()
+    await expect(
+      canvas.getByRole("button", { name: "Declare Codex" })
+    ).toBeInTheDocument()
   },
 }

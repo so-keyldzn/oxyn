@@ -38,7 +38,6 @@ export function AssistantAgentTool({
     <Marker
       data-slot="assistant-agent-tool"
       data-status={status}
-      role="status"
       className="text-xs"
     >
       <MarkerIcon>
@@ -77,7 +76,6 @@ export function AssistantPermissionRefused({
     <div
       data-slot="assistant-permission-refused"
       role="note"
-      aria-label={`The agent asked to ${action} on this machine. Oxyn refused.`}
       className="flex items-start gap-2 rounded-lg border border-dashed px-3 py-2 text-xs"
     >
       <HugeiconsIcon
@@ -119,10 +117,14 @@ export function AssistantMemoryReset({ reason }: { reason: MemoryReset }) {
   )
 }
 
-/** Discreet: a waiting step, not an alarm. */
+/**
+ * Discreet: a waiting step, not an alarm — and not a live region either. The
+ * panel announces its state once, in one place; a marker per step read aloud
+ * would drown the answer.
+ */
 export function AssistantWaiting({ label }: { label: string }) {
   return (
-    <Marker role="status" className="text-xs">
+    <Marker className="text-xs">
       <MarkerIcon>
         <HugeiconsIcon icon={Clock01Icon} strokeWidth={2} />
       </MarkerIcon>

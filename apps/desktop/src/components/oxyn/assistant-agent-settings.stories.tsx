@@ -3,6 +3,10 @@ import type { Meta, StoryObj } from "@storybook/react-vite"
 import { expect, fn, userEvent, waitFor, within } from "storybook/test"
 
 import { AssistantAgentSettings } from "./assistant-agent-settings"
+import { AssistantView } from "./assistant-view"
+import panel from "./assistant-view.stories"
+import { assistantState, destinations } from "./assistant-fixtures"
+import { NEW_THREAD } from "@/features/assistant/thread"
 import { Button } from "@/components/ui/button"
 import type { AgentSettings } from "@/features/assistant/transcript"
 import type { AgentChoice, AgentOption } from "@/lib/ipc/ai"
@@ -186,6 +190,95 @@ const meta = {
 export default meta
 type Story = StoryObj<typeof meta>
 
+/**
+ * The shape Claude Agent 0.78.0 declares on `session/new`, as measured on
+ * 2026-09-23: `model` (ten choices), `effort` (`thought_level`), `fast`
+ * (`model_config`). No mode: Oxyn confines it, and the modes are withdrawn
+ * from a confined agent (ADR-0032).
+ *
+ * The categories and the counts are the measurement; the choices' names are
+ * stand-ins — they are the adapter's, depend on the account, and are not
+ * recorded.
+ */
+const CLAUDE_MEASURED: AgentSettings = {
+  modes: [],
+  currentMode: null,
+  options: [
+    select(
+      "model",
+      "Model",
+      "model",
+      Array.from({ length: 10 }, (_, index) =>
+        choice(`model-${index + 1}`, `Model ${index + 1}`)
+      ),
+      "id-model-1-7f3a"
+    ),
+    select(
+      "effort",
+      "Effort",
+      "thoughtLevel",
+      [
+        choice("low", "Low"),
+        choice("medium", "Medium"),
+        choice("high", "High"),
+      ],
+      "id-medium-7f3a"
+    ),
+    toggle("fast", "Fast mode", "modelConfig", false),
+  ],
+}
+
+/** What the panel passes once it started Claude Code, before any question. */
+const startedClaude = {
+  startup: {
+    status: "ready" as const,
+    key: "k",
+    label: "Claude Code",
+    version: "Claude Agent 0.78.0",
+    settings: CLAUDE_MEASURED,
+  },
+  signInStates: {},
+  onCancel: fn(),
+  onStart: fn(),
+  onSignIn: fn(),
+  onCopy: fn(() => true),
+}
+
+/**
+ * Model and effort inline, the fast switch behind « More », and a change
+ * made before any question sent as the agent's own ids.
+ */
+async function everythingClaudeDeclaresIsOffered(
+  onChange: (...args: Array<never>) => unknown
+) {
+  const screen = body()
+  await expect(
+    screen.getByRole("combobox", { name: "Model: Model 1" })
+  ).toBeVisible()
+  const effort = screen.getByRole("combobox", { name: "Effort: Medium" })
+  await expect(effort).toBeVisible()
+
+  await userEvent.click(
+    screen.getByRole("button", { name: "More agent settings" })
+  )
+  await visible(
+    await screen.findByRole("menuitemcheckbox", { name: /Fast mode/ })
+  )
+  await userEvent.keyboard("{Escape}")
+  await settled()
+
+  await userEvent.click(effort)
+  await userEvent.click(
+    await visible(await screen.findByRole("option", { name: /High/ }))
+  )
+  await expect(onChange).toHaveBeenCalledWith({
+    kind: "select",
+    option: "opt-effort-9c1e",
+    choice: "id-high-7f3a",
+  })
+  await settled()
+}
+
 /** No settings declared: nothing at all — no skeleton, no reserved room. */
 export const Null: Story = {
   args: { settings: null },
@@ -196,6 +289,44 @@ export const Null: Story = {
     ).toBeNull()
   },
 }
+
+/**
+ * Before the first question: the agent the panel started declared its
+ * settings, and they are offered before anything is asked.
+ */
+export const BeforeTheFirstQuestion: Story = {
+  args: { settings: startedClaude.startup.settings },
+  play: async ({ args }) => {
+    await everythingClaudeDeclaresIsOffered(args.onChange)
+  },
+}
+
+/**
+ * The same, in the whole panel: opened on Claude Code, no question asked, and
+ * its model, its effort and its fast switch are already there.
+ */
+export const InThePanelBeforeTheFirstQuestion: StoryObj<typeof AssistantView> =
+  {
+    render: (args) => (
+      <div className="h-[640px] max-w-2xl border">
+        <AssistantView {...args} />
+      </div>
+    ),
+    args: {
+      ...panel.args,
+      agentStartup: startedClaude,
+      state: assistantState(NEW_THREAD),
+      selected: destinations[1] ?? null,
+      model: null,
+      onChangeAgentSetting: fn(async () => {}),
+    },
+    play: async ({ args, canvasElement }) => {
+      await expect(
+        within(canvasElement).getByText(/Claude Agent 0\.78\.0 ·/)
+      ).toBeVisible()
+      await everythingClaudeDeclaresIsOffered(args.onChangeAgentSetting ?? fn())
+    },
+  }
 
 export const ModelOnly: Story = {
   args: { settings: { modes: [], currentMode: null, options: [MODEL] } },

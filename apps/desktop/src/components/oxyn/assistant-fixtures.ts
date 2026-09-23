@@ -59,6 +59,7 @@ export const externalAgent: ExternalAgent = {
   argCount: 2,
   envNames: ["PATH"],
   preset: "claude-code",
+  confined: true,
 }
 
 export const destinations: Array<DestinationOption> = [

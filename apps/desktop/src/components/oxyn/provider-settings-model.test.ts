@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  counted,
   endpointCarriesCredentials,
   parseArguments,
+  parseEnvironment,
   reachSummary,
 } from "./provider-settings-model"
 
@@ -26,10 +28,27 @@ describe("provider settings", () => {
     )
   })
 
-  it("splits a command line without a shell", () => {
+  it("takes one argument per line, exactly as typed", () => {
     expect(
-      parseArguments(`--model "claude sonnet" --flag='a b' $HOME`)
-    ).toEqual(["--model", "claude sonnet", "--flag=a b", "$HOME"])
-    expect(parseArguments(`''`)).toEqual([""])
+      parseArguments(`-y\n--model "claude sonnet"\r\n\n; rm -rf /\n$HOME`)
+    ).toEqual(["-y", '--model "claude sonnet"', "; rm -rf /", "$HOME"])
+  })
+
+  it("reads NAME=value lines and refuses a line without a name", () => {
+    expect(parseEnvironment("A_B=x=y\n\nEMPTY=\r\n")).toEqual({
+      ok: true,
+      env: [
+        { name: "A_B", value: "x=y" },
+        { name: "EMPTY", value: "" },
+      ],
+    })
+    expect(parseEnvironment("OK=1\n1BAD=2")).toEqual({ ok: false, line: 2 })
+    expect(parseEnvironment("no equals")).toEqual({ ok: false, line: 1 })
+  })
+
+  it("counts in the singular only for one", () => {
+    expect(counted(1, "model", "models")).toBe("1 model")
+    expect(counted(0, "model", "models")).toBe("0 models")
+    expect(counted(3, "argument", "arguments")).toBe("3 arguments")
   })
 })

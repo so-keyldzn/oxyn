@@ -44,16 +44,28 @@ export const Unavailable: Story = {
     },
   },
   play: async ({ canvasElement }) => {
-    // Visible, and it says why.
-    const button = within(canvasElement).getByRole("button", { name: /Ask AI/ })
+    // Visible, and it says why — once, as a description, not in its name.
+    const button = within(canvasElement).getByRole("button", { name: "Ask AI" })
     await expect(button).toHaveAccessibleDescription(/Unavailable:/)
+    await expect(button).not.toHaveTextContent(/Unavailable/)
+  },
+}
+
+export const WithTheTierBeside: Story = {
+  args: { tier: "sampled" },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    // Read before speaking: the tier sits next to the entry.
+    await expect(canvas.getByText("AI · Sampled")).toBeVisible()
+    await expect(canvas.getByRole("button", { name: "Ask AI" })).toBeVisible()
   },
 }
 
 export const NoProviderDeclared: Story = {
-  args: { entry: { status: "absent" } },
+  args: { entry: { status: "absent" }, tier: "metadata" },
   play: async ({ canvasElement }) => {
     // No button, no badge, no invitation (docs/UX-SPEC.md).
     await expect(within(canvasElement).queryByRole("button")).toBeNull()
+    await expect(canvasElement.textContent).not.toMatch(/AI · /)
   },
 }

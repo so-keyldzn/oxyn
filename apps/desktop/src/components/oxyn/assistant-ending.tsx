@@ -7,6 +7,9 @@ import { endingLine } from "@/features/assistant/transcript"
 import type { Ending } from "@/lib/ipc/ai"
 import { cn } from "@/lib/utils"
 
+const AWAITING_REVIEW =
+  "Waiting for your review: a command the agent submitted has not run."
+
 /** Endings that ask for the reader's attention. */
 function notable(ending: Ending) {
   return (
@@ -25,32 +28,40 @@ function notable(ending: Ending) {
  * answer that looks finished reads as a wrong one. « Continue » is offered
  * where going on makes sense, and only as a click — a paused turn resumes at
  * the user's cost, not on its own.
+ *
+ * While a command of the exchange still waits for approval, the line says so
+ * instead of « Answered »: the work is not done until the user decides.
+ *
+ * Not a live region: the panel announces its state once, in one place.
  */
 export function AssistantEnding({
   ending,
+  awaitingReview = false,
   onContinue,
   continueDisabled = false,
 }: {
   ending: Ending
+  awaitingReview?: boolean
   onContinue?: () => void
   continueDisabled?: boolean
 }) {
-  const attention = notable(ending)
+  const attention = awaitingReview || notable(ending)
   return (
     <div
       data-slot="assistant-ending"
-      data-ending={ending.type}
+      data-ending={awaitingReview ? "awaitingReview" : ending.type}
       className="flex flex-wrap items-center gap-2"
     >
       <Marker
         variant="border"
-        role="status"
         className={cn(
           "min-w-0 flex-1 text-xs tabular-nums",
-          attention && "text-env-staging"
+          attention && "text-warning"
         )}
       >
-        <MarkerContent>{endingLine(ending)}</MarkerContent>
+        <MarkerContent>
+          {awaitingReview ? AWAITING_REVIEW : endingLine(ending)}
+        </MarkerContent>
       </Marker>
       {onContinue ? (
         <Button

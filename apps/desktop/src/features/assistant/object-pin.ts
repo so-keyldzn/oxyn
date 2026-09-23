@@ -40,10 +40,33 @@ export interface PinState {
   pin: ObjectPin | null
 }
 
-const EMPTY: PinState = { chosenKey: null, pin: null }
-
 const states = new Map<string, PinState>()
 const listeners = new Map<string, Set<() => void>>()
+
+// Who answers is remembered per connection across restarts, in the webview's
+// own storage. Not in the workspace preferences, which the backend owns and
+// which hold nothing per connection: a key there is a change to the domain.
+// What is kept is only `provider:<id>` or `agent:<id>` — two opaque ids, no
+// label, no secret — and it is a convenience: a value that no longer names a
+// declared destination falls back to the default (`selectedDestination`), and
+// storage that refuses is not an error.
+const DESTINATION_KEY = "oxyn.assistant.destination."
+
+function recalledDestination(connection: string): string | null {
+  try {
+    return localStorage.getItem(DESTINATION_KEY + connection)
+  } catch {
+    return null
+  }
+}
+
+function rememberDestination(connection: string, key: string) {
+  try {
+    localStorage.setItem(DESTINATION_KEY + connection, key)
+  } catch {
+    /* storage unavailable: the choice holds for this window */
+  }
+}
 
 function publish(connection: string, update: (state: PinState) => PinState) {
   states.set(connection, update(getPinState(connection)))
@@ -51,7 +74,14 @@ function publish(connection: string, update: (state: PinState) => PinState) {
 }
 
 export function getPinState(connection: string): PinState {
-  return states.get(connection) ?? EMPTY
+  let found = states.get(connection)
+  if (!found) {
+    // Read once per connection and window, then kept: `useSyncExternalStore`
+    // needs the same object back on every read.
+    found = { chosenKey: recalledDestination(connection), pin: null }
+    states.set(connection, found)
+  }
+  return found
 }
 
 export function usePinState(connection: string): PinState {
@@ -73,6 +103,7 @@ export function usePinState(connection: string): PinState {
 }
 
 export function chooseDestination(connection: string, key: string) {
+  rememberDestination(connection, key)
   publish(connection, (state) => ({ ...state, chosenKey: key }))
 }
 

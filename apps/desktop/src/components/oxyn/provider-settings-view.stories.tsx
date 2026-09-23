@@ -38,13 +38,14 @@ const meta = {
     working: null,
     failure: null,
     models: {},
-    onSaveProvider: fn(),
-    onSaveAgent: fn(),
+    onSaveProvider: fn(() => Promise.resolve(true)),
+    onSaveAgent: fn(() => Promise.resolve(true)),
     onDetectPreset: fn(),
     onDeclarePreset: fn(),
     onRemoveProvider: fn(),
     onRemoveAgent: fn(),
-    onCheckModels: fn(),
+    onListModels: fn(),
+    onDismissFailure: fn(),
   },
   decorators: [
     (Story) => (
@@ -128,10 +129,118 @@ export const Saving: Story = { args: { working: "saving" } }
 export const SaveFailed: Story = {
   args: {
     failure: {
+      operation: "save-provider",
       message: "writing the provider key: the keychain refused the write",
       retryable: false,
       keyMustBeRetyped: true,
     },
+  },
+  play: async ({ canvasElement }) => {
+    // Said in the form that sent it, with what failed.
+    const form = within(
+      within(canvasElement).getByRole("form", { name: "Declare a provider" })
+    )
+    await expect(form.getByText("Provider not saved")).toBeVisible()
+    await expect(
+      form.getByText("The key was not kept: type it again.")
+    ).toBeVisible()
+  },
+}
+
+export const RemovalFailed: Story = {
+  args: {
+    failure: {
+      operation: "remove-agent",
+      message: "removing the agent: database is locked",
+      retryable: true,
+      keyMustBeRetyped: false,
+    },
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    await expect(canvas.getByText("Agent not removed")).toBeVisible()
+    const form = within(
+      canvas.getByRole("form", { name: "Declare a provider" })
+    )
+    await expect(form.queryByText("Agent not removed")).toBeNull()
+  },
+}
+
+export const NothingIsClearedBeforeTheSaveSucceeds: Story = {
+  args: {
+    providers: [],
+    agents: [],
+    onSaveProvider: fn(() => Promise.resolve(false)),
+  },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement)
+    await userEvent.type(canvas.getByLabelText("Name"), "Work")
+    await userEvent.type(
+      canvas.getByLabelText("Endpoint"),
+      "https://api.anthropic.com"
+    )
+    await userEvent.type(
+      canvas.getByLabelText("Default model"),
+      "claude-sonnet-5"
+    )
+    await userEvent.type(canvas.getByLabelText("API key"), "sk-ant-refused")
+    await userEvent.click(canvas.getByRole("button", { name: "Declare" }))
+    await waitFor(() => expect(args.onSaveProvider).toHaveBeenCalled())
+    // The key leaves the screen at once (I-03); the rest waits for success.
+    await waitFor(() =>
+      expect(canvas.getByLabelText("API key")).toHaveValue("")
+    )
+    await expect(canvas.getByLabelText("Name")).toHaveValue("Work")
+    await expect(canvas.getByLabelText("Default model")).toHaveValue(
+      "claude-sonnet-5"
+    )
+  },
+}
+
+export const EditLandsOnTheForm: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    await userEvent.click(
+      canvas.getByRole("button", { name: "Edit Work account" })
+    )
+    await expect(
+      canvas.getByRole("form", { name: "Edit “Work account”" })
+    ).toBeVisible()
+    await waitFor(() => expect(canvas.getByLabelText("Name")).toHaveFocus())
+    await expect(canvas.getByLabelText("Name")).toHaveValue("Work account")
+  },
+}
+
+export const ReplacingAnAgent: Story = {
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement)
+    await userEvent.click(
+      canvas.getByRole("button", { name: `Replace… ${externalAgent.label}` })
+    )
+    const form = within(
+      canvas.getByRole("form", { name: `Replace “${externalAgent.label}”` })
+    )
+    await expect(form.getByLabelText("Program")).toHaveValue(
+      externalAgent.command
+    )
+    // What the IPC does not return is said, not silently dropped.
+    await expect(form.getByText(/type the arguments again/)).toBeVisible()
+    // One argument per line, exactly as typed (ADR-0026).
+    await userEvent.type(
+      form.getByLabelText("Arguments"),
+      "-y{Enter}@agentclientprotocol/claude-agent-acp@0.78.0"
+    )
+    await userEvent.click(form.getByRole("button", { name: "Replace" }))
+    await waitFor(() =>
+      expect(args.onSaveAgent).toHaveBeenCalledWith(
+        // The same id: replaced in one write, never declared beside it.
+        expect.objectContaining({
+          id: externalAgent.id,
+          command: externalAgent.command,
+          args: ["-y", "@agentclientprotocol/claude-agent-acp@0.78.0"],
+        })
+      )
+    )
   },
 }
 

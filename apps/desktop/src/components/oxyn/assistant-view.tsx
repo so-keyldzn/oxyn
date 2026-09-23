@@ -1,37 +1,28 @@
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
-import { AiChat02Icon } from "@hugeicons/core-free-icons"
+import { SparklesIcon } from "@hugeicons/core-free-icons"
 
 import { ApprovalDialog } from "@/components/oxyn/approval-dialog"
-import {
-  AssistantAgentTool,
-  AssistantMemoryReset,
-  AssistantPermissionRefused,
-  AssistantWaiting,
-} from "@/components/oxyn/assistant-agent-activity"
-import { AssistantAnswerActions } from "@/components/oxyn/assistant-answer-actions"
 import { AssistantAgentSettings } from "@/components/oxyn/assistant-agent-settings"
 import type { AgentSettingIntent } from "@/components/oxyn/assistant-agent-settings"
+import type { AgentStartupControls } from "@/components/oxyn/assistant-agent-startup"
 import { AssistantComposer } from "@/components/oxyn/assistant-composer"
+import type { AssistantComposerHandle } from "@/components/oxyn/assistant-composer"
 import { AssistantContextPins } from "@/components/oxyn/assistant-context-pins"
 import type { ContextPin } from "@/components/oxyn/assistant-context-pins"
-import { AssistantEnding } from "@/components/oxyn/assistant-ending"
-import { AssistantFailure } from "@/components/oxyn/assistant-failure"
+import {
+  ExchangeView,
+  awaitsReview,
+  exchangeCost,
+} from "@/components/oxyn/assistant-exchange"
 import { AssistantHeader } from "@/components/oxyn/assistant-header"
+import type { ModelListState } from "@/components/oxyn/assistant-header"
 import { AssistantHistory } from "@/components/oxyn/assistant-history"
-import { AssistantMarkdown } from "@/components/oxyn/assistant-markdown"
-import { AssistantPlan } from "@/components/oxyn/assistant-plan"
-import { AssistantQuestion } from "@/components/oxyn/assistant-question"
 import { AssistantQueue } from "@/components/oxyn/assistant-queue"
-import { AssistantSources } from "@/components/oxyn/assistant-sources"
-import { AssistantThinking } from "@/components/oxyn/assistant-thinking"
-import { AssistantToolCall } from "@/components/oxyn/assistant-tool-call"
-import { AssistantToolDraft } from "@/components/oxyn/assistant-tool-draft"
-import { AssistantUsage } from "@/components/oxyn/assistant-usage"
-import { Marker, MarkerContent } from "@/components/ui/marker"
-import { Message, MessageContent } from "@/components/ui/message"
+import { Button } from "@/components/ui/button"
 import {
   Empty,
+  EmptyContent,
   EmptyDescription,
   EmptyHeader,
   EmptyMedia,
@@ -45,24 +36,19 @@ import {
   MessageScrollerProvider,
   MessageScrollerViewport,
 } from "@/components/ui/message-scroller"
+import {
+  NO_USABLE_DESTINATION,
+  UNREADABLE,
+} from "@/features/assistant/availability"
 import type {
   AssistantEntry,
   DestinationOption,
 } from "@/features/assistant/availability"
 import type { AssistantState } from "@/features/assistant/conversation-store"
-import { activePath, versionsOf } from "@/features/assistant/thread"
+import { activePath } from "@/features/assistant/thread"
 import type { ExchangeNode } from "@/features/assistant/thread"
-import {
-  answerText,
-  canContinue,
-  outcomeOf,
-  saidSomething,
-} from "@/features/assistant/transcript"
-import type {
-  Entry,
-  Exchange,
-  ToolCallEntry,
-} from "@/features/assistant/transcript"
+import { outcomeOf } from "@/features/assistant/transcript"
+import type { ToolCallEntry } from "@/features/assistant/transcript"
 import type {
   AgentProvenance,
   ModelChoice,
@@ -71,8 +57,29 @@ import type {
 } from "@/lib/ipc/ai"
 import type { CatalogAddress, Environment, PrivacyTier } from "@/lib/ipc/types"
 
-const NO_PROVENANCE =
-  "This answer cannot be opened in a console: Oxyn cannot record where it came from, and an unmarked statement would look like one you wrote."
+/** Under the field: the whole reason is in the panel above it, once. */
+const UNAVAILABLE_SHORT = "Not available on this connection."
+
+/**
+ * What the user can do about a closed entry, when there is something to do.
+ * Keyed on the reason the backend-facing module wrote, never parsed from it.
+ */
+const REMEDIES: Record<string, string> = {
+  [NO_USABLE_DESTINATION]:
+    "Declare a local provider in Settings, or change this connection's privacy tier.",
+  [UNREADABLE]:
+    "Check the declared providers in Settings; nothing is sent meanwhile.",
+}
+
+/**
+ * Questions that fill the field, and only fill it: nothing leaves until the
+ * user presses send. They name no object, so they hold for any schema.
+ */
+const EXAMPLES = [
+  "What are the main tables here, and how are they related?",
+  "Which columns look like foreign keys without a constraint?",
+  "Write a query listing the 10 most recent rows of a table.",
+]
 
 export interface AssistantViewProps {
   connectionName: string
@@ -85,7 +92,10 @@ export interface AssistantViewProps {
   selected: DestinationOption | null
   model: string | null
   models: ReadonlyArray<ModelChoice> | null
-  /** The price of the selected model, as the provider publishes it. */
+  /**
+   * The price of the selected model, as the provider publishes it. An exchange
+   * answered by another model shows its own price, or none.
+   */
   modelCost?: ModelCost | null
   onSelectDestination: (key: string) => void
   onSelectModel: (model: string) => void
@@ -94,6 +104,13 @@ export interface AssistantViewProps {
   efforts?: ReadonlyArray<ReasoningEffort>
   effort?: ReasoningEffort | null
   onSelectEffort?: (effort: ReasoningEffort) => void
+  /**
+   * The selected agent's start, before its first question. What it declared
+   * then is what the settings offer until an answer reports more.
+   */
+  agentStartup?: AgentStartupControls | null
+  /** The selected provider's model list, while it is loading or failed. */
+  modelList?: ModelListState | null
   /** Sends or queues; `false` when the backend refused and the draft stays. */
   onAsk: (question: string) => Promise<boolean> | boolean
   onStop: () => void
@@ -133,238 +150,32 @@ export interface AssistantViewProps {
   onRemoveQueued: (key: string) => void
 }
 
-function EntryView({
-  entry,
-  openSql,
-  openSqlDisabledReason,
-  onReview,
-  onCopy,
-}: {
-  entry: Entry
-  openSql: (sql: string) => void
-  openSqlDisabledReason: string | null
-  onReview: (entry: ToolCallEntry) => void
-  onCopy: (text: string) => Promise<boolean> | boolean
-}) {
-  switch (entry.kind) {
-    case "answer":
-      return (
-        <Message align="start">
-          <MessageContent>
-            <AssistantMarkdown
-              text={entry.text}
-              onOpenSql={openSql}
-              openSqlDisabledReason={openSqlDisabledReason}
-              onCopy={onCopy}
-            />
-          </MessageContent>
-        </Message>
-      )
-    case "thinking":
-      return <AssistantThinking entry={entry} />
-    case "turn":
-      return (
-        <Marker variant="separator" className="text-xs">
-          <MarkerContent>
-            Turn {entry.turn} / {entry.maxTurns}
-          </MarkerContent>
-        </Marker>
-      )
-    case "toolDraft":
-      return <AssistantToolDraft entry={entry} />
-    case "tool":
-      return <AssistantToolCall entry={entry} onReview={onReview} />
-    case "agentTool":
-      return <AssistantAgentTool tool={entry.tool} status={entry.status} />
-    case "permissionRefused":
-      return (
-        <AssistantPermissionRefused
-          action={entry.action}
-          reason={entry.reason}
-        />
-      )
-    case "memoryReset":
-      return <AssistantMemoryReset reason={entry.reason} />
-    case "notSaved":
-      return (
-        <Marker role="note" className="items-start text-xs">
-          <MarkerContent>
-            This conversation is not being saved to the workspace. The assistant
-            still answers; nothing of it will be here next time.
-          </MarkerContent>
-        </Marker>
-      )
-    case "olderNotLoaded":
-      return (
-        <Marker role="note" className="items-start text-xs">
-          <MarkerContent>
-            Older exchanges of this conversation are in the workspace and not
-            loaded here.
-          </MarkerContent>
-        </Marker>
-      )
-    case "answerNotKept":
-      return (
-        <Marker role="note" className="items-start text-xs">
-          <MarkerContent>
-            This answer used a data sample and was not kept. The workspace holds
-            the question and the size of the sample, nothing else.
-          </MarkerContent>
-        </Marker>
-      )
-    case "restoredCall":
-      return (
-        <Marker className="items-start text-xs">
-          <MarkerContent>
-            <span className="font-mono">{entry.tool}</span> · {entry.summary}
-            {entry.statement ? (
-              <span className="mt-1 block font-mono break-all opacity-80">
-                {entry.statement}
-              </span>
-            ) : null}
-          </MarkerContent>
-        </Marker>
-      )
-    case "sampleSent":
-      return (
-        <Marker role="note" className="items-start text-xs">
-          <MarkerContent>
-            {entry.rows} {entry.rows === 1 ? "row" : "rows"} and {entry.columns}{" "}
-            {entry.columns === 1 ? "column" : "columns"} of an approved sample
-            went with this question only. Oxyn keeps none of their values.
-          </MarkerContent>
-        </Marker>
-      )
-    case "rejectedCall":
-      return (
-        <Marker className="items-start text-xs">
-          <MarkerContent>
-            <span className="font-mono">{entry.tool}</span> · refused before the
-            bus, nothing ran: {entry.error}
-          </MarkerContent>
-        </Marker>
-      )
-    // Endings and failures are drawn after the exchange, with what they offer.
-    case "ended":
-    case "failed":
-      return null
-  }
+/**
+ * The one thing the panel announces, in one live region.
+ *
+ * Every step of a run used to be its own `status`, and a screen reader read
+ * each marker as it arrived — a tool, a wait, an ending — over the answer
+ * itself. A state change is what the user needs to hear; the transcript is
+ * there to be read.
+ */
+function panelStatus(path: ReadonlyArray<ExchangeNode>) {
+  const last = path.at(-1)?.exchange
+  if (!last) return ""
+  if (path.some((node) => awaitsReview(node.exchange)))
+    return "Needs your review"
+  if (last.running) return "Answering…"
+  const outcome = outcomeOf(last)
+  if (outcome?.kind === "failed") return "Failed"
+  if (outcome?.kind === "ended") return "Answer ready"
+  return ""
 }
 
-/** One exchange of the shown path: the question, the run, what it offers. */
-function ExchangeView({
-  node,
-  view,
-  busy,
-  last,
-  onReview,
-}: {
-  node: ExchangeNode
-  view: AssistantViewProps
-  busy: boolean
-  last: boolean
-  onReview: (node: number, entry: ToolCallEntry) => void
-}) {
-  const exchange: Exchange = node.exchange
-  const provenance = exchange.started?.provenance ?? null
-  const openSqlDisabledReason = provenance === null ? NO_PROVENANCE : null
-  const outcome = outcomeOf(exchange)
-  const answer = answerText(exchange)
-  const waiting =
-    exchange.running &&
-    !exchange.entries.some(
-      (item) => item.kind === "answer" || item.kind === "thinking"
-    )
-
-  return (
-    <div className="flex flex-col gap-3">
-      <AssistantQuestion
-        text={exchange.question}
-        versions={versionsOf(view.state.thread, node)}
-        busy={busy}
-        onEdit={(text) => view.onEdit(node, text)}
-        onSelectVersion={view.onSelectVersion}
-        onCopy={view.onCopy}
-      />
-      {/* Before the run: what the agent says it will do. It describes intent,
-          not authority — what actually went through the bus is drawn by the
-          tool calls below, with their connection and their approval (I-07). */}
-      <AssistantPlan entries={exchange.plan ?? []} running={exchange.running} />
-      {exchange.entries.map((item) => (
-        <EntryView
-          key={item.key}
-          entry={item}
-          openSql={(sql) => view.onOpenInConsole(sql, provenance)}
-          openSqlDisabledReason={openSqlDisabledReason}
-          onReview={(tool) => onReview(node.id, tool)}
-          onCopy={view.onCopy}
-        />
-      ))}
-      {waiting ? (
-        <AssistantWaiting
-          label={
-            exchange.stopRequested ? "Stopping…" : "Waiting for the model…"
-          }
-        />
-      ) : null}
-      {!exchange.running &&
-      outcome?.kind === "ended" &&
-      !saidSomething(exchange) ? (
-        <Marker role="status" className="text-xs">
-          <MarkerContent>
-            The model answered nothing. This is not a failure.
-          </MarkerContent>
-        </Marker>
-      ) : null}
-
-      <AssistantUsage
-        usage={exchange.usage}
-        contextWindow={exchange.contextWindow}
-        cost={view.modelCost ?? null}
-      />
-
-      {/* After the run: what Oxyn's own tools read, so the answer can be
-          checked against the database rather than believed. */}
-      <AssistantSources
-        sources={exchange.sources ?? []}
-        tier={view.tier}
-        onOpenObject={view.onOpenObject}
-      />
-
-      {outcome?.kind === "failed" ? (
-        <AssistantFailure
-          entry={outcome}
-          canRetry={!busy}
-          signInStates={view.state.signIn}
-          onRetry={() => view.onRegenerate(node)}
-          onSignIn={view.onSignIn}
-          onCopy={view.onCopy}
-        />
-      ) : null}
-
-      {outcome?.kind === "ended" ? (
-        <div className="flex flex-col gap-2">
-          <AssistantEnding
-            ending={outcome.ending}
-            onContinue={
-              last && canContinue(exchange)
-                ? () => view.onContinue(node)
-                : undefined
-            }
-            continueDisabled={busy}
-          />
-          {answer !== "" ? (
-            <AssistantAnswerActions
-              text={answer}
-              canRegenerate={!busy}
-              onRegenerate={() => view.onRegenerate(node)}
-              onCopy={view.onCopy}
-            />
-          ) : null}
-        </div>
-      ) : null}
-    </div>
-  )
+/** What the first empty screen says, for whoever answers. */
+function introduction(selected: DestinationOption | null) {
+  if (selected?.kind === "agent") {
+    return `${selected.label} receives your question as you type it, and reads this connection only through Oxyn's tools, which apply its privacy tier on every call. What it proposes arrives in a console as text, and you run it yourself.`
+  }
+  return "The assistant reads this connection's catalog under its privacy tier. What it proposes arrives in a console as text, and you run it yourself."
 }
 
 /**
@@ -390,6 +201,8 @@ export function AssistantView(props: AssistantViewProps) {
     efforts,
     effort,
     onSelectEffort,
+    agentStartup = null,
+    modelList = null,
     onAsk,
     onStop,
     onDecide,
@@ -399,6 +212,13 @@ export function AssistantView(props: AssistantViewProps) {
     approval: string
   } | null>(null)
   const [historyOpen, setHistoryOpen] = React.useState(false)
+  const composer = React.useRef<AssistantComposerHandle>(null)
+  // The agent started when the panel opened, before any question: what it
+  // declared then is what the selector offers until an answer reports more.
+  const startedSettings =
+    agentStartup?.startup.status === "ready"
+      ? agentStartup.startup.settings
+      : null
 
   if (entry.status === "absent") return null
 
@@ -413,22 +233,26 @@ export function AssistantView(props: AssistantViewProps) {
         found.item.kind === "tool" &&
         found.item.approval?.id === reviewing?.approval
     )
-  const disabledReason =
-    entry.status === "disabled"
-      ? entry.reason
-      : state.opening
-        ? "Taking the conversation back…"
-        : selected === null || !selected.usable
-          ? (selected?.reason ?? "Choose who answers.")
-          : null
+  const unavailable = entry.status === "disabled"
+  const disabledReason = unavailable
+    ? UNAVAILABLE_SHORT
+    : state.opening
+      ? "Taking the conversation back…"
+      : selected === null || !selected.usable
+        ? (selected?.reason ?? "Choose who answers.")
+        : null
   const lastExchange = path.at(-1)?.exchange ?? null
   const held = lastExchange ? outcomeOf(lastExchange)?.kind === "failed" : false
+  const remedy = unavailable ? (REMEDIES[entry.reason] ?? null) : null
 
   return (
     <section
       aria-label={`Assistant for ${connectionName}`}
       className="flex h-full min-h-0 flex-col bg-background"
     >
+      <p data-slot="assistant-status" role="status" className="sr-only">
+        {panelStatus(path)}
+      </p>
       <AssistantHeader
         connectionName={connectionName}
         environment={environment}
@@ -447,6 +271,8 @@ export function AssistantView(props: AssistantViewProps) {
         efforts={efforts}
         effort={effort}
         onSelectEffort={onSelectEffort}
+        agentStartup={agentStartup}
+        modelList={modelList}
         onToggleHistory={setHistoryOpen}
         onNewConversation={() => {
           setHistoryOpen(false)
@@ -480,15 +306,45 @@ export function AssistantView(props: AssistantViewProps) {
                     <Empty className="border-0">
                       <EmptyHeader>
                         <EmptyMedia variant="icon">
-                          <HugeiconsIcon icon={AiChat02Icon} strokeWidth={2} />
+                          <HugeiconsIcon icon={SparklesIcon} strokeWidth={2} />
                         </EmptyMedia>
-                        <EmptyTitle>Ask about {connectionName}</EmptyTitle>
+                        <EmptyTitle>
+                          {unavailable
+                            ? "Not available on this connection"
+                            : `Ask about ${connectionName}`}
+                        </EmptyTitle>
                         <EmptyDescription>
-                          {entry.status === "disabled"
-                            ? entry.reason
-                            : "The assistant reads this connection's catalog under its privacy tier. What it proposes arrives in a console as text, and you run it yourself."}
+                          {unavailable ? entry.reason : introduction(selected)}
                         </EmptyDescription>
+                        {remedy ? (
+                          <EmptyDescription data-slot="assistant-remedy">
+                            {remedy}
+                          </EmptyDescription>
+                        ) : null}
                       </EmptyHeader>
+                      {disabledReason === null ? (
+                        <EmptyContent>
+                          <ul
+                            aria-label="Example questions"
+                            className="flex w-full flex-col gap-1.5"
+                          >
+                            {EXAMPLES.map((example) => (
+                              <li key={example}>
+                                <Button
+                                  variant="outline"
+                                  size="sm"
+                                  className="h-auto w-full justify-start py-1.5 text-left whitespace-normal"
+                                  onClick={() =>
+                                    composer.current?.fill(example)
+                                  }
+                                >
+                                  {example}
+                                </Button>
+                              </li>
+                            ))}
+                          </ul>
+                        </EmptyContent>
+                      ) : null}
                     </Empty>
                   </MessageScrollerItem>
                 ) : null}
@@ -503,6 +359,7 @@ export function AssistantView(props: AssistantViewProps) {
                       view={props}
                       busy={busy}
                       last={index === path.length - 1}
+                      cost={exchangeCost(node.exchange, props)}
                       onReview={(id, tool) =>
                         setReviewing(
                           tool.approval
@@ -550,7 +407,7 @@ export function AssistantView(props: AssistantViewProps) {
             a provider's model is chosen in the header. */}
         {selected?.kind === "agent" && props.onChangeAgentSetting ? (
           <AssistantAgentSettings
-            settings={lastAgentSettings(path)}
+            settings={lastAgentSettings(path) ?? startedSettings}
             disabledReason={
               busy ? "Settings can be changed once the answer is done." : null
             }
@@ -558,10 +415,16 @@ export function AssistantView(props: AssistantViewProps) {
           />
         ) : null}
         <AssistantComposer
+          ref={composer}
           running={state.thread.running !== null}
           stopRequested={lastExchange?.stopRequested ?? false}
           disabledReason={disabledReason}
-          onSubmit={onAsk}
+          // The question goes to the current conversation: it is shown again
+          // first, so nothing is sent into a thread the user cannot see.
+          onSubmit={(question) => {
+            setHistoryOpen(false)
+            return onAsk(question)
+          }}
           onStop={onStop}
         />
       </div>

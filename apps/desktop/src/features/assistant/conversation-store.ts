@@ -27,6 +27,7 @@ import {
 } from "./thread"
 import type { ExchangeNode, Thread } from "./thread"
 import { refusalMessage, toAgentSettingChange } from "./agent-settings"
+import { forgetAgentStart, updateStartedSettings } from "./agent-startup"
 import {
   decisionSettled,
   decisionStarted,
@@ -552,16 +553,18 @@ export async function changeAgentSetting(
   connection: string,
   intent: AgentSettingIntent
 ) {
+  // Before the first question there is no conversation: the backend then
+  // asks the agent the panel started, which is also the one it asks first
+  // when there is one — it answers the next question.
   const thread = getAssistant(connection).thread.id
-  if (thread === null) {
-    throw new Error("there is no conversation with this agent yet.")
-  }
   const answer = await ai.setAgentSetting(
     connection,
     thread,
     toAgentSettingChange(intent)
   )
   if (answer.type === "refused") throw new Error(refusalMessage(answer))
+  updateStartedSettings(connection, answer.settings)
+  if (thread === null) return
   setThread(connection, (current) => {
     const latest = activePath(current).at(-1)
     if (current.id !== thread || !latest) return current
@@ -580,5 +583,7 @@ export async function closeConversation(connection: string) {
   resumed.delete(connection)
   rememberThread(connection, null)
   publish(connection, () => INITIAL_ASSISTANT)
+  // The backend releases the agent started for it with the rest.
+  forgetAgentStart(connection)
   await ai.forget(connection).catch(() => undefined)
 }

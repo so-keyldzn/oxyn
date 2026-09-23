@@ -11,8 +11,9 @@ import { modelsQuery } from "./queries"
  *
  * Once per provider: the query never goes stale, so reopening the panel does
  * not ask again, and it is not retried (the client's `retry: false`). An
- * unusable provider — refused by the tier — is not asked at all. A failure
- * stays in the query, where the model menu shows it; nothing else does.
+ * unusable provider — refused by the tier — is not asked at all. The panel
+ * turns the query's state into the header's « Listing models… » and its
+ * failure, in the backend's words (`ModelListState`).
  */
 export function useProviderModels(selected: DestinationOption | null) {
   const provider =

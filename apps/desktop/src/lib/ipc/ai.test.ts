@@ -42,6 +42,7 @@ describe("what ends a turn", () => {
         retryable: false,
         signIn: null,
         foundElsewhere: null,
+        exit: null,
       },
     })
     expect(update.event).toMatchObject({

@@ -51,6 +51,23 @@ export const MachineActionRefused: Story = {
     await expect(canvas.getByText(/Oxyn\s+refused/)).toBeVisible()
     // ADR-0026: nothing here can grant it.
     await expect(canvas.queryByRole("button")).toBeNull()
+    // Read whole: no label replaces the content and drops the reason.
+    const note = canvas.getByRole("note")
+    await expect(note).not.toHaveAttribute("aria-label")
+    await expect(note).toHaveTextContent(/does not run commands/)
+  },
+}
+
+export const StepsAreNotLiveRegions: Story = {
+  render: () => (
+    <>
+      <AssistantAgentTool tool="read" status="running" />
+      <AssistantWaiting label="Waiting for the model…" />
+    </>
+  ),
+  play: async ({ canvasElement }) => {
+    // One announcement per panel state, not one per step (AssistantView).
+    await expect(within(canvasElement).queryByRole("status")).toBeNull()
   },
 }
 

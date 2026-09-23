@@ -6,7 +6,49 @@
 // in the endpoint produces a message at once, not when the form is complete
 // (docs/UX-SPEC.md, « Configuration des fournisseurs »).
 
-import type { ProviderKind, ProviderReach } from "@/lib/ipc/ai"
+import type { ModelChoice, ProviderKind, ProviderReach } from "@/lib/ipc/ai"
+
+export type ModelsState =
+  | { status: "loading" }
+  | { status: "ready"; models: ReadonlyArray<ModelChoice> }
+  | { status: "error"; message: string }
+
+/** Which write failed: the screen names it, rather than a bare « Failed ». */
+export type SettingsOperation =
+  | "save-provider"
+  | "save-agent"
+  | "declare-preset"
+  | "remove-provider"
+  | "remove-agent"
+
+export interface ProviderSettingsFailure {
+  operation: SettingsOperation
+  message: string
+  retryable: boolean
+  /** A failed save forgot the key it carried: say so, rather than a blank field. */
+  keyMustBeRetyped: boolean
+}
+
+export const FAILURE_TITLES: Record<SettingsOperation, string> = {
+  "save-provider": "Provider not saved",
+  "save-agent": "Agent not saved",
+  "declare-preset": "Agent not declared",
+  "remove-provider": "Provider not removed",
+  "remove-agent": "Agent not removed",
+}
+
+/** Whether the failure belongs to the form, where it is shown next to its fields. */
+export function isFormFailure(failure: ProviderSettingsFailure | null) {
+  return (
+    failure?.operation === "save-provider" ||
+    failure?.operation === "save-agent"
+  )
+}
+
+/** « 1 argument », « 3 arguments »: English plurals of this screen only. */
+export function counted(count: number, singular: string, plural: string) {
+  return `${count} ${count === 1 ? singular : plural}`
+}
 
 /** The domain's words, so the screen and the backend refusal read the same. */
 export const CREDENTIALS_IN_ENDPOINT =
@@ -67,38 +109,46 @@ export function reachSummary(reach: ProviderReach, measuredAtMs: number) {
 }
 
 /**
- * Splits a command line typed by the user into arguments.
+ * The arguments typed in the form, **one per line**, exactly as typed.
  *
- * Whitespace separates; single or double quotes group. No expansion of any
- * kind: the backend runs the program without a shell.
+ * No grammar at all — no quotes, no splitting on spaces (ADR-0026): a grammar
+ * of the command line is a surface, and one line per argument has no
+ * ambiguous case. Only a trailing carriage return is dropped, and blank lines
+ * are skipped.
  */
-export function parseArguments(line: string): Array<string> {
-  const args: Array<string> = []
-  let current = ""
-  let quote: string | null = null
-  let started = false
-  for (const char of line) {
-    if (quote) {
-      if (char === quote) quote = null
-      else current += char
-      continue
-    }
-    if (char === '"' || char === "'") {
-      quote = char
-      started = true
-      continue
-    }
-    if (/\s/.test(char)) {
-      if (started) args.push(current)
-      current = ""
-      started = false
-      continue
-    }
-    current += char
-    started = true
+export function parseArguments(text: string): Array<string> {
+  return text
+    .split("\n")
+    .map((line) => line.replace(/\r$/, ""))
+    .filter((line) => line.trim() !== "")
+}
+
+/** A variable name a process environment accepts everywhere. */
+const ENV_NAME = /^[A-Za-z_][A-Za-z0-9_]*$/
+
+/**
+ * The environment typed in the form, one `NAME=value` per line.
+ *
+ * The value is everything after the first `=`, as typed. A line without a
+ * valid name is an error rather than skipped: a variable the user believes set
+ * and that is not is exactly the failure nobody sees.
+ */
+export function parseEnvironment(
+  text: string
+):
+  | { ok: true; env: Array<{ name: string; value: string }> }
+  | { ok: false; line: number } {
+  const env: Array<{ name: string; value: string }> = []
+  const lines = text.split("\n")
+  for (const [index, raw] of lines.entries()) {
+    const line = raw.replace(/\r$/, "")
+    if (line.trim() === "") continue
+    const equals = line.indexOf("=")
+    const name = equals < 0 ? "" : line.slice(0, equals)
+    if (!ENV_NAME.test(name)) return { ok: false, line: index + 1 }
+    env.push({ name, value: line.slice(equals + 1) })
   }
-  if (started) args.push(current)
-  return args
+  return { ok: true, env }
 }
 
 export function removalQuestion(label: string) {

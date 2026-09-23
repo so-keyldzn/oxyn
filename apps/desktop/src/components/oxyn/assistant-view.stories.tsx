@@ -1,6 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/react-vite"
 import { expect, fn, userEvent, waitFor, within } from "storybook/test"
 
+import { visibleAssistantField } from "./assistant-composer"
 import { AssistantView } from "./assistant-view"
 import type { PlanEntry } from "./assistant-plan"
 import type { AssistantSource } from "./assistant-sources"
@@ -147,7 +148,61 @@ const meta = {
 export default meta
 type Story = StoryObj<typeof meta>
 
-export const Initial: Story = {}
+export const Initial: Story = {
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement)
+    // A provider reads the catalog under the tier: said as such.
+    await expect(
+      canvas.getByText(/reads this connection's catalog under its privacy tier/)
+    ).toBeVisible()
+    // An example fills the field and sends nothing.
+    await userEvent.click(
+      canvas.getByRole("button", {
+        name: "What are the main tables here, and how are they related?",
+      })
+    )
+    const field = canvas.getByRole("textbox", {
+      name: "Question for the assistant",
+    })
+    await expect(field).toHaveValue(
+      "What are the main tables here, and how are they related?"
+    )
+    await expect(field).toHaveFocus()
+    // What `Ask AI` focuses once the column is drawn.
+    await expect(visibleAssistantField(canvasElement)).toBe(field)
+    await expect(args.onAsk).not.toHaveBeenCalled()
+  },
+}
+
+export const InitialWithAnAgent: Story = {
+  args: { selected: destinations[1] ?? null },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    // An agent assembles its own prompt: the provider's sentence would lie.
+    await expect(
+      canvas.queryByText(/reads this connection's catalog/)
+    ).toBeNull()
+    await expect(
+      canvas.getByText(/receives your question as you type it/)
+    ).toBeVisible()
+  },
+}
+
+export const SendButtonLooksInactiveWhenEmpty: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    const send = canvas.getByRole("button", { name: "Send question" })
+    await expect(send).toHaveAttribute("aria-disabled", "true")
+    // Not the primary colour of a button that sends.
+    await expect(send.className).not.toMatch(/\bbg-primary\b/)
+    await userEvent.type(
+      canvas.getByRole("textbox", { name: "Question for the assistant" }),
+      "How many?"
+    )
+    await expect(send).not.toHaveAttribute("aria-disabled")
+    await expect(send.className).toMatch(/\bbg-primary\b/)
+  },
+}
 
 export const Running: Story = {
   args: {
@@ -170,6 +225,13 @@ export const Running: Story = {
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement)
     await expect(canvas.getByText("Waiting for the model…")).toBeVisible()
+    // The panel says it once; the waiting marker is not a second region.
+    await expect(
+      canvas.getByText("Waiting for the model…").closest("[role=status]")
+    ).toBeNull()
+    await expect(
+      canvasElement.querySelector("[data-slot=assistant-status]")
+    ).toHaveTextContent("Answering…")
     // Stopping is offered the whole time, not between two turns.
     await expect(
       canvas.getByRole("button", { name: "Stop the assistant" })
@@ -197,6 +259,23 @@ export const Answered: Story = {
       canvas.getByRole("button", { name: "Regenerate answer" })
     )
     await expect(args.onRegenerate).toHaveBeenCalledOnce()
+    await expect(canvas.getByText(/^≈ /)).toBeVisible()
+    await expect(canvas.getByRole("status")).toHaveTextContent("Answer ready")
+  },
+}
+
+export const ThePriceOfAnotherModelIsNotShown: Story = {
+  args: {
+    state: assistantState(answeredThread),
+    // The model selected now is not the one that answered.
+    model: "claude-haiku-5",
+    modelCost: { inputPerMillion: 1, outputPerMillion: 5, currency: "USD" },
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    await expect(canvas.getByText("8.2K in")).toBeVisible()
+    // Today's price for another model would be a wrong figure, not a guess.
+    await expect(canvas.queryByText(/^≈ /)).toBeNull()
   },
 }
 
@@ -314,6 +393,7 @@ export const ProviderFailed: Story = {
               retryable: true,
               signIn: null,
               foundElsewhere: null,
+              exit: null,
             },
           ],
         },
@@ -346,6 +426,7 @@ export const FailedAfterAWrite: Story = {
               retryable: false,
               signIn: null,
               foundElsewhere: null,
+              exit: null,
             },
           ],
         },
@@ -378,6 +459,7 @@ export const RefusedByTier: Story = {
               retryable: false,
               signIn: null,
               foundElsewhere: null,
+              exit: null,
             },
           ],
         },
@@ -412,6 +494,7 @@ export const AgentNeedsSignIn: Story = {
                 terminalCommand: "claude auth login",
               },
               foundElsewhere: null,
+              exit: null,
             },
           ],
         },
@@ -509,6 +592,32 @@ export const Unavailable: Story = {
     },
     selected: null,
   },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement)
+    await expect(
+      canvas.getByText("Not available on this connection")
+    ).toBeVisible()
+    await expect(canvas.queryByText(/^Ask about/)).toBeNull()
+    // The full reason once, a short one under the field, and what to do.
+    await expect(canvas.getAllByText(NO_USABLE_DESTINATION)).toHaveLength(1)
+    await expect(
+      canvas.getByText("Not available on this connection.")
+    ).toBeVisible()
+    await expect(
+      canvas.getByText(
+        "Declare a local provider in Settings, or change this connection's privacy tier."
+      )
+    ).toBeVisible()
+    // No example to fill a field that cannot send.
+    await expect(
+      canvas.queryByRole("list", { name: "Example questions" })
+    ).toBeNull()
+    const field = canvas.getByRole("textbox", {
+      name: "Question for the assistant",
+    })
+    await userEvent.type(field, "anything{Enter}")
+    await expect(args.onAsk).not.toHaveBeenCalled()
+  },
 }
 
 export const Absent: Story = {
@@ -569,6 +678,14 @@ export const PendingApproval: Story = {
   play: async ({ canvasElement, args }) => {
     const canvas = within(canvasElement)
     await expect(canvasElement.textContent).not.toContain(APPROVAL_ID)
+
+    // Not « Answered » while a command waits: the work is not done.
+    await expect(canvas.queryByText(/^Answered in/)).toBeNull()
+    await expect(canvas.getByText(/^Waiting for your review/)).toBeVisible()
+    // One live region for the panel, saying what the user must do.
+    const regions = canvas.getAllByRole("status")
+    await expect(regions).toHaveLength(1)
+    await expect(regions[0]).toHaveTextContent("Needs your review")
 
     // A message sent meanwhile approves nothing.
     const field = canvas.getByRole("textbox", {
@@ -648,6 +765,29 @@ export const TheHistoryOpens: Story = {
       canvas.getByRole("button", { name: "Start a new conversation" })
     )
     await expect(args.onNewConversation).toHaveBeenCalled()
+  },
+}
+
+export const SendingClosesTheHistory: Story = {
+  args: TheHistoryOpens.args,
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement)
+    await userEvent.click(canvas.getByRole("button", { name: "Conversations" }))
+    await expect(
+      canvas.getByRole("heading", { name: "Conversations" })
+    ).toBeVisible()
+    await userEvent.type(
+      canvas.getByRole("textbox", { name: "Question for the assistant" }),
+      "And by region?{Enter}"
+    )
+    await expect(args.onAsk).toHaveBeenCalledWith("And by region?")
+    // The question lands in a conversation the user can see.
+    await expect(
+      canvas.queryByRole("heading", { name: "Conversations" })
+    ).toBeNull()
+    await expect(
+      canvasElement.querySelector('[aria-label="Conversation"]')
+    ).toBeVisible()
   },
 }
 
@@ -817,6 +957,107 @@ export const AgentSettingsAboveTheField: Story = {
       field.closest('[data-slot="input-group"]')?.contains(model)
     ).toBe(false)
     await expect(canvasElement.innerText).not.toContain("opt-model-9c1e")
+  },
+}
+
+/**
+ * Started when the panel opened: the model, the effort and the rest of what
+ * Claude Agent 0.78.0 declares are offered before the first question
+ * (measured 2026-09-23, RESEARCH-NOTES).
+ */
+export const AgentSettingsBeforeTheFirstQuestion: Story = {
+  args: {
+    selected: destinations[1] ?? null,
+    model: null,
+    onChangeAgentSetting: fn(async () => {}),
+    agentStartup: {
+      startup: {
+        status: "ready",
+        key: "agent:claude",
+        label: "Claude Code",
+        version: "Claude Agent 0.78.0",
+        settings: {
+          modes: [],
+          currentMode: null,
+          options: [
+            {
+              id: "model",
+              name: "Model",
+              description: null,
+              category: "model",
+              value: {
+                type: "select",
+                current: "default",
+                choices: [
+                  {
+                    id: "default",
+                    name: "Default (recommended)",
+                    description: null,
+                  },
+                  { id: "sonnet", name: "Sonnet 5", description: null },
+                  { id: "haiku", name: "Haiku 4.5", description: null },
+                ],
+              },
+            },
+            {
+              id: "effort",
+              name: "Effort",
+              description: null,
+              category: "thoughtLevel",
+              value: {
+                type: "select",
+                current: "default",
+                choices: [
+                  { id: "default", name: "Default", description: null },
+                  { id: "high", name: "High", description: null },
+                ],
+              },
+            },
+            {
+              id: "fast",
+              name: "Fast mode",
+              description: null,
+              category: "modelConfig",
+              value: {
+                type: "select",
+                current: "off",
+                choices: [
+                  { id: "on", name: "On", description: null },
+                  { id: "off", name: "Off", description: null },
+                ],
+              },
+            },
+          ],
+        },
+      },
+      signInStates: {},
+      onCancel: fn(),
+      onStart: fn(),
+      onSignIn: fn(),
+      onCopy: fn(() => true),
+    },
+  },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement)
+    // Nothing asked yet, and the model is already there to choose.
+    const model = canvas.getByRole("combobox", {
+      name: "Model: Default (recommended)",
+    })
+    await expect(model).toBeEnabled()
+    await userEvent.click(model)
+    await userEvent.click(
+      await within(document.body).findByRole("option", { name: /Sonnet 5/ })
+    )
+    await waitFor(() =>
+      expect(args.onChangeAgentSetting).toHaveBeenCalledWith({
+        kind: "select",
+        option: "model",
+        choice: "sonnet",
+      })
+    )
+    await waitFor(() =>
+      expect(document.querySelector("[data-base-ui-focus-guard]")).toBeNull()
+    )
   },
 }
 
