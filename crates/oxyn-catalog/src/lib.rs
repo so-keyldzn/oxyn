@@ -68,11 +68,12 @@
 pub mod cache;
 pub mod definition;
 pub mod model;
+pub mod nesting;
 pub mod path;
 pub mod provider;
 pub mod search;
 
-pub use cache::{CacheError, CatalogCache, CatalogScope, Freshness, SharedCatalog};
+pub use cache::{CacheError, CatalogCache, CatalogHandle, CatalogScope, Freshness, SharedCatalog};
 pub use definition::{DefinitionSource, RelationDefinition};
 pub use model::{
     CatalogRef, Constraint, ConstraintKind, Field, ForeignKey, ForeignKeyTarget,

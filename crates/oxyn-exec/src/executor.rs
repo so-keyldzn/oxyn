@@ -117,6 +117,17 @@ pub enum Outcome {
         scope: CatalogRefreshScope,
     },
 
+    /// The local catalog cache, handed to whoever was allowed to read it.
+    ///
+    /// The cache itself, not a rendering: rendering is `oxyn-ai`'s, under the
+    /// connection's privacy tier.
+    CatalogDescribed {
+        /// Connection owning the cache.
+        connection: ConnectionId,
+        /// The cache, shared rather than copied.
+        catalog: oxyn_catalog::CatalogHandle,
+    },
+
     /// Une instruction a été exécutée et son résultat est disponible.
     Executed {
         /// Le résultat, tel que l'interface le désignera ensuite.
@@ -708,6 +719,31 @@ impl Executor {
             }
             Command::RefreshCatalogScope { connection, scope } => {
                 self.refresh_catalog(id, *connection, scope, cancel).await
+            }
+            Command::DescribeCatalog { connection, focus } => {
+                if focus
+                    .as_deref()
+                    .is_some_and(|focus| focus.len() > oxyn_core::MAX_CATALOG_FOCUS_BYTES)
+                {
+                    return Err(OxynError::Config(format!(
+                        "a catalog focus is limited to {} bytes",
+                        oxyn_core::MAX_CATALOG_FOCUS_BYTES
+                    )));
+                }
+                // The cache as it stands: no server is contacted, and no
+                // rendering is done here — what of it reaches a prompt is
+                // decided under the connection's tier, in `oxyn-ai`.
+                let catalog = self.catalog(*connection).ok_or_else(|| {
+                    OxynError::Config(
+                        "this connection has no catalog loaded yet: the user must open it in \
+                         the explorer first"
+                            .into(),
+                    )
+                })?;
+                Ok(Outcome::CatalogDescribed {
+                    connection: *connection,
+                    catalog: oxyn_catalog::CatalogHandle::new(catalog),
+                })
             }
 
             Command::InspectResultValue {

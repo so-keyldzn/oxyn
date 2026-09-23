@@ -84,6 +84,44 @@ fn depuis_cle(valeur: &str) -> Option<String> {
 /// tâche de rafraîchissement.
 pub type SharedCatalog = Arc<RwLock<CatalogCache>>;
 
+/// Le cache d'une connexion, remis à qui a obtenu le droit de le lire.
+///
+/// Existe pour traverser les rapports d'exécution — qui se comparent et se
+/// journalisent — sans copier le cache : deux poignées sont égales quand elles
+/// désignent **le même** cache, et le `Debug` ne dit rien de son contenu, qui
+/// porte les noms d'objets de la base de l'utilisateur.
+#[derive(Clone)]
+pub struct CatalogHandle(SharedCatalog);
+
+impl CatalogHandle {
+    /// Enveloppe un cache partagé.
+    #[must_use]
+    pub const fn new(catalog: SharedCatalog) -> Self {
+        Self(catalog)
+    }
+
+    /// Le cache désigné. La lecture prend le verrou du cache : ne pas la
+    /// garder au-delà d'un rendu.
+    #[must_use]
+    pub const fn catalog(&self) -> &SharedCatalog {
+        &self.0
+    }
+}
+
+impl PartialEq for CatalogHandle {
+    fn eq(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+}
+
+impl Eq for CatalogHandle {}
+
+impl std::fmt::Debug for CatalogHandle {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CatalogHandle").finish_non_exhaustive()
+    }
+}
+
 /// Ce qu'une opération sur le cache peut refuser.
 ///
 /// Ces refus dénoncent un **bug d'appel**, pas une panne : passer un chemin
@@ -498,13 +536,18 @@ impl CatalogCache {
     /// doit pas exiger d'avoir d'abord listé son schéma. La nature du nœud créé
     /// vient de [`Relation::kind`], jamais d'une valeur par défaut.
     ///
+    /// Les types imbriqués au-delà de
+    /// [`MAX_TYPE_DEPTH`](crate::nesting::MAX_TYPE_DEPTH) sont coupés : un
+    /// document inféré sans fin ferait déborder la pile au premier `Drop`.
+    ///
     /// # Erreurs
     /// [`CacheError::NotARelation`] si `path` ne nomme pas de relation.
     pub fn set_relation(
         &mut self,
         path: &CatalogPath,
-        relation: Relation,
+        mut relation: Relation,
     ) -> Result<(), CacheError> {
+        crate::nesting::bound(&mut relation.fields);
         let kind = relation.kind;
         let noeud = self.relation_node_or_create(path, kind)?;
         noeud.detail.set(Some(relation));

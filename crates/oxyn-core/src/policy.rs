@@ -799,6 +799,31 @@ mod tests {
     }
 
     #[test]
+    fn lire_le_catalogue_local_est_permis_partout_sans_approbation() {
+        // Une lecture du cache local : aucun serveur contacté, aucune valeur de
+        // ligne. La refuser en production laisserait l'agent deviner des noms ;
+        // la soumettre à approbation apprendrait à cliquer. Ce qui en sort est
+        // gouverné par le niveau de confidentialité, dans `oxyn-ai`.
+        let banc = Banc::new();
+        for read_only in [false, true] {
+            for env in ENVS {
+                for acteur in [humain(), agent()] {
+                    let cmd = Command::DescribeCatalog {
+                        connection: banc.connexion(read_only),
+                        focus: Some("clients".to_owned()),
+                    };
+                    assert!(!cmd.is_mutating());
+                    assert!(!cmd.touches_database());
+                    assert!(
+                        banc.politique.authorize(&acteur, &cmd, env).is_allowed(),
+                        "lecture du catalogue refusée : acteur={acteur} env={env} ro={read_only}"
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
     fn un_agent_ne_peut_pas_creer_de_connexion_sans_approbation() {
         // Le canal d'exfiltration : un agent qui déclarerait une connexion vers
         // l'hôte de son choix.

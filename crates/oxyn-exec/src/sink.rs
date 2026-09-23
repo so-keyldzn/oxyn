@@ -98,6 +98,18 @@ pub enum DispatchReport {
         stats: Option<ExecStats>,
     },
 
+    /// Le catalogue local a été lu : la poignée du cache, pas un rendu.
+    ///
+    /// Ce que le modèle en apprend est décidé par `oxyn-ai`, sous le niveau
+    /// de la connexion ([I-04](../../../CLAUDE.md#i-04)) : ce rapport porte
+    /// les faits, il ne rend rien.
+    CatalogRead {
+        /// La commande.
+        command: CommandId,
+        /// Le cache de la connexion.
+        catalog: oxyn_catalog::CatalogHandle,
+    },
+
     /// **Rien ne s'est exécuté.** L'utilisateur a été sollicité et n'a pas
     /// encore répondu.
     AwaitingApproval {
@@ -147,7 +159,7 @@ impl DispatchReport {
     /// hypothèse.
     #[must_use]
     pub const fn took_effect(&self) -> bool {
-        matches!(self, Self::Completed { .. })
+        matches!(self, Self::Completed { .. } | Self::CatalogRead { .. })
     }
 
     /// La commande qui a produit ce rapport.
@@ -155,6 +167,7 @@ impl DispatchReport {
     pub const fn command(&self) -> CommandId {
         match self {
             Self::Completed { command, .. }
+            | Self::CatalogRead { command, .. }
             | Self::AwaitingApproval { command, .. }
             | Self::Denied { command, .. }
             | Self::Failed { command, .. } => *command,
@@ -179,6 +192,8 @@ impl DispatchReport {
                     stats: Some(stats),
                 }
             }
+
+            Outcome::CatalogDescribed { catalog, .. } => Self::CatalogRead { command, catalog },
 
             Outcome::NeedsApproval {
                 command, reason, ..

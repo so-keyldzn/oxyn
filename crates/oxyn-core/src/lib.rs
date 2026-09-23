@@ -99,7 +99,7 @@ pub use ai::{
 };
 pub use cancel::CancelToken;
 pub use capabilities::Capabilities;
-pub use command::{Actor, CatalogRefreshScope, Command, ExportFormat};
+pub use command::{Actor, CatalogRefreshScope, Command, ExportFormat, MAX_CATALOG_FOCUS_BYTES};
 pub use connection::{ConnectionConfig, Environment, PrivacyTier};
 pub use error::{ErrorClass, OxynError, Result};
 pub use event::Event;

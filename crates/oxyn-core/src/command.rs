@@ -201,6 +201,12 @@ pub enum CatalogRefreshScope {
     },
 }
 
+/// Longest focus accepted by [`Command::DescribeCatalog`], in bytes.
+///
+/// A focus is a few search words. The bound keeps what an agent writes there
+/// from growing the audit journal or the search without limit.
+pub const MAX_CATALOG_FOCUS_BYTES: usize = 256;
+
 /// Une action soumise au bus.
 ///
 /// Une commande fait **une** chose. Une commande « pratique » qui en emballe
@@ -301,6 +307,23 @@ pub enum Command {
     RefreshCatalog {
         /// La connexion visée.
         connection: ConnectionId,
+    },
+
+    /// Read the connection's **local** catalog cache, without contacting the
+    /// server.
+    ///
+    /// What an agent asks for when it needs the structure of the database. The
+    /// executor hands back the cache itself, never a rendering: what of it
+    /// reaches a prompt is decided in `oxyn-ai`, under the connection's
+    /// privacy tier ([I-04](../../../CLAUDE.md#i-04)). Its outcome carries no
+    /// row value, because the catalog holds none.
+    DescribeCatalog {
+        /// Connection whose cache is read, and whose policy applies.
+        connection: ConnectionId,
+        /// Words to orient the selection of relations — a table name, a
+        /// topic. Search terms, never query text: nothing composes a
+        /// statement from them. Bounded by [`MAX_CATALOG_FOCUS_BYTES`].
+        focus: Option<String>,
     },
 
     /// Refresh one metadata level through an existing session.
@@ -538,6 +561,7 @@ impl Command {
             | Self::SetSessionContext { .. }
             | Self::Cancel { .. }
             | Self::RefreshCatalog { .. }
+            | Self::DescribeCatalog { .. }
             | Self::RefreshCatalogScope { .. }
             | Self::PreviewRelation { .. }
             | Self::ReadResultPage { .. }
@@ -582,6 +606,7 @@ impl Command {
             | Self::Execute { connection, .. }
             | Self::Cancel { connection, .. }
             | Self::RefreshCatalog { connection }
+            | Self::DescribeCatalog { connection, .. }
             | Self::RefreshCatalogScope { connection, .. }
             | Self::PreviewRelation { connection, .. }
             | Self::ReadResultPage { connection, .. }
@@ -669,6 +694,7 @@ impl Command {
             Self::InspectResultValue { .. } => "InspectResultValue",
             Self::Cancel { .. } => "Cancel",
             Self::RefreshCatalog { .. } => "RefreshCatalog",
+            Self::DescribeCatalog { .. } => "DescribeCatalog",
             Self::RefreshCatalogScope { .. } => "RefreshCatalogScope",
             Self::Export { .. } => "Export",
             Self::OpenDocument { .. } => "OpenDocument",

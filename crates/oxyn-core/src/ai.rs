@@ -588,12 +588,21 @@ impl ExternalAgentConfig {
     ///
     /// # Erreurs
     /// [`OxynError::Config`] : nom ou commande vide, caractère de contrôle dans
-    /// la commande ou un argument, listes hors borne, variable d'environnement
-    /// sans nom. Aucun message ne recopie la valeur fautive.
+    /// le nom, la commande, un argument ou une variable d'environnement, listes
+    /// hors borne, variable d'environnement sans nom. Aucun message ne recopie la valeur fautive.
     pub fn validate(&self) -> Result<()> {
         if self.label.trim().is_empty() || self.label.len() > MAX_PROVIDER_LABEL_BYTES {
             return Err(OxynError::Config(
                 "agent label must be nonempty and fit 128 UTF-8 bytes".into(),
+            ));
+        }
+        // The label heads the native confirmation dialog, above the command it
+        // asks the user to read. A newline or two there pushes the real
+        // command out of view — and the declaration can come from any script
+        // running in the webview.
+        if self.label.chars().any(char::is_control) {
+            return Err(OxynError::Config(
+                "agent label must not contain control characters".into(),
             ));
         }
         if self.command.trim().is_empty() {
@@ -621,13 +630,13 @@ impl ExternalAgentConfig {
                 "agent has too many environment variables".into(),
             ));
         }
-        if self
-            .env
-            .iter()
-            .any(|(nom, _)| nom.trim().is_empty() || nom.contains(['=', '\0']))
-        {
+        if self.env.iter().any(|(nom, _)| {
+            nom.trim().is_empty() || nom.contains('=') || nom.chars().any(char::is_control)
+        }) {
             return Err(OxynError::Config(
-                "agent environment variable names must be nonempty and free of '=' and NUL".into(),
+                "agent environment variable names must be nonempty and free of '=' and control \
+                 characters"
+                    .into(),
             ));
         }
         // Les **valeurs** étaient la moitié non vérifiée : bornées par rien, et
@@ -785,6 +794,30 @@ mod tests {
         ] {
             assert!(avec(valeur).validate().is_err(), "{cas} doit être refusé");
         }
+    }
+
+    /// The label and the variable names head the confirmation dialog: a
+    /// newline there pushes the command the user must read out of view.
+    #[test]
+    fn a_control_character_in_the_label_or_a_variable_name_is_refused() {
+        let base = ExternalAgentConfig::new(
+            ProviderId::new("claude-code").expect("valid identifier"),
+            "Claude Code",
+            "npx",
+        );
+        assert!(base.validate().is_ok());
+
+        let mut agent = base.clone();
+        agent.label = format!("Claude Code{}", "\n".repeat(40));
+        assert!(agent.validate().is_err(), "newlines in the label");
+
+        let mut agent = base.clone();
+        agent.label = "Claude\u{1b}[2J".to_owned();
+        assert!(agent.validate().is_err(), "escape in the label");
+
+        let mut agent = base;
+        agent.env = vec![("MODE\n\n\n".to_owned(), "acp".to_owned())];
+        assert!(agent.validate().is_err(), "newlines in a variable name");
     }
 
     #[test]
