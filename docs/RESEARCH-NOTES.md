@@ -157,7 +157,7 @@ Sources vérifiées le **2026-09-07** lors de l'intégration GPUI :
 | Ressource | Source figée | Usage |
 |---|---|---|
 | Hugeicons Stroke Rounded | [Dépôt source](https://github.com/hugeicons/hugeicons-static/tree/f9dbcca8d72cc2777a0ccd873c274d9bf7a153e6), contours exportés du [Figma Oxyn](https://www.figma.com/design/Yviemi4brBczzdRdBp1ONv/Oxyn?node-id=13-291) | Douze SVG de 16 × 16 px, octets exacts embarqués ; notice amont conservée |
-| Marque Oxyn | Même Figma, composant `149:22199`, relu après la mise à jour des couleurs | Deux SVG 32 × 32 px selon le thème, fragment orangé et marges internes conservés |
+| Marque Oxyn | Même Figma, composant `149:22199`, relu après la mise à jour des couleurs | Deux SVG 32 × 32 px selon le thème, marges internes conservées ; fragment orangé à la source, recoloré en vert-de-gris le 2026-09-23, tracés inchangés ([marque](../assets/brand/README.md#couleurs)) |
 | Geist | [vercel/geist-font](https://github.com/vercel/geist-font/tree/10dc7658f13c38a474cde201bb09a4617267545b/fonts/Geist/ttf) | Regular, Medium et SemiBold, TTF embarqués sous SIL OFL |
 
 Nœuds, dimensions et SHA-256 : [icônes](../assets/ui/provenance.json) et
@@ -503,7 +503,8 @@ registre ACP.
   d'agent). `session/new` rend `auth_required` sans compte ; la connexion en
   terminal est `codex login` ([authentification Codex](https://developers.openai.com/codex/auth)).
 
-**Emplacements usuels** cherchés par le bouton « Detect », parce qu'une
+**Emplacements usuels** cherchés à l'ouverture de l'écran des fournisseurs
+(et par « Detect again »), parce qu'une
 application lancée depuis le Finder n'hérite pas du `PATH` du shell :
 `~/.local/bin` (installateurs natifs de Claude Code et de Codex,
 [installation Claude Code](https://code.claude.com/docs/en/setup),

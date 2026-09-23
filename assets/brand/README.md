@@ -45,18 +45,26 @@ demande macOS 26 pour le rendu en couches.
 
 | Jeton | Valeur | Emploi |
 |---|---|---|
-| Graphite | `#262422` → `#1C1B1A` | tuile, mode light |
-| Graphite profond | `#1E1D1C` → `#151413` | tuile, mode dark |
-| Os | `#EEEBEA` | glyphe sur tuile sombre |
-| Oxyde | `#9A3B1E` → `#7F3416` | tuile de la palette D |
-| Oxyde profond | `#7F3416` | glyphe sur tuile claire |
-| **Accent** | **`#BF4C22`** | le fragment, partout |
+| Ardoise | `#172E33` → `#0D2125` | tuile, mode light ; marque sur fond clair |
+| Ardoise profonde | `#102428` → `#061519` | tuile, mode dark |
+| Givre | `#E8F3F2` → `#D6E7E5` | glyphe sur tuile sombre ; tuile B |
+| Patine | `#007467` → `#005B53` | tuile de la palette D |
+| Patine profonde | `#005B53` | glyphe sur tuile claire |
+| **Accent** | **`#1C8D7A`** | le fragment, partout — le vert-de-gris |
 
 Un seul accent pour tout le système. Il tient le rapport de contraste de 3:1
-sur chaque tuile : 3,15 sur le haut du graphite light, 3,50 en bas, 3,42 et
-3,74 en dark, et 4,14 contre l'os, ce qui garde les deux pièces distinctes.
+sur chaque tuile : 3,49 sur le haut de l'ardoise light, 4,07 en bas, 3,96 et
+4,56 en dark, 3,18 sur le bas de la tuile givre, et 3,58 contre le glyphe
+givre, ce qui garde les deux pièces distinctes.
 
-La valeur précédente `#9A3B1E` ne tenait que 2,22:1 sur la tuile light, le mode
+La palette est celle de l'interface (`apps/desktop/src/styles.css`) : l'accent
+est le vert-de-gris des actions — la patine du cuivre —, l'ardoise celle des
+surfaces sombres. Elle remplace
+depuis le 2026-09-23 le graphite, l'os et l'oxyde orangé (`#BF4C22`) de la
+première version ; seules les couleurs ont changé, les tracés sont restés
+identiques à l'octet près.
+
+L'avant-dernier accent `#9A3B1E` ne tenait que 2,22:1 sur la tuile light, le mode
 le plus courant : le binôme ne se lisait pas là où l'icône est le plus vue.
 
 ## Quel fichier employer

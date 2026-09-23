@@ -61,6 +61,14 @@ et `Light 5:2`. La palette précédente zinc est remplacée par graphite/os.
 La date UTC précise, les identifiants de variables et les changements détaillés
 sont conservés dans `palette_refresh` de [provenance.json](provenance.json).
 
+> **Remplacé le 2026-09-23.** Cette table est le relevé daté de la maquette
+> pour l'ancienne interface GPUI ; elle n'est pas corrigée après coup. La
+> palette en vigueur est vert-de-gris sur ardoise, dans
+> `apps/desktop/src/styles.css`, et la marque suit
+> [assets/brand/README.md](../brand/README.md). Les deux logos de ce
+> répertoire ont été recolorés le même jour, tracés inchangés ; leur empreinte
+> est à jour dans `logo_assets` de [provenance.json](provenance.json).
+
 Les anciennes valeurs ci-dessous sont celles du lot GPUI précédent dans ce
 worktree, avant cette actualisation. Les identifiants de source sont ceux du
 fichier Figma indiqué ci-dessus.
