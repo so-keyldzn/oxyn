@@ -1,1 +1,2 @@
+- [make socle ignore les ancres](socle_ne_verifie_pas_les_ancres.md) — une ancre #section morte passe au vert ; la vérifier par script
 - [Vérifier avant de corriger](feedback_verifier_avant_corriger.md) — re-vérifier tout constat dans le code ; signaler sans trancher ce qui oppose deux documents d'autorité

@@ -6,3 +6,4 @@
 - [Piège hook NOM_SECRET](piege_hook_nom_secret_token.md) — `derive(Debug)` refusé sur tout type nommé `…Token…`, `…Dsn…` : renommer plutôt que contourner
 - [Piège PG jetable](piege_pg_jetable_scratchpad.md) — socket Unix trop long dans le scratchpad (TCP seul) ; psql découpe au `;`, écrire un client filaire pour le protocole étendu
 - [Piège crate jetable et réseau](piege_crate_jetable_reseau.md) — mesurer un `size_of` dans un projet Cargo jetable déclenche un accès au registre et l'échec SSL ; le faire dans la crate
+- [Piège rustfmt et commentaire de tableau](piege_rustfmt_commentaire_tableau.md) — un `//` d'une ligne au-dessus d'un élément court est recollé à l'élément précédent : écrire deux lignes

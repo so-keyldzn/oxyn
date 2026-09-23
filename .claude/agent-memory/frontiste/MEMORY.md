@@ -15,3 +15,7 @@
 - [wrap-anywhere dans une grille](wrap-anywhere-dans-une-grille.md) — `break-words` n'abaisse pas la min-content : un long identifiant élargit la page
 - [Couleurs calculées en OKLCH](couleurs-calculees-en-oklch.md) — `getComputedStyle` rend `oklch(...)` : mesurer par canvas, jamais par regex `rgb()` ; vérifier un statut sur sa propre teinte
 - [prettier écrit un octet NUL](prettier-ecrit-un-octet-nul.md) — `"\u0000"` dans une chaîne TS devient un NUL réel dans le source
+- [Spinner et nom du bouton](spinner-change-le-nom-du-bouton.md) — un `Spinner` dans un `Button` ajoute « Loading » au nom : chercher par `/Declare$/`
+- [Spinner porte role="status"](spinner-porte-role-status.md) — chaque spinner visible est une région live : `aria-hidden` à côté d'un libellé
+- [Port Vitest partagé](port-vitest-browser-partage.md) — « Port 63315 already in use » + « no tests » : un autre agent teste, relancer
+- [Requête désactivée = pending](query-desactivee-est-pending.md) — `enabled: false` reste `isPending` : « en cours » = `fetchStatus !== "idle"`
