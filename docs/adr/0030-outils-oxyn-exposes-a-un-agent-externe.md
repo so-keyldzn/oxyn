@@ -50,8 +50,8 @@ forme qu'on lui donne aujourd'hui est celle qu'on gardera.
 ### 1. Le serveur MCP n'expose que le `ToolRegistry`, tel quel
 
 Les outils servis à l'agent externe sont **exactement** ceux que l'assistant
-interne reçoit du `ToolRegistry` d'`oxyn-ai` — aujourd'hui `execute_query` et
-`describe_schema` (§ 4 bis) —
+interne reçoit du `ToolRegistry` d'`oxyn-ai` — aujourd'hui `execute_query`,
+`describe_schema` (§ 4 bis) et `request_sample` (§ 4 ter) —
 avec leurs schémas JSON d'arguments, produits par le même code.
 
 **Aucun outil n'est écrit pour l'agent externe.** Un outil qui n'existerait que
@@ -130,11 +130,15 @@ interne — même résumé, même rapport d'échec expurgé selon le niveau, mê
 encadrement `untrusted`. Il n'y a donc **pas** de règle de niveau propre aux
 agents externes :
 
-| Niveau | Agent externe | `execute_query` | `describe_schema` | `refresh_catalog` |
-|---|---|---|---|---|
-| `Local` | interdit | — | — | — |
-| `Metadata` | permis | permis, rend la forme | permis, rend la structure | permis |
-| `Sampled` | permis | permis, rend la forme | permis, rend la structure, aucune valeur | permis |
+| Niveau | Agent externe | `execute_query` | `describe_schema` | `refresh_catalog` | `request_sample` |
+|---|---|---|---|---|---|
+| `Local` | interdit | — | — | — | — |
+| `Metadata` | permis | permis, rend la forme | permis, rend la structure | permis | refusé avant tout écran |
+| `Sampled` | permis | permis, rend la forme | permis, rend la structure, aucune valeur | permis | les colonnes que l'utilisateur coche, après son accord (§ 4 ter) |
+
+`request_sample` n'est pas une règle de niveau propre aux agents externes : le
+refus hors `Sampled` est `allows_row_values`, appliqué dans le chemin commun des
+deux destinations, et les valeurs ne sortent que par `ContextBuilder::build`.
 
 `Local` interdit l'agent externe **avant le lancement du processus** : c'est
 ADR-0026, inchangé.
@@ -194,8 +198,11 @@ et ajouter une destination ne demande aucun code propre au schéma.
   le justifient : l'échantillon approuvé n'entre que par ce contexte, un petit
   modèle local peine à appeler un outil, et la première réponse n'attend pas un
   aller-retour. L'outil sert à ce que ce contexte a laissé hors budget.
-  L'invite d'un agent externe ne porte jamais d'échantillon : sa session survit à
-  la question, et Oxyn ne peut pas y marquer un échange comme sans mémoire.
+  *Corrigé le 2026-09-24 :* cette version disait que l'invite d'un agent externe
+  ne porte jamais d'échantillon, faute de pouvoir marquer un échange comme sans
+  mémoire. Elle en porte désormais un, épinglé et approuvé, par le même
+  `ContextBuilder` ; la mémoire est tenue en relâchant le processus après
+  l'échange (§ 4 ter).
 * **Ce qui dépend de la destination se dérive, ne se recopie pas.** Le nom du
   serveur MCP est une constante (`mcp::SERVER_NAME`) dont découlent la
   déclaration ACP, la règle de permission de Claude (`mcp__oxyn`, qui couvre
@@ -213,6 +220,29 @@ vingt-quatre relations, environ six mille jetons. L'agent parcourt un grand
 schéma par mots de recherche, pas par pages. Et le catalogue commun ne connaît ni
 les définitions de vues ni les valeurs de champs énumérés : ce qu'il ne sait pas
 reste absent.
+
+### 4 ter. Des valeurs approuvées, pour toute destination
+
+*Ajouté le 2026-09-24.* Sous `Sampled`, un agent — interne ou externe — reçoit
+les valeurs que l'utilisateur approuve colonne par colonne : épinglées avec la
+question, ou demandées par l'outil `request_sample`. La décision, ses bornes et
+ses limites sont dans [ADR-0034](0034-echantillon-pour-toute-destination.md) ;
+ce qui en regarde le pont :
+
+* l'outil vient du registre et passe par `run_tool_call`, comme les autres ;
+  aucune ligne du pont ne lui est propre ;
+* la demande passe la même garde qu'une commande (`WriteGate`) : une à la fois,
+  jamais pendant qu'une approbation de cet agent attend, seulement pour la
+  question ouverte — et une réponse arrivée après la fermeture de la question
+  est jetée ;
+* l'agent ne peut pas s'approuver : la réponse vient de la commande Tauri
+  `ai_answer_sample`, et l'identifiant de la demande ne traverse jamais le pont ;
+* un échange qui a porté des valeurs relâche le processus de l'agent ; la
+  question suivante en lance un autre.
+
+La liste figée par le test du § 1 passe à `execute_query`, `describe_schema` et
+`request_sample`. Ce changement **appelle la relecture de sécurité du pont** que
+le § 1 exige.
 
 ### 5. Le transport est `http` sur la boucle locale, avec un jeton par conversation
 

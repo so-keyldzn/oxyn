@@ -106,7 +106,7 @@ La conséquence tombe sans mécanique nouvelle, parce que le dépôt traite déj
 |---|---|
 | `Local` | **refusé** — la promesse « rien ne sort de la machine » ne peut pas être tenue par un processus dont on ne voit pas la sortie |
 | `Metadata` *(défaut)* | permis — la structure de la base part avec la première question d'une session d'agent, et sur demande par l'outil `describe_schema` ; les deux rendus par `ContextBuilder` |
-| `Sampled` | permis, la structure part comme sous `Metadata`, mais l'échantillon approuvé est **refusé** : la session d'un agent survit à la question, et Oxyn ne peut pas y marquer un échange comme sans mémoire, comme il le fait pour un fournisseur. Ses outils MCP traversent le `PolicyGate`, relisent le niveau à chaque appel, et ne rendent que la forme d'un résultat — jamais ses valeurs |
+| `Sampled` | permis, la structure part comme sous `Metadata`, et l'échantillon **approuvé colonne par colonne** aussi — épinglé par l'utilisateur ou demandé par l'agent avec l'outil `request_sample`. Le processus qui a reçu des valeurs est relâché après l'échange : la question suivante en lance un autre ([ADR-0034](adr/0034-echantillon-pour-toute-destination.md)). Ses outils MCP traversent le `PolicyGate`, relisent le niveau à chaque appel ; `execute_query` ne rend que la forme d'un résultat — jamais ses valeurs |
 
 Le détail de l'échantillon est dans [Échantillon approuvé](#échantillon-approuvé).
 
@@ -122,8 +122,11 @@ démarrer l'agent peut suffire à lui faire contacter son service.
 > même code, le même budget, le même encadré que pour l'assistant interne — et
 > elle ne part qu'à l'ouverture d'une session d'agent : une question qui suit une
 > réponse de la même session porte la question seule, comme une conversation de
-> fournisseur remémorée. `with_schema` ne reçoit aucun échantillon : aucun
-> argument ne le permet.
+> fournisseur remémorée. `with_schema` reçoit aussi l'échantillon approuvé pour
+> **cette** question, qu'il passe à `ContextBuilder::with_samples` : sous tout
+> autre niveau que `Sampled`, il est écarté. `from_user`, qui continue une
+> session, n'en reçoit jamais — une question avec échantillon ouvre toujours une
+> session neuve ([ADR-0034](adr/0034-echantillon-pour-toute-destination.md)).
 >
 > **La structure au-delà de ce contexte** passe par l'outil `describe_schema`,
 > le même pour toute destination — boucle d'outils d'un fournisseur ou pont MCP
@@ -215,24 +218,39 @@ compris quand elles arrivent dans une invite. Voir
 ## Échantillon approuvé
 
 Ce que chaque niveau laisse sortir est tranché par
-[ADR-0006](adr/0006-ai-privacy-tiers.md) ; cette section décrit le seul chemin
-par lequel des **valeurs de ligne** rejoignent une invite, tel qu'il est codé
-dans `oxyn-desktop` (`backend/ai/samples.rs`).
+[ADR-0006](adr/0006-ai-privacy-tiers.md) ; qui peut déclencher un échantillon et
+quelles destinations le reçoivent, par
+[ADR-0034](adr/0034-echantillon-pour-toute-destination.md). Cette section décrit
+le seul chemin par lequel des **valeurs de ligne** rejoignent une invite, tel
+qu'il est codé dans `oxyn-desktop` (`backend/ai/samples.rs`,
+`backend/ai/conversation/sampling.rs`). Il vaut pour un fournisseur intégré
+comme pour un agent externe.
 
-1. **L'utilisateur le déclenche, jamais le modèle.** L'utilisateur épingle un
-   objet depuis le menu du catalogue (« Pin to question »). L'action n'existe que
-   sous `Sampled`, pour un fournisseur intégré et sur un objet qui porte des
-   lignes ; ailleurs elle est absente, pas grisée. Un agent externe garde sa
-   session d'une question à l'autre, et Oxyn ne pourrait pas tenir la suite. Une question porte
-   une seule épingle ; elle tombe dès que la question part, ou dès que le niveau
-   ou le destinataire ne la permettent plus. Aucun outil ne permet au modèle de
-   demander un échantillon. L'offre (`ai_request_sample`) porte le nom de la
-   source, les colonnes du catalogue, la borne de lignes et le destinataire —
-   **aucune valeur**. Dans l'écran d'approbation, rien n'est coché par défaut,
-   rien ne coche tout, et Annuler a le focus. Cette garantie vaut contre le
-   **modèle**, pas contre un script de la webview : un tel script peut demander
-   une offre et la présenter sans montrer l'écran, mais il peut déjà lire des
-   pages de résultat et coller leurs valeurs dans la question.
+1. **L'utilisateur approuve, toujours ; l'agent peut demander, jamais
+   approuver.** Deux façons d'ouvrir le même écran d'approbation :
+   - **l'utilisateur épingle** un objet depuis le menu du catalogue (« Pin to
+     question »). L'action n'existe que sous `Sampled`, quand le panneau a une
+     destination utilisable — fournisseur ou agent externe —, sur un objet qui
+     porte des lignes ; ailleurs elle est absente, pas grisée. Une question porte
+     une seule épingle ; elle tombe dès que la question part, ou dès que le
+     niveau ou le destinataire ne la permettent plus. L'offre
+     (`ai_request_sample`) porte le nom de la source, les colonnes du catalogue,
+     la borne de lignes (5) et le destinataire — **aucune valeur** ;
+   - **l'agent demande**, par l'outil `request_sample { relation, namespace?,
+     columns?, rows? }` — 5 lignes par défaut, **20 au plus**. Hors `Sampled`,
+     l'appel est refusé avant tout écran. Sinon l'écran s'ouvre, nomme l'agent
+     qui demande, n'offre que les colonnes qu'il a nommées (toutes s'il n'en
+     nomme aucune), et l'appel attend la réponse **cinq minutes au plus**.
+     Refus, expiration ou arrêt de la question : l'agent reçoit « the user
+     declined », sans aucune valeur. La seule réponse possible est la commande
+     Tauri `ai_answer_sample` ; l'identifiant de la demande ne part jamais vers
+     le modèle.
+
+   Dans l'écran, rien n'est coché par défaut, rien ne coche tout, et Annuler a
+   le focus. Cette garantie vaut contre le **modèle**, pas contre un script de
+   la webview : un tel script peut demander une offre et la présenter sans
+   montrer l'écran, mais il peut déjà lire des pages de résultat et coller leurs
+   valeurs dans la question.
 2. **Un jeton du backend, à usage unique.** L'offre émet un jeton aléatoire, lié
    à la connexion, à la conversation, à l'échange qu'il suit, à la source, aux
    colonnes proposées et au destinataire que l'écran nomme : fournisseur,
@@ -246,19 +264,36 @@ dans `oxyn-desktop` (`backend/ai/samples.rs`).
    - le niveau, **relu depuis le store** et toujours `Sampled` ;
    - la source identique ;
    - les colonnes cochées incluses dans les colonnes proposées ;
-   - le destinataire, le fournisseur intégré et le modèle approuvés, dont
-     l'adresse est **reclassée** et ne porte pas plus loin qu'à l'offre.
+   - le destinataire que l'écran a nommé : le même fournisseur intégré et le
+     même modèle, dont l'adresse est **reclassée** et ne porte pas plus loin
+     qu'à l'offre — ou le même agent externe, toujours `Unresolved`. Un
+     fournisseur et un agent ne s'échangent jamais un jeton, même sous le même
+     identifiant.
+
+   Une demande d'agent suit le même ordre, sans jeton : niveau relu dans le
+   store, relation et colonnes cherchées dans le catalogue, écran, réponse,
+   niveau relu. Une réponse mal formée — colonne non proposée, aucune colonne —
+   refuse la demande. Une connexion garde au plus quatre demandes en attente.
+   Aucun écran ne s'ouvre pendant qu'une approbation de cet agent attend, et un
+   échange n'en ouvre **qu'un** : après une approbation, un refus ou une
+   expiration, toute nouvelle demande dans la même réponse est refusée sans
+   écran, par un message qui ne dit pas quelle fut la réponse.
 
    Chaque échec est un refus typé, **avant toute lecture**. La lecture passe
-   ensuite par `Command::PreviewRelation` sur le bus, auditée comme une lecture
-   de l'utilisateur, avec la borne de lignes fixée par le backend quoi que le
-   front envoie. Le niveau est **relu après la lecture** : s'il n'est plus
+   ensuite par `Command::PreviewRelation` sur le bus — auditée comme une lecture
+   de l'utilisateur pour une épingle, comme une commande de l'agent
+   (`Actor::Agent`, `PolicyGate`) pour une demande —, avec la borne de lignes
+   fixée par le backend quoi que le front ou l'agent envoie. Le driver compose
+   la lecture et cite la relation ; les colonnes n'entrent dans aucune
+   instruction ([I-10](../CLAUDE.md#i-10)). Le niveau est **relu après la lecture** : s'il n'est plus
    `Sampled`, rien n'est envoyé, et c'est ce niveau relu qui gouverne
    l'invite et le contrôle de l'adresse. Les colonnes non cochées sont
    écartées avant la construction de l'invite, et l'échantillon entre dans le
-   contexte par `ContextBuilder`, comme le reste. Juste avant l'envoi, la
-   sortie est inscrite dans `ai_egress`, reliée à l'aperçu qui a lu les
-   lignes ; si l'inscription échoue, rien ne part
+   contexte par `ContextBuilder`, comme le reste. Juste avant l'envoi, et
+   seulement si ce rendu a gardé l'échantillon, la sortie est inscrite dans
+   `ai_egress`, reliée à l'aperçu qui a lu les lignes ; si l'inscription
+   échoue, rien ne part. Un échantillon écarté pour le budget n'est ni inscrit
+   ni annoncé comme envoyé
    ([SECURITY](SECURITY.md#ce-qui-sort-vers-un-destinataire-ia-laisse-une-trace)).
    Aucune valeur n'apparaît dans une trace ni dans un message
    d'erreur.
@@ -266,7 +301,12 @@ dans `oxyn-desktop` (`backend/ai/samples.rs`).
    pas retenu : il part avec un contexte neuf, et la question suivante émet
    `memoryReset` pour la raison `sampleNotKept`, avec une ligne qui le dit. La
    conversation ne garde que « N lignes et K colonnes ». Régénérer ou modifier
-   la question ne réutilise pas l'approbation : il faut la redonner.
+   la question ne réutilise pas l'approbation : il faut la redonner. Pour un
+   **agent externe**, qui est un processus et se souvient : une question avec
+   échantillon épinglé ouvre une session neuve, et tout échange qui a porté des
+   valeurs **relâche le processus** à sa fin ; la question suivante en lance un
+   autre. Ce que l'agent a pu écrire sur son propre disque échappe à Oxyn
+   ([ADR-0034 § 5](adr/0034-echantillon-pour-toute-destination.md#5-un-échange-qui-a-porté-un-échantillon-ne-laisse-aucune-mémoire-quelle-que-soit-la-destination)).
 4. **Colonnes secrètes : pas encore de filtre.** Aucun driver ne déclare encore
    de classement de colonnes. Plutôt qu'un filtre sur des noms qui ferait croire
    à une protection, l'offre porte un TODO daté, débloqué par ce classement.

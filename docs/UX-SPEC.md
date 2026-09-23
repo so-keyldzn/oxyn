@@ -733,6 +733,42 @@ rouverte depuis le workspace ne montre donc aucune grille : sous un appel qui
 avait renvoyé des lignes, elle dit « Result no longer available: the workspace
 keeps the statement, never its rows ».
 
+### Un échantillon s'approuve colonne par colonne, dans un seul écran
+
+Sous `Sampled`, des valeurs de ligne partent vers un agent — fournisseur ou
+agent externe — seulement après que l'utilisateur a coché, dans l'écran
+d'approbation, les colonnes qui partent. L'écran s'ouvre de deux façons, et
+c'est **le même** ([ADR-0034](adr/0034-echantillon-pour-toute-destination.md),
+[AI-PROVIDERS](AI-PROVIDERS.md#échantillon-approuvé)) :
+
+* **l'utilisateur épingle** un objet (« Pin to question » dans le menu du
+  catalogue), puis envoie sa question : l'écran s'ouvre avant l'envoi ;
+* **l'agent demande** (`request_sample`) pendant qu'il répond : l'écran s'ouvre
+  au-dessus du panneau, et l'appel attend. Titre « An agent asks for a row
+  sample », puis, avant toute autre ligne, **qui** demande : « Claude Code
+  asked for it, not you, and waits for your answer. Cancel declines. » Seules
+  les colonnes que l'agent a nommées sont offertes — toutes s'il n'en nomme
+  aucune.
+
+Ce qui ne change pas selon le déclencheur, et que les stories tiennent :
+
+* **rien n'est coché** à l'ouverture, **rien ne coche tout**, rien ne se
+  retient pour la fois suivante ;
+* **Annuler a le focus**, vient en premier à toute largeur, et **Entrée
+  n'envoie rien** ;
+* le bouton dit ce qui part et où : « Send 2 of 4 columns to Claude Code · to an
+  unresolved address » ;
+* **aucune valeur** n'apparaît dans l'écran : il approuve des colonnes, pas un
+  aperçu ;
+* hors `Sampled`, l'écran ne montre que le refus, sans case ni bouton d'envoi.
+
+**Une demande d'agent se ferme d'elle-même** quand elle est tranchée, expire
+(cinq minutes) ou que la question s'arrête : l'agent reçoit alors « the user
+declined ». Une épingle de l'utilisateur passe devant : la demande de l'agent
+attend derrière elle. L'appel d'outil se lit dans le fil comme les autres ; son
+rapport ne dit que des compteurs (« sent 5 rows of 1 column you approved »),
+jamais un nom de colonne ni une valeur.
+
 ### Ce que le panneau montre d'un agent externe
 
 Un agent externe travaille avec ses propres outils, qui ne sont pas des `Command`

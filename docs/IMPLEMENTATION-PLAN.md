@@ -1492,6 +1492,20 @@ passe intégralement sur les trois drivers, annulation côté serveur comprise.
 **Porte de sortie** : Oxyn reste un client complet, sans dégradation, avec zéro
 fournisseur configuré — vérifié par un test, pas par conviction.
 
+**Reste à faire, noté le 2026-09-24 — l'échantillon ne lit pas encore que les
+colonnes cochées.** La lecture d'un échantillon, épinglé ou demandé par un agent
+([ADR-0034](adr/0034-echantillon-pour-toute-destination.md)), est un
+`PreviewRelation` qui rapatrie **toutes** les colonnes de la relation ; seule la
+copie vers l'invite filtre les colonnes cochées. Rien de non coché ne sort de la
+machine, mais les valeurs non approuvées sont lues du serveur et tenues dans le
+`ResultBuffer` le temps de la copie : c'est plus que ce que l'utilisateur a
+approuvé, et le journal des commandes ne le distingue pas.
+**Ce qui le débloque** : une projection dans `PreviewShape` (des noms de
+colonnes, cités par le driver comme la relation, [I-10](../CLAUDE.md#i-10)), ce
+qui touche `oxyn-core`, [DRIVER-CONTRACT](DRIVER-CONTRACT.md) et chaque driver
+qui compose un aperçu — PostgreSQL et SQLite aujourd'hui. **Échéance** : avant
+la porte de sortie de cette phase, et au plus tard le 2026-10-31.
+
 ## Phase 4 — Extension et isolation
 
 **[ADR]** Ce qui a été délibérément reporté ici :
