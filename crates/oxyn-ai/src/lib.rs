@@ -39,11 +39,12 @@
 //!
 //! **La seconde destination a désormais la même garantie.**
 //! [`external::turn::run_turn`] ne prend plus l'invite en `&str` mais un
-//! [`external::prompt::AgentPrompt`], dont le seul constructeur exige le niveau
+//! [`external::prompt::AgentPrompt`], dont les constructeurs exigent le niveau
 //! de la connexion ([ADR-0027](../../../docs/adr/0027-porte-unique-pour-les-deux-destinations.md)).
 //! Le raccourci que `.claude/rules/ia.md` nomme — « juste le schéma, c'est du
-//! `Metadata` de toute façon » — ne s'écrit plus en un `format!` : il faudrait
-//! ajouter un constructeur à ce type, et c'est visible en relecture.
+//! `Metadata` de toute façon » — ne s'écrit plus en un `format!` : le schéma
+//! qu'un agent externe reçoit est rendu par [`ContextBuilder::build`], à travers
+//! `AgentPrompt::with_schema`, et rien d'autre ne sait l'y mettre.
 //!
 //! **`oxyn-ai` ne parle jamais à un driver.** Le contexte se construit à partir
 //! du [`CatalogCache`](oxyn_catalog::CatalogCache) local. Un agent qui irait

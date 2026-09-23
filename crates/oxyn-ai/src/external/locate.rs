@@ -1,25 +1,29 @@
-//! Finding an agent's program on the machine, when the user asks.
+//! Finding an agent's program on the machine.
 //!
-//! # Only on request
+//! # Read, never declared
 //!
-//! Nothing here runs at startup, and nothing here writes a declaration: a
-//! « Detect » button calls it, the user reads what was found, and confirms.
-//! Reading the machine without being asked is how a tool ends up declaring an
-//! agent nobody chose (ADR-0023, IMPLEMENTATION-PLAN).
+//! The AI settings screen asks when it opens. Nothing here runs a program or
+//! writes a declaration: the user reads what was found, and confirms. What
+//! must never happen is an agent declared that nobody chose; reading where it
+//! is installed does not come near that.
 //!
 //! # Why the usual places, and not only `PATH`
 //!
 //! A desktop application started from the Finder or a launcher does not get
 //! the `PATH` of the user's shell: `/usr/bin:/bin` and little more. The
-//! programs of a Claude Code or Codex installation live in documented places
-//! outside it. They are listed in RESEARCH-NOTES with their sources; a place
-//! no official page names is not searched.
+//! programs of a Claude Code or Codex installation, and the Node their
+//! adapters run on, live in documented places outside it. They are listed in
+//! RESEARCH-NOTES with their sources; a place no official page names is not
+//! searched.
 //!
 //! Every function here touches the file system: never on the IPC or UI thread
 //! (I-05).
 
 use std::ffi::OsStr;
 use std::path::{Path, PathBuf};
+
+#[cfg(unix)]
+mod nvm;
 
 /// Where to look for a program, in order.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
@@ -29,17 +33,33 @@ pub struct SearchPath {
 
 impl SearchPath {
     /// The entries of a `PATH` value, then the documented installation places
-    /// under `home`.
+    /// under `home` — among them the Node nvm would start, if its major is at
+    /// least `node_major`, else the most recent installed that is.
     #[must_use]
-    pub fn usual(path_var: Option<&OsStr>, home: Option<&Path>) -> Self {
+    pub fn usual(path_var: Option<&OsStr>, home: Option<&Path>, node_major: u64) -> Self {
+        // A relative entry — `.`, `bin`, the empty one — resolves against the
+        // working directory, which is wherever Oxyn was started from: a
+        // program found there is one nobody installed as an agent.
         let mut dirs: Vec<PathBuf> = path_var
-            .map(|value| std::env::split_paths(value).collect())
+            .map(|value| {
+                std::env::split_paths(value)
+                    .filter(|dir| dir.is_absolute())
+                    .collect()
+            })
             .unwrap_or_default();
         if let Some(home) = home {
             // Claude Code's native installer, and Codex's (RESEARCH-NOTES).
             dirs.push(home.join(".local").join("bin"));
             // Claude Code's former local npm installation.
             dirs.push(home.join(".claude").join("local"));
+            // nvm's and Volta's documented defaults. `NVM_DIR` and
+            // `VOLTA_HOME` are not read: a shell profile sets them, and a
+            // process that ran one already has these directories on `PATH`.
+            #[cfg(unix)]
+            {
+                dirs.extend(nvm::bin_dir(&home.join(".nvm"), node_major));
+                dirs.push(home.join(".volta").join("bin"));
+            }
         }
         #[cfg(unix)]
         {
@@ -157,7 +177,7 @@ mod tests {
         let home = Path::new("/home/someone");
         let path = std::env::join_paths([home.join(".local/bin"), PathBuf::from("/usr/bin")])
             .expect("join");
-        let search = SearchPath::usual(Some(&path), Some(home));
+        let search = SearchPath::usual(Some(&path), Some(home), 22);
         assert_eq!(search.dirs.first(), Some(&home.join(".local/bin")));
         assert_eq!(
             search
@@ -168,5 +188,43 @@ mod tests {
             1
         );
         assert!(search.dirs.contains(&home.join(".claude").join("local")));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_relative_path_entry_is_not_searched() {
+        let path = std::env::join_paths([
+            PathBuf::from("."),
+            PathBuf::from("bin"),
+            PathBuf::from("/usr/bin"),
+        ])
+        .expect("join");
+        let search = SearchPath::usual(Some(&path), None, 22);
+        assert_eq!(search.dirs.first(), Some(&PathBuf::from("/usr/bin")));
+        assert!(
+            search.dirs.iter().all(|dir| dir.is_absolute()),
+            "{:?}",
+            search.dirs
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn node_from_nvm_is_searched_before_the_system_places() {
+        let home = scratch("nvm-home");
+        let bin = home.join(".nvm/versions/node/v22.23.2/bin");
+        std::fs::create_dir_all(&bin).expect("nvm bin");
+        std::fs::create_dir_all(home.join(".nvm/alias")).expect("alias");
+        std::fs::write(home.join(".nvm/alias/default"), "22\n").expect("default");
+        let expected = program(&bin, "npx", 0o755);
+        let search = SearchPath::usual(None, Some(&home), 22);
+        let nvm = search.dirs.iter().position(|dir| *dir == bin);
+        let brew = search
+            .dirs
+            .iter()
+            .position(|dir| *dir == Path::new("/opt/homebrew/bin"));
+        assert!(nvm < brew && nvm.is_some(), "{:?}", search.dirs);
+        assert!(search.dirs.contains(&home.join(".volta/bin")));
+        assert_eq!(SearchPath::of(vec![bin]).find("npx"), Some(expected));
     }
 }

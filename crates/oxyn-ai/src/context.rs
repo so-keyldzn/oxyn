@@ -31,7 +31,8 @@
 //!    pertinence lexicale vis-à-vis de la question posée ; à défaut de question,
 //!    l'ordre des chemins tranche, pour que deux constructions successives
 //!    rendent le même contexte ;
-//! 2. **normalisation** — un DDL reconstruit, sans les variations d'écriture du
+//! 2. **normalisation** — une description reconstruite depuis le modèle commun
+//!    du catalogue, la même pour toute base, sans les variations d'écriture du
 //!    serveur ;
 //! 3. **budget** — un plafond en jetons, dépassé lequel les relations restantes
 //!    sont comptées et annoncées, jamais coupées au milieu.
@@ -54,11 +55,11 @@
 
 use std::fmt;
 
-use oxyn_catalog::model::{Field, Relation, RelationRef};
+use oxyn_catalog::model::{Field, LogicalType, Relation, RelationRef};
 use oxyn_catalog::{
     CatalogCache, CatalogPath, QuoteStyle, SearchOptions, quote_identifier, search,
 };
-use oxyn_core::{ScalarValue, SqlDialect};
+use oxyn_core::{QueryLanguage, ScalarValue};
 use serde::{Deserialize, Serialize};
 
 use crate::privacy::PrivacyTier;
@@ -78,6 +79,21 @@ const MAX_COMMENT_CHARS: usize = 200;
 
 /// Longueur maximale d'une valeur d'échantillon.
 const MAX_SAMPLE_VALUE_CHARS: usize = 64;
+
+/// Longueur maximale d'un nom de type ou de méthode d'index.
+///
+/// Un type vient du serveur, et une source sans schéma peut en inventer de
+/// très longs : c'est une entrée hostile comme une autre.
+const MAX_TYPE_CHARS: usize = 64;
+
+/// Profondeur maximale des champs rendus, champs de premier niveau compris.
+///
+/// Un document peut imbriquer sans fin ; au-delà, les sous-champs sont comptés
+/// et annoncés comme omis. Le comptage lui-même s'arrête à la même profondeur
+/// sous le point où il commence : une imbrication construite pour faire
+/// déborder la pile ne le fait pas davantage en étant comptée qu'en étant
+/// rendue (I-09).
+const MAX_FIELD_DEPTH: usize = 4;
 
 /// Estime le coût en jetons d'un texte.
 ///
@@ -258,12 +274,27 @@ impl fmt::Debug for AgentContext {
 /// Le niveau de confidentialité est un **argument du constructeur** et non une
 /// option : il n'existe pas de `ContextBuilder` sans niveau, donc pas de chemin
 /// qui oublie de l'appliquer.
+///
+/// # Un rendu pour toutes les bases
+///
+/// Le rendu ne connaît que le modèle commun d'`oxyn-catalog` : chemin, sorte
+/// d'objet, champs et types **tels que le driver les nomme**, index, clés
+/// étrangères. Il ne connaît aucun produit. Une collection MongoDB, un motif de
+/// clés Redis, un index Elasticsearch ou un label Neo4j s'y rendent comme une
+/// table, par leur [`RelationKind`](oxyn_catalog::model::RelationKind) ; ce que
+/// le catalogue ne sait pas reste absent. Un driver qui remplit le catalogue
+/// est couvert sans une ligne de plus ici.
+///
+/// Le langage de requête de la connexion est dit en tête, et décide d'une seule
+/// chose : la façon d'écrire les noms. En SQL, cités comme le dialecte les
+/// cite, pour que le modèle puisse les recopier ; ailleurs, en littéraux JSON,
+/// qui ne laissent aucune ambiguïté sur les bornes d'un nom hostile.
 #[derive(Debug)]
 pub struct ContextBuilder<'a> {
     cache: &'a CatalogCache,
     tier: PrivacyTier,
     policy: ContextPolicy,
-    dialect: SqlDialect,
+    language: QueryLanguage,
     focus: String,
     samples: Vec<RowSample>,
 }
@@ -279,7 +310,7 @@ impl<'a> ContextBuilder<'a> {
             cache,
             tier,
             policy: ContextPolicy::default(),
-            dialect: SqlDialect::Ansi,
+            language: QueryLanguage::SQL,
             focus: String::new(),
             samples: Vec::new(),
         }
@@ -292,18 +323,18 @@ impl<'a> ContextBuilder<'a> {
         self
     }
 
-    /// Fixe le dialecte, qui détermine la citation des identifiants dans le DDL
-    /// rendu.
+    /// Fixe le langage de requête de la connexion : il est dit au modèle, et
+    /// il décide de la citation des noms.
     #[must_use]
-    pub fn with_dialect(mut self, dialect: SqlDialect) -> Self {
-        self.dialect = dialect;
+    pub const fn with_language(mut self, language: QueryLanguage) -> Self {
+        self.language = language;
         self
     }
 
     /// Oriente la sélection des relations vers une question.
     ///
-    /// C'est le texte de l'utilisateur, pas celui du modèle : il sert à classer
-    /// des noms, jamais à composer une invite.
+    /// C'est le texte de l'utilisateur, ou les mots de recherche d'un agent :
+    /// il sert à classer des noms, jamais à composer une invite ni une requête.
     #[must_use]
     pub fn focused_on(mut self, question: impl Into<String>) -> Self {
         self.focus = question.into();
@@ -324,21 +355,28 @@ impl<'a> ContextBuilder<'a> {
     /// Assemble le contexte. **Le point de passage unique d'I-04.**
     #[must_use]
     pub fn build(self) -> AgentContext {
-        let quote = QuoteStyle::for_dialect(self.dialect);
+        let naming = Naming::for_language(self.language);
         let known = self.cache.relation_count();
 
         let mut body = String::new();
-        if self.policy.include_server_info {
-            self.render_server(&mut body);
-        }
+        self.render_header(&mut body);
 
-        let mut used = estimate_tokens(&body);
+        let header_cost = estimate_tokens(&body);
+        let mut used = header_cost;
         let mut kept: Vec<CatalogPath> = Vec::new();
         let mut omitted = 0usize;
 
         for path in self.select_relations() {
-            let chunk = self.render_relation(&path, quote);
-            let cost = estimate_tokens(&chunk);
+            let mut chunk = self.render_relation(&path, naming);
+            let mut cost = estimate_tokens(&chunk);
+            if header_cost + cost > self.policy.max_context_tokens {
+                // Seul, l'objet dépasse déjà le budget : le compter parmi
+                // « ce qui n'a pas tenu » ferait resserrer la recherche à
+                // l'agent, qui le retrouverait premier et relancerait sans fin.
+                // Il est donc nommé, et déclaré trop grand.
+                chunk = self.render_oversized(&path, naming);
+                cost = estimate_tokens(&chunk);
+            }
             if used + cost > self.policy.max_context_tokens {
                 // On continue plutôt que d'arrêter : une relation plus petite,
                 // classée juste après, peut encore tenir. L'ordre de pertinence
@@ -356,7 +394,7 @@ impl<'a> ContextBuilder<'a> {
         let mut dropped_samples = 0usize;
         if self.tier.allows_row_values() {
             for sample in &self.samples {
-                let chunk = self.render_sample(sample, quote);
+                let chunk = self.render_sample(sample, naming);
                 let cost = estimate_tokens(&chunk);
                 if used + cost > self.policy.max_context_tokens {
                     dropped_samples += 1;
@@ -382,7 +420,7 @@ impl<'a> ContextBuilder<'a> {
         if omitted > 0 {
             block.push_str(&format!(
                 " ({omitted} more matched but did not fit the context budget; \
-                 ask the user to narrow the question rather than guessing)"
+                 narrow the search rather than guessing)"
             ));
         }
         block.push_str(".\n");
@@ -435,24 +473,57 @@ impl<'a> ContextBuilder<'a> {
             .collect()
     }
 
-    /// Décrit le serveur : produit, version, capacités déclarées.
+    /// Décrit le serveur et le langage dans lequel écrire.
     ///
     /// Les capacités comptent pour le modèle : proposer un index à un système
     /// qui n'en a pas, ou un `EXPLAIN` à un système qui ne sait pas l'exécuter,
-    /// fait perdre un tour à chaque fois (ARCHITECTURE §4.2).
-    fn render_server(&self, out: &mut String) {
-        let Some(info) = self.cache.server_info() else {
-            return;
-        };
-        out.push_str(&format!(
-            "-- server: {} {}\n-- capabilities: {}\n\n",
-            info.product, info.version, info.capabilities
-        ));
+    /// fait perdre un tour à chaque fois (ARCHITECTURE §4.2). Le langage compte
+    /// davantage : sans lui, un modèle écrit du SQL à une base documentaire.
+    ///
+    /// Le produit et la version viennent du serveur : bornés et ramenés sur une
+    /// ligne comme toute entrée hostile, d'autant que l'en-tête est toujours
+    /// inclus, hors budget.
+    fn render_header(&self, out: &mut String) {
+        if self.policy.include_server_info
+            && let Some(info) = self.cache.server_info()
+        {
+            out.push_str(&format!(
+                "server: {} {}\ncapabilities: {}\n",
+                untrusted::sanitize_inline(&info.product, MAX_TYPE_CHARS),
+                untrusted::sanitize_inline(&info.version, MAX_TYPE_CHARS),
+                info.capabilities
+            ));
+        }
+        match self.language {
+            QueryLanguage::Sql(dialect) => out.push_str(&format!(
+                "query language: sql (dialect: {})\n",
+                dialect.as_str()
+            )),
+            other => out.push_str(&format!("query language: {}\n", other.as_str())),
+        }
+        out.push('\n');
     }
 
-    /// Décrit une relation en DDL normalisé.
-    fn render_relation(&self, path: &CatalogPath, quote: QuoteStyle) -> String {
-        let qualified = path.qualify(quote);
+    /// Nomme une relation dont la description seule dépasse le budget.
+    ///
+    /// Le dire explicitement est ce qui arrête l'agent : sans ce message, il ne
+    /// voit qu'un objet manquant et redemande la même description.
+    fn render_oversized(&self, path: &CatalogPath, naming: Naming) -> String {
+        let kind_label = self
+            .cache
+            .relation(path)
+            .map(|relation| relation.kind)
+            .or_else(|| self.cache.relation_summary(path).map(|r| r.kind))
+            .map_or("relation", |k| k.as_str());
+        format!(
+            "{kind_label} {}\n  object too large to describe within the context budget; \
+             its fields are not shown, and searching again will not change that\n\n",
+            naming.path(path)
+        )
+    }
+
+    /// Décrit une relation : ce que le catalogue en sait, et rien d'autre.
+    fn render_relation(&self, path: &CatalogPath, naming: Naming) -> String {
         let summary = self.cache.relation_summary(path);
         let detail = self.cache.relation(path);
 
@@ -461,14 +532,14 @@ impl<'a> ContextBuilder<'a> {
             .or_else(|| summary.map(|reference| reference.kind));
         let kind_label = kind.map_or("relation", |k| k.as_str());
 
-        let mut out = format!("-- {kind_label} {qualified}\n");
+        let mut out = format!("{kind_label} {}\n", naming.path(path));
 
         if let Some(relation) = detail {
             if let Some(rows) = relation.estimated_rows {
-                out.push_str(&format!("-- estimated rows: {rows}\n"));
+                out.push_str(&format!("  estimated rows: {rows}\n"));
             }
             if relation.has_inferred_schema() {
-                out.push_str("-- schema inferred by sampling; the server did not declare it\n");
+                out.push_str("  schema inferred by sampling; the server did not declare it\n");
             }
         }
 
@@ -478,7 +549,7 @@ impl<'a> ContextBuilder<'a> {
                 .or_else(|| summary.and_then(|reference| reference.comment.as_deref()));
             if let Some(text) = comment {
                 out.push_str(&format!(
-                    "-- comment: {}\n",
+                    "  comment: {}\n",
                     untrusted::sanitize_inline(text, MAX_COMMENT_CHARS)
                 ));
             }
@@ -486,30 +557,30 @@ impl<'a> ContextBuilder<'a> {
 
         let Some(relation) = detail else {
             // Le palier existe, sa description n'a pas été demandée. Le dire
-            // vaut mieux que de laisser croire à une table sans colonne — et
+            // vaut mieux que de laisser croire à un objet sans champ — et
             // c'est ce qui doit conduire l'agent à demander un rafraîchissement
             // plutôt qu'à inventer des noms.
-            out.push_str("-- columns not read yet\n\n");
+            out.push_str("  fields not read yet\n\n");
             return out;
         };
 
-        self.render_fields(&mut out, relation, &qualified, quote);
+        self.render_fields(&mut out, relation, naming);
 
         if self.policy.include_indexes
             && let Some(indexes) = self.cache.indexes(path)
         {
             for index in indexes {
-                let fields = join_quoted(&index.fields, quote);
-                let unique = if index.unique { "UNIQUE " } else { "" };
+                let fields = naming.list(&index.fields);
+                let unique = if index.unique { "unique " } else { "" };
                 let method = index
                     .method
                     .as_deref()
-                    .map(|m| format!(" USING {}", untrusted::sanitize(m)))
+                    .map(|m| format!(" using {}", untrusted::sanitize_inline(m, MAX_TYPE_CHARS)))
                     .unwrap_or_default();
                 let predicate = if index.is_partial() { " (partial)" } else { "" };
                 out.push_str(&format!(
-                    "-- index {unique}{}{method} ({fields}){predicate}\n",
-                    quote_identifier(&index.name, quote)
+                    "  {unique}index {}{method} ({fields}){predicate}\n",
+                    naming.name(&index.name)
                 ));
             }
         }
@@ -519,11 +590,11 @@ impl<'a> ContextBuilder<'a> {
         {
             for key in keys {
                 out.push_str(&format!(
-                    "-- foreign key {} ({}) REFERENCES {} ({}) ON DELETE {}\n",
-                    quote_identifier(&key.name, quote),
-                    join_quoted(&key.fields, quote),
-                    key.references.relation.qualify(quote),
-                    join_quoted(&key.references.fields, quote),
+                    "  foreign key {} ({}) references {} ({}) on delete {}\n",
+                    naming.name(&key.name),
+                    naming.list(&key.fields),
+                    naming.path(&key.references.relation),
+                    naming.list(&key.references.fields),
                     key.on_delete.as_str()
                 ));
             }
@@ -533,39 +604,69 @@ impl<'a> ContextBuilder<'a> {
         out
     }
 
-    /// Rend le corps `CREATE TABLE` d'une relation.
-    fn render_fields(
-        &self,
-        out: &mut String,
-        relation: &Relation,
-        qualified: &str,
-        quote: QuoteStyle,
-    ) {
+    /// Rend les champs d'une relation, sous-champs compris, dans la limite de
+    /// la politique : un document à mille clés imbriquées n'en montre que le
+    /// plafond, et le dit.
+    fn render_fields(&self, out: &mut String, relation: &Relation, naming: Naming) {
         if relation.fields.is_empty() {
-            out.push_str("-- no columns known\n");
+            out.push_str("  no fields known\n");
             return;
         }
-
-        out.push_str(&format!("CREATE TABLE {qualified} (\n"));
-        let shown = self
-            .policy
-            .max_fields_per_relation
-            .min(relation.fields.len());
-        for field in relation.fields.iter().take(shown) {
-            out.push_str("  ");
-            out.push_str(&self.render_field(field, quote));
-            out.push('\n');
+        out.push_str("  fields:\n");
+        let mut budget = self.policy.max_fields_per_relation;
+        let hidden = self.render_field_list(out, &relation.fields, naming, 1, &mut budget);
+        if hidden.uncounted {
+            out.push_str("    … more fields omitted (too deeply nested to count)\n");
+        } else if hidden.count > 0 {
+            out.push_str(&format!("    … {} more fields omitted\n", hidden.count));
         }
-        let hidden = relation.fields.len().saturating_sub(shown);
-        if hidden > 0 {
-            out.push_str(&format!("  -- {hidden} more columns omitted\n"));
-        }
-        out.push_str(");\n");
     }
 
-    /// Rend une colonne.
-    fn render_field(&self, field: &Field, quote: QuoteStyle) -> String {
-        let mut line = quote_identifier(&field.name, quote);
+    /// Rend une liste de champs au niveau `level` — 1 pour les champs de la
+    /// relation —, et rend ce qui a été laissé de côté, sous-champs compris.
+    ///
+    /// Le niveau est la profondeur logique ; l'indentation s'en déduit. Les
+    /// confondre coûtait un niveau de [`MAX_FIELD_DEPTH`].
+    fn render_field_list(
+        &self,
+        out: &mut String,
+        fields: &[Field],
+        naming: Naming,
+        level: usize,
+        budget: &mut usize,
+    ) -> OmittedFields {
+        let mut hidden = OmittedFields::default();
+        for field in fields {
+            if *budget == 0 {
+                hidden.count += 1;
+                hidden.absorb(count_nested(&field.logical_type, MAX_FIELD_DEPTH));
+                continue;
+            }
+            *budget -= 1;
+            out.push_str(&"  ".repeat(level + 1));
+            out.push_str(&self.render_field(field, naming));
+            out.push('\n');
+            let nested = nested_fields(&field.logical_type);
+            if nested.is_empty() {
+                continue;
+            }
+            if level >= MAX_FIELD_DEPTH {
+                for sub in nested {
+                    hidden.count += 1;
+                    hidden.absorb(count_nested(&sub.logical_type, MAX_FIELD_DEPTH));
+                }
+            } else {
+                let deeper = self.render_field_list(out, nested, naming, level + 1, budget);
+                hidden.absorb(deeper);
+            }
+        }
+        hidden
+    }
+
+    /// Rend un champ : son nom, son type tel que le serveur le nomme, et ce que
+    /// le catalogue en sait.
+    fn render_field(&self, field: &Field, naming: Naming) -> String {
+        let mut line = naming.name(&field.name);
         line.push(' ');
         let raw = field.raw_type.trim();
         // Le type déclaré par le serveur, pas une traduction : c'est celui que
@@ -573,20 +674,23 @@ impl<'a> ContextBuilder<'a> {
         let rendered = if raw.is_empty() {
             "unknown".to_owned()
         } else {
-            untrusted::sanitize(raw)
+            untrusted::sanitize_inline(raw, MAX_TYPE_CHARS)
         };
         line.push_str(&rendered);
         if !field.nullable {
-            line.push_str(" NOT NULL");
+            line.push_str(" not null");
         }
         if field.is_primary_key {
-            line.push_str(" PRIMARY KEY");
+            line.push_str(" primary key");
+        }
+        if field.inferred {
+            line.push_str(" (inferred)");
         }
         if let Some(default) = &field.default {
-            // Une valeur par défaut est du DDL, donc du `Metadata` : elle ne
-            // décrit aucune ligne existante.
+            // Une valeur par défaut est de la définition, donc du `Metadata` :
+            // elle ne décrit aucune ligne existante.
             line.push_str(&format!(
-                " DEFAULT {}",
+                " default {}",
                 untrusted::sanitize_inline(default, MAX_SAMPLE_VALUE_CHARS)
             ));
         }
@@ -594,7 +698,7 @@ impl<'a> ContextBuilder<'a> {
             && let Some(comment) = &field.comment
         {
             line.push_str(&format!(
-                " -- {}",
+                " — {}",
                 untrusted::sanitize_inline(comment, MAX_COMMENT_CHARS)
             ));
         }
@@ -603,38 +707,159 @@ impl<'a> ContextBuilder<'a> {
 
     /// Rend un échantillon approuvé. **Appelé uniquement sous
     /// [`PrivacyTier::Sampled`].**
-    fn render_sample(&self, sample: &RowSample, quote: QuoteStyle) -> String {
+    fn render_sample(&self, sample: &RowSample, naming: Naming) -> String {
         let mut out = format!(
-            "-- row sample approved by the user for {}\n",
-            sample.relation.qualify(quote)
+            "row sample approved by the user for {}\n  columns: {}\n",
+            naming.path(&sample.relation),
+            naming.list(&sample.columns)
         );
-        out.push_str(&format!("-- {}\n", join_quoted(&sample.columns, quote)));
         for row in sample.rows.iter().take(self.policy.max_sample_rows) {
             let cells: Vec<String> = row
                 .iter()
                 .map(|value| untrusted::sanitize_inline(&value.to_string(), MAX_SAMPLE_VALUE_CHARS))
                 .collect();
-            out.push_str(&format!("-- {}\n", cells.join(" | ")));
+            out.push_str(&format!("  row: {}\n", cells.join(" | ")));
         }
         let hidden = sample
             .rows
             .len()
             .saturating_sub(self.policy.max_sample_rows);
         if hidden > 0 {
-            out.push_str(&format!("-- {hidden} more approved rows not shown\n"));
+            out.push_str(&format!("  {hidden} more approved rows not shown\n"));
         }
         out.push('\n');
         out
     }
 }
 
-/// Cite et joint une liste d'identifiants.
-fn join_quoted(names: &[String], quote: QuoteStyle) -> String {
-    names
-        .iter()
-        .map(|name| quote_identifier(name, quote))
-        .collect::<Vec<_>>()
-        .join(", ")
+/// La façon d'écrire un nom pour le modèle, décidée par le langage de requête.
+#[derive(Debug, Clone, Copy)]
+enum Naming {
+    /// Cité comme le dialecte SQL le cite : le modèle peut le recopier tel quel.
+    Quoted(QuoteStyle),
+    /// Un littéral JSON : bornes et caractères spéciaux sans ambiguïté, quel
+    /// que soit le langage — un nom de collection ou de clé n'y est jamais un
+    /// fragment de requête.
+    Literal,
+}
+
+impl Naming {
+    const fn for_language(language: QueryLanguage) -> Self {
+        match language {
+            QueryLanguage::Sql(dialect) => Self::Quoted(QuoteStyle::for_dialect(dialect)),
+            _ => Self::Literal,
+        }
+    }
+
+    fn name(self, raw: &str) -> String {
+        match self {
+            // Citer un nom qui porte un saut de ligne le rend sur deux lignes,
+            // et la seconde peut imiter une ligne du rendu — une fausse
+            // `table`, un faux échantillon approuvé. PostgreSQL accepte ces
+            // noms. Ils passent donc en littéral, sur une ligne, et la mention
+            // dit au modèle que la forme citée n'est pas recopiable telle quelle.
+            Self::Quoted(_) if raw.chars().any(breaks_line) => {
+                format!("{} (name contains control characters)", json_literal(raw))
+            }
+            Self::Quoted(style) => quote_identifier(raw, style),
+            Self::Literal => json_literal(raw),
+        }
+    }
+
+    fn path(self, path: &CatalogPath) -> String {
+        path.segments()
+            .map(|segment| self.name(segment))
+            .collect::<Vec<_>>()
+            .join(".")
+    }
+
+    fn list(self, names: &[String]) -> String {
+        names
+            .iter()
+            .map(|name| self.name(name))
+            .collect::<Vec<_>>()
+            .join(", ")
+    }
+}
+
+/// Un caractère qui coupe ou masque une ligne pour qui lit le rendu.
+///
+/// `U+2028` et `U+2029` ne sont pas des caractères de contrôle, mais un
+/// modèle comme un éditeur peuvent les lire comme des fins de ligne.
+fn breaks_line(c: char) -> bool {
+    c.is_control() || c == '\u{2028}' || c == '\u{2029}'
+}
+
+/// Un nom en littéral JSON, garanti sur une seule ligne.
+///
+/// `serde_json` échappe les contrôles C0 mais laisse `DEL`, les contrôles C1
+/// et `U+2028`/`U+2029` : ils sont échappés ici. Tous sont dans le plan de
+/// base, donc un `\uXXXX` suffit.
+fn json_literal(raw: &str) -> String {
+    // Une chaîne se sérialise toujours ; le repli tient la promesse qu'aucun
+    // nom venu du serveur ne fait paniquer (I-09).
+    let json = serde_json::to_string(raw).unwrap_or_else(|_| "\"?\"".to_owned());
+    let mut out = String::with_capacity(json.len());
+    for c in json.chars() {
+        if breaks_line(c) {
+            out.push_str(&format!("\\u{:04x}", u32::from(c)));
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}
+
+/// Les sous-champs d'un type : ceux d'une structure, ou d'un tableau de
+/// structures — un sous-document, un tableau de sous-documents.
+///
+/// Une boucle et non une récursion : une chaîne `Array(Array(…))` n'a pas de
+/// fond garanti, et chaque niveau serait un cadre de pile (I-09).
+fn nested_fields(mut logical: &LogicalType) -> &[Field] {
+    loop {
+        match logical {
+            LogicalType::Struct(fields) => return fields,
+            LogicalType::Array(inner) => logical = inner,
+            _ => return &[],
+        }
+    }
+}
+
+/// Des champs laissés de côté : combien, et si le compte est incomplet.
+#[derive(Debug, Clone, Copy, Default)]
+struct OmittedFields {
+    count: usize,
+    /// Une partie n'a pas été comptée, faute de profondeur : le chiffre serait
+    /// un minorant présenté comme un total, donc il n'est pas écrit.
+    uncounted: bool,
+}
+
+impl OmittedFields {
+    fn absorb(&mut self, other: Self) {
+        self.count = self.count.saturating_add(other.count);
+        self.uncounted |= other.uncounted;
+    }
+}
+
+/// Combien de sous-champs un type porte, sur au plus `levels` niveaux.
+///
+/// Au-delà, le compte s'arrête et se déclare incomplet : compter une
+/// imbrication sans fond déborderait la pile comme la rendre.
+fn count_nested(logical: &LogicalType, levels: usize) -> OmittedFields {
+    let nested = nested_fields(logical);
+    let mut tally = OmittedFields::default();
+    if nested.is_empty() {
+        return tally;
+    }
+    let Some(below) = levels.checked_sub(1) else {
+        tally.uncounted = true;
+        return tally;
+    };
+    for field in nested {
+        tally.count = tally.count.saturating_add(1);
+        tally.absorb(count_nested(&field.logical_type, below));
+    }
+    tally
 }
 
 #[cfg(test)]
@@ -643,7 +868,7 @@ mod tests {
         Field, ForeignKey, ForeignKeyTarget, Index, LogicalType, Relation, RelationKind,
         RelationRef, ServerInfo,
     };
-    use oxyn_core::Capabilities;
+    use oxyn_core::{Capabilities, SqlDialect};
 
     use super::*;
 
@@ -728,23 +953,23 @@ mod tests {
     fn le_ddl_normalise_decrit_les_relations_choisies() {
         let cache = cache();
         let contexte = ContextBuilder::new(&cache, PrivacyTier::Metadata)
-            .with_dialect(SqlDialect::Postgres)
+            .with_language(QueryLanguage::Sql(SqlDialect::Postgres))
             .build();
 
         let bloc = contexte.prompt_block();
         assert!(
-            bloc.contains(r#"CREATE TABLE "caisse"."public"."clients""#),
+            bloc.contains(r#"table "caisse"."public"."clients""#),
             "{bloc}"
         );
-        assert!(bloc.contains(r#""id" int8 NOT NULL PRIMARY KEY"#), "{bloc}");
+        assert!(bloc.contains(r#""id" int8 not null primary key"#), "{bloc}");
         assert!(bloc.contains("estimated rows: 12000"), "{bloc}");
         assert!(bloc.contains("PostgreSQL 17.2"), "{bloc}");
         assert!(
-            bloc.contains(r#"-- index "idx_commandes_client" ("client_id")"#),
+            bloc.contains(r#"  index "idx_commandes_client" ("client_id")"#),
             "{bloc}"
         );
         assert!(
-            bloc.contains(r#"REFERENCES "caisse"."public"."clients" ("id")"#),
+            bloc.contains(r#"references "caisse"."public"."clients" ("id")"#),
             "{bloc}"
         );
     }
@@ -884,7 +1109,7 @@ mod tests {
 
         let contexte = ContextBuilder::new(&cache, PrivacyTier::Metadata).build();
         assert!(
-            contexte.prompt_block().contains("columns not read yet"),
+            contexte.prompt_block().contains("fields not read yet"),
             "{}",
             contexte.prompt_block()
         );
@@ -929,3 +1154,6 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+mod generic_tests;

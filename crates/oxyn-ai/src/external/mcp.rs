@@ -42,6 +42,33 @@ use crate::untrusted;
 use turn::Admission;
 pub use turn::{OpenTurn, ToolTurns};
 
+/// The name under which Oxyn's server is declared to an agent.
+///
+/// The one copy. The declaration in `session/new`, Claude's permission rule and
+/// Codex's approved server are derived from it: a rule written against another
+/// spelling would leave every tool of the server asking a permission Oxyn
+/// refuses, and nothing would fail — the agent would just stop reaching the
+/// base.
+pub const SERVER_NAME: &str = "oxyn";
+
+/// Claude Code's permission rule for **every** tool of Oxyn's server.
+///
+/// A rule naming the server alone covers all its tools — `mcp__<server>`, as
+/// Claude Code spells its MCP permissions —, so a tool added to the registry
+/// is allowed without touching the confinement. Naming tools one by one here
+/// would be a copy of the registry, and the tool it forgets would be refused
+/// in silence.
+#[must_use]
+pub fn claude_permission_rule() -> String {
+    format!("mcp__{SERVER_NAME}")
+}
+
+/// How Claude Code names one of Oxyn's tools: `mcp__<server>__<tool>`.
+#[must_use]
+pub fn claude_tool_name(tool: &str) -> String {
+    format!("mcp__{SERVER_NAME}__{tool}")
+}
+
 /// MCP revisions Oxyn can speak, newest first.
 ///
 /// Taken from the `@modelcontextprotocol/sdk` bundled by the Claude adapter

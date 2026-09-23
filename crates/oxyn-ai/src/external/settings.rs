@@ -54,6 +54,9 @@ pub struct AgentSettings {
     pub current_mode: Option<String>,
     /// The options the agent lets a client set, in its order.
     pub options: Vec<AgentOption>,
+    /// The agent is kept in the mode Oxyn chose (see [`super::confine`]):
+    /// no mode, and no option of category mode, is offered or accepted.
+    pub modes_locked: bool,
 }
 
 impl AgentSettings {
@@ -63,13 +66,27 @@ impl AgentSettings {
         self.modes.is_empty() && self.current_mode.is_none() && self.options.is_empty()
     }
 
-    /// Reads what `session/new` declared.
+    /// Reads what `session/new` declared, for an agent Oxyn does not confine.
+    #[cfg(test)]
     #[must_use]
     pub(crate) fn declared(
         modes: Option<&SessionModeState>,
         options: Option<&[SessionConfigOption]>,
     ) -> Self {
-        let mut settings = Self::default();
+        Self::declared_with(modes, options, false)
+    }
+
+    /// The same, for an agent whose mode Oxyn keeps: see `modes_locked`.
+    #[must_use]
+    pub(crate) fn declared_with(
+        modes: Option<&SessionModeState>,
+        options: Option<&[SessionConfigOption]>,
+        modes_locked: bool,
+    ) -> Self {
+        let mut settings = Self {
+            modes_locked,
+            ..Self::default()
+        };
         if let Some(modes) = modes {
             settings.set_modes(modes);
         }
@@ -138,7 +155,17 @@ impl AgentSettings {
     /// an agent that declares `modes` alone keeps its selector.
     ///
     /// The only place this rule lives: every change to the settings ends here.
+    ///
+    /// A locked agent loses both selectors here too, so that no update from
+    /// the agent brings back a choice the user could not be given.
     fn supersede_modes(&mut self) {
+        if self.modes_locked {
+            self.options
+                .retain(|option| option.category != OptionCategory::Mode);
+            self.modes.clear();
+            self.current_mode = None;
+            return;
+        }
         if self
             .options
             .iter()

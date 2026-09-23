@@ -49,7 +49,10 @@
 
 use std::fmt;
 
-use oxyn_core::{Command, ConnectionId, ExecLimits, ExecRequest, QueryLanguage, SessionId};
+use oxyn_core::{
+    Command, ConnectionId, ExecLimits, ExecRequest, MAX_CATALOG_FOCUS_BYTES, QueryLanguage,
+    SessionId,
+};
 use oxyn_llm::{ToolCall, ToolSpec};
 use schemars::{JsonSchema, SchemaGenerator, generate::SchemaSettings};
 use serde::Deserialize;
@@ -62,6 +65,9 @@ pub const EXECUTE_QUERY: &str = "execute_query";
 
 /// Nom de l'outil qui relit le catalogue depuis le serveur.
 pub const REFRESH_CATALOG: &str = "refresh_catalog";
+
+/// Nom de l'outil qui décrit la structure de la base, depuis le catalogue local.
+pub const DESCRIBE_SCHEMA: &str = "describe_schema";
 
 /// Ce que l'appelant impose, et que le modèle ne choisit pas.
 ///
@@ -114,6 +120,27 @@ pub struct ExecuteQueryArgs {
                        held for the user's approval before anything happens."
     )]
     pub statement: String,
+}
+
+/// Arguments de [`DESCRIBE_SCHEMA`].
+///
+/// Un seul champ, facultatif : des mots de recherche. La connexion vient du
+/// [`ToolScope`], et rien ici ne compose de requête — les mots servent à classer
+/// des noms du catalogue local.
+#[derive(Debug, Clone, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DescribeSchemaArgs {
+    /// La description part vers le modèle : elle est en anglais. Elle écrit la
+    /// borne en octets, parce que `maxLength` compte des caractères et ne dirait
+    /// pas la même chose que le refus de la traduction et de l'exécuteur
+    /// ([`MAX_CATALOG_FOCUS_BYTES`]) ; un test tient le chiffre aligné.
+    #[schemars(
+        description = "Optional search words — a table, collection or column name, or a \
+                       topic — to describe the most relevant objects first. Omit it to \
+                       describe the database from the start. At most 256 bytes of UTF-8."
+    )]
+    #[serde(default)]
+    pub search: Option<String>,
 }
 
 /// Arguments de [`REFRESH_CATALOG`] : aucun.
@@ -201,14 +228,37 @@ impl ToolRegistry {
             tools: vec![
                 ToolDefinition {
                     name: EXECUTE_QUERY,
+                    // « Reads return rows » disait le contraire de ce que
+                    // rend l'outil : un agent qui attendait des lignes de
+                    // `sqlite_master` a conclu qu'il ne pouvait pas lire la
+                    // base. Le schéma est dans le contexte, pas ici.
                     description: "Run one statement against the database the user opened. \
-                                  Reads return rows. Writes, DDL and anything the analyzer \
+                                  Write it against the structure described to you. \
+                                  Reads run immediately: the rows go to the user's result \
+                                  grid, and you receive only the shape of the result (row \
+                                  and batch counts), never the values — so do not query \
+                                  system tables to learn the schema: call describe_schema. \
+                                  Writes, DDL and anything the analyzer \
                                   cannot classify are held for the user's explicit approval, \
                                   so never assume a statement ran until the tool result says \
                                   so. You cannot choose the connection.",
                     command: "Execute",
                     schema: schema_of::<ExecuteQueryArgs>,
                     translate: translate_execute_query,
+                },
+                ToolDefinition {
+                    name: DESCRIBE_SCHEMA,
+                    description: "Describe the structure of the database the user opened: \
+                                  its objects (tables, views, collections, indexes, key \
+                                  patterns, labels…), their fields and types as the server \
+                                  names them, keys and indexes, and the query language to \
+                                  write in. Read from Oxyn's local catalog: it never \
+                                  contacts the server and never returns row values. The \
+                                  answer is bounded; when it says objects were left out, \
+                                  call it again with search words.",
+                    command: "DescribeCatalog",
+                    schema: schema_of::<DescribeSchemaArgs>,
+                    translate: translate_describe_schema,
                 },
                 ToolDefinition {
                     name: REFRESH_CATALOG,
@@ -383,6 +433,37 @@ fn translate_execute_query(raw: &serde_json::Value, scope: &ToolScope) -> Result
     })
 }
 
+/// [`DESCRIBE_SCHEMA`] → [`Command::DescribeCatalog`].
+///
+/// Les mots de recherche sont bornés ici, avant la commande : un agent qui en
+/// écrirait un mégaoctet se voit répondre de raccourcir, et l'exécuteur refait
+/// la vérification.
+fn translate_describe_schema(
+    raw: &serde_json::Value,
+    scope: &ToolScope,
+) -> Result<Command, AiError> {
+    let args: DescribeSchemaArgs = parse_args(DESCRIBE_SCHEMA, raw)?;
+    let focus = args
+        .search
+        .as_deref()
+        .map(str::trim)
+        .filter(|search| !search.is_empty())
+        .map(str::to_owned);
+    if focus
+        .as_deref()
+        .is_some_and(|focus| focus.len() > MAX_CATALOG_FOCUS_BYTES)
+    {
+        return Err(AiError::InvalidArguments {
+            name: DESCRIBE_SCHEMA.to_owned(),
+            detail: format!("`search` is limited to {MAX_CATALOG_FOCUS_BYTES} bytes"),
+        });
+    }
+    Ok(Command::DescribeCatalog {
+        connection: scope.connection,
+        focus,
+    })
+}
+
 /// [`REFRESH_CATALOG`] → [`Command::RefreshCatalog`].
 fn translate_refresh_catalog(
     raw: &serde_json::Value,
@@ -427,6 +508,7 @@ mod tests {
             "Execute",
             "Cancel",
             "RefreshCatalog",
+            "DescribeCatalog",
             "Export",
             "OpenDocument",
             "WriteDocument",
@@ -635,7 +717,7 @@ mod tests {
     fn les_schemas_sont_transmissibles_a_un_fournisseur() {
         let registre = ToolRegistry::builtin();
         let specs = registre.specs_for(&tous()).expect("outils connus");
-        assert_eq!(specs.len(), 2);
+        assert_eq!(specs.len(), 3);
         for spec in &specs {
             let params = &spec.parameters;
             assert_eq!(params.get("type").and_then(|v| v.as_str()), Some("object"));
@@ -663,6 +745,33 @@ mod tests {
             );
             assert!(!spec.description.is_empty());
         }
+    }
+
+    #[test]
+    fn la_borne_de_la_recherche_est_annoncee_au_modele() {
+        // La panne visée : un agent qui ne voit pas la borne la dépasse, se
+        // fait refuser, et ne sait pas de combien raccourcir.
+        let registre = ToolRegistry::builtin();
+        let specs = registre
+            .specs_for(&[DESCRIBE_SCHEMA.to_owned()])
+            .expect("outil connu");
+        let description = specs
+            .first()
+            .and_then(|spec| spec.parameters.pointer("/properties/search/description"))
+            .and_then(serde_json::Value::as_str)
+            .expect("`search` est décrit");
+        assert!(
+            description.contains(&format!("At most {MAX_CATALOG_FOCUS_BYTES} bytes")),
+            "{description}"
+        );
+
+        // Et la borne annoncée est celle qui refuse.
+        let juste = "a".repeat(MAX_CATALOG_FOCUS_BYTES);
+        let call = appel(DESCRIBE_SCHEMA, json!({ "search": juste }));
+        assert!(registre.translate(&call, &tous(), &scope()).is_ok());
+        let trop = "é".repeat(MAX_CATALOG_FOCUS_BYTES / 2 + 1);
+        let call = appel(DESCRIBE_SCHEMA, json!({ "search": trop }));
+        assert!(registre.translate(&call, &tous(), &scope()).is_err());
     }
 
     #[test]

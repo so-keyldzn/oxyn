@@ -205,6 +205,7 @@ pub fn option_for<'a>(
     }
 }
 
+pub mod confine;
 pub mod locate;
 pub mod mcp;
 pub mod presets;

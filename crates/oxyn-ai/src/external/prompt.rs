@@ -22,32 +22,101 @@
 //!
 //! # Pourquoi un type mince, et non l'`AgentContext` du chemin fournisseur
 //!
-//! [`AgentContext`](crate::AgentContext) a été conçu pour une conversation à
-//! outils : il porte le schéma rendu, les relations retenues, un budget de
-//! jetons. Un agent externe n'a l'usage d'aucun — il reçoit un texte, et c'est
-//! tout. Lui imposer ce contexte serait l'abstraction pour un seul appelant que
-//! [CLAUDE.md](../../../../CLAUDE.md#organisation-du-code) déconseille.
+//! Un agent externe reçoit un texte, et c'est tout : il n'a l'usage ni d'un
+//! message système, ni d'une session de conversation à outils. Lui imposer
+//! l'`AgentSession` du chemin fournisseur serait l'abstraction pour un seul
+//! appelant que [CLAUDE.md](../../../../CLAUDE.md#organisation-du-code)
+//! déconseille. Ce type porte donc le texte — et, quand un schéma l'accompagne,
+//! l'[`AgentContext`] qui l'a rendu, pour que l'appelant dise ce qui est parti.
 //!
 //! Ce module prend l'option **B** d'ADR-0027 : un type qui ne porte que ce qui
-//! part, dont le seul constructeur exige le niveau de la connexion.
+//! part, dont les constructeurs exigent le niveau de la connexion.
+//!
+//! # Le schéma, et par quelle porte il entre
+//!
+//! Un agent externe qui ne reçoit que la question ne connaît pas la base : il
+//! lance `SELECT name FROM sqlite_master`, reçoit « 11 rows » — l'outil rend la
+//! forme, jamais les valeurs (ADR-0030 § 4) — et finit par proposer
+//! `SELECT * FROM your_table`. C'est ce qu'a constaté l'utilisateur le
+//! 2026-09-23.
+//!
+//! [`AgentPrompt::with_schema`] y répond **sans écrire de seconde porte** : le
+//! schéma est rendu par [`ContextBuilder::build`], le point de passage d'I-04,
+//! le même code, sous le même niveau, avec le même budget que pour l'assistant
+//! interne. Ce module ne rend rien lui-même ; il place un bloc déjà rendu.
+//!
+//! Et il ne sait pas joindre d'échantillon : aucun argument ne le permet. La
+//! session d'un agent survit à la question, et rien ne dit ce qu'il garde d'une
+//! ligne qu'on lui aurait montrée ; le chemin fournisseur, lui, sait marquer
+//! un échange comme sans mémoire. Sous `Sampled`, un agent externe reçoit donc
+//! la structure, et aucune valeur.
 
-use oxyn_core::OxynError;
+use std::fmt;
 
+use oxyn_catalog::CatalogCache;
+use oxyn_core::{OxynError, QueryLanguage};
+
+use crate::context::{AgentContext, ContextBuilder};
 use crate::privacy::PrivacyTier;
+use crate::untrusted;
+
+/// Ce qui précède le schéma : d'où il vient, et ce qu'on peut en attendre.
+///
+/// En anglais, parce qu'il part vers un modèle. Il dit aussi ce que l'outil
+/// **ne** rend pas : un agent qui attend des lignes de `execute_query` conclut
+/// qu'il ne peut pas lire la base, et c'est la panne constatée. Composé à
+/// l'appel : les noms d'outils et du serveur viennent de leurs constantes, pas
+/// d'une copie.
+fn schema_intro() -> String {
+    format!(
+        "You are working inside Oxyn, a database workspace. The structure of the database the \
+         user has open is described below, as far as it fits. Write statements only against \
+         the objects and fields it names; for anything it leaves out, call the \
+         `{describe}` tool of the `{server}` MCP server with search words rather than guessing \
+         a name. Run a statement with its `{execute}` tool: the rows appear in the user's \
+         result grid, and the tool returns you the shape of the result — row and batch \
+         counts — never the values.",
+        describe = crate::tools::DESCRIBE_SCHEMA,
+        execute = crate::tools::EXECUTE_QUERY,
+        server = super::mcp::SERVER_NAME,
+    )
+}
+
+/// Ce qui annonce la question, pour qu'elle ne se confonde pas avec le schéma.
+const QUESTION_HEADER: &str = "The user's question:";
 
 /// Ce qui part vers un agent externe, une fois le niveau appliqué.
 ///
-/// **Aucun constructeur public naïf.** La seule façon d'en obtenir un est
-/// [`AgentPrompt::from_user`], qui exige le niveau de la connexion. Un
-/// `From<String>` ou un `new(&str)` rouvrirait exactement le trou que ce type
-/// ferme — c'est la discipline à maintenir, et la seule.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// **Aucun constructeur public naïf.** Les seules façons d'en obtenir un sont
+/// [`AgentPrompt::from_user`] et [`AgentPrompt::with_schema`], qui exigent le
+/// niveau de la connexion. Un `From<String>` ou un `new(&str)` rouvrirait
+/// exactement le trou que ce type ferme — c'est la discipline à maintenir, et la
+/// seule.
+///
+/// Le `Debug` est écrit à la main : le texte porte des noms de tables et de
+/// colonnes de la base de l'utilisateur, qu'un `tracing::debug!("{prompt:?}")`
+/// écrirait dans un journal.
+#[derive(Clone, PartialEq)]
 pub struct AgentPrompt {
     text: String,
+    context: Option<AgentContext>,
+}
+
+impl fmt::Debug for AgentPrompt {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("AgentPrompt")
+            .field(
+                "text",
+                &format_args!("<redacted, {} bytes>", self.text.len()),
+            )
+            .field("context", &self.context)
+            .finish()
+    }
 }
 
 impl AgentPrompt {
-    /// Compose l'invite à partir de ce que **l'utilisateur a tapé**.
+    /// Compose l'invite à partir de ce que **l'utilisateur a tapé**, et de rien
+    /// d'autre.
     ///
     /// # Ce que cette porte garantit, et ce qu'elle ne garantit pas
     ///
@@ -57,10 +126,8 @@ impl AgentPrompt {
     /// lui appartient, et [ADR-0006](../../../../docs/adr/0006-ai-privacy-tiers.md)
     /// n'a jamais eu pour objet de censurer sa propre question.
     ///
-    /// Le jour où du contexte devra rejoindre cette invite — un nom de table, un
-    /// extrait de schéma — il devra passer par une **autre** fonction de ce
-    /// module, qui appliquera le niveau à ce contexte-là. C'est précisément la
-    /// condition de reconsidération écrite dans ADR-0027.
+    /// Du contexte ne rejoint cette invite que par [`AgentPrompt::with_schema`],
+    /// qui le fait rendre par [`ContextBuilder::build`].
     ///
     /// # Erreurs
     ///
@@ -82,6 +149,48 @@ impl AgentPrompt {
         }
         Ok(Self {
             text: question.to_owned(),
+            context: None,
+        })
+    }
+
+    /// Compose l'invite qui ouvre une session d'agent : la structure de la base,
+    /// puis la question.
+    ///
+    /// Le schéma est rendu par [`ContextBuilder::build`] sous `tier` — le point
+    /// de passage d'[I-04](../../../../CLAUDE.md#i-04), avec son budget, sa
+    /// sélection orientée par la question et son encadré `untrusted`. Le
+    /// préambule qui dit ce qu'est un encadré vient **avant** l'encadré, comme
+    /// dans le message système de l'assistant interne : un modèle qui lit la
+    /// consigne après les données a déjà lu les données.
+    ///
+    /// Aucun échantillon ne peut y entrer : ce constructeur n'en reçoit pas
+    /// (voir l'en-tête du module).
+    ///
+    /// # Erreurs
+    ///
+    /// Celles de [`AgentPrompt::from_user`], vérifiées **avant** que le moindre
+    /// schéma ne soit rendu.
+    pub fn with_schema(
+        tier: PrivacyTier,
+        question: &str,
+        cache: &CatalogCache,
+        language: QueryLanguage,
+    ) -> Result<Self, OxynError> {
+        let asked = Self::from_user(tier, question)?;
+        let context = ContextBuilder::new(cache, tier)
+            .with_language(language)
+            .focused_on(asked.text.clone())
+            .build();
+        let text = format!(
+            "{}\n\n{}\n\n{}\n\n{QUESTION_HEADER}\n{}",
+            schema_intro(),
+            untrusted::PREAMBLE,
+            context.prompt_block(),
+            asked.text
+        );
+        Ok(Self {
+            text,
+            context: Some(context),
         })
     }
 
@@ -92,6 +201,13 @@ impl AgentPrompt {
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.text
+    }
+
+    /// Le contexte joint, s'il y en a un — pour dire à l'utilisateur ce qui
+    /// est parti : combien de relations, combien écartées, quel coût.
+    #[must_use]
+    pub const fn context(&self) -> Option<&AgentContext> {
+        self.context.as_ref()
     }
 }
 

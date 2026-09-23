@@ -47,6 +47,7 @@ use futures::future::{BoxFuture, Either, select};
 use futures::stream::StreamExt;
 use oxyn_core::{CancelToken, ExternalAgentConfig};
 
+use super::confine::{Confinement, ModeWatch};
 use super::prompt::AgentPrompt;
 use super::settings::{AgentSettings, SettingChange, SettingRefused, SettingValue};
 use super::spawn::{Environment, ExitReport, Spawned, spawn};
@@ -171,7 +172,7 @@ pub enum ExternalError {
         client: String,
     },
     /// The agent process is gone.
-    #[error("the agent process stopped; start the conversation again to relaunch it")]
+    #[error("the agent process stopped; asking again starts it again")]
     Exited,
     /// The agent answered with an error.
     #[error("the agent reported an error: {0}")]
@@ -179,6 +180,16 @@ pub enum ExternalError {
     /// A settings change was not sent, or the agent refused it.
     #[error(transparent)]
     Setting(#[from] SettingRefused),
+    /// The agent could not be kept in the restricted mode Oxyn runs it in, or
+    /// left it: it is not given the question (see [`super::confine`]).
+    #[error(
+        "the agent did not stay in the restricted mode Oxyn runs it in, so Oxyn stopped \
+         talking to it; asking again starts it again"
+    )]
+    Unconfined,
+    /// A known agent could not be confined as measured, and was not started.
+    #[error(transparent)]
+    Unconfinable(#[from] super::confine::Unconfinable),
 }
 
 impl From<ExternalError> for oxyn_core::OxynError {
@@ -290,19 +301,48 @@ pub(crate) async fn live<P, W>(
         },
         None => (lifetime.await, false),
     };
-    // The child died first. Keep what it said: without it the panel can only
-    // say « the agent stopped », which sends the user looking in the wrong place.
-    if let Either::Right((report, _)) = ended
-        && let Ok(mut slot) = exit.lock()
-    {
+    // Keep what the child said: without it the panel can only say « the agent
+    // stopped », which sends the user looking in the wrong place. A child that
+    // dies closes its `stdout` and its `stderr` together, so the protocol often
+    // ends first — its report then comes a moment later, and is waited for,
+    // briefly: a protocol that ended with the child still alive (the session
+    // dropped) must not hold the tool server's wind-down for long.
+    let late = match ended {
+        Either::Right((report, _)) => {
+            keep_report(&exit, report);
+            None
+        }
+        Either::Left((_, watch)) => Some(watch),
+    };
+    drop(endpoint);
+    let wind_down = async {
+        if let Some(server) = serving
+            && !server_finished
+        {
+            server.await;
+        }
+    };
+    let report = async {
+        if let Some(watch) = late
+            && let Ok(report) = tokio::time::timeout(LATE_EXIT_REPORT, watch).await
+        {
+            keep_report(&exit, report);
+        }
+    };
+    futures::future::join(wind_down, report).await;
+}
+
+/// How long a report is waited for once the protocol has ended.
+///
+/// Product bound, not a measurement: the report follows the protocol's end by
+/// the time the child's `stderr` drains and its status is read. Past this, the
+/// failure is shown without it rather than late.
+const LATE_EXIT_REPORT: std::time::Duration = std::time::Duration::from_millis(500);
+
+fn keep_report(exit: &Mutex<Option<ExitReport>>, report: ExitReport) {
+    if let Ok(mut slot) = exit.lock() {
         // Already redacted by `spawn`, the token included.
         *slot = Some(report);
-    }
-    drop(endpoint);
-    if let Some(server) = serving
-        && !server_finished
-    {
-        server.await;
     }
 }
 
@@ -346,11 +386,18 @@ impl ExternalSession {
     /// [`ExternalError::RefusedByTier`] under a local-only tier — before any
     /// process exists, since launching one may already reach its service;
     /// [`ExternalError::Invalid`] if the declaration does not validate.
+    ///
+    /// Blocks on the file system for Codex, whose configuration it reads: not
+    /// for an async worker — [`Self::launch_with_tools`] reads it off one.
     pub fn launch(
         agent: &ExternalAgentConfig,
         tier: PrivacyTier,
     ) -> Result<(Self, SessionDriver), ExternalError> {
-        Self::start_process(agent, tier, None)
+        refuse_before_launch(agent, tier)?;
+        let confinement = super::confine::confinement_for(agent, None, || {
+            super::confine::codex_config_layers(agent)
+        })?;
+        Self::start_process(agent, tier, None, confinement)
     }
 
     /// The same, plus Oxyn's tools served to the agent on the loopback.
@@ -378,9 +425,27 @@ impl ExternalSession {
             .map_err(|error| {
                 ExternalError::Invalid(format!("opening the tool endpoint: {error}"))
             })?;
-        Self::start_process(agent, tier, Some((endpoint, serving)))
+        // On the blocking pool, not this worker: Codex's configuration may
+        // sit on a network share that stops answering, and the caller holds
+        // the lock every other agent launch waits on (I-05).
+        let confinement = {
+            let agent = agent.clone();
+            let url = endpoint.url().to_owned();
+            tokio::task::spawn_blocking(move || {
+                super::confine::confinement_for(&agent, Some(&url), || {
+                    super::confine::codex_config_layers(&agent)
+                })
+            })
+            .await
+            .map_err(|error| {
+                ExternalError::Invalid(format!("reading the agent's configuration: {error}"))
+            })??
+        };
+        Self::start_process(agent, tier, Some((endpoint, serving)), confinement)
     }
 
+    /// Reads nothing: the confinement is computed by the caller, off any
+    /// async worker when it is one.
     fn start_process(
         agent: &ExternalAgentConfig,
         tier: PrivacyTier,
@@ -388,17 +453,35 @@ impl ExternalSession {
             super::mcp::server::Endpoint,
             futures::future::BoxFuture<'static, ()>,
         )>,
+        confinement: Option<super::confine::Confinement>,
     ) -> Result<(Self, SessionDriver), ExternalError> {
         refuse_before_launch(agent, tier)?;
+        let tools_in_env = confinement
+            .as_ref()
+            .is_some_and(|confinement| confinement.tools_in_env);
         // Only what is named reaches the child. Reading the host here is not a
-        // leak: `with_essentials` looks up four names and ignores the rest.
+        // leak: `with_essentials` looks up the names of `ALWAYS_PASSED` and
+        // ignores the rest.
+        // The confinement comes last: a declared variable cannot undo it.
         let mut environment = Environment::empty()
             .with_essentials(|name| std::env::var(name).ok())
-            .with_declared(agent.env.iter().cloned());
+            .with_declared(agent.env.iter().cloned())
+            .with_declared(
+                confinement
+                    .iter()
+                    .flat_map(|confinement| confinement.env.iter())
+                    .map(|(name, value)| (*name, value.clone())),
+            );
         if let Some((endpoint, _)) = &tools {
-            // Never given to the child, but handed to the agent over the
-            // protocol: what it says back is redacted all the same.
-            environment = environment.withholding("tool token", endpoint.token());
+            environment = if tools_in_env {
+                // Given to the child, for the configuration that names it:
+                // `redact` covers what is passed as well as what is withheld.
+                environment.with_declared([(super::confine::TOOL_TOKEN_VAR, endpoint.token())])
+            } else {
+                // Never given to the child, but handed to the agent over the
+                // protocol: what it says back is redacted all the same.
+                environment.withholding("tool token", endpoint.token())
+            };
         }
         let spawned = spawn(&agent.command, &agent.args, &environment)?;
         let Spawned {
@@ -410,11 +493,13 @@ impl ExternalSession {
         let declaration = tools.as_ref().map(|(endpoint, _)| ToolEndpoint {
             url: endpoint.url().to_owned(),
             token: endpoint.token().to_owned(),
+            // Declared once: over the protocol, or in the configuration above.
+            over_acp: !tools_in_env,
         });
         // The session's working directory is the process's own: announcing
         // another would point the agent at a directory it was not given.
         let directory = guard.directory().to_path_buf();
-        let (session, protocol) = Self::over_with(transport, directory, declaration);
+        let (session, protocol) = Self::over_with(transport, directory, declaration, confinement);
         let exit = Arc::clone(&session.exit);
         let driver = async move {
             // The guard lives exactly as long as the driver: dropping the
@@ -448,7 +533,7 @@ impl ExternalSession {
         transport: impl ConnectTo<Client> + 'static,
         directory: std::path::PathBuf,
     ) -> (Self, SessionDriver) {
-        Self::over_with(transport, directory, None)
+        Self::over_with(transport, directory, None, None)
     }
 
     /// A session that also hands the agent Oxyn's tools.
@@ -456,10 +541,19 @@ impl ExternalSession {
         transport: impl ConnectTo<Client> + 'static,
         directory: std::path::PathBuf,
         tools: Option<ToolEndpoint>,
+        confinement: Option<super::confine::Confinement>,
     ) -> (Self, SessionDriver) {
         let (requests, inbox) = mpsc::unbounded();
         let (declared, settings) = tokio::sync::watch::channel(AgentSettings::default());
-        let driver = drive(transport, inbox, directory, tools, Arc::new(declared)).boxed();
+        let driver = drive(
+            transport,
+            inbox,
+            directory,
+            tools,
+            confinement,
+            Arc::new(declared),
+        )
+        .boxed();
         (
             Self {
                 requests,
@@ -599,6 +693,10 @@ struct State {
     tools: Option<ToolEndpoint>,
     /// The session's working directory: the private one the process runs in.
     directory: std::path::PathBuf,
+    /// How the agent is confined, when Oxyn knows its adapter.
+    confinement: Option<Confinement>,
+    /// Whether it left the mode it was put in.
+    watch: Arc<ModeWatch>,
 }
 
 impl State {
@@ -615,6 +713,9 @@ impl State {
 struct ToolEndpoint {
     url: String,
     token: String,
+    /// Named in `session/new`. Kept, and its token still redacted, when the
+    /// agent's own configuration names it instead (see `super::confine`).
+    over_acp: bool,
 }
 
 async fn drive(
@@ -622,16 +723,29 @@ async fn drive(
     inbox: mpsc::UnboundedReceiver<Request>,
     directory: std::path::PathBuf,
     tools: Option<ToolEndpoint>,
+    confinement: Option<Confinement>,
     settings: Settings,
 ) {
     let watcher: Watcher = Arc::new(Mutex::new(None));
+    let watch = Arc::new(ModeWatch::default());
+    let locked_mode = confinement.as_ref().map(|confinement| confinement.mode);
     let result = Client
         .builder()
         .on_receive_notification(
             {
                 let watcher = Arc::clone(&watcher);
                 let settings = Arc::clone(&settings);
-                async move |notification: SessionNotification, _cx| {
+                let watch = Arc::clone(&watch);
+                async move |notification: SessionNotification, cx| {
+                    // Stopped at once, not at the next question: the turn in
+                    // progress would otherwise go on in the wider mode.
+                    if let Some(mode) = locked_mode
+                        && watch.observe(mode, &notification.update)
+                    {
+                        let _ = cx.send_notification(CancelNotification::new(
+                            notification.session_id.clone(),
+                        ));
+                    }
                     // Settings go to the `watch`, question or not; the rest
                     // only to the question being answered.
                     if !remember(&settings, &notification.update)
@@ -659,7 +773,17 @@ async fn drive(
                         ));
                     }
                     let kind = request.tool_call.fields.kind.unwrap_or_default();
-                    let verdict = permission_for(kind);
+                    let verdict = match kind {
+                        // Granted to an agent Oxyn does not confine, whose
+                        // modes are its own business; a confined one stays
+                        // in the mode it was put in.
+                        ToolKind::SwitchMode if locked_mode.is_some() => {
+                            PermissionVerdict::Refused(
+                                "Oxyn keeps this agent in a restricted mode.",
+                            )
+                        }
+                        _ => permission_for(kind),
+                    };
                     if let PermissionVerdict::Refused(reason) = verdict
                         && let Some(observer) = current(&watcher)
                     {
@@ -690,7 +814,14 @@ async fn drive(
         .connect_with(transport, {
             let watcher = Arc::clone(&watcher);
             async move |connection: ConnectionTo<Agent>| {
-                serve(&connection, inbox, &watcher, &settings, directory, tools).await;
+                let state = State {
+                    directory,
+                    tools,
+                    confinement,
+                    watch,
+                    ..State::default()
+                };
+                serve(&connection, inbox, &watcher, &settings, state).await;
                 Ok(())
             }
         })
@@ -707,14 +838,8 @@ async fn serve(
     mut inbox: mpsc::UnboundedReceiver<Request>,
     watcher: &Watcher,
     settings: &Settings,
-    directory: std::path::PathBuf,
-    tools: Option<ToolEndpoint>,
+    mut state: State,
 ) {
-    let mut state = State {
-        directory,
-        tools,
-        ..State::default()
-    };
     while let Some(request) = inbox.next().await {
         match request {
             Request::Start { reply } => {
@@ -778,6 +903,12 @@ async fn serve(
                 match select(sent, cancelled).await {
                     Either::Left((answer, _)) => {
                         set_watcher(watcher, None);
+                        // Cut short because it left its mode: said as such,
+                        // not as a cancel the user did not ask for.
+                        if state.watch.left() {
+                            let _ = reply.send(Err(ExternalError::Unconfined));
+                            continue;
+                        }
                         let _ = reply.send(
                             answer
                                 .map(|response| turn_end(response.stop_reason))
@@ -877,6 +1008,11 @@ async fn ensure(
     state: &mut State,
     settings: &Settings,
 ) -> Result<(AgentReady, SessionId), ExternalError> {
+    // Checked on every question, not only at opening: the departure may have
+    // come during the previous answer.
+    if state.watch.left() {
+        return Err(ExternalError::Unconfined);
+    }
     let ready = match &state.initialized {
         Some(ready) => ready.clone(),
         None => initialize(connection, state).await?,
@@ -895,13 +1031,19 @@ async fn ensure(
             // accept HTTP MCP simply ignores the declaration; the panel says so
             // rather than leaving the user wondering why it cannot read the
             // database (ADR-0030).
-            if let Some(tools) = &state.tools {
+            if let Some(tools) = state.tools.as_ref().filter(|tools| tools.over_acp) {
                 request = request.mcp_servers(vec![McpServer::Http(
-                    McpServerHttp::new("oxyn", tools.url.clone()).headers(vec![HttpHeader::new(
-                        "Authorization",
-                        format!("Bearer {}", tools.token),
-                    )]),
+                    McpServerHttp::new(super::mcp::SERVER_NAME, tools.url.clone()).headers(vec![
+                        HttpHeader::new("Authorization", format!("Bearer {}", tools.token)),
+                    ]),
                 )]);
+            }
+            if let Some(meta) = state
+                .confinement
+                .as_ref()
+                .and_then(|confinement| confinement.session_meta.clone())
+            {
+                request = request.meta(meta);
             }
             request
         })
@@ -910,11 +1052,25 @@ async fn ensure(
         .map_err(|e| classify(connection, "session/new", e, &state.methods, state.token()))?;
     // A new session starts from what it declares, never from the previous
     // one's: a session opened again after sign-in may offer other models.
-    settings.send_replace(AgentSettings::declared(
+    settings.send_replace(AgentSettings::declared_with(
         response.modes.as_ref(),
         response.config_options.as_deref(),
+        state.confinement.is_some(),
     ));
     let session = response.session_id;
+    // Before the session is handed out, so before any question: an agent that
+    // will not take the mode never reads one.
+    if let Some(confinement) = &state.confinement {
+        connection
+            .send_request(SetSessionModeRequest::new(
+                session.clone(),
+                confinement.mode.to_owned(),
+            ))
+            .block_task()
+            .await
+            .map_err(|_| ExternalError::Unconfined)?;
+        state.watch.arm();
+    }
     state.session = Some(session.clone());
     Ok((ready, session))
 }

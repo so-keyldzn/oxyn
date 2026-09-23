@@ -89,7 +89,7 @@ fn run_with<T>(
     scenario: impl AsyncFnOnce(ExternalSession) -> T,
 ) -> T {
     let (ours, theirs) = Channel::duplex();
-    let (session, driver) = ExternalSession::over_with(ours, private(), tools);
+    let (session, driver) = ExternalSession::over_with(ours, private(), tools, None);
     let background = join(driver, agent(theirs));
     block_on(async move {
         let scenario = pin!(scenario(session));
@@ -396,6 +396,101 @@ fn a_session_that_needs_a_sign_in_says_how_and_recovers_after_it() {
     );
     assert!(after.is_ok(), "{after:?}");
     assert_eq!(signed_in.load(Ordering::SeqCst), 1);
+}
+
+/// What the agent reads on the wire, end to end: the structure of the open
+/// database, fenced, and no row value — the failure the user met was an agent
+/// that knew nothing of the base and proposed `SELECT * FROM your_table`.
+#[test]
+fn the_agent_receives_the_structure_of_the_database_and_no_value() {
+    use oxyn_catalog::model::{Field, LogicalType, Relation, RelationKind};
+    use oxyn_catalog::{CatalogCache, CatalogPath};
+
+    let mut cache = CatalogCache::new();
+    let orders = CatalogPath::for_relation(None, Some("main"), "orders").expect("a valid path");
+    cache
+        .set_relation(
+            &orders,
+            Relation::new("orders", RelationKind::Table)
+                .with_estimated_rows(11)
+                .with_fields(vec![
+                    Field::new("id", 0, LogicalType::INT64, "INTEGER").primary_key(),
+                    Field::new("placed_at", 1, LogicalType::Text, "TEXT"),
+                ]),
+        )
+        .expect("the path names a relation");
+
+    let received = Arc::new(Mutex::new(Vec::<String>::new()));
+    let kept = Arc::clone(&received);
+    let invite = AgentPrompt::with_schema(
+        PrivacyTier::Sampled,
+        "the last 10 rows",
+        &cache,
+        oxyn_core::QueryLanguage::Sql(oxyn_core::SqlDialect::Sqlite),
+    )
+    .expect("an external agent is allowed under sampled");
+
+    let end = run(
+        move |channel| {
+            Agent
+                .builder()
+                .on_receive_request(
+                    async |request: InitializeRequest, responder, _cx| {
+                        responder.respond(InitializeResponse::new(request.protocol_version))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async |_: NewSessionRequest, responder, _cx| {
+                        responder.respond(NewSessionResponse::new(session_id()))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |request: PromptRequest, responder, _cx| {
+                        for block in request.prompt {
+                            if let ContentBlock::Text(text) = block {
+                                kept.lock()
+                                    .unwrap_or_else(PoisonError::into_inner)
+                                    .push(text.text);
+                            }
+                        }
+                        responder.respond(PromptResponse::new(StopReason::EndTurn))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .connect_to(channel)
+                .boxed()
+        },
+        async move |session| {
+            session
+                .prompt(&invite, Arc::new(()), &CancelToken::new())
+                .await
+        },
+    );
+    assert_eq!(end, Ok(TurnEnd::Answered { truncated: false }));
+
+    let text = received
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .join("\n");
+    assert!(
+        text.contains(r#"table "main"."orders""#),
+        "the agent is told the table: {text}"
+    );
+    assert!(
+        text.contains(r#""placed_at" TEXT"#),
+        "and its columns: {text}"
+    );
+    assert!(
+        text.contains(crate::untrusted::FENCE_OPEN),
+        "fenced: {text}"
+    );
+    assert!(
+        !text.contains("row sample approved by the user"),
+        "no row value reaches an external agent, even under sampled: {text}"
+    );
+    assert!(text.ends_with("the last 10 rows"), "{text}");
 }
 
 #[test]
@@ -854,6 +949,7 @@ fn journal_of_a_conversation(capped: bool) -> String {
         let tools = ToolEndpoint {
             url: "http://127.0.0.1:9/mcp".to_owned(),
             token: TOKEN.to_owned(),
+            over_acp: true,
         };
         let ended = run_with(
             Some(tools),
@@ -1024,6 +1120,7 @@ fn an_agent_that_says_the_token_back_does_not_show_it() {
         Some(ToolEndpoint {
             url: "http://127.0.0.1:9/mcp".to_owned(),
             token: TOKEN.to_owned(),
+            over_acp: true,
         }),
         |channel| {
             Agent
@@ -1615,5 +1712,133 @@ mod setting_changes {
         };
         let shown = error.to_string();
         assert!(!shown.contains("SECRET-ROW"), "{shown}");
+    }
+}
+
+mod confined {
+    use agent_client_protocol::schema::v1::{
+        CurrentModeUpdate, SessionMode, SessionModeState, SetSessionModeResponse,
+    };
+
+    use super::*;
+    use crate::external::confine::Confinement;
+
+    type Log = Arc<Mutex<Vec<String>>>;
+
+    fn log(log: &Log, line: String) {
+        log.lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .push(line);
+    }
+
+    /// An agent that starts in `free`, offers `locked`, and goes back to
+    /// `free` on its own while answering the first question.
+    fn wandering(said: Log) -> impl FnOnce(Channel) -> BoxFuture<'static, Result<(), Error>> {
+        let (opened, moved, asked) = (Arc::clone(&said), Arc::clone(&said), said);
+        move |channel| {
+            Agent
+                .builder()
+                .on_receive_request(
+                    async |request: InitializeRequest, responder, _cx| {
+                        responder.respond(InitializeResponse::new(request.protocol_version))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |request: NewSessionRequest, responder, _cx| {
+                        let meta = request.meta.map(serde_json::Value::Object);
+                        log(&opened, format!("meta:{}", meta.unwrap_or_default()));
+                        responder.respond(NewSessionResponse::new(session_id()).modes(
+                            SessionModeState::new(
+                                "free",
+                                vec![
+                                    SessionMode::new("locked", "Locked"),
+                                    SessionMode::new("free", "Free"),
+                                ],
+                            ),
+                        ))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |request: SetSessionModeRequest, responder, _cx| {
+                        log(&moved, format!("mode:{}", request.mode_id));
+                        responder.respond(SetSessionModeResponse::new())
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |_: PromptRequest, responder, cx| {
+                        log(&asked, "prompt".to_owned());
+                        cx.send_notification(SessionNotification::new(
+                            session_id(),
+                            SessionUpdate::CurrentModeUpdate(CurrentModeUpdate::new("free")),
+                        ))?;
+                        responder.respond(PromptResponse::new(StopReason::EndTurn))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .connect_to(channel)
+                .boxed()
+        }
+    }
+
+    #[test]
+    fn a_confined_agent_is_put_in_its_mode_first_and_cut_off_as_soon_as_it_leaves() {
+        let said: Log = Arc::default();
+        let seen = Arc::new(Seen::default());
+        let observer: Arc<dyn AgentObserver> = seen.clone();
+        let mut meta = serde_json::Map::new();
+        meta.insert("confined".to_owned(), serde_json::Value::Bool(true));
+        let confinement = Confinement {
+            env: Vec::new(),
+            session_meta: Some(meta),
+            mode: "locked",
+            tools_in_env: false,
+        };
+
+        let (ours, theirs) = Channel::duplex();
+        let (session, driver) =
+            ExternalSession::over_with(ours, private(), None, Some(confinement));
+        let background = join(driver, wandering(Arc::clone(&said))(theirs));
+        let ends = block_on(async move {
+            let scenario = pin!(async {
+                let first = session
+                    .prompt(&prompt("one"), Arc::clone(&observer), &CancelToken::new())
+                    .await;
+                let second = session
+                    .prompt(&prompt("two"), observer, &CancelToken::new())
+                    .await;
+                (first, second)
+            });
+            match select(scenario, pin!(background)).await {
+                Either::Left((ends, _)) => ends,
+                Either::Right(_) => panic!("the agent ended before the scenario"),
+            }
+        });
+
+        // The answer during which it left is cut and said as such, not taken
+        // as a full answer; the next question is refused before it is sent.
+        assert_eq!(ends.0, Err(ExternalError::Unconfined));
+        assert_eq!(ends.1, Err(ExternalError::Unconfined));
+        assert_eq!(
+            said.lock().unwrap_or_else(PoisonError::into_inner).clone(),
+            vec![
+                r#"meta:{"confined":true}"#.to_owned(),
+                "mode:locked".to_owned(),
+                // One question only: the second never reached an agent that
+                // left its mode.
+                "prompt".to_owned(),
+            ]
+        );
+        // No mode is offered to the user of a confined agent.
+        assert!(
+            seen.lines()
+                .iter()
+                .filter(|line| line.starts_with("settings:"))
+                .all(|line| line.starts_with("settings:mode=-")),
+            "{:?}",
+            seen.lines()
+        );
     }
 }

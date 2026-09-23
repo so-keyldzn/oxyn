@@ -37,7 +37,7 @@ use oxyn_core::AgentId;
 
 use crate::context::ContextPolicy;
 use crate::spec::AgentSpec;
-use crate::tools::{EXECUTE_QUERY, REFRESH_CATALOG};
+use crate::tools::{DESCRIBE_SCHEMA, EXECUTE_QUERY, REFRESH_CATALOG};
 
 /// Identifiant stable de l'agent SQL.
 ///
@@ -93,9 +93,10 @@ pub fn sql_agent() -> AgentSpec {
          short, and never pad an answer.\n\
          \n\
          Rules you cannot bend:\n\
-         - Write queries only against tables and columns shown to you in the database \
-           context. If what you need is not there, say what is missing and ask; never \
-           guess a name.\n\
+         - Write queries only against objects and fields shown to you in the database \
+           context or by the describe_schema tool. If what you need is not there, call \
+           describe_schema with search words; if it is still missing, say what is missing \
+           and ask. Never guess a name.\n\
          - One statement per tool call.\n\
          - Reads run immediately. Writes, DDL and anything the analyzer cannot classify \
            are held for the user to approve. Until a tool result says `status: completed`, \
@@ -109,7 +110,7 @@ pub fn sql_agent() -> AgentSpec {
          only when asked.",
     )
     .with_description("Writes, fixes and explains queries on the open connection.")
-    .with_tools([EXECUTE_QUERY])
+    .with_tools([EXECUTE_QUERY, DESCRIBE_SCHEMA])
     .with_max_turns(8)
 }
 
@@ -127,9 +128,10 @@ pub fn schema_agent() -> AgentSpec {
          design is inconsistent.\n\
          \n\
          Rules you cannot bend:\n\
-         - Describe only what the database context shows. When the context says a \
-           relation's columns were not read yet, say so and offer to refresh — do not \
-           invent them.\n\
+         - Describe only what the database context or the describe_schema tool shows; \
+           call describe_schema with search words for what the context left out. When \
+           it says a relation's fields were not read yet, say so and offer to refresh — \
+           do not invent them.\n\
          - When the context says a schema was inferred by sampling, repeat that: it is \
            not something the server declared.\n\
          - Refreshing the catalog is slow on large schemas. Do it when the structure \
@@ -144,7 +146,7 @@ pub fn schema_agent() -> AgentSpec {
          prose.",
     )
     .with_description("Explains the structure of a database and spots its inconsistencies.")
-    .with_tools([EXECUTE_QUERY, REFRESH_CATALOG])
+    .with_tools([EXECUTE_QUERY, DESCRIBE_SCHEMA, REFRESH_CATALOG])
     .with_context(ContextPolicy {
         // Comprendre une structure demande de la voir en entier ; écrire une
         // requête demande de voir juste. D'où deux politiques différentes, et
@@ -189,11 +191,13 @@ mod tests {
     }
 
     #[test]
-    fn l_agent_sql_n_a_qu_un_outil() {
-        // Le principe de moindre autorité : relire 20 000 objets pour écrire un
-        // SELECT n'a aucun sens, donc l'outil n'est pas accordé.
+    fn l_agent_sql_lit_le_catalogue_local_mais_ne_le_rafraichit_pas() {
+        // Le principe de moindre autorité : relire 20 000 objets depuis le
+        // serveur pour écrire un SELECT n'a aucun sens, donc le rafraîchissement
+        // n'est pas accordé. Lire le catalogue déjà chargé, si : sans lui,
+        // l'agent devine des noms.
         let sql = sql_agent();
-        assert_eq!(sql.allowed_tools, [EXECUTE_QUERY]);
+        assert_eq!(sql.allowed_tools, [EXECUTE_QUERY, DESCRIBE_SCHEMA]);
         assert!(!sql.allows(REFRESH_CATALOG));
     }
 

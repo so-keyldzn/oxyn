@@ -1,8 +1,8 @@
 //! Ready-made declarations for agents already installed on the machine.
 //!
 //! A preset is a **draft**: a command, arguments and environment the user reads
-//! and confirms. Nothing is declared by this module, and nothing in it runs at
-//! startup (ADR-0023). The user keeps their subscription and their sign-in with
+//! and confirms. Nothing is declared by this module: detection only reads the
+//! file system, when the AI settings screen opens. The user keeps their subscription and their sign-in with
 //! the agent; Oxyn holds no key and no token for it.
 //!
 //! # Where each value comes from
@@ -30,8 +30,14 @@ pub struct AgentPreset {
     pub version: &'static str,
     /// The program the user signs in with, and how, in a terminal.
     pub sign_in: &'static str,
+    /// The arguments that sign in through the CLI the adapter bundles,
+    /// appended to the command that runs it. Empty when it bundles none: the
+    /// agent's own program is then the only way.
+    pub adapter_sign_in: &'static [&'static str],
     /// The program whose presence tells the agent is installed at all.
     pub agent_program: &'static str,
+    /// The oldest Node major its adapter runs on (RESEARCH-NOTES).
+    pub node_major: u64,
 }
 
 /// Claude Code, through Anthropic's ACP adapter.
@@ -43,7 +49,14 @@ pub const CLAUDE_CODE: AgentPreset = AgentPreset {
     // Claude Code's CLI reference: `claude auth login`; the adapter reads the
     // same configuration directory.
     sign_in: "claude auth login",
+    // What the adapter 0.78.0 itself advertises as its terminal sign-in
+    // (`dist/acp-agent.js`): `--cli` hands the rest to the Claude Code CLI its
+    // SDK bundles (`dist/index.js`), so it works with no `claude` installed,
+    // and signs in exactly the CLI the adapter reads (RESEARCH-NOTES).
+    adapter_sign_in: &["--cli", "auth", "login", "--claudeai"],
     agent_program: "claude",
+    // `engines` of the adapter 0.78.0: `node >=22`.
+    node_major: 22,
 };
 
 /// OpenAI Codex CLI, through its ACP adapter.
@@ -54,8 +67,29 @@ pub const CODEX: AgentPreset = AgentPreset {
     version: "1.12.0",
     // OpenAI's Codex authentication page; the adapter reuses that sign-in.
     sign_in: "codex login",
+    // Not verified for codex-acp: `codex login` stays the only proposal.
+    adapter_sign_in: &[],
     agent_program: "codex",
+    // The adapter 1.12.0 declares no `engines`; its dependency `open@^11`
+    // declares `node >=20`, the highest among them.
+    node_major: 20,
 };
+
+impl AgentPreset {
+    /// The words that sign in through the adapter's bundled CLI, when the
+    /// adapter is run by `command` and `args`; `None` when it bundles none.
+    ///
+    /// The words are raw: whoever shows them quotes them for a shell.
+    #[must_use]
+    pub fn adapter_sign_in(self, command: &str, args: &[String]) -> Option<Vec<String>> {
+        (!self.adapter_sign_in.is_empty()).then(|| {
+            std::iter::once(command.to_owned())
+                .chain(args.iter().cloned())
+                .chain(self.adapter_sign_in.iter().map(|&word| word.to_owned()))
+                .collect()
+        })
+    }
+}
 
 /// Every preset, in the order shown.
 pub const PRESETS: [AgentPreset; 2] = [CLAUDE_CODE, CODEX];
@@ -64,6 +98,33 @@ pub const PRESETS: [AgentPreset; 2] = [CLAUDE_CODE, CODEX];
 #[must_use]
 pub fn preset(id: &str) -> Option<AgentPreset> {
     PRESETS.into_iter().find(|preset| preset.id == id)
+}
+
+/// The preset whose package this declaration runs, if any: recognized by an
+/// argument naming the package, pinned or not.
+#[must_use]
+pub fn preset_of(config: &oxyn_core::ExternalAgentConfig) -> Option<AgentPreset> {
+    PRESETS.into_iter().find(|preset| {
+        config.args.iter().any(|arg| {
+            arg == preset.package
+                || arg
+                    .strip_prefix(preset.package)
+                    .is_some_and(|rest| rest.starts_with('@'))
+        })
+    })
+}
+
+/// The preset this declaration runs **exactly as Oxyn proposes it**: its
+/// pinned version, and no other argument.
+///
+/// The confinement (ADR-0032) was measured on that version; another may ignore
+/// its switches, and an argument more may override them. Anything else is
+/// treated as an agent Oxyn does not know.
+#[must_use]
+pub fn pinned_preset_of(config: &oxyn_core::ExternalAgentConfig) -> Option<AgentPreset> {
+    PRESETS
+        .into_iter()
+        .find(|&preset| config.args == arguments(preset))
 }
 
 /// The launcher both adapters are distributed through.
@@ -181,6 +242,28 @@ mod tests {
         assert_eq!(draft.agent_program, None);
         assert_eq!(draft.command, "npx");
         assert!(draft.env.is_empty());
+    }
+
+    #[test]
+    fn claude_signs_in_through_its_adapter_and_codex_does_not() {
+        let draft = PresetDraft::blank(CLAUDE_CODE);
+        assert_eq!(
+            CLAUDE_CODE.adapter_sign_in(&draft.command, &draft.args),
+            Some(
+                [
+                    "npx",
+                    "-y",
+                    "@agentclientprotocol/claude-agent-acp@0.78.0",
+                    "--cli",
+                    "auth",
+                    "login",
+                    "--claudeai",
+                ]
+                .map(str::to_owned)
+                .to_vec()
+            )
+        );
+        assert_eq!(CODEX.adapter_sign_in("npx", &arguments(CODEX)), None);
     }
 
     #[test]

@@ -27,6 +27,9 @@ schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
+# Lire les **noms** des serveurs MCP et des plugins de `~/.codex/config.toml`
+# pour les couper au lancement : aucune clé ne les coupe en bloc (ADR-0032).
+toml.workspace = true
 # `net` et `rt` pour l'écoute MCP sur la boucle locale : sans les nommer ici, la
 # crate ne compile que grâce à l'unification des fonctionnalités d'un voisin.
 tokio = { workspace = true, features = ["net", "rt"] }

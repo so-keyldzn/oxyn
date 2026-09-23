@@ -73,7 +73,9 @@ const ALWAYS_PASSED: [&str; 5] = [
     "USER",
     // Node and Python decode argv and paths with it; a user whose files carry
     // accents gets mojibake or a hard failure without it.
-    "LANG", // Where a launcher unpacks what it downloads.
+    "LANG",
+    // Where a launcher unpacks what it downloads — `npx -y` fetches the
+    // adapter the first time it runs it.
     "TMPDIR",
 ];
 

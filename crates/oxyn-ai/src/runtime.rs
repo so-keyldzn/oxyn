@@ -59,13 +59,15 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::StreamExt;
+use oxyn_catalog::CatalogHandle;
 use oxyn_core::{
     Actor, AgentSessionId, CancelToken, Command, Decision, ErrorClass, ExecStats, OxynError,
+    QueryLanguage,
 };
 use oxyn_llm::reasoning::ReasoningBlock;
 use oxyn_llm::{ChatEvent, ChatMessage, ChatRequest, LlmProvider, Reach, StopReason, ToolCall};
 
-use crate::context::AgentContext;
+use crate::context::{AgentContext, ContextBuilder};
 use crate::error::AiError;
 use crate::failure::FailureReport;
 use crate::observer::{AgentEvent, AgentObserver, TokenUsage};
@@ -89,6 +91,14 @@ pub enum DispatchOutcome {
     Completed {
         /// Ce qu'il faut en dire au modèle : volumétrie, troncature.
         summary: String,
+    },
+    /// Le catalogue local a été lu : la poignée du cache, jamais un rendu.
+    ///
+    /// Ce que le modèle en apprend est rendu par `ContextBuilder::build`, sous
+    /// le niveau de la connexion, dans `ToolOutcome::from_dispatch`.
+    CatalogRead {
+        /// Le cache de la connexion.
+        catalog: CatalogHandle,
     },
     /// La commande attend l'accord de l'utilisateur. **Rien ne s'est exécuté.**
     AwaitingApproval {
@@ -137,6 +147,7 @@ impl fmt::Debug for DispatchOutcome {
                 .debug_struct("AwaitingApproval")
                 .field("reason", reason)
                 .finish(),
+            Self::CatalogRead { .. } => f.debug_struct("CatalogRead").finish_non_exhaustive(),
             Self::Denied { reason } => f.debug_struct("Denied").field("reason", reason).finish(),
             Self::Failed { class, message } => f
                 .debug_struct("Failed")
@@ -206,13 +217,23 @@ impl DispatchOutcome {
 /// privés, et le seul chemin qui en produit un est
 /// `from_dispatch`, qui exige le niveau de la connexion.
 /// Le filtre n'est donc pas contournable par oubli.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Le `Debug` est écrit à la main, comme ceux d'[`AgentContext`] et
+/// d'`AgentPrompt` : [`Described`](Self::Described) porte le schéma rendu, et
+/// un `tracing::debug!("{outcome:?}")` l'écrirait dans un journal (I-03).
+#[derive(Clone, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ToolOutcome {
     /// La commande a été exécutée.
     Completed {
         /// Ce qu'il faut en dire au modèle : volumétrie, durée, troncature.
         summary: String,
+    },
+    /// La structure de la base, rendue par le point de passage.
+    Described {
+        /// Le bloc que `ContextBuilder::build` a produit — **déjà encadré** :
+        /// c'est le même texte que le contexte d'une invite.
+        block: String,
     },
     /// La commande attend l'accord de l'utilisateur. **Rien ne s'est exécuté.**
     AwaitingApproval {
@@ -239,10 +260,30 @@ impl ToolOutcome {
     /// l'applique au chemin de contexte. `pub(crate)` : le seul appelant est la
     /// boucle, qui tient le niveau de la session — et la session tient celui de
     /// la connexion, jamais un réglage global (I-04, ADR-0006).
+    ///
+    /// Un catalogue lu est rendu ici, par [`ContextBuilder::build`] — la même
+    /// fonction que le contexte d'une invite, sous le même niveau, avec le même
+    /// budget —, dans le langage de la connexion et orienté par les mots de
+    /// recherche de la commande. Il n'existe pas de second rendu du schéma.
     #[must_use]
-    pub(crate) fn from_dispatch(tier: PrivacyTier, outcome: DispatchOutcome) -> Self {
+    pub(crate) fn from_dispatch(
+        tier: PrivacyTier,
+        outcome: DispatchOutcome,
+        language: QueryLanguage,
+        focus: Option<&str>,
+    ) -> Self {
         match outcome {
             DispatchOutcome::Completed { summary } => Self::Completed { summary },
+            DispatchOutcome::CatalogRead { catalog } => {
+                let cache = catalog.catalog().read();
+                let context = ContextBuilder::new(&cache, tier)
+                    .with_language(language)
+                    .focused_on(focus.unwrap_or_default())
+                    .build();
+                Self::Described {
+                    block: context.prompt_block().to_owned(),
+                }
+            }
             DispatchOutcome::AwaitingApproval { reason } => Self::AwaitingApproval { reason },
             DispatchOutcome::Denied { reason } => Self::Denied { reason },
             DispatchOutcome::Failed { class, message } => Self::Failed {
@@ -266,6 +307,9 @@ impl ToolOutcome {
             (Self::Completed { summary }, DispatchOutcome::Completed { summary: facts }) => {
                 summary != facts
             }
+            // Le catalogue ne porte aucune valeur de ligne : le niveau n'en a
+            // rien retenu. Le budget, lui, se dit dans le bloc même.
+            (Self::Described { .. }, DispatchOutcome::CatalogRead { .. }) => false,
             (
                 Self::AwaitingApproval { reason },
                 DispatchOutcome::AwaitingApproval { reason: facts },
@@ -291,7 +335,7 @@ impl ToolOutcome {
     /// suppose qu'un `INSERT` a eu lieu et enchaîne sur cette hypothèse.
     #[must_use]
     pub const fn is_completed(&self) -> bool {
-        matches!(self, Self::Completed { .. })
+        matches!(self, Self::Completed { .. } | Self::Described { .. })
     }
 
     /// Le texte renvoyé au modèle, **encadré comme contenu non fiable**.
@@ -307,7 +351,15 @@ impl ToolOutcome {
     /// appliqué en amont par `from_dispatch`.
     #[must_use]
     pub fn render(&self) -> String {
-        untrusted::fence(&self.to_string())
+        match self {
+            // Le bloc sort du point de passage, qui l'a déjà encadré : le
+            // ré-encadrer neutraliserait ses balises et le rendrait différent du
+            // contexte d'une invite. Le statut, lui, est encadré comme les autres.
+            Self::Described { block } => {
+                format!("{}\n{block}", untrusted::fence("status: completed"))
+            }
+            _ => untrusted::fence(&self.to_string()),
+        }
     }
 }
 
@@ -317,6 +369,7 @@ impl fmt::Display for ToolOutcome {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Completed { summary } => write!(f, "status: completed\n{summary}"),
+            Self::Described { block } => write!(f, "status: completed\n{block}"),
             Self::AwaitingApproval { reason } => write!(
                 f,
                 "status: awaiting_approval\n\
@@ -330,6 +383,29 @@ impl fmt::Display for ToolOutcome {
                  not look for another way to achieve the same effect.\nreason: {reason}"
             ),
             Self::Failed { report } => write!(f, "status: failed\n{report}"),
+        }
+    }
+}
+
+/// Voir le type : seul le schéma rendu est masqué, par sa longueur. Les autres
+/// variantes ne portent que ce qu'un dérivé montrait déjà.
+impl fmt::Debug for ToolOutcome {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Completed { summary } => f
+                .debug_struct("Completed")
+                .field("summary", summary)
+                .finish(),
+            Self::Described { block } => f
+                .debug_struct("Described")
+                .field("block", &format_args!("<redacted, {} bytes>", block.len()))
+                .finish(),
+            Self::AwaitingApproval { reason } => f
+                .debug_struct("AwaitingApproval")
+                .field("reason", reason)
+                .finish(),
+            Self::Denied { reason } => f.debug_struct("Denied").field("reason", reason).finish(),
+            Self::Failed { report } => f.debug_struct("Failed").field("report", report).finish(),
         }
     }
 }
@@ -835,11 +911,18 @@ pub(crate) async fn run_tool_call(
             mutating: command.is_mutating(),
         });
 
+        // Les mots de recherche sont ceux que la commande porte — donc ceux que
+        // le journal retient —, pas ceux de l'appel : il n'y a qu'une vérité.
+        let focus = match &command {
+            Command::DescribeCatalog { focus, .. } => focus.clone(),
+            _ => None,
+        };
         let dispatched = sink.dispatch(actor, command, cancel).await;
         // Le niveau de la session est celui de la connexion. C'est le seul
         // endroit du chemin d'erreur où il est connu, donc le seul où il peut
         // s'appliquer (I-04).
-        let outcome = ToolOutcome::from_dispatch(tier, dispatched.clone());
+        let outcome =
+            ToolOutcome::from_dispatch(tier, dispatched.clone(), scope.language, focus.as_deref());
         // L'utilisateur voit les faits ; le modèle voit `outcome`. L'écart est
         // porté par l'événement, constaté sur les deux valeurs qu'on tient ici
         // — le seul endroit où elles coexistent.
@@ -978,6 +1061,12 @@ impl AgentRuntime {
 
 #[cfg(test)]
 mod tests {
+    /// `from_dispatch` pour une issue qui n'est pas un catalogue lu : le
+    /// langage et les mots de recherche n'y servent pas.
+    fn hors_catalogue(tier: PrivacyTier, outcome: DispatchOutcome) -> ToolOutcome {
+        ToolOutcome::from_dispatch(tier, outcome, oxyn_core::QueryLanguage::SQL, None)
+    }
+
     use std::sync::Mutex;
 
     use futures::executor::block_on;
@@ -1018,6 +1107,26 @@ mod tests {
         assert!(
             rendu.contains("message_bytes"),
             "et la longueur suffit à diagnostiquer : {rendu}"
+        );
+    }
+
+    /// I-03, même piège côté catalogue : le schéma rendu pour l'agent ne sort
+    /// pas par `Debug`, comme il ne sort pas par celui d'`AgentContext`.
+    #[test]
+    fn le_schema_decrit_ne_sort_pas_par_debug() {
+        let issue = ToolOutcome::Described {
+            block: "table \"patients\"\n  \"hiv_status\" bool".to_owned(),
+        };
+        let rendu = format!("{issue:?}");
+        assert!(!rendu.contains("patients"), "{rendu}");
+        assert!(!rendu.contains("hiv_status"), "{rendu}");
+        assert!(
+            rendu.contains("Described"),
+            "la variante reste lisible : {rendu}"
+        );
+        assert!(
+            rendu.contains("bytes"),
+            "la longueur suffit à diagnostiquer : {rendu}"
         );
     }
 
@@ -1772,7 +1881,7 @@ mod tests {
         // Le niveau est `Sampled` **à dessein** : c'est le seul sous lequel le
         // message traverse, donc le seul où l'encadrement a quelque chose à
         // encadrer. Sous les autres, ce test ne prouverait rien.
-        let echec = ToolOutcome::from_dispatch(
+        let echec = hors_catalogue(
             PrivacyTier::Sampled,
             DispatchOutcome::Failed {
                 class: ErrorClass::Permanent,
@@ -1822,7 +1931,7 @@ mod tests {
         // contrainte : elle ne doit rejoindre ni le rendu, ni la conversation,
         // qui repart entière au fournisseur au tour suivant (I-04).
         for niveau in [PrivacyTier::Local, PrivacyTier::Metadata] {
-            let echec = ToolOutcome::from_dispatch(
+            let echec = hors_catalogue(
                 niveau,
                 DispatchOutcome::Failed {
                     class: ErrorClass::Permanent,
@@ -1888,7 +1997,7 @@ mod tests {
             (ErrorClass::Permanent, false),
             (ErrorClass::Ambiguous, false),
         ] {
-            let echec = ToolOutcome::from_dispatch(
+            let echec = hors_catalogue(
                 PrivacyTier::Metadata,
                 DispatchOutcome::Failed {
                     class: classe,
@@ -1925,7 +2034,7 @@ mod tests {
             }
         );
 
-        let echec = ToolOutcome::from_dispatch(PrivacyTier::Metadata, brut);
+        let echec = hors_catalogue(PrivacyTier::Metadata, brut);
         let ToolOutcome::Failed { report } = &echec else {
             panic!("variante inattendue : {echec:?}");
         };
@@ -2101,7 +2210,7 @@ mod tests {
             let faits = DispatchOutcome::Completed {
                 summary: "1 rows, 1 batches".to_owned(),
             };
-            let filtre = ToolOutcome::from_dispatch(niveau, faits.clone());
+            let filtre = hors_catalogue(niveau, faits.clone());
             assert!(!filtre.withholds_from(&faits), "{niveau}");
         }
     }

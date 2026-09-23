@@ -331,9 +331,17 @@ fn the_tools_handed_to_external_agents_are_frozen_here() {
     // added there for the internal assistant would reach every external agent
     // without anyone reviewing the bridge: this test fails first, on purpose.
     // Changing it means a security review of ADR-0030, not an updated list.
+    //
+    // 2026-09-23: `describe_schema` added (ADR-0030 § 4 bis). It becomes a
+    // `DescribeCatalog`, a read of the local cache that contacts no server and
+    // carries no row value; its answer is rendered by `ContextBuilder::build`
+    // under the tier read at the call. Pending review by `relecteur-securite`.
     assert_eq!(
         crate::sql_agent().allowed_tools,
-        vec![crate::tools::EXECUTE_QUERY.to_owned()]
+        vec![
+            crate::tools::EXECUTE_QUERY.to_owned(),
+            crate::tools::DESCRIBE_SCHEMA.to_owned(),
+        ]
     );
 }
 
