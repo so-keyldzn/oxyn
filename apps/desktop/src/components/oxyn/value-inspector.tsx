@@ -132,7 +132,7 @@ export function ValueInspector({
             onClick={() => onSelectColumn(index)}
             onDoubleClick={() => onInspect(index)}
             className={cn(
-              "flex cursor-default flex-col gap-0.5 border-b px-3 py-2",
+              "flex flex-col gap-0.5 border-b px-3 py-2",
               column === index && "bg-accent"
             )}
           >

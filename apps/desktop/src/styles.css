@@ -7,6 +7,25 @@
 @custom-variant dark (&:is(.dark *));
 
 /*
+ * A disabled control keeps receiving the pointer, so that it can show
+ * `not-allowed` (see the cursors at the end of this file): it must then stop
+ * reacting to it. `[data-disabled]` is Base UI's mark; cmdk writes
+ * `data-disabled="false"` on enabled items, hence the exception.
+ */
+@custom-variant hover {
+  @media (hover: hover) {
+    &:hover:not(
+        :disabled,
+        [data-disabled]:not([data-disabled="false"]),
+        [aria-disabled="true"]
+      ) {
+      @slot;
+    }
+  }
+}
+@custom-variant active (&:active:not(:disabled, [aria-disabled="true"]));
+
+/*
  * Oxyn palette: verdigris — the green of weathered copper — over deep
  * blue-green slate, written in OKLCH like shadcn's own themes and modelled on
  * tweakcn's « Perpetuity » (https://tweakcn.com/r/themes/perpetuity.json,
@@ -335,4 +354,139 @@
     user-select: text;
     -webkit-user-select: text;
   }
+
+  /*
+   * Cursors: each one says what the pointer will do here. All at zero
+   * specificity (`:where`), so a `cursor-*` utility still wins and, between
+   * them, the later rule does.
+   */
+
+  /* A desktop application: the arrow over chrome and static text, where a
+     browser would show a text caret that selects nothing. */
+  body {
+    cursor: default;
+  }
+
+  /* The caret where text can be typed or selected. */
+  :where(
+    input:not(
+      [type="checkbox"],
+      [type="radio"],
+      [type="file"],
+      [type="range"],
+      [type="color"],
+      [type="button"],
+      [type="submit"],
+      [type="reset"]
+    ),
+    textarea,
+    [contenteditable="true"],
+    .cm-content,
+    [data-selectable]
+  ) {
+    cursor: text;
+  }
+
+  /* The hand on what acts on a click. Tailwind 4 leaves buttons on the
+     arrow. */
+  :where(
+    button,
+    a[href],
+    summary,
+    select,
+    input:is(
+      [type="checkbox"],
+      [type="radio"],
+      [type="file"],
+      [type="range"],
+      [type="color"],
+      [type="button"],
+      [type="submit"],
+      [type="reset"]
+    ),
+    label:has(
+      [role="checkbox"],
+      [role="switch"],
+      [role="radio"],
+      input:is([type="checkbox"], [type="radio"])
+    ),
+    [role="button"],
+    [role="link"],
+    [role="tab"],
+    [role="menuitem"],
+    [role="menuitemcheckbox"],
+    [role="menuitemradio"],
+    [role="option"],
+    [role="treeitem"],
+    [role="checkbox"],
+    [role="radio"],
+    [role="switch"],
+    [role="slider"],
+    button[role="combobox"]
+  ) {
+    cursor: pointer;
+  }
+
+  /* The result grid is a spreadsheet: a click or a drag selects cells. */
+  :where([role="grid"] [role="gridcell"]) {
+    cursor: cell;
+  }
+}
+
+/*
+ * Outside any layer, so that they beat the generated components of
+ * `components/ui`, which a `shadcn add --overwrite` would restore if they
+ * were edited there.
+ */
+
+/* Menu, list and palette entries are written `cursor-default` upstream. */
+[data-slot="dropdown-menu-item"],
+[data-slot="dropdown-menu-sub-trigger"],
+[data-slot="dropdown-menu-checkbox-item"],
+[data-slot="dropdown-menu-radio-item"],
+[data-slot="context-menu-item"],
+[data-slot="context-menu-sub-trigger"],
+[data-slot="context-menu-checkbox-item"],
+[data-slot="context-menu-radio-item"],
+[data-slot="menubar-item"],
+[data-slot="menubar-sub-trigger"],
+[data-slot="menubar-checkbox-item"],
+[data-slot="menubar-radio-item"],
+[data-slot="select-item"],
+[data-slot="combobox-item"],
+[data-slot="command-item"] {
+  cursor: pointer;
+}
+
+/* Upstream, a disabled control drops the pointer entirely
+   (`disabled:pointer-events-none`), which hides any cursor it could show.
+   It takes it back: the element is inert anyway, and the `hover` and
+   `active` variants above ignore it. */
+:is(button, input, select, textarea):disabled {
+  pointer-events: auto;
+}
+:disabled,
+[aria-disabled="true"],
+[data-disabled]:not([data-disabled="false"]),
+label:has(:disabled, [data-disabled]:not([data-disabled="false"])) {
+  cursor: not-allowed;
+}
+
+/* Where a tooltip says why a control is disabled, it sits on a wrapper
+   (`WithReason`, the object view's Data tab, the reasoning effort): the
+   disabled control must stay transparent to the pointer, or the wrapper is
+   never hovered and the reason never shown. The wrapper shows the cursor. */
+[data-slot="tooltip-trigger"] :disabled {
+  pointer-events: none;
+}
+[data-slot="tooltip-trigger"]:has(:disabled) {
+  cursor: not-allowed;
+}
+
+/* Something is loading, and the rest of the window still answers: the arrow
+   with a spinner, never the blocking `wait`. It beats `not-allowed`: the
+   connection being opened is also disabled, and it is the one that works. */
+[aria-busy="true"],
+[aria-busy="true"] * {
+  cursor: progress;
 }

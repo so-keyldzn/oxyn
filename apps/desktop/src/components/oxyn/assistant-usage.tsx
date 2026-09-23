@@ -108,7 +108,7 @@ export function AssistantUsage({
     >
       <span className="sr-only">Usage: </span>
       {parts.map((part, index) => (
-        <span key={part.key} title={part.title}>
+        <span key={part.key} title={part.title} className="cursor-help">
           {index > 0 ? (
             <span aria-hidden className="mr-1.5">
               ·

@@ -141,7 +141,7 @@ export function WorkspaceTabs({
                   onClose(tab.key)
                 }}
                 className={cn(
-                  "flex size-5 shrink-0 items-center justify-center rounded-sm opacity-60 hover:bg-muted hover:opacity-100",
+                  "flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-sm opacity-60 hover:bg-muted hover:opacity-100",
                   "group-data-active/tab:opacity-100"
                 )}
               >

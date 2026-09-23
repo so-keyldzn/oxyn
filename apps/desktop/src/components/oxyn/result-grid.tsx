@@ -635,7 +635,7 @@ export const ResultGrid = React.memo(function ResultGrid({
                   className={cn(
                     // Opaque, so cells scrolled under it stay hidden; the
                     // stripe and the active row are drawn over it again.
-                    "sticky left-0 z-[1] flex h-full cursor-default items-center justify-end border-r border-grid-line bg-background px-2 text-[length:var(--reading-caption)] text-muted-foreground tabular-nums",
+                    "sticky left-0 z-[1] flex h-full cursor-pointer items-center justify-end border-r border-grid-line bg-background px-2 text-[length:var(--reading-caption)] text-muted-foreground tabular-nums",
                     striped &&
                       "bg-[linear-gradient(var(--color-grid-stripe),var(--color-grid-stripe))]",
                     isActiveRow && "bg-accent text-foreground",

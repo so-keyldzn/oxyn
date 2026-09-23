@@ -578,7 +578,7 @@ export function CatalogTree({
                         : row.node.name
                     }
                     className={cn(
-                      "absolute inset-x-0 top-0 flex cursor-default items-center gap-1.5 rounded-md pr-2 text-[length:var(--reading-text)] text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+                      "absolute inset-x-0 top-0 flex items-center gap-1.5 rounded-md pr-2 text-[length:var(--reading-text)] text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
                       isSelected &&
                         "bg-sidebar-accent font-medium text-sidebar-accent-foreground",
                       // The ring sits on the row, and only while the tree has
