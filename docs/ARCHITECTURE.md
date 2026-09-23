@@ -618,6 +618,7 @@ pub enum Command {
     Cancel           { connection: ConnectionId, statement: StatementHandle },
     RefreshCatalog   { connection: ConnectionId },
     RefreshCatalogScope { connection: ConnectionId, scope: CatalogRefreshScope },
+    DescribeCatalog  { connection: ConnectionId, focus: Option<String> },
     ReadResultPage   { connection: ConnectionId, result: ResultId, batch: usize },
     InspectResultValue { connection: ConnectionId, result: ResultId,
                          row: usize, column: usize, offset: usize },

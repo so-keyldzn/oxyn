@@ -58,6 +58,8 @@ Pour localiser les planches et leurs états avant implémentation, consulter
 | [0029](adr/0029-interface-tauri-shadcn.md) | Interface web dans Tauri : TanStack Start, shadcn/ui sur Base UI | proposé |
 | [0030](adr/0030-outils-oxyn-exposes-a-un-agent-externe.md) | Un agent externe atteint la base par les outils d'Oxyn, servis en MCP, et par rien d'autre | proposé |
 | [0031](adr/0031-validation-des-reponses-ipc.md) | Toute réponse du backend est validée à l'entrée du front | proposé |
+| [0032](adr/0032-agent-externe-confine-au-lancement.md) | Un agent externe connu est confiné au lancement, et n'a d'outils que ceux d'Oxyn | proposé |
+| [0033](adr/0033-couches-de-configuration-codex.md) | Oxyn coupe Codex dans toutes les couches de configuration qu'il peut lire, et laisse à l'organisation celles qu'il ne peut pas lire | proposé |
 
 Les ADR restent `proposé` jusqu'au premier commit de code qui les met en œuvre.
 

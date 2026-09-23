@@ -604,15 +604,17 @@ redémarrages. Aucun résultat évincé n'est recréé par rejeu de la requête.
 
 ## Le workspace IA n'existe que s'il a été configuré
 
-Tant qu'aucun fournisseur n'est déclaré, `Ask AI` **n'est pas affiché**, aucun
-badge de confidentialité n'apparaît, et rien ne suggère qu'une fonction manque.
-Oxyn est un client complet sans IA (ADR-0006). L'accès à la configuration passe
-par les réglages, jamais par un appel à l'action dans la barre de connexion : un
-bouton grisé qui invite à configurer est une publicité, pas une fonctionnalité.
+Tant qu'aucune destination n'est déclarée — ni fournisseur, ni agent externe —,
+`Ask AI` **n'est pas affiché**, aucun badge de confidentialité n'apparaît, et rien
+ne suggère qu'une fonction manque. Un agent externe déclaré seul suffit à faire
+exister l'entrée. Oxyn est un client complet sans IA (ADR-0006). L'accès à la
+configuration passe par les réglages, jamais par un appel à l'action dans la
+barre de connexion : un bouton grisé qui invite à configurer est une publicité,
+pas une fonctionnalité.
 
-Le premier fournisseur enregistré fait apparaître l'entrée **sans redémarrage**,
-et le dernier supprimé la fait disparaître — en fermant le panneau s'il était
-ouvert. Cela se fait **sans nouvelle variante du bus d'exécution** : la vue qui
+La première destination enregistrée fait apparaître l'entrée **sans
+redémarrage**, et la dernière supprimée la fait disparaître — en fermant le
+panneau s'il était ouvert. Cela se fait **sans nouvelle variante du bus d'exécution** : la vue qui
 écrit la déclaration connaît le sort de son écriture et recharge la liste
 elle-même. Y publier un événement ferait ce qu'[ADR-0022](adr/0022-rafraichissement-automatique.md)
 refuse — un second endroit où penser à publier
@@ -626,9 +628,38 @@ jamais un réglage d'application — et il change quand on change de connexion,
 même conversation ouverte.
 
 Sur une connexion en `Local` dont aucun fournisseur déclaré n'est local,
-`Ask AI` reste **visible et désactivé**, avec la raison : « ce niveau interdit
-un fournisseur distant ». Faire disparaître l'entrée se lirait comme un défaut,
-et ADR-0006 demande qu'une fonctionnalité indisponible s'explique.
+`Ask AI` reste **visible et désactivé**, avec la raison : ce niveau n'admet
+qu'un fournisseur résolu sur la machine, et un agent externe ne peut pas le
+servir non plus, faute de savoir où il envoie
+([AI-PROVIDERS](AI-PROVIDERS.md#un-agent-externe--la-portée-nest-pas-inconnue-elle-est-inconnaissable)).
+Faire disparaître l'entrée se lirait comme un défaut, et ADR-0006 demande
+qu'une fonctionnalité indisponible s'explique. Il en va de même sur une session
+qui ne parle pas SQL : l'assistant n'écrit que du SQL, et l'entrée le dit.
+
+### Qui répond se choisit dans le panneau
+
+L'en-tête du panneau porte un sélecteur, « Who answers », qui range les
+destinations en deux groupes : les fournisseurs, puis les agents externes. Une
+destination que le niveau de la connexion refuse y reste, désactivée, avec sa
+raison. Sans choix de l'utilisateur, la question part au **premier fournisseur
+utilisable** dans l'ordre de déclaration, et à un agent seulement s'il n'y en a
+aucun : un fournisseur est la seule destination dont Oxyn sait vérifier la
+portée (ADR-0026). Le choix tient tant que la destination reste offerte ;
+retirée, la question retombe sur ce défaut.
+
+Le sélecteur est inerte pendant qu'une réponse s'écrit. Changer de destination
+entre deux questions ne transmet pas les échanges précédents : le panneau le dit
+par une ligne (`destinationChanged`), puisque les réponses antérieures n'étaient
+pas celles du nouveau destinataire.
+
+Un agent choisi est accompagné de deux mentions permanentes : « Oxyn ne voit pas
+où il envoie la question », et, pour un agent qu'Oxyn ne confine pas, qu'il
+**ne peut pas l'empêcher de lancer des commandes ni de modifier des fichiers de
+la machine de lui-même**
+([ADR-0032](adr/0032-agent-externe-confine-au-lancement.md)). Pour un agent
+confiné, le sélecteur de mode de l'agent n'existe pas : Oxyn le maintient dans
+son mode le plus strict, et un mode dangereux ne doit pas pouvoir se choisir à
+l'écran. Un agent non confiné garde les modes et options qu'il déclare.
 
 Un point d'accès qu'Oxyn n'a pas su résoudre compte comme distant. La
 configuration l'affiche comme « non résolu », pas comme « local » : le doute ne
@@ -665,9 +696,84 @@ tout fournisseur honore le jeton d'annulation dans son flux — et un fournisseu
 qui ne le ferait pas rendrait l'annulation inopérante sans que rien d'autre ne
 le signale.
 
-Une conversation appartient à sa connexion. Fermer la connexion ferme la
-conversation ; elle n'est pas persistée et ne réapparaît pas au lancement
-suivant.
+### Ce que le panneau montre d'un agent externe
+
+Un agent externe travaille avec ses propres outils, qui ne sont pas des `Command`
+d'Oxyn. Le panneau en montre ce qu'il peut montrer **sans rien recopier de la
+machine** :
+
+* le texte de la réponse et le raisonnement que l'agent diffuse ;
+* chaque étape de ses outils propres, réduite à **sa sorte** — lecture, édition,
+  recherche… — et à son état : en attente, en cours, terminée, échouée. Le titre
+  que l'agent compose pour l'étape n'est jamais affiché, ni son contenu : il
+  peut citer un chemin de la machine. L'étape est dessinée comme le travail de
+  l'agent, distincte d'un appel d'outil d'Oxyn, qui lui est passé par le bus ;
+* son **plan**, remplacé en entier à chaque envoi et jamais fusionné avec le
+  précédent : le protocole n'envoie ni différence ni identifiant d'étape. Une
+  priorité inconnue s'affiche « moyenne », un état inconnu « en attente » —
+  jamais « terminé » sur une supposition ;
+* l'occupation de sa fenêtre de contexte, et son coût quand il le donne ;
+* chaque demande d'agir sur la machine qu'Oxyn a refusée, sans bouton pour
+  l'accorder
+  ([AI-PROVIDERS](AI-PROVIDERS.md#ce-que-lagent-demande-lui-à-la-machine)).
+
+Les messages de l'utilisateur renvoyés par l'agent, ses commandes disponibles et
+les informations de session ne sont pas relayés ; une variante que cette version
+ne connaît pas n'est rien, plutôt qu'autre chose que ce qu'elle est.
+
+**Ceci précise [ADR-0026](adr/0026-agents-externes-acp.md)**, qui ne remontait
+que les fragments de texte au motif qu'un plan ou une étape d'outil affichés
+« comme les siens » feraient croire à un travail autorisé par Oxyn. Le risque est
+tenu autrement : la marque distingue le travail de l'agent de celui d'Oxyn, et
+rien de ce qu'elle montre ne peut citer la machine. Le cacher faisait retomber
+dans l'état que ce document refuse : un agent qui travaille en silence est
+indistinguable d'un agent bloqué.
+
+### Une conversation reste dans le workspace, pas ce qu'on lui a montré
+
+Une conversation appartient à sa connexion. Fermer la connexion arrête ce que
+ses conversations exécutaient et les retire de la fenêtre ; elles restent
+**dans le fichier du workspace** (tables `ai_conversations`,
+`ai_conversation_turns` et `ai_conversation_nodes`) et se rouvrent depuis la
+liste « Conversations » du panneau, qui montre les 64 plus récentes de la
+connexion. Au lancement suivant, le panneau s'ouvre sur une conversation neuve ;
+les précédentes attendent dans cette liste.
+
+Ce qui est gardé, échange par échange : la question, la destination (libellé et
+modèle, jamais de clé), le niveau de confidentialité **sous lequel cet échange a
+eu lieu**, et son issue ; pour la réponse, le texte que l'utilisateur a lu, le
+raisonnement, un **rendu** de chaque appel d'outil d'Oxyn — nom, instruction
+SQL, issue, message affiché — et les jetons déclarés. Les versions sœurs créées
+par une régénération ou une modification sont gardées avec leur arbre.
+
+Ce qui ne l'est jamais, faute de colonne où l'écrire : les arguments d'un appel
+d'outil, un résultat de requête, une valeur liée, une clé. Les étapes et le plan
+d'un agent externe ne sont pas gardés non plus.
+
+**Un échange qui a reçu un échantillon de lignes ne garde que sa question**, ses
+compteurs — lignes et colonnes, jamais leurs noms — et son issue. Ni la réponse,
+ni le raisonnement, ni un appel d'outil, ni un message d'erreur : chacun peut
+citer les valeurs envoyées, et le fichier de workspace est l'un des six canaux
+d'[I-03](../CLAUDE.md#i-03). Le fichier le refuse lui-même, et marquer l'échange
+efface ce qui avait déjà été écrit pour lui
+([AI-PROVIDERS](AI-PROVIDERS.md#échantillon-approuvé)). Rouvert, cet échange
+l'annonce au lieu de montrer un vide.
+
+**Rouvrir ne rend pas la mémoire au modèle.** La conversation s'affiche en
+entier, mais la question suivante part d'un contexte neuf, et une ligne le dit
+(`restarted`) : ce qu'on avait transmis au modèle n'a pas été écrit, et une
+transcription rejouée sans les résultats d'outils lui ferait croire à un
+contexte qui n'est plus là. Le raisonnement gardé reste sur le disque et ne
+s'affiche pas à la réouverture.
+
+Supprimer une conversation la retire du fichier avec tous ses échanges, dans la
+même transaction ; ce qui est sorti vers un destinataire reste inscrit dans
+`ai_egress`
+([SECURITY](SECURITY.md#ce-qui-sort-vers-un-destinataire-ia-laisse-une-trace)).
+Supprimer une connexion n'efface pas ses conversations, qui gardent le nom de la
+connexion : ce que l'utilisateur a demandé ne disparaît pas avec l'outil qui a
+servi à le demander. Si l'écriture échoue, la question part quand même, et le
+panneau dit que ce fil n'est gardé que dans la fenêtre.
 
 ### Une proposition n'est jamais exécutée par le fait de l'être
 
@@ -707,7 +813,11 @@ Elle ne suit pas un copier-coller : le presse-papiers ne porte pas de
 métadonnée. Un texte recopié à la main dans un autre document y arrive donc sans
 marque, et c'est une limite assumée d'ADR-0023, pas un défaut à contourner.
 
-### Configuration des fournisseurs
+### Configuration des fournisseurs et des agents
+
+L'écran IA des réglages déclare deux sortes de destinations et les montre dans
+**une** liste : les fournisseurs, avec leur clé, et les agents externes, sans
+clé.
 
 Un fournisseur se déclare par sa famille, son point d'accès, son modèle et, si
 le point d'accès l'exige, une clé. La clé va au trousseau du système ; elle
@@ -721,4 +831,44 @@ hier peut résoudre ailleurs aujourd'hui. Une URL portant des identifiants dans
 son autorité est refusée à la saisie, pas nettoyée en silence.
 
 Les fournisseurs sont communs à tous les workspaces ; le niveau de
-confidentialité, lui, reste attaché à chaque connexion (ADR-0023).
+confidentialité, lui, reste attaché à chaque connexion (ADR-0023). Il en va de
+même des agents externes.
+
+**Un agent externe se déclare de deux façons**, et aucune n'est déclarée sans que
+l'utilisateur l'ait voulu :
+
+* **par un préréglage**, pour les agents qu'Oxyn connaît — Claude Code et Codex
+  ([AI-PROVIDERS](AI-PROVIDERS.md#un-agent-externe--la-portée-nest-pas-inconnue-elle-est-inconnaissable)).
+  **À chaque ouverture de l'écran**, Oxyn cherche dans les emplacements
+  d'installation documentés le lanceur, `node` et le programme de l'agent. C'est
+  une **lecture du disque**, hors du thread de l'interface : rien n'est lancé,
+  rien n'est enregistré. Un agent installé pendant qu'Oxyn tourne se retrouve
+  par « Detect again ». L'écran montre la commande proposée, avec la version
+  épinglée de l'adaptateur, ce qui a été trouvé ou non, et la variable `PATH`
+  ajoutée pour qu'un Oxyn lancé depuis le Finder trouve Node — jamais un jeton.
+  Sans lanceur trouvé, la déclaration est impossible : elle enregistrerait un
+  agent qui ne peut pas démarrer. La commande d'authentification de l'agent est
+  affichée à côté ; c'est l'agent qui connecte son utilisateur, Oxyn ne voit
+  aucun identifiant ;
+* **à la main**, par un programme, ses arguments et son environnement, lancés
+  sans shell. Les arguments se tapent **un par ligne**, tels que le programme
+  les reçoit : aucun guillemet, aucun découpage sur l'espace
+  ([ADR-0026](adr/0026-agents-externes-acp.md)). L'environnement se tape une
+  ligne `NOM=valeur` par variable ; une ligne sans nom valide refuse
+  l'enregistrement plutôt que d'être ignorée. Les valeurs, qui sont souvent des
+  jetons, partent une fois et quittent l'écran aussitôt, que l'enregistrement
+  réussisse ou non ; la liste n'en montre que les noms.
+
+Dans les deux cas, déclarer demande **deux confirmations** : le bouton de
+l'écran, puis une boîte de dialogue **native** qui recopie la commande exacte,
+environnement compris, et rappelle qu'Oxyn ne voit pas où l'agent envoie les
+questions. Native, parce qu'un script injecté dans la webview peut appeler la
+commande de déclaration mais pas cliquer une fenêtre qu'il ne dessine pas
+([ADR-0026](adr/0026-agents-externes-acp.md)).
+
+Un agent déclaré **exactement** comme le préréglage le propose — même adaptateur,
+même version, aucun argument de plus — est confiné au lancement
+([ADR-0032](adr/0032-agent-externe-confine-au-lancement.md)). Tout autre agent,
+préréglage modifié compris, est traité comme inconnu : la liste le marque d'un
+avertissement disant qu'Oxyn ne peut pas l'empêcher d'agir seul sur la machine,
+et le panneau le répète quand il est choisi.

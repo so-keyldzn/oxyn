@@ -1275,6 +1275,16 @@ matrice onglet × index × dialecte pour que les deux ne puissent pas diverger.
 agents externes »). **Le dos est complet et éprouvé ; il ne manque que
 l'interface.**
 
+> **État au 2026-09-23.** Le tableau et les deux paragraphes qui le suivent
+> décrivent l'interface GPUI du 2026-09-14 : `provider_settings.rs`,
+> `row_display` et leurs tests **sans fenêtre** ont été retirés avec elle le
+> 2026-09-18 ([Migration vers l'interface Tauri](#migration-vers-linterface-tauri)).
+> L'interface existe désormais dans `apps/desktop` : liste commune des
+> fournisseurs et des agents, préréglages Claude Code et Codex détectés à
+> l'ouverture de l'écran, confinement ([ADR-0032](adr/0032-agent-externe-confine-au-lancement.md)),
+> sélecteur « Who answers » dans le panneau. Le comportement fait autorité dans
+> [UX-SPEC](UX-SPEC.md#configuration-des-fournisseurs-et-des-agents), pas ici.
+
 | Couche | État | Ce qui la tient |
 |---|---|---|
 | Déclaration | fait | `oxyn_core::ExternalAgentConfig` — **aucun champ de secret**, `Debug` manuel qui ne rend que le nombre de variables d'environnement |
@@ -1325,11 +1335,30 @@ absence de déclaration.
 `remove_external_agent` est plus court que son jumeau, et c'est le sujet : **il
 n'y a pas de clé à oublier**, le geste s'arrête au bus.
 
-**Ce qui reste :** le champ d'environnement dans le formulaire de déclaration, et
-le choix explicite d'un second agent plutôt que du premier déclaré. Les deux sont
-du confort, pas du trajet. Le trajet lui-même — déclarer, persister, lister,
-retirer, lancer, converser, refuser sur `Local`, refuser à un agent — est écrit
-et éprouvé ([ADR-0026](adr/0026-agents-externes-acp.md)).
+**Ce qui restait au 2026-09-14 :** le champ d'environnement dans le formulaire de
+déclaration, et le choix explicite d'un second agent plutôt que du premier
+déclaré. Le trajet lui-même — déclarer, persister, lister, retirer, lancer,
+converser, refuser sur `Local`, refuser à un agent — est écrit et éprouvé
+([ADR-0026](adr/0026-agents-externes-acp.md)).
+
+**Ce qui reste au 2026-09-23 :**
+
+- ~~le choix explicite d'un second agent~~ — fait : le sélecteur « Who answers »
+  du panneau offre chaque fournisseur et chaque agent déclarés
+  (`features/assistant/availability.ts`) ;
+- ~~le champ d'environnement du formulaire manuel~~ — fait le 2026-09-23
+  (`components/oxyn/provider-form.tsx`, `parseEnvironment`). Le même jour, la
+  saisie des arguments est revenue à **un argument par ligne**, comme le veut
+  l'ADR-0026 : le portage vers Tauri avait réintroduit un découpage sur
+  l'espace avec guillemets ;
+- **la nuance « inconnaissable » n'est plus tenue par un test.** L'écran GPUI
+  refusait qu'une destination d'agent se lise comme « inconnue » ou « à
+  mesurer », puisque aucune mesure ne viendra la lever. Aujourd'hui le panneau
+  dit « Oxyn ne voit pas où il envoie la question », ce qui tient la nuance,
+  mais son badge de portée affiche `Unresolved` pour un agent — le mot qu'il
+  emploie aussi pour un point d'accès **pas encore** résolu. Garder le mot
+  commun, qui dit vrai sur la décision (le doute compte comme distant), ou en
+  donner un propre à l'agent, qui dit vrai sur la cause : **non tranché**.
 
 ### Vérification phase par phase, avec les preuves
 
@@ -1662,6 +1691,26 @@ sujet de la dépendance `agent-client-protocol`.
 critère — la décision prise, ou la décision implémentée et mesurée. Le passage au
 statut `accepté` verrouille la réécriture : c'est une décision de gouvernance, pas
 un balayage de champs à faire en lot sans relecture.
+
+### 4. Le budget des conversations est écrit, mais rien ne l'applique
+
+Relevé le **2026-09-23**. [PERFORMANCE](PERFORMANCE.md) fixe le budget disque de
+l'historique de l'assistant — 200 fils, 90 jours d'inactivité, 32 Mio de
+transcript par workspace — « appliqués par `Conversations::prune` ».
+`Conversations::prune` et `RetentionPolicy::default()` existent dans
+`oxyn-store` et sont éprouvés par ses tests, mais **aucun appelant hors de ces
+tests** : l'application n'élague jamais. Le budget ne tient donc pas, et c'est
+précisément la croissance qu'il devait empêcher.
+
+**Corrigé le 2026-09-23.** `Backend::prune_conversations` applique
+`RetentionPolicy::default()` une fois par lancement, sur le pool bloquant, sans
+retarder l'ouverture. On élague au lancement plutôt qu'après chaque échange : le
+budget borne des mois d'usage, pas une session, et une suppression en pleine
+conversation pourrait emporter le fil que l'utilisateur lit.
+
+**Reste ouvert :** faut-il dire à l'utilisateur qu'un fil a été élagué ?
+[UX-SPEC](UX-SPEC.md#une-conversation-reste-dans-le-workspace-pas-ce-quon-lui-a-montré)
+ne le prévoit pas. Aujourd'hui, seul un journal `info` le consigne.
 
 ## Ce qui n'a pas sa place ici
 

@@ -50,7 +50,8 @@ forme qu'on lui donne aujourd'hui est celle qu'on gardera.
 ### 1. Le serveur MCP n'expose que le `ToolRegistry`, tel quel
 
 Les outils servis à l'agent externe sont **exactement** ceux que l'assistant
-interne reçoit du `ToolRegistry` d'`oxyn-ai` — aujourd'hui `execute_query` seul —
+interne reçoit du `ToolRegistry` d'`oxyn-ai` — aujourd'hui `execute_query` et
+`describe_schema` (§ 4 bis) —
 avec leurs schémas JSON d'arguments, produits par le même code.
 
 **Aucun outil n'est écrit pour l'agent externe.** Un outil qui n'existerait que
@@ -129,11 +130,11 @@ interne — même résumé, même rapport d'échec expurgé selon le niveau, mê
 encadrement `untrusted`. Il n'y a donc **pas** de règle de niveau propre aux
 agents externes :
 
-| Niveau | Agent externe | `execute_query` | `refresh_catalog` |
-|---|---|---|---|
-| `Local` | interdit | — | — |
-| `Metadata` | permis | permis, rend la forme | permis |
-| `Sampled` | permis | permis, rend la forme | permis |
+| Niveau | Agent externe | `execute_query` | `describe_schema` | `refresh_catalog` |
+|---|---|---|---|---|
+| `Local` | interdit | — | — | — |
+| `Metadata` | permis | permis, rend la forme | permis, rend la structure | permis |
+| `Sampled` | permis | permis, rend la forme | permis, rend la structure, aucune valeur | permis |
 
 `Local` interdit l'agent externe **avant le lancement du processus** : c'est
 ADR-0026, inchangé.
@@ -149,6 +150,69 @@ relance l'agent sous ce qui vaut alors.
 
 Écrire une seconde règle aurait été la vraie faute : deux règles de niveau
 divergent le jour où l'une des deux change, et divergent en silence.
+
+### 4 bis. La structure de la base : un outil pour toutes les destinations
+
+*Ajouté le 2026-09-23, sur constat.* La première version de cet ADR affirmait
+que l'agent externe « lit le schéma ». C'était faux : il ne recevait que la
+question, et aucun outil ne lui rendait la structure. Sur une base SQLite, un
+agent à qui l'on demandait « les 10 dernières lignes » a lancé
+`SELECT name FROM sqlite_master`, reçu `11 rows` — la forme, jamais les valeurs,
+comme le veut le § 4 —, et proposé `SELECT * FROM your_table`. La description
+d'`execute_query` l'y invitait : elle disait « Reads return rows ».
+
+La consigne qui a tranché : l'accès à la structure est **le même pour toute
+destination** — fournisseur intégré, Claude Code, Codex, tout agent à venir —,
+et ajouter une destination ne demande aucun code propre au schéma.
+
+**Décision :**
+
+* **Un outil du registre, `describe_schema`**, que la boucle interne et le pont
+  MCP exposent tous deux. Il se traduit en une `Command` nouvelle,
+  **`DescribeCatalog { connection, focus }`**, qui porte `Actor::Agent` et
+  traverse le `PolicyGate` comme toute autre (§ 2). C'est une lecture du cache
+  local : elle ne contacte aucun serveur, n'est pas mutante, et le `PolicyGate`
+  la permet partout, `production` comprise. `focus` porte les mots de recherche
+  de l'agent, bornés à 256 octets — des mots pour classer des noms, jamais du
+  texte de requête ([I-10](../../CLAUDE.md#i-10)).
+* **L'exécuteur rend le cache, pas un rendu.** Il remet la poignée du catalogue
+  (`CatalogHandle`) dans son rapport ; c'est `oxyn-ai` qui la rend, dans
+  `ToolOutcome::from_dispatch`, par **`ContextBuilder::build`** — la même
+  fonction que le contexte d'une invite, sous le niveau **relu à l'appel** (§ 4),
+  avec le même budget et le même encadré `untrusted`. Il n'existe pas de second
+  rendu du schéma ([I-04](../../CLAUDE.md#i-04)).
+* **Le rendu est le même pour toute base.** Il ne connaît que le modèle commun
+  d'`oxyn-catalog` : chemin, sorte d'objet (`table`, `collection`, `index`,
+  `key_pattern`, `node_label`…), champs et sous-champs avec leurs types **tels
+  que le driver les nomme**, champs inférés, index, clés étrangères. Il dit en
+  tête le langage de requête de la connexion. Les noms sont cités comme le
+  dialecte SQL les cite, ou, hors SQL, en littéraux JSON. Un driver qui remplit
+  le catalogue est couvert sans une ligne de plus dans `oxyn-ai`.
+* **Les deux destinations gardent aussi un contexte d'ouverture**, rendu par la
+  même fonction : l'assistant interne dans son message système, l'agent externe
+  dans l'invite qui ouvre sa session (`AgentPrompt::with_schema`). Trois raisons
+  le justifient : l'échantillon approuvé n'entre que par ce contexte, un petit
+  modèle local peine à appeler un outil, et la première réponse n'attend pas un
+  aller-retour. L'outil sert à ce que ce contexte a laissé hors budget.
+  L'invite d'un agent externe ne porte jamais d'échantillon : sa session survit à
+  la question, et Oxyn ne peut pas y marquer un échange comme sans mémoire.
+* **Ce qui dépend de la destination se dérive, ne se recopie pas.** Le nom du
+  serveur MCP est une constante (`mcp::SERVER_NAME`) dont découlent la
+  déclaration ACP, la règle de permission de Claude (`mcp__oxyn`, qui couvre
+  tous les outils du serveur) et l'approbation de Codex, posée sur le serveur
+  entier. Un test vérifie que chaque outil du registre passe les deux
+  confinements sans y être nommé.
+* la description d'`execute_query` dit désormais ce que l'outil rend : la forme
+  du résultat, jamais ses valeurs, et renvoie à `describe_schema`.
+
+La liste figée par le test du § 1 passe à `execute_query` et `describe_schema`.
+Ce changement **appelle la relecture de sécurité du pont** que le § 1 exige.
+
+**Limite assumée.** Une réponse de `describe_schema` suit le budget du contexte :
+vingt-quatre relations, environ six mille jetons. L'agent parcourt un grand
+schéma par mots de recherche, pas par pages. Et le catalogue commun ne connaît ni
+les définitions de vues ni les valeurs de champs énumérés : ce qu'il ne sait pas
+reste absent.
 
 ### 5. Le transport est `http` sur la boucle locale, avec un jeton par conversation
 
@@ -312,7 +376,8 @@ fois, et ce sera un autre ADR.
 ## Conséquences
 
 * **+** L'agent externe devient utile dans un atelier de bases de données : il
-  lit le schéma et interroge la base que l'utilisateur a ouverte.
+  lit la structure de la base par le même outil que l'assistant interne (§ 4 bis)
+  et interroge la base que l'utilisateur a ouverte.
 * **+** Aucune surface nouvelle vers le bus : le pont traduit vers le même
   `ToolRegistry` et le même sink. Ce qui est relu une fois vaut pour les deux
   destinations.

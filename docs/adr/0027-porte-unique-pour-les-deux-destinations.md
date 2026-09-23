@@ -139,6 +139,15 @@ Le premier est vérifiable mécaniquement : `grep` sur `run_turn` doit rendre un
 seul site d'appel hors tests. Si ce compte change et que cet ADR est resté en
 **C**, il n'a plus de fondement.
 
+**Le deuxième fait s'est produit le 2026-09-23**, et l'option **B** l'a absorbé
+sans changer de forme : la structure de la base rejoint désormais l'invite qui
+ouvre une session d'agent, par un second constructeur, `with_schema`, qui la fait
+rendre par `ContextBuilder::build` sous le même niveau. `AgentPrompt` porte
+l'`AgentContext` produit, pour que l'appelant dise ce qui est parti. Le reste de
+la structure passe par l'outil `describe_schema`, commun aux deux destinations et
+rendu par la même fonction. La décision et ses limites sont dans
+[ADR-0030 § 4 bis](0030-outils-oxyn-exposes-a-un-agent-externe.md#4-bis-la-structure-de-la-base--un-outil-pour-toutes-les-destinations).
+
 ## Conséquences
 
 Quelle que soit l'option retenue, une chose ne doit pas rester en l'état : un

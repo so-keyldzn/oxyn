@@ -81,9 +81,16 @@ données quittent la machine, ou non.
 
 Depuis [ADR-0026](adr/0026-agents-externes-acp.md), une destination peut aussi
 être un **agent externe** — un programme déjà installé et authentifié chez
-l'utilisateur (Claude Code, Gemini CLI), lancé en sous-processus et parlant
-l'Agent Client Protocol. Oxyn ne détient alors **aucune clé** : l'agent porte sa
-propre authentification.
+l'utilisateur, lancé en sous-processus et parlant l'Agent Client Protocol. Oxyn
+ne détient alors **aucune clé** : l'agent porte sa propre authentification.
+
+Oxyn a un **préréglage** pour deux agents, Claude Code et Codex : un adaptateur
+ACP à version épinglée, dont les réglages de confinement ont été mesurés
+([ADR-0032](adr/0032-agent-externe-confine-au-lancement.md)). Tout autre agent —
+Gemini CLI, que l'ADR-0026 citait en exemple, compris — se déclare **à la main**,
+par sa commande et ses arguments, et n'est **pas confiné**. La déclaration et ce
+que l'écran en montre sont décrits dans
+[UX-SPEC](UX-SPEC.md#configuration-des-fournisseurs-et-des-agents).
 
 Ce mode déplace la question de ce document, et il faut le dire nettement. Pour un
 fournisseur déclaré, la portée se **mesure** : on résout l'hôte, et la réponse
@@ -98,25 +105,34 @@ La conséquence tombe sans mécanique nouvelle, parce que le dépôt traite déj
 | Niveau de la connexion | Agent externe |
 |---|---|
 | `Local` | **refusé** — la promesse « rien ne sort de la machine » ne peut pas être tenue par un processus dont on ne voit pas la sortie |
-| `Metadata` *(défaut)* | permis — voir la réserve ci-dessous sur la forme que prend ce contrôle |
-| `Sampled` | permis, mais l'échantillon approuvé est **refusé** : l'invite ne passe pas par `ContextBuilder`, seul point qui applique le niveau ([I-04](../CLAUDE.md#i-04)). L'agent ne lit des lignes que par ses outils MCP, qui traversent le `PolicyGate` et relisent le niveau à chaque appel. Réouverture quand son invite passera par `ContextBuilder` |
+| `Metadata` *(défaut)* | permis — la structure de la base part avec la première question d'une session d'agent, et sur demande par l'outil `describe_schema` ; les deux rendus par `ContextBuilder` |
+| `Sampled` | permis, la structure part comme sous `Metadata`, mais l'échantillon approuvé est **refusé** : la session d'un agent survit à la question, et Oxyn ne peut pas y marquer un échange comme sans mémoire, comme il le fait pour un fournisseur. Ses outils MCP traversent le `PolicyGate`, relisent le niveau à chaque appel, et ne rendent que la forme d'un résultat — jamais ses valeurs |
 
 Le détail de l'échantillon est dans [Échantillon approuvé](#échantillon-approuvé).
 
 Le refus tombe **avant le lancement**, pas avant l'envoi : le seul fait de
 démarrer l'agent peut suffire à lui faire contacter son service.
 
-> **La réserve, et elle porte sur la garantie, pas sur le comportement.** Pour
-> un fournisseur, le point de passage est tenu par le type : seul
-> `ContextBuilder::build` fabrique un `AgentContext`, et rien ne rejoint une
-> invite sans passer par lui. Pour un agent externe, `run_turn` prend l'invite
-> en `&str` : le niveau y gouverne le **lancement**, pas l'assemblage de ce qui
-> est envoyé. Aujourd'hui l'unique appelant ne transmet que la question tapée
-> par l'utilisateur, et aucun contenu de catalogue n'entre dans cette invite —
-> il n'y a donc rien qui sorte indûment. Mais la propriété tient par la
-> relecture et non par le compilateur, ce qui n'est pas ce que ce document
-> promet ailleurs. Refermer l'écart demande de faire passer ce chemin par le
-> même `AgentContext` : c'est une décision de conception, à trancher par un ADR.
+> **Ce qui entre dans l'invite, et par où.** Pour un fournisseur comme pour un
+> agent externe, le point de passage est tenu par le type. `run_turn` exige un
+> `AgentPrompt` ([ADR-0027](adr/0027-porte-unique-pour-les-deux-destinations.md)),
+> qui ne naît que sous le niveau de la connexion : la question seule
+> (`from_user`), ou la question précédée de la structure de la base
+> (`with_schema`). Cette structure est rendue par `ContextBuilder::build` — le
+> même code, le même budget, le même encadré que pour l'assistant interne — et
+> elle ne part qu'à l'ouverture d'une session d'agent : une question qui suit une
+> réponse de la même session porte la question seule, comme une conversation de
+> fournisseur remémorée. `with_schema` ne reçoit aucun échantillon : aucun
+> argument ne le permet.
+>
+> **La structure au-delà de ce contexte** passe par l'outil `describe_schema`,
+> le même pour toute destination — boucle d'outils d'un fournisseur ou pont MCP
+> d'un agent externe. Il devient une `Command::DescribeCatalog` qui traverse le
+> `PolicyGate` ; l'exécuteur rend la poignée du catalogue local, et `oxyn-ai` la
+> rend par `ContextBuilder::build`, sous le niveau relu à l'appel. Le rendu ne
+> connaît que le modèle commun du catalogue : une collection, un motif de clés ou
+> un label de graphe s'y décrivent comme une table, dans le langage de requête de
+> la connexion ([ADR-0030 § 4 bis](adr/0030-outils-oxyn-exposes-a-un-agent-externe.md#4-bis-la-structure-de-la-base--un-outil-pour-toutes-les-destinations)).
 
 > **Ce qu'Oxyn ne peut pas promettre ici**, et qu'il ne promet donc pas : ce que
 > l'agent fait de ce qu'il reçoit. La facturation, la rétention et le traitement
@@ -138,6 +154,20 @@ Surtout, il n'a pas d'écran pour montrer *quel* fichier ni *quelle* commande �
 et une confirmation qui ne dit pas ce qu'elle autorise déplace la responsabilité
 sans donner de quoi l'exercer. Seuls le raisonnement interne et le changement de
 mode sont accordés : ils ne quittent pas l'agent.
+
+**Refuser ne suffit pas.** Un agent ne demande que ce que son mode l'oblige à
+demander : mesuré le 2026-09-23, Claude Agent et Codex lançaient une commande
+sans rien demander dans leur mode initial. Un agent dont Oxyn connaît
+l'adaptateur est donc **confiné au lancement** : ses outils de la machine sont
+retirés ou coupés, ses outils personnels désactivés, et il est maintenu dans son
+mode le plus strict. Les outils d'Oxyn, eux, sont préautorisés côté agent,
+puisque le `PolicyGate` les contrôle ([ADR-0032](adr/0032-agent-externe-confine-au-lancement.md)).
+Un agent déclaré à la main n'est pas confiné, et l'écran le dit.
+
+Ce que le panneau montre en retour du travail de l'agent — texte, raisonnement,
+sorte et état de ses étapes, plan — et ce qu'il n'en montre jamais est décrit
+dans [UX-SPEC](UX-SPEC.md#ce-que-le-panneau-montre-dun-agent-externe) ; la
+règle précise l'ADR-0026, qui ne remontait que le texte.
 
 ## Ce qu'on fait des réponses
 
@@ -192,8 +222,8 @@ dans `oxyn-desktop` (`backend/ai/samples.rs`).
 1. **L'utilisateur le déclenche, jamais le modèle.** L'utilisateur épingle un
    objet depuis le menu du catalogue (« Pin to question »). L'action n'existe que
    sous `Sampled`, pour un fournisseur intégré et sur un objet qui porte des
-   lignes ; ailleurs elle est absente, pas grisée. Un agent externe assemble son
-   propre contexte, et Oxyn ne pourrait pas tenir la suite. Une question porte
+   lignes ; ailleurs elle est absente, pas grisée. Un agent externe garde sa
+   session d'une question à l'autre, et Oxyn ne pourrait pas tenir la suite. Une question porte
    une seule épingle ; elle tombe dès que la question part, ou dès que le niveau
    ou le destinataire ne la permettent plus. Aucun outil ne permet au modèle de
    demander un échantillon. L'offre (`ai_request_sample`) porte le nom de la
@@ -292,8 +322,10 @@ s'édite pas.
 
 ## Absence de fournisseur
 
-Sans configuration, le workspace IA est **absent de l'interface** et Oxyn reste
-un client complet ([ADR-0006](adr/0006-ai-privacy-tiers.md)). Un chemin de code
+Sans fournisseur ni agent externe déclaré, le workspace IA est **absent de
+l'interface** et Oxyn reste un client complet
+([ADR-0006](adr/0006-ai-privacy-tiers.md) ; le comportement d'écran est dans
+[UX-SPEC](UX-SPEC.md#le-workspace-ia-nexiste-que-sil-a-été-configuré)). Un chemin de code
 qui appelle un modèle pour produire un résultat que l'utilisateur attend comme
 déterministe — un tri, un formatage, une complétion de nom de table — est un
 défaut de conception, pas une fonctionnalité.

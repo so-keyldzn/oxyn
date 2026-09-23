@@ -472,7 +472,7 @@ valeurs de `crates/oxyn-ai/src/external/presets.rs`.
 |---|---|---|---|---|
 | `@agentclientprotocol/claude-agent-acp` | **0.78.0** | Apache-2.0 (le registre ACP écrit « proprietary », voir plus bas) | `claude-agent-acp` ; `engines` : `node >=22` | [registre npm](https://registry.npmjs.org/@agentclientprotocol/claude-agent-acp), [registre ACP](https://github.com/agentclientprotocol/registry/blob/main/claude-acp/agent.json) |
 | `@anthropic-ai/claude-agent-sdk` (dépendance, CLI embarquée 2.1.270) | 0.3.270 | « SEE LICENSE IN README.md » | — | [registre npm](https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk/0.3.270) |
-| `@agentclientprotocol/codex-acp` | **1.12.0** | Apache-2.0 | `codex-acp` ; aucun `engines` déclaré | [registre npm](https://registry.npmjs.org/@agentclientprotocol/codex-acp), [registre ACP](https://github.com/agentclientprotocol/registry/blob/main/codex-acp/agent.json) |
+| `@agentclientprotocol/codex-acp` | **1.12.0** | Apache-2.0 | `codex-acp` ; aucun `engines` déclaré, mais sa dépendance `open@^11` exige `node >=20`, la plus haute de ses dépendances directes (`vscode-jsonrpc@9` : `>=14`, `diff@9` : `>=0.3.1`, `zod@4` et `@agentclientprotocol/sdk@1.4` : rien) — relevé au registre npm le 2026-09-23 | [registre npm](https://registry.npmjs.org/@agentclientprotocol/codex-acp), [registre ACP](https://github.com/agentclientprotocol/registry/blob/main/codex-acp/agent.json) |
 | `@openai/codex` (dépendance) | 0.154.0 | Apache-2.0 | `codex` ; `node >=16` | [registre npm](https://registry.npmjs.org/@openai/codex/latest) |
 | `@zed-industries/claude-code-acp`, `@zed-industries/codex-acp` | 0.16.2, 0.16.0 | Apache-2.0 | — | **dépréciés** au profit des deux premiers ; le dépôt `zed-industries/codex-acp` est archivé |
 
@@ -496,6 +496,19 @@ registre ACP.
   l'adaptateur relit. **Déduit, non écrit** dans la documentation de
   l'adaptateur : une connexion faite avec le `claude` de l'utilisateur est
   réutilisée à configuration identique.
+  **Sans `claude` installé — vérifié le 2026-09-23** dans la source publiée de
+  0.78.0 (cache `npx`) : `dist/index.js` transmet tout ce qui suit `--cli` à la
+  CLI que le SDK embarque (`claudeCliPath()`, `dist/acp-agent.js`), et les
+  méthodes `terminal` qu'il annonce sont exactement
+  `--cli auth login --claudeai` et `--cli auth login --console`, ajoutés à la
+  commande qui le lance. Mesuré sur la machine de développement :
+  `npx -y @agentclientprotocol/claude-agent-acp@0.78.0 --cli --version` répond
+  `2.1.270 (Claude Code)`, et `… --cli auth login --help` liste `--claudeai`
+  (« Use Claude subscription (default) »). Oxyn propose donc cette commande,
+  composée avec la commande déclarée, quand `claude` est introuvable à l'écran
+  des fournisseurs, et toujours dans le panneau pour la déclaration épinglée
+  (il n'y cherche pas `claude`). Rien d'équivalent n'est vérifié pour
+  `codex-acp` : `codex login` reste la seule proposition.
 - Codex : méthodes de genre `agent`, qui passent par `authenticate` —
   `chat-gpt` (réussit aussitôt si un compte est déjà connecté, ouvre le
   navigateur sinon) et `api-key` (clé passée en `_meta` ou lue dans
@@ -511,8 +524,30 @@ application lancée depuis le Finder n'hérite pas du `PATH` du shell :
 [script d'installation Codex](https://raw.githubusercontent.com/openai/codex/main/scripts/install/install.sh)),
 `~/.claude/local` (ancienne installation npm locale de Claude Code),
 `/opt/homebrew/bin`, `/usr/local/bin`, `/home/linuxbrew/.linuxbrew/bin`
-([Homebrew](https://docs.brew.sh/Installation)). **Non vérifiés, donc non
-cherchés** : les répertoires de nvm, fnm, volta et asdf.
+([Homebrew](https://docs.brew.sh/Installation)). Seules les entrées **absolues**
+de `PATH` sont gardées : `.` ou `bin` se résoudraient contre le répertoire
+courant d'Oxyn.
+
+**nvm et Volta — vérification du 2026-09-23.** Ajoutés après qu'une machine
+dont Node vient de nvm n'a pas trouvé `npx` depuis le Finder.
+
+| Gestionnaire | Ce qui est relevé | Source |
+|---|---|---|
+| nvm **0.40.8** | installé dans `~/.nvm`, ou `${XDG_CONFIG_HOME}/nvm` si cette variable existe (`NVM_DIR`) | [README](https://github.com/nvm-sh/nvm/blob/v0.40.8/README.md), l. 120-126 |
+| | une version vit dans `$NVM_DIR/versions/node/<version>`, son exécutable dans `<version>/bin` | [`nvm.sh`](https://github.com/nvm-sh/nvm/blob/v0.40.8/nvm.sh) : `nvm_version_dir` (l. 781-785), `NVM_NODE_PATH="${VERSION_PATH}/bin/…"` (l. 253) |
+| | les alias sont des fichiers de `$NVM_DIR/alias` (`nvm_alias_path`, l. 796), ceux des LTS sous `alias/lts/` ; un alias peut viser un autre alias, nvm suit la chaîne et s'arrête sur un cycle (`nvm_resolve_alias`, l. 1553) ; `..` est refusé dans un nom (l. 1507-1510) | `nvm.sh` |
+| | `default` peut valoir `node` (la plus récente installée), `18` (la plus récente v18.x), `18.12` (la plus récente v18.12.x) — « The first version installed becomes the default » | README, l. 396 et 626-628 |
+| Volta | « The shim directory is at `$VOLTA_HOME/bin` », `VOLTA_HOME` valant `~/.volta` sur Unix | [installateurs Volta](https://docs.volta.sh/advanced/installers) |
+
+Ce qu'Oxyn en fait (`crates/oxyn-ai/src/external/locate/nvm.rs`) : il suit
+l'alias `default` sous `~/.nvm` et garde la version installée qu'il désigne
+**si elle satisfait le minimum de l'agent** — `node >=22` pour `claude-agent-acp`,
+`node >=20` pour `codex-acp` (ci-dessus), aucun pour un agent qu'Oxyn ne connaît
+pas ; sinon la plus haute version installée qui le satisfait ; sinon rien. `NVM_DIR`,
+`XDG_CONFIG_HOME` et `VOLTA_HOME` ne sont pas lus : c'est un profil de shell qui
+les pose, et un processus qui en a exécuté un a déjà ces répertoires dans son
+`PATH`. **Non vérifiés, donc non cherchés** : fnm (ses répertoires `multishell`
+sont propres à chaque shell) et asdf.
 
 **Écart à signaler.** Le registre ACP déclare la licence de Claude Agent
 « proprietary » quand `package.json` et `LICENSE` disent Apache-2.0 ;
@@ -661,6 +696,185 @@ required for correctness ».
 le mode courant ne sont plus retenus, ni affichés, ni acceptés en changement. Un
 agent qui ne déclare que `modes` garde son sélecteur : la consigne vise la
 transition, pas les agents anciens.
+
+### Confinement des adaptateurs ACP — mesure du 2026-09-23
+
+Fonde [ADR-0032](adr/0032-agent-externe-confine-au-lancement.md). Mesuré avec
+les adaptateurs épinglés (`@agentclientprotocol/claude-agent-acp` 0.78.0, qui
+embarque `@anthropic-ai/claude-agent-sdk` 0.3.270 ; `@agentclientprotocol/codex-acp`
+1.12.0, qui embarque `@openai/codex` 0.154.0). Le client de mesure refuse
+toute demande d'autorisation, comme `permission_for` ; la consigne demande à
+l'agent de lancer `touch` sur un fichier témoin.
+
+**Un agent ne demande que ce que son mode lui fait demander.**
+
+| Agent, mode | Demande au client ? | Fichier créé |
+|---|---|---|
+| Claude Agent, `auto` (mode initial, lu dans les réglages de l'utilisateur) | non | oui |
+| Claude Agent, `default` (« Manual ») | oui, refus respecté | non |
+| Codex, `agent` (mode initial) | non | oui |
+| Codex, `read-only`, fichier dans `/tmp` | non | oui |
+| Codex, `read-only`, fichier dans le répertoire personnel | oui, refus respecté | non |
+
+Le mode d'un agent décrit ce qu'il décide **sans** demander ; le refus par défaut
+de `permission_for` ne protège que ce qui est demandé.
+
+**Claude Agent : les options du SDK passent par `_meta`.** Dans
+`dist/acp-agent.js` (0.78.0), `newSession` étale
+`params._meta.claudeCode.options` dans les options du SDK. Relu dans
+`sdk.d.ts` (0.3.270) :
+
+| Option | Texte de `sdk.d.ts` |
+|---|---|
+| `tools` | `string[] \| { preset }` ; `[]` retire tous les outils intégrés |
+| `allowedTools` | « List of tool names that are auto-allowed without prompting for permission » ; une entrée `mcp__<serveur>` vaut pour tout le serveur |
+| `strictMcpConfig` | ne garde que les serveurs MCP fournis par l'appelant |
+| `settingSources` | les sources de réglages chargées ; `[]` n'en charge aucune |
+| `allowDangerouslySkipPermissions` | requis par `bypassPermissions` ; l'adaptateur retire ce mode du catalogue à `false` |
+
+Mesuré avec `tools: []`, `allowedTools: ["mcp__oxyn"]`, `strictMcpConfig: true`,
+`settingSources: []`, `allowDangerouslySkipPermissions: false`, puis
+`session/set_mode` à `default` : aucun appel d'outil sur la consigne `touch`,
+`bypassPermissions` absent des modes, et l'outil d'un serveur MCP `oxyn` appelé
+sans demande d'autorisation.
+
+**Codex : `CODEX_CONFIG` et `INITIAL_AGENT_MODE`**, variables documentées par
+le README de `codex-acp` 1.12.0 (« JSON object merged into the Codex session
+config » ; « initial mode id: `read-only`, `agent`, or `agent-full-access` »).
+Clés relues dans la [référence de configuration Codex](https://learn.chatgpt.com/docs/config-file/config-reference)
+le 2026-09-23 :
+
+| Clé | Texte de la référence |
+|---|---|
+| `features.shell_tool` | « Enable the default `shell` tool for running commands (stable; on by default) » |
+| `features.unified_exec` | « Use the unified PTY-backed exec tool » |
+| `features.hooks` | « Enable lifecycle hooks loaded from hooks.json or inline [hooks] config » |
+| `features.apps` | « Enable app (connector) integrations (stable; on by default) » |
+| `web_search` | `disabled \| cached \| indexed \| live` ; « `"disabled"` to remove the tool » |
+| `mcp_servers.<id>.url`, `.bearer_token_env_var` | point d'accès HTTP, et variable d'environnement portant le jeton |
+| `mcp_servers.<id>.default_tools_approval_mode` | `auto \| prompt \| writes \| approve` |
+| `mcp_servers.<id>.enabled`, `plugins.<id>.enabled` | désactivation **une par une** ; « No single master key exists » |
+
+Mesuré avec le shell, `unified_exec`, les hooks, les apps et la recherche web
+coupés, en `read-only` :
+
+* la consigne `touch` n'exécute plus rien ; Codex tente une édition de fichier,
+  qui demande et est refusée ;
+* un serveur MCP déclaré **par ACP** (`session/new`) demande l'autorisation à
+  chaque appel, sous le genre `execute` et sans titre ni nom d'outil —
+  `default_tools_approval_mode` passé par `CODEX_CONFIG` ne s'y applique pas ;
+* le même serveur déclaré **dans `CODEX_CONFIG`** avec
+  `default_tools_approval_mode = "approve"` est appelé sans demande.
+
+**L'écart qui reste.** Codex charge encore les serveurs MCP et les plugins de
+`~/.codex/config.toml` de l'utilisateur ; la mesure l'a vu tenter l'outil d'un
+plugin de l'utilisateur. Aucune clé documentée ne les coupe en bloc, et la
+référence ne documente aucun moyen d'ignorer ce fichier.
+
+#### Les couches de configuration que Codex charge — relu le 2026-09-23
+
+Relu dans le code source au tag `rust-v0.154.0` d'openai/codex (commit
+`6b9826e3aa83b1a5947db50f4332cb9c65f1b340`), qui correspond à `@openai/codex`
+0.154.0. Le registre npm ne publie aucune 0.154.x plus récente à cette date,
+alors que `codex-acp` 1.12.0 en accepte une (`"@openai/codex": "^0.154.0"`).
+Côté adaptateur, relu dans `dist/index.js` de `@agentclientprotocol/codex-acp`
+1.12.0, tel que publié au registre (`gitHead`
+`a7afd2ae077d625710194d9701b83595494449de`). Les numéros de ligne renvoient à
+ces deux versions.
+
+**Le chemin de lancement.** `codex-acp` démarre `codex app-server` sans autre
+argument, avec son propre environnement et son propre répertoire de travail
+(`startCodexConnection`, l. 22098-22106). La CLI démarre l'app-server avec
+`LoaderOverrides::default()` : **aucun profil**, même si `--profile` est passé
+([`cli/src/main.rs` l. 1353-1356](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/cli/src/main.rs#L1353-L1356)).
+À chaque `session/new`, `codex-acp` envoie `thread/start` avec deux champs
+(l. 28596-28602) : `cwd`, qui reprend le `cwd` ACP, et `config`, qui contient
+`CODEX_CONFIG` plus `projects.<cwd>.trust_level = "trusted"` (l. 28703-28708).
+L'app-server verse ce `config` dans les surcharges de ligne de commande
+([`app-server/src/config_manager.rs` l. 232-243](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/app-server/src/config_manager.rs#L232-L243)).
+`CODEX_CONFIG` forme donc la couche **`SessionFlags`**, au même rang que `-c`.
+Le chargeur de configuration par thread de l'app-server est
+`NoopThreadConfigLoader`
+([`app-server/src/lib.rs` l. 510](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/app-server/src/lib.rs#L510)).
+
+**`CODEX_HOME`**
+([`utils/home-dir/src/lib.rs` l. 13-62](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/utils/home-dir/src/lib.rs#L13-L62)) :
+
+* une valeur **vide** vaut une variable absente ;
+* une valeur non vide doit désigner un répertoire existant. Sinon, Codex
+  s'arrête en erreur. Le chemin est canonicalisé, et un chemin relatif se
+  résout donc depuis le répertoire de travail **de Codex** ;
+* en l'absence de `CODEX_HOME`, Codex prend `home_dir()` suivi de `.codex`,
+  sans vérifier que ce répertoire existe.
+
+**Les couches, de la plus faible à la plus forte.** L'ordre vient du
+[commentaire de `load_config_layers_state`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/config/src/loader/mod.rs#L110-L124)
+et du corps de cette fonction (l. 132-500).
+
+| Rang | Couche | Source | Peut déclarer `mcp_servers` / `plugins` |
+|---|---|---|---|
+| 1 | valeurs par défaut du paquet | `config/defaults.toml`, embarqué dans le binaire | non : 17 lignes, aucune de ces deux tables |
+| 2 | système | `/etc/codex/config.toml` sous Unix ([l. 66](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/config/src/loader/mod.rs#L66)) | oui |
+| 3 | cloud géré par l'entreprise | fragments TOML livrés par le serveur pour l'espace de travail connecté ([`cloud_config_layers.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/config/src/cloud_config_layers.rs)) | oui |
+| 4 | utilisateur | `$CODEX_HOME/config.toml` | oui |
+| 5 | profil v2 | `$CODEX_HOME/<nom>.config.toml`, choisi par `--profile` | non active ici, puisque l'app-server ignore le profil. Un profil hérité, `[profiles.<nom>]`, ne porte aucune de ces deux tables ([`profile_toml.rs`](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/config/src/profile_toml.rs)) |
+| 6 | projet | tout `.codex/config.toml` trouvé entre la racine du projet et le `cwd` du thread. Le plus proche du `cwd` l'emporte | oui : `mcp_servers` et `plugins` ne figurent pas dans `PROJECT_LOCAL_CONFIG_DENYLIST` ([l. 75-88](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/config/src/loader/mod.rs#L75-L88)) |
+| 7 | `SessionFlags` | `-c`, `--config`, et le `config` de `thread/start`, c'est-à-dire `CODEX_CONFIG` | c'est la couche qu'écrit Oxyn |
+| 8 | géré, fichier hérité | `/etc/codex/managed_config.toml` sous Unix, **indépendamment de `CODEX_HOME`** ([`layer_io.rs` l. 22, 222-233](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/config/src/loader/layer_io.rs#L222-L233)) | oui |
+| 9 | géré par MDM (macOS) | préférence gérée `config_toml_base64` du domaine `com.openai.codex` ([`macos.rs` l. 20-22](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/config/src/loader/macos.rs#L20-L22)) | oui |
+
+La documentation publique confirme les rangs 1 à 7 : la section
+« Configuration precedence » de
+[config-basic](https://learn.chatgpt.com/docs/config-file/config-basic),
+relue le 2026-09-23. Elle confirme aussi les rangs 8 et 9, dans cet ordre, au-dessus de
+`config.toml` : la page
+[managed-configuration](https://learn.chatgpt.com/docs/enterprise/managed-configuration),
+relue le même jour. `requirements.toml`, dans `/etc/codex/` ou dans la
+préférence `requirements_toml_base64`, contraint les valeurs mais ne forme pas
+une couche de configuration.
+
+**La fusion est récursive, table par table**
+([`merge_toml_values`, `merge.rs` l. 58](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/config/src/merge.rs#L58)).
+`mcp_servers` et `plugins` forment donc l'**union** des entrées de toutes les
+couches. Une couche plus forte ne remplace que les clés qu'elle écrit. Deux
+conséquences :
+
+* `mcp_servers.<id>.enabled = false` au rang 7 coupe un serveur déclaré aux
+  rangs 2 à 6 ;
+* aux rangs 8 et 9, ce même réglage n'est écrasé que si la couche gérée écrit
+  elle-même `enabled`.
+
+**La couche de projet**
+(`find_project_root`, [l. 1548-1583](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/config/src/loader/mod.rs#L1548-L1583) ;
+`discover_project_layers`, [l. 1696-1718](https://github.com/openai/codex/blob/rust-v0.154.0/codex-rs/config/src/loader/mod.rs#L1696-L1718)) :
+
+* Elle part du **`cwd` du thread**, pas de celui du processus. Oxyn donne le
+  même répertoire aux deux : le répertoire privé que crée `private_directory`,
+  à la fois répertoire de travail du processus et `cwd` de `session/new`.
+* La racine du projet est le premier ancêtre qui porte un marqueur de
+  `project_root_markers`. Par défaut, ce marqueur est `.git` : soit un fichier,
+  soit un répertoire qui contient `HEAD`. Sans marqueur trouvé, la racine est
+  le `cwd` lui-même. Une liste vide désactive la remontée.
+* Codex lit tous les `.codex/config.toml` de la racine au `cwd`, en sautant
+  celui qui est `CODEX_HOME`.
+* Une couche **non approuvée** est chargée mais désactivée. L'approbation se
+  cherche d'abord sur la clé exacte du répertoire dans `projects`, puis sur la
+  racine du projet, puis sur la racine du dépôt git (l. 1062-1105).
+  L'approbation que `codex-acp` ajoute ne vise que le `cwd`.
+
+**Ce que voit un lancement par Oxyn.** Le répertoire privé est neuf et vide,
+et son nom est imprévisible. Il est créé dans le `TMPDIR` d'Oxyn : sous macOS,
+`/var/folders/…/T/`, sans `.git` au-dessus par défaut. La racine du projet est
+alors le répertoire privé lui-même, et aucune couche de projet n'existe. La
+remontée ne s'ouvre que si un ancêtre de `TMPDIR` porte un `.git`. Par exemple,
+un `TMPDIR` placé sous un répertoire personnel versionné. Il faut aussi que
+l'utilisateur ait approuvé cet ancêtre ou la racine du dépôt.
+
+**Ce qu'Oxyn en fait.** Il lit les rangs 2, 4 et 8, et coupe par leur nom les
+serveurs et les plugins qu'ils déclarent. Il ne présente pas comme confiné un
+Codex dont le rang 8 écrit `enabled = true`. Il ne lit ni le rang 3 ni le
+rang 9 : [ADR-0033](adr/0033-couches-de-configuration-codex.md) décide ces
+trois points.
 
 ## Relecture locale des résultats — 2026-09-10
 
