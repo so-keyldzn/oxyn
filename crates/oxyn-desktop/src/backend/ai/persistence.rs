@@ -220,6 +220,10 @@ const fn failure_kind(category: FailureCategory) -> FailureKind {
         FailureCategory::AgentIncompatible => FailureKind::AgentIncompatible,
         FailureCategory::AgentExited => FailureKind::AgentExited,
         FailureCategory::Agent => FailureKind::Agent,
+        // The store has no word for it: written as the agent's failure, which
+        // it is, rather than as `unknown`. Read back, it says « the agent
+        // reported an error », never that it answered.
+        FailureCategory::AgentTimedOut => FailureKind::Agent,
     }
 }
 
@@ -385,6 +389,8 @@ fn ended_event(outcome: ExchangeOutcome) -> AiEvent {
             retryable,
             sign_in: None,
             found_elsewhere: None,
+            // Never kept: the workspace keeps the kind, never the words.
+            exit: None,
         },
         // Neither answered nor failed: said as an ending this build cannot
         // name, which is what it is.
@@ -593,6 +599,7 @@ mod tests {
                 retryable: true,
                 sign_in: None,
                 found_elsewhere: None,
+                exit: None,
             }],
             PrivacyTier::Metadata,
             false,

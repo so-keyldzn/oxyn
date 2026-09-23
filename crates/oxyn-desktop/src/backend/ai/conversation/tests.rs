@@ -218,7 +218,7 @@ fn a_sign_in_names_the_agent_and_the_documented_command_without_running_it() {
     assert_eq!(failure.category, FailureCategory::AgentSignIn);
     let help = failure.sign_in.expect("help");
     assert_eq!(help.agent, "Codex");
-    assert_eq!(help.terminal_command, Some("codex login"));
+    assert_eq!(help.terminal_command.as_deref(), Some("codex login"));
     let method = help.methods.first().expect("one method");
     assert_eq!((method.kind, method.command.as_deref()), ("agent", None));
 }
@@ -408,7 +408,7 @@ fn linked(
     let (ours, _theirs) = agent_client_protocol::Channel::duplex();
     let (session, driver) = ExternalSession::over(ours, std::env::temp_dir().join("unused"));
     thread.link_agent(Some(AgentLink {
-        agent: ProviderId::for_new_agent(),
+        agent: agent("unused"),
         tier: PrivacyTier::Sampled,
         leaf: None,
         session: Arc::new(session),
@@ -733,7 +733,7 @@ fn releasing_an_agent_withdraws_its_pending_requests() {
     let (ours, _theirs) = agent_client_protocol::Channel::duplex();
     let (session, _driver) = ExternalSession::over(ours, std::env::temp_dir().join("unused"));
     thread.link_agent(Some(AgentLink {
-        agent: ProviderId::for_new_agent(),
+        agent: agent("unused"),
         tier: PrivacyTier::Metadata,
         leaf: None,
         session: Arc::new(session),
@@ -867,7 +867,7 @@ fn an_agents_settings_reach_the_panel_between_two_questions() {
     let session = Arc::new(session);
     thread.follow_agent_settings(&session);
     thread.link_agent(Some(AgentLink {
-        agent: ProviderId::for_new_agent(),
+        agent: agent("unused"),
         tier: PrivacyTier::Sampled,
         leaf: Some(node),
         session: Arc::clone(&session),
@@ -2260,5 +2260,388 @@ mod approved_samples {
             .backend
             .ai_cancel(fixture.connection, &started.thread)
             .expect("cancelled");
+    }
+
+    /// The failure the user met: an external agent asked for « the last 10
+    /// rows » knew nothing of the base and proposed `SELECT * FROM your_table`.
+    ///
+    /// End to end, on a `Sampled` connection whose table holds real values:
+    /// the agent session that starts receives the structure the explorer read
+    /// — through the `ContextBuilder` — and not one value; the panel says what
+    /// left; a follow-up in the same agent session carries the question alone.
+    #[test]
+    fn an_external_agent_is_told_the_structure_once_and_never_a_value() {
+        use agent_client_protocol::schema::v1::{
+            ContentBlock, InitializeRequest, InitializeResponse, NewSessionRequest,
+            NewSessionResponse, PromptRequest, PromptResponse, SessionId as AcpSession, StopReason,
+        };
+        use agent_client_protocol::{Agent, Channel as Duplex};
+        use futures::FutureExt as _;
+
+        use super::super::super::threads::Waiting;
+
+        let fixture = fixture();
+        let _guard = fixture.runtime.enter();
+        let config = fixture.config();
+        assert_eq!(config.privacy_tier, PrivacyTier::Sampled);
+
+        // An agent that records every prompt it is sent, as text.
+        let prompts = Arc::new(Mutex::new(Vec::<String>::new()));
+        let kept = Arc::clone(&prompts);
+        let (ours, theirs) = Duplex::duplex();
+        let (session, driver) = ExternalSession::over(ours, std::env::temp_dir().join("unused"));
+        fixture.runtime.spawn(driver);
+        fixture.runtime.spawn(
+            Agent
+                .builder()
+                .on_receive_request(
+                    async |request: InitializeRequest, responder, _cx| {
+                        responder.respond(InitializeResponse::new(request.protocol_version))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async |_: NewSessionRequest, responder, _cx| {
+                        responder.respond(NewSessionResponse::new(AcpSession::new("s")))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |request: PromptRequest, responder, _cx| {
+                        let text: Vec<String> = request
+                            .prompt
+                            .into_iter()
+                            .filter_map(|block| match block {
+                                ContentBlock::Text(text) => Some(text.text),
+                                _ => None,
+                            })
+                            .collect();
+                        kept.lock().push(text.join("\n"));
+                        responder.respond(PromptResponse::new(StopReason::EndTurn))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .connect_to(theirs)
+                .boxed(),
+        );
+
+        // Waiting for this connection's next question, as the panel's start
+        // leaves it: the question takes it instead of launching a process.
+        let declared = agent("unused");
+        fixture.backend.inner.ai.wait(
+            fixture.connection,
+            Waiting {
+                link: AgentLink {
+                    agent: declared.clone(),
+                    tier: PrivacyTier::Sampled,
+                    leaf: None,
+                    session: Arc::new(session),
+                    tools: ToolTurns::new(8, Arc::new(|| false)),
+                    actor: (AgentId::new(), AgentSessionId::new()),
+                    _requests: WithdrawOnRelease::new(
+                        Arc::clone(&fixture.backend.inner.executor),
+                        Actor::agent(AgentId::new(), AgentSessionId::new()),
+                    ),
+                },
+                session: fixture.session,
+                stop: CancelToken::new(),
+            },
+        );
+
+        let thread = fixture
+            .backend
+            .inner
+            .ai
+            .thread_for(fixture.connection, None)
+            .expect("a conversation");
+        let scope = || Scope {
+            connection: fixture.connection,
+            name: config.name.clone(),
+            environment: config.environment,
+        };
+        let ask = |parent: Option<u32>, question: &str| {
+            let (channel, received) = recording();
+            let (node, cancel) = thread
+                .begin(parent, question, channel, scope())
+                .expect("begins");
+            let run = Run {
+                inner: &fixture.backend.inner,
+                thread: &thread,
+                node,
+                parent,
+                connection: &config,
+                cancel: &cancel,
+            };
+            fixture
+                .runtime
+                .block_on(run.ask_agent(fixture.session, &declared, question))
+                .map_err(|failure| failure.message)
+                .expect("the agent answers");
+            thread.finish(node);
+            (node, received)
+        };
+
+        let (first, shown) = ask(None, "the last 10 rows");
+        let (_, _) = ask(Some(first), "and the first 10?");
+
+        let prompts = prompts.lock().clone();
+        assert_eq!(prompts.len(), 2, "{prompts:?}");
+        let opening = &prompts[0];
+        for expected in [
+            r#"table "main"."customers""#,
+            "query language: sql (dialect: sqlite)",
+            r#""email" TEXT"#,
+            r#""secret" TEXT"#,
+            "wide",
+        ] {
+            assert!(
+                opening.contains(expected),
+                "« {expected} » missing:\n{opening}"
+            );
+        }
+        for value in ["user1@example.com", "SECRET-1", "SECRET-12"] {
+            assert!(
+                !opening.contains(value),
+                "a row value reached the agent:\n{opening}"
+            );
+        }
+        assert!(opening.ends_with("the last 10 rows"), "{opening}");
+        assert_eq!(
+            prompts[1], "and the first 10?",
+            "the agent session already has the structure"
+        );
+
+        let started = shown
+            .lock()
+            .iter()
+            .find(|json| json.contains(r#""kind":"started""#))
+            .cloned()
+            .expect("the question started");
+        assert!(
+            started.contains(r#""relations":2"#),
+            "the panel says what left: {started}"
+        );
+    }
+
+    /// One way to the structure, for every destination.
+    ///
+    /// On a `Sampled` SQLite connection whose tables hold real values, the
+    /// internal assistant — a provider's tool loop — and an external agent —
+    /// the MCP bridge — both call `describe_schema`. Each call becomes a
+    /// `DescribeCatalog` carrying `Actor::Agent`, crosses the real `PolicyGate`
+    /// and executor, and comes back rendered by `ContextBuilder::build` under
+    /// the tier read at the call. The two answers are the **same text**, name
+    /// the tables and columns, and carry no value.
+    #[test]
+    fn every_destination_reads_the_same_structure_by_the_same_command_and_no_value() {
+        use oxyn_ai::external::mcp::{ToolService, ToolTurns};
+
+        let fixture = fixture();
+        let _guard = fixture.runtime.enter();
+        let config = fixture.config();
+        assert_eq!(config.privacy_tier, PrivacyTier::Sampled);
+        let language = QueryLanguage::Sql(SqlDialect::Sqlite);
+        let scope = oxyn_ai::ToolScope::new(fixture.connection, fixture.session, language);
+        let arguments = serde_json::json!({ "search": "customers" });
+        let thread = fixture
+            .backend
+            .inner
+            .ai
+            .thread_for(fixture.connection, None)
+            .expect("a conversation");
+        let begin = |question: &str| {
+            let (channel, _) = recording();
+            thread
+                .begin(
+                    None,
+                    question,
+                    channel,
+                    Scope {
+                        connection: fixture.connection,
+                        name: config.name.clone(),
+                        environment: config.environment,
+                    },
+                )
+                .expect("begins")
+                .0
+        };
+        let sink_for = |identity: AgentId, conversation: AgentSessionId, node: u32| AgentSink {
+            sink: ExecutorSink::for_agent(
+                Arc::clone(&fixture.backend.inner.executor),
+                identity,
+                conversation,
+            ),
+            executor: Arc::clone(&fixture.backend.inner.executor),
+            thread: Arc::clone(&thread),
+            node,
+            question: QuestionOpen::new(),
+        };
+
+        // The internal assistant: a provider whose model asks for the tool.
+        // Its context is empty on purpose — the structure can only come from
+        // the tool.
+        let provider = ScriptedProvider::new(vec![
+            vec![
+                oxyn_llm::ChatEvent::ToolCallComplete(oxyn_llm::ToolCall::new(
+                    "call-1",
+                    oxyn_ai::tools::DESCRIBE_SCHEMA,
+                    arguments.clone(),
+                )),
+                oxyn_llm::ChatEvent::Done {
+                    stop_reason: oxyn_llm::StopReason::ToolCalls,
+                },
+            ],
+            vec![
+                oxyn_llm::ChatEvent::TextDelta("Two tables.".to_owned()),
+                oxyn_llm::ChatEvent::Done {
+                    stop_reason: oxyn_llm::StopReason::EndTurn,
+                },
+            ],
+        ]);
+        let spec = oxyn_ai::sql_agent();
+        let engine = oxyn_ai::AgentRuntime::new(
+            spec.clone(),
+            provider,
+            oxyn_llm::Reach::Local,
+            oxyn_ai::ToolRegistry::builtin(),
+            "scripted",
+        )
+        .expect("a valid declaration");
+        let empty =
+            oxyn_ai::ContextBuilder::new(&oxyn_catalog::CatalogCache::new(), config.privacy_tier)
+                .build();
+        let mut session = oxyn_ai::AgentSession::new(&spec, &empty, scope.clone());
+        session.ask("which tables hold customers?");
+        let node = begin("which tables hold customers?");
+        let sink = sink_for(spec.id, session.id(), node);
+        let observer = Observer {
+            thread: Arc::clone(&thread),
+            node,
+        };
+        fixture
+            .runtime
+            .block_on(engine.run(&mut session, &sink, &observer, &CancelToken::new()))
+            .expect("the conversation runs");
+        let internal = session
+            .messages()
+            .iter()
+            .rev()
+            .find(|message| message.role == oxyn_llm::Role::Tool)
+            .expect("the tool result reached the conversation")
+            .content
+            .clone();
+        thread.finish(node);
+
+        // An external agent: the MCP bridge, with the tier read from the store
+        // at the call.
+        let (identity, conversation) = (AgentId::new(), AgentSessionId::new());
+        let service = ToolService::new(
+            oxyn_ai::ToolRegistry::builtin(),
+            spec.allowed_tools.clone(),
+            scope,
+            Arc::new(fixture.stored()),
+            Actor::agent(identity, conversation),
+        );
+        let turns = ToolTurns::new(8, Arc::new(|| false));
+        let node = begin("which tables hold customers?");
+        let _turn = turns.open(
+            Arc::new(sink_for(identity, conversation, node)),
+            Arc::new(()),
+            CancelToken::new(),
+        );
+        let call = serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "tools/call",
+            "params": { "name": oxyn_ai::tools::DESCRIBE_SCHEMA, "arguments": arguments },
+        })
+        .to_string();
+        let reply: serde_json::Value = serde_json::from_str(
+            &fixture
+                .runtime
+                .block_on(service.respond(&call, &turns))
+                .expect("a request is answered"),
+        )
+        .expect("the reply is JSON");
+        assert_eq!(
+            reply["result"]["isError"],
+            serde_json::json!(false),
+            "{reply}"
+        );
+        let external = reply["result"]["content"][0]["text"]
+            .as_str()
+            .expect("a text block")
+            .to_owned();
+
+        assert_eq!(internal, external, "one path, one rendering");
+        for expected in [
+            "status: completed",
+            "query language: sql (dialect: sqlite)",
+            r#"table "main"."customers""#,
+            r#""email" TEXT"#,
+            r#""secret" TEXT"#,
+        ] {
+            assert!(
+                external.contains(expected),
+                "« {expected} » missing:\n{external}"
+            );
+        }
+        for value in ["user1@example.com", "SECRET-1", "SECRET-12"] {
+            assert!(!external.contains(value), "a row value left:\n{external}");
+        }
+
+        // Both went through the bus as the command the journal names, under
+        // the agent that asked.
+        let described: Vec<_> = fixture
+            .backend
+            .inner
+            .executor
+            .store()
+            .journal()
+            .recent(256)
+            .expect("journal")
+            .into_iter()
+            .filter(|entry| entry.record.command_kind == "DescribeCatalog")
+            .collect();
+        // The journal writes a command's decision and its outcome: count
+        // commands, not lines.
+        let commands: std::collections::BTreeSet<String> = described
+            .iter()
+            .filter_map(|entry| entry.record.command_id.map(|id| id.to_string()))
+            .collect();
+        assert_eq!(commands.len(), 2, "one command per destination");
+        assert!(
+            described
+                .iter()
+                .all(|entry| entry.record.actor_id.is_some()),
+            "each carried Actor::Agent"
+        );
+
+        // The tier is read at the call: once local-only, the external agent
+        // reads nothing more.
+        fixture
+            .runtime
+            .block_on(fixture.backend.update_connection(
+                CommandId::new(),
+                fixture.connection,
+                edited(PrivacyTier::Local),
+            ))
+            .expect("local-only");
+        let refused: serde_json::Value = serde_json::from_str(
+            &fixture
+                .runtime
+                .block_on(service.respond(&call, &turns))
+                .expect("a request is answered"),
+        )
+        .expect("the reply is JSON");
+        assert_eq!(
+            refused["result"]["isError"],
+            serde_json::json!(true),
+            "{refused}"
+        );
+        assert!(
+            !refused.to_string().contains("customers"),
+            "nothing of the structure left: {refused}"
+        );
     }
 }

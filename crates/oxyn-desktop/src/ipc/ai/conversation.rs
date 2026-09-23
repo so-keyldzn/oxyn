@@ -340,6 +340,8 @@ pub enum FailureCategory {
     AgentIncompatible,
     /// The agent's process stopped.
     AgentExited,
+    /// The agent did not finish starting in time, and Oxyn stopped it.
+    AgentTimedOut,
     /// The agent answered with an error.
     Agent,
 }
@@ -352,7 +354,7 @@ pub struct SignInHelp {
     pub methods: Vec<SignInMethod>,
     /// The documented terminal command for a known agent, when the agent
     /// itself offers nothing Oxyn can run.
-    pub terminal_command: Option<&'static str>,
+    pub terminal_command: Option<String>,
 }
 
 /// One way to sign in.
@@ -820,6 +822,9 @@ pub enum AiEvent {
         sign_in: Option<SignInHelp>,
         /// For `agentNotFound`: where a program of that name was found instead.
         found_elsewhere: Option<String>,
+        /// For `agentExited`: what the process said on its way out, when it
+        /// said it in time.
+        exit: Option<super::AgentExit>,
     },
 }
 
@@ -906,6 +911,7 @@ mod tests {
                 description: None,
             }],
             current_mode: Some("plan".to_owned()),
+            modes_locked: false,
             options: vec![
                 settings::AgentOption {
                     id: "effort".to_owned(),

@@ -339,7 +339,9 @@ impl Backend {
         change: DocumentChange,
     ) -> Result<DocumentWrite, IpcError> {
         let language = match connection {
-            Some(connection) => QueryLanguage::Sql(self.dialect_of(connection)?),
+            Some(connection) => QueryLanguage::Sql(oxyn_query::dialect_for(
+                &self.read_config(connection).await?.driver,
+            )),
             None => QueryLanguage::SQL,
         };
         let update = QueryDocumentUpdate {

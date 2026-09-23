@@ -196,6 +196,7 @@ impl Backend {
             }),
         };
         backend.start_heartbeat();
+        backend.prune_conversations();
         // Results nobody reads any more are released on a timer, off the IPC
         // threads (ADR-0017). A weak handle: the task ends with the backend.
         let weak = Arc::downgrade(&backend.inner);
@@ -217,6 +218,38 @@ impl Backend {
             }
         });
         Ok(backend)
+    }
+
+    /// Applies the assistant's disk budget to this workspace, once per launch
+    /// (docs/PERFORMANCE.md: 200 threads, 90 idle days, 32 MiB).
+    ///
+    /// At startup rather than after each exchange: the budget bounds months of
+    /// use, not one session, and a delete in the middle of a conversation
+    /// could take the thread the user is reading. Off the startup path and the
+    /// UI thread (I-05); a weak handle, so it ends with the backend.
+    fn prune_conversations(&self) {
+        let weak = Arc::downgrade(&self.inner);
+        tauri::async_runtime::spawn_blocking(move || {
+            let Some(inner) = weak.upgrade() else {
+                return;
+            };
+            let executor = &inner.executor;
+            match executor
+                .store()
+                .conversations()
+                .prune(executor.workspace(), oxyn_store::RetentionPolicy::default())
+            {
+                Ok(report) if !report.is_empty() => tracing::info!(
+                    conversations = report.conversations,
+                    turns = report.turns,
+                    bytes = report.bytes,
+                    "assistant history pruned to its budget"
+                ),
+                Ok(_) => {}
+                // Counted, never quoted: a SQLite message may carry a path.
+                Err(_) => tracing::warn!("the assistant history could not be pruned"),
+            }
+        });
     }
 
     /// The database types the connection screen may offer, from the registry.
@@ -464,9 +497,10 @@ impl Backend {
         session: SessionId,
         sql: String,
     ) -> Result<CommandOutcome, IpcError> {
-        let dialect = self.dialect_of(connection)?;
+        let config = self.read_config(connection).await?;
+        let dialect = oxyn_query::dialect_for(&config.driver);
         let mut request = ExecRequest::new(QueryLanguage::Sql(dialect), sql);
-        request.limits.read_only = self.is_read_only(connection);
+        request.limits.read_only = config.read_only;
         self.run(
             id,
             Command::Execute {
@@ -548,6 +582,8 @@ impl Backend {
         token
     }
 
+    /// Reads the store: only from the blocking pool, or through
+    /// [`Self::read_config`] from an async body (I-05).
     pub(crate) fn config(&self, connection: ConnectionId) -> Result<ConnectionConfig, IpcError> {
         self.inner
             .executor
@@ -558,6 +594,17 @@ impl Backend {
             .ok_or_else(|| IpcError::invalid("This connection is no longer in the workspace"))
     }
 
+    /// [`Self::config`] off the runtime worker: a store waiting on a lock — the
+    /// startup pruning writes at the same moment — must not stall every other
+    /// command on that worker (ARCHITECTURE, the thread model).
+    pub(crate) async fn read_config(
+        &self,
+        connection: ConnectionId,
+    ) -> Result<ConnectionConfig, IpcError> {
+        self.on_blocking_pool(move |backend| backend.config(connection))
+            .await
+    }
+
     /// Resolved from the driver, never defaulted to ANSI: the dialect decides
     /// how `EXPLAIN (ANALYZE) DELETE …` is classified ([I-07](../../../CLAUDE.md#i-07)).
     pub(crate) fn dialect_of(
@@ -565,13 +612,6 @@ impl Backend {
         connection: ConnectionId,
     ) -> Result<oxyn_core::SqlDialect, IpcError> {
         Ok(oxyn_query::dialect_for(&self.config(connection)?.driver))
-    }
-
-    pub(crate) fn is_read_only(&self, connection: ConnectionId) -> bool {
-        // Unknown means refuse writes: the safer reading when the store cannot
-        // say (I-02).
-        self.config(connection)
-            .map_or(true, |config| config.read_only)
     }
 }
 

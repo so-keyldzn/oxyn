@@ -44,10 +44,10 @@ use super::threads::{AgentLink, LinkedAgent, Memory, Scope, Thread, WithdrawOnRe
 use super::{Backend, check_endpoint};
 use crate::backend::Inner;
 use crate::ipc::ai::{
-    AgentSettingAnswer, AgentSettingChange, AgentSettingsView, AiEvent, AiUpdate, AskRequest,
-    AskStarted, ContextSummary, Cut, Destination, DestinationChoice, Ending, FailureCategory,
-    MemoryReset, Money, PlanEntry, SignInHelp, SignInMethod, ThreadSummary, ThreadView, ToolStatus,
-    error_class, preset_of,
+    AgentExit, AgentSettingAnswer, AgentSettingChange, AgentSettingsView, AgentStart, AiEvent,
+    AiUpdate, AskRequest, AskStarted, ContextSummary, Cut, Destination, DestinationChoice, Ending,
+    FailureCategory, MemoryReset, Money, PlanEntry, SignInHelp, SignInMethod, ThreadSummary,
+    ThreadView, ToolStatus, error_class, preset_of, preset_sign_in,
 };
 use crate::ipc::ai::{SampleApproval, SampleRequest};
 use crate::ipc::{CatalogAddress, IpcError, RelationField};
@@ -227,6 +227,13 @@ fn report_call(thread: &Thread, node: u32, outcome: &DispatchOutcome, withheld: 
     }
     let (status, detail, class) = match outcome {
         DispatchOutcome::Completed { summary } => (ToolStatus::Completed, summary.clone(), None),
+        // What the model was told is its rendering, under the tier; the panel
+        // says what happened, not what the catalog holds.
+        DispatchOutcome::CatalogRead { .. } => (
+            ToolStatus::Completed,
+            "read the structure from Oxyn's local catalog".to_owned(),
+            None,
+        ),
         DispatchOutcome::AwaitingApproval { reason } => {
             (ToolStatus::AwaitingApproval, reason.clone(), None)
         }
@@ -429,6 +436,7 @@ impl CommandSink for AgentSink {
 fn translate(report: DispatchReport) -> DispatchOutcome {
     match report {
         DispatchReport::Completed { summary, .. } => DispatchOutcome::Completed { summary },
+        DispatchReport::CatalogRead { catalog, .. } => DispatchOutcome::CatalogRead { catalog },
         DispatchReport::AwaitingApproval { reason, .. } => {
             DispatchOutcome::AwaitingApproval { reason }
         }
@@ -489,8 +497,16 @@ pub(super) struct Failure {
     /// The error's class, when the failure carries one. Transmitted, never
     /// deduced from the message.
     class: Option<ErrorClass>,
-    sign_in: Option<SignInHelp>,
+    /// Boxed, like `exit`: rare, and every `Result` of this module carries a
+    /// `Failure`.
+    sign_in: Option<Box<SignInHelp>>,
     found_elsewhere: Option<String>,
+    /// What an agent's process said as it died, when it did.
+    exit: Option<Box<AgentExit>>,
+    /// The agent's session can no longer answer — dead, stopped for its
+    /// start, or out of its confinement. The conversation lets it go, so
+    /// asking again starts a new one, as the failure says.
+    ends_agent: bool,
 }
 
 /// Said after a failure that followed a write, so nobody reads the failure as
@@ -506,6 +522,8 @@ impl Failure {
             class: None,
             sign_in: None,
             found_elsewhere: None,
+            exit: None,
+            ends_agent: false,
         }
     }
 
@@ -534,8 +552,21 @@ impl Failure {
             },
             category: self.category,
             retryable,
-            sign_in: self.sign_in,
+            sign_in: self.sign_in.map(|help| *help),
             found_elsewhere: self.found_elsewhere,
+            exit: self.exit.map(|exit| *exit),
+        }
+    }
+
+    /// As the panel's start of an agent reports it: the same words, the same
+    /// help, and nothing to ask again — a new start is a click.
+    fn into_start(self) -> AgentStart {
+        AgentStart::Failed {
+            message: self.message,
+            category: self.category,
+            sign_in: self.sign_in.map(|help| *help),
+            found_elsewhere: self.found_elsewhere,
+            exit: self.exit.map(|exit| *exit),
         }
     }
 }
@@ -583,7 +614,7 @@ impl Backend {
 
         // Read now, not when the panel opened: a tier changed since then must
         // govern this question (I-04).
-        let config = self.config(connection)?;
+        let config = self.read_config(connection).await?;
         let capabilities = self
             .inner
             .executor
@@ -920,17 +951,10 @@ impl Backend {
     pub async fn ai_authenticate(
         &self,
         connection: ConnectionId,
-        thread: &str,
+        thread: Option<&str>,
         method: &str,
     ) -> Result<(), IpcError> {
-        let session = self
-            .inner
-            .ai
-            .find(connection, thread)?
-            .live_agent()
-            .ok_or_else(|| {
-                IpcError::invalid("The agent is no longer running. Ask your question again.")
-            })?;
+        let session = self.agent_to_ask(connection, thread)?;
         session
             .authenticate(method)
             .await
@@ -948,17 +972,10 @@ impl Backend {
     pub async fn ai_set_agent_setting(
         &self,
         connection: ConnectionId,
-        thread: &str,
+        thread: Option<&str>,
         change: AgentSettingChange,
     ) -> Result<AgentSettingAnswer, IpcError> {
-        let session = self
-            .inner
-            .ai
-            .find(connection, thread)?
-            .live_agent()
-            .ok_or_else(|| {
-                IpcError::invalid("The agent is no longer running. Ask your question again.")
-            })?;
+        let session = self.agent_to_ask(connection, thread)?;
         match session.change_setting(change.into_change()).await {
             Ok(settings) => Ok(AgentSettingAnswer::Sent {
                 settings: AgentSettingsView::of(&settings),
@@ -966,6 +983,30 @@ impl Backend {
             Err(ExternalError::Setting(refusal)) => Ok(AgentSettingAnswer::refused(&refusal)),
             Err(error) => Err(IpcError::invalid(error.to_string())),
         }
+    }
+
+    /// The agent a sign-in or a settings change is for: the one the panel
+    /// started ahead of the next question, when there is one — it is the one
+    /// that will answer —, else the conversation's own.
+    ///
+    /// The panel only starts one when the conversation's own would not answer
+    /// next, and starting from a conversation whose agent would releases it
+    /// (`ai_start_agent`): the two never compete.
+    fn agent_to_ask(
+        &self,
+        connection: ConnectionId,
+        thread: Option<&str>,
+    ) -> Result<Arc<ExternalSession>, IpcError> {
+        if let Some(waiting) = self.inner.ai.waiting_session(connection) {
+            return Ok(waiting);
+        }
+        let live = match thread {
+            Some(thread) => self.inner.ai.find(connection, thread)?.live_agent(),
+            None => None,
+        };
+        live.ok_or_else(|| {
+            IpcError::invalid("The agent is no longer running. Ask your question again.")
+        })
     }
 
     /// Offers a row sample of `address` for the next question of a
@@ -987,7 +1028,7 @@ impl Backend {
         address: CatalogAddress,
         destination: DestinationChoice,
     ) -> Result<SampleRequest, IpcError> {
-        let config = self.config(connection)?;
+        let config = self.read_config(connection).await?;
         if config.privacy_tier != PrivacyTier::Sampled {
             return Err(IpcError::invalid(
                 "Row samples are offered only on a connection whose privacy tier is Sampled. \
@@ -1388,7 +1429,7 @@ impl Run<'_> {
                 let context = {
                     let cache = catalog.read();
                     ContextBuilder::new(&cache, tier)
-                        .with_dialect(dialect)
+                        .with_language(QueryLanguage::Sql(dialect))
                         .focused_on(question.to_owned())
                         .with_samples(sample.into_iter().collect())
                         .build()
@@ -1570,16 +1611,39 @@ impl Run<'_> {
         question: &str,
     ) -> Result<(), Failure> {
         let tier = self.connection.privacy_tier;
+        let linked = self.thread.agent_for(agent, tier, self.parent);
         // The prompt is born through the only gate that builds one, under the
-        // tier (ADR-0027).
-        let prompt = AgentPrompt::from_user(tier, question)
-            .map_err(|error| Failure::new(error.to_string(), FailureCategory::Refused))?;
+        // tier (ADR-0027), before anything is launched. An agent session that
+        // starts here is told the structure of the database, rendered by the
+        // `ContextBuilder` as the internal assistant's is; one that follows an
+        // answer already has it, as a remembered provider session does.
+        let prompt = match &linked {
+            Some(_) => AgentPrompt::from_user(tier, question),
+            None => {
+                let language = QueryLanguage::Sql(oxyn_query::dialect_for(&self.connection.driver));
+                // From the local catalog only: an agent that fetched what it
+                // needs would bypass both the gate and the bus. No catalog yet
+                // is said to the agent as « 0 of 0 known relations ».
+                match self.inner.executor.catalog(self.connection.id) {
+                    Some(catalog) => {
+                        AgentPrompt::with_schema(tier, question, &catalog.read(), language)
+                    }
+                    None => AgentPrompt::with_schema(
+                        tier,
+                        question,
+                        &oxyn_catalog::CatalogCache::new(),
+                        language,
+                    ),
+                }
+            }
+        }
+        .map_err(|error| Failure::new(error.to_string(), FailureCategory::Refused))?;
 
         let LinkedAgent {
             session,
             tools,
             actor: (identity, conversation),
-        } = match self.thread.agent_for(&agent.id, tier, self.parent) {
+        } = match linked {
             Some(linked) => linked,
             None => {
                 if self.parent.is_some() {
@@ -1592,70 +1656,30 @@ impl Run<'_> {
                     });
                 }
                 self.thread.link_agent(None);
-                locate(agent).await?;
-                // Oxyn's tools, served to the agent on the loopback. Without
-                // them the agent cannot read the database the user has open,
-                // which is the whole point of running it here (ADR-0030).
-                //
-                // The actor is minted per external conversation and shared by
-                // every question's sink and the service: the executor refuses a
-                // command whose actor is not the one bound to the conversation.
-                let (identity, conversation) = (AgentId::new(), AgentSessionId::new());
-                let spec = sql_agent();
-                // The ceiling the internal assistant has, per question.
-                let executor = Arc::clone(&self.inner.executor);
-                let actor = Actor::agent(identity, conversation);
-                // Asked of the executor, which holds the requests: a request
-                // this agent left undecided in an earlier question counts, and
-                // so does a « read » the executor reclassified.
-                let waiting = move || {
-                    executor
-                        .approvals()
-                        .pending()
-                        .iter()
-                        .any(|request| request.actor == actor && !request.is_expired())
+                // The agent the panel started for this connection, when it is
+                // this one — else a launch of its own. Under the launch lock,
+                // so a start still launching is waited for rather than doubled.
+                let link = {
+                    let _launching = self.inner.ai.launching.lock().await;
+                    match self
+                        .inner
+                        .ai
+                        .take_waiting(self.connection.id, agent, tier, session)
+                    {
+                        Some(link) => link,
+                        None => {
+                            launch_agent(self.inner, self.connection, session, agent, tier).await?
+                        }
+                    }
                 };
-                let tools = ToolTurns::new(spec.max_turns, Arc::new(waiting));
-                let bridge = ToolBridge {
-                    service: Arc::new(ToolService::new(
-                        ToolRegistry::builtin(),
-                        spec.allowed_tools,
-                        ToolScope::new(
-                            self.connection.id,
-                            session,
-                            QueryLanguage::Sql(oxyn_query::dialect_for(&self.connection.driver)),
-                        ),
-                        Arc::new(StoredTier {
-                            executor: Arc::clone(&self.inner.executor),
-                            connection: self.connection.id,
-                        }),
-                        Actor::agent(identity, conversation),
-                    )),
-                    turns: tools.clone(),
+                let linked = LinkedAgent {
+                    session: Arc::clone(&link.session),
+                    tools: link.tools.clone(),
+                    actor: link.actor,
                 };
-                let (session, driver) = ExternalSession::launch_with_tools(agent, tier, bridge)
-                    .await
-                    .map_err(|error| agent_failure(agent, error))?;
-                tauri::async_runtime::spawn(driver);
-                let session = Arc::new(session);
-                self.thread.follow_agent_settings(&session);
-                self.thread.link_agent(Some(AgentLink {
-                    agent: agent.id.clone(),
-                    tier,
-                    leaf: None,
-                    session: Arc::clone(&session),
-                    tools: tools.clone(),
-                    actor: (identity, conversation),
-                    _requests: WithdrawOnRelease::new(
-                        Arc::clone(&self.inner.executor),
-                        Actor::agent(identity, conversation),
-                    ),
-                }));
-                LinkedAgent {
-                    session,
-                    tools,
-                    actor: (identity, conversation),
-                }
+                self.thread.follow_agent_settings(&linked.session);
+                self.thread.link_agent(Some(link));
+                linked
             }
         };
 
@@ -1668,13 +1692,11 @@ impl Run<'_> {
                 label: agent.label.clone(),
                 model: None,
                 reach: Reach::Unresolved.into(),
-                agent_version: match (ready.name, ready.version) {
-                    (Some(name), Some(version)) => Some(format!("{name} {version}")),
-                    (name, version) => name.or(version),
-                },
+                agent_version: version_of(ready),
             },
             tier,
-            context: None,
+            // What left with the question, shown as the provider path shows it.
+            context: prompt.context().map(ContextSummary::of),
             provenance: None,
         });
 
@@ -1699,15 +1721,16 @@ impl Run<'_> {
             Arc::clone(&observer),
             self.cancel.clone(),
         );
-        let end = session
-            .prompt(&prompt, observer, self.cancel)
-            .await
-            .map_err(|error| {
-                if error == ExternalError::Exited {
+        let end = match session.prompt(&prompt, observer, self.cancel).await {
+            Ok(end) => end,
+            Err(error) => {
+                let failure = agent_failure_of(agent, error, &session).await;
+                if failure.ends_agent {
                     self.thread.link_agent(None);
                 }
-                agent_failure(agent, error)
-            })?;
+                return Err(failure);
+            }
+        };
         self.thread.agent_answered(self.node);
         // Closed before « finished » is shown: no request may appear after it.
         drop(closing);
@@ -1729,16 +1752,23 @@ impl Run<'_> {
         Ok(())
     }
 
-    /// Starts the agent unless already started, while the user can still stop.
+    /// Starts the agent unless already started, while the user can still stop,
+    /// and within [`AGENT_START_TIMEOUT`].
     ///
-    /// `Ok(None)` when stopped first: the ending is already said.
+    /// `Ok(None)` when stopped first: the ending is already said. A start that
+    /// times out or dies takes the agent out of the conversation: the next
+    /// question launches a new one rather than waiting on this one.
     async fn start(
         &self,
         agent: &ExternalAgentConfig,
         session: &ExternalSession,
     ) -> Result<Option<AgentReady>, Failure> {
         tokio::select! {
-            ready = session.start() => ready.map(Some).map_err(|error| agent_failure(agent, error)),
+            ready = start_bounded(agent, session) => ready.map(Some).inspect_err(|failure| {
+                if failure.ends_agent {
+                    self.thread.link_agent(None);
+                }
+            }),
             () = self.cancel.cancelled() => {
                 self.emit(AiEvent::Finished { ending: Ending::Cancelled { turns: 0 } });
                 Ok(None)
@@ -1756,6 +1786,10 @@ async fn locate(agent: &ExternalAgentConfig) -> Result<(), Failure> {
         .iter()
         .find(|(name, _)| name == "PATH")
         .map(|(_, value)| std::ffi::OsString::from(value));
+    // An agent Oxyn does not know asks for no particular Node: nvm's default
+    // is the one its user would have in a shell.
+    let node_major =
+        oxyn_ai::external::presets::preset_of(agent).map_or(0, |preset| preset.node_major);
     let found = tokio::task::spawn_blocking(move || {
         // The child resolves its program with its own `PATH` when the
         // declaration sets one, the parent's otherwise.
@@ -1770,7 +1804,7 @@ async fn locate(agent: &ExternalAgentConfig) -> Result<(), Failure> {
         let home = std::env::var_os("HOME")
             .or_else(|| std::env::var_os("USERPROFILE"))
             .map(std::path::PathBuf::from);
-        let elsewhere = SearchPath::usual(None, home.as_deref())
+        let elsewhere = SearchPath::usual(None, home.as_deref(), node_major)
             .find(&command)
             .and_then(|path| path.into_os_string().into_string().ok());
         Err(elsewhere)
@@ -1803,14 +1837,22 @@ fn agent_failure(agent: &ExternalAgentConfig, error: ExternalError) -> Failure {
             let launch: Vec<String> = std::iter::once(agent.command.clone())
                 .chain(agent.args.iter().cloned())
                 .collect();
-            Some(SignInHelp {
+            Some(Box::new(SignInHelp {
                 agent: agent.label.clone(),
                 methods: methods
                     .iter()
                     .map(|method| SignInMethod::of(method, &launch))
                     .collect(),
-                terminal_command: preset_of(agent).map(|preset| preset.sign_in),
-            })
+                // The adapter's own CLI when Oxyn runs it as proposed: it signs
+                // in whether or not `claude` is installed, and looking for
+                // `claude` here would touch the disk on an async worker.
+                terminal_command: match oxyn_ai::external::presets::pinned_preset_of(agent) {
+                    Some(preset) => {
+                        Some(preset_sign_in(preset, &agent.command, &agent.args, false))
+                    }
+                    None => preset_of(agent).map(|preset| preset.sign_in.to_owned()),
+                },
+            }))
         }
         _ => None,
     };
@@ -1821,7 +1863,184 @@ fn agent_failure(agent: &ExternalAgentConfig, error: ExternalError) -> Failure {
         class: None,
         sign_in,
         found_elsewhere: None,
+        exit: None,
+        ends_agent: matches!(error, ExternalError::Exited | ExternalError::Unconfined),
     }
+}
+
+/// [`agent_failure`], with what the process said when the failure is its
+/// death. The report is written by the session's driver as the process goes,
+/// which can be a moment after the protocol noticed: it is waited for, briefly.
+async fn agent_failure_of(
+    agent: &ExternalAgentConfig,
+    error: ExternalError,
+    session: &ExternalSession,
+) -> Failure {
+    let exited = error == ExternalError::Exited;
+    let mut failure = agent_failure(agent, error);
+    if exited {
+        failure.exit = exit_of(session).await;
+    }
+    failure
+}
+
+/// How long a death's report is looked for, and how often.
+const EXIT_REPORT_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
+const EXIT_REPORT_POLL: std::time::Duration = std::time::Duration::from_millis(50);
+
+async fn exit_of(session: &ExternalSession) -> Option<Box<AgentExit>> {
+    let deadline = tokio::time::Instant::now() + EXIT_REPORT_WAIT;
+    loop {
+        if let Some(report) = session.exit_report() {
+            return Some(Box::new(AgentExit::of(&report)));
+        }
+        if tokio::time::Instant::now() >= deadline {
+            return None;
+        }
+        tokio::time::sleep(EXIT_REPORT_POLL).await;
+    }
+}
+
+/// How long an agent may take to answer `initialize` and open its session.
+///
+/// Product bound. The first launch of an agent distributed through `npx`
+/// downloads its adapter before it answers, which takes tens of seconds on an
+/// ordinary connection; past two minutes the user is better told than left
+/// looking at « Starting ». Not retried: the next start is the user's click.
+pub(super) const AGENT_START_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(120);
+
+/// How long finding an agent's program, reading its configuration and
+/// spawning it may each take — before `initialize`, which
+/// [`AGENT_START_TIMEOUT`] bounds.
+///
+/// Product bound. Local file system work takes milliseconds; one that takes
+/// this long is a network share or a disk that stopped answering.
+const AGENT_LAUNCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(20);
+
+fn timed_out(agent: &ExternalAgentConfig) -> Failure {
+    Failure {
+        ends_agent: true,
+        ..Failure::new(
+            format!(
+                "{} did not finish starting within {} seconds, so Oxyn stopped it. Nothing was \
+                 sent.",
+                agent.label,
+                AGENT_START_TIMEOUT.as_secs()
+            ),
+            FailureCategory::AgentTimedOut,
+        )
+    }
+}
+
+/// Starts `session` — once: a second call waits for the first one's answer —
+/// within [`AGENT_START_TIMEOUT`].
+async fn start_bounded(
+    agent: &ExternalAgentConfig,
+    session: &ExternalSession,
+) -> Result<AgentReady, Failure> {
+    match tokio::time::timeout(AGENT_START_TIMEOUT, session.start()).await {
+        Ok(Ok(ready)) => Ok(ready),
+        Ok(Err(error)) => Err(agent_failure_of(agent, error, session).await),
+        Err(_elapsed) => Err(timed_out(agent)),
+    }
+}
+
+/// « Claude Code 0.78.0 », or whichever half the agent said.
+fn version_of(ready: AgentReady) -> Option<String> {
+    match (ready.name, ready.version) {
+        (Some(name), Some(version)) => Some(format!("{name} {version}")),
+        (name, version) => name.or(version),
+    }
+}
+
+/// Launches `agent` for questions asked on `connection` in `session`, with
+/// Oxyn's tools on the loopback (ADR-0030). Nothing is asked of it yet.
+///
+/// The one launch of an external agent, whether a question needs it or the
+/// panel starts it ahead of one: the tier is refused before anything exists
+/// (`launch_with_tools`), and the tools, the actor and the confinement are
+/// the same either way.
+async fn launch_agent(
+    inner: &Inner,
+    connection: &ConnectionConfig,
+    session: SessionId,
+    agent: &ExternalAgentConfig,
+    tier: PrivacyTier,
+) -> Result<AgentLink, Failure> {
+    tokio::time::timeout(AGENT_LAUNCH_TIMEOUT, locate(agent))
+        .await
+        .map_err(|_| {
+            setup(format!(
+                "Looking for {} took more than {} seconds. Nothing was started.",
+                agent.label,
+                AGENT_LAUNCH_TIMEOUT.as_secs()
+            ))
+        })??;
+    // The actor is minted per external conversation and shared by every
+    // question's sink and the service: the executor refuses a command whose
+    // actor is not the one bound to the conversation.
+    let (identity, conversation) = (AgentId::new(), AgentSessionId::new());
+    let spec = sql_agent();
+    // The ceiling the internal assistant has, per question.
+    let executor = Arc::clone(&inner.executor);
+    let actor = Actor::agent(identity, conversation);
+    // Asked of the executor, which holds the requests: a request this agent
+    // left undecided in an earlier question counts, and so does a « read »
+    // the executor reclassified.
+    let waiting = move || {
+        executor
+            .approvals()
+            .pending()
+            .iter()
+            .any(|request| request.actor == actor && !request.is_expired())
+    };
+    let tools = ToolTurns::new(spec.max_turns, Arc::new(waiting));
+    let bridge = ToolBridge {
+        service: Arc::new(ToolService::new(
+            ToolRegistry::builtin(),
+            spec.allowed_tools,
+            ToolScope::new(
+                connection.id,
+                session,
+                QueryLanguage::Sql(oxyn_query::dialect_for(&connection.driver)),
+            ),
+            Arc::new(StoredTier {
+                executor: Arc::clone(&inner.executor),
+                connection: connection.id,
+            }),
+            Actor::agent(identity, conversation),
+        )),
+        turns: tools.clone(),
+    };
+    // Bounded: callers hold the lock every other agent launch waits on, and a
+    // file system that stops answering must not hold it for good.
+    let (session, driver) = tokio::time::timeout(
+        AGENT_LAUNCH_TIMEOUT,
+        ExternalSession::launch_with_tools(agent, tier, bridge),
+    )
+    .await
+    .map_err(|_| {
+        setup(format!(
+            "{} could not be launched within {} seconds: its configuration or its program \
+             did not answer. Nothing was sent.",
+            agent.label,
+            AGENT_LAUNCH_TIMEOUT.as_secs()
+        ))
+    })?
+    .map_err(|error| agent_failure(agent, error))?;
+    tauri::async_runtime::spawn(driver);
+    Ok(AgentLink {
+        agent: agent.clone(),
+        tier,
+        leaf: None,
+        session: Arc::new(session),
+        tools,
+        actor: (identity, conversation),
+        _requests: WithdrawOnRelease::new(
+            Arc::clone(&inner.executor),
+            Actor::agent(identity, conversation),
+        ),
+    })
 }
 
 fn setup(message: impl Into<String>) -> Failure {
@@ -1866,6 +2085,8 @@ fn category_of(error: &AiError) -> FailureCategory {
         _ => FailureCategory::Provider,
     }
 }
+
+mod startup;
 
 #[cfg(test)]
 mod tests;

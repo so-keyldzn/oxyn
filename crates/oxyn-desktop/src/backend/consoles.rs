@@ -101,7 +101,7 @@ impl Backend {
         let inner = &self.inner;
         let cancel = self.track(id);
         let _running = super::Running { inner, id };
-        let config = self.config(connection)?;
+        let config = self.read_config(connection).await?;
         inner.policy.register(&config);
         let outcome = inner
             .executor
@@ -265,7 +265,8 @@ impl Backend {
         session: SessionId,
         run: ConsoleRun,
     ) -> Result<CommandOutcome, IpcError> {
-        let dialect = self.dialect_of(connection)?;
+        let config = self.read_config(connection).await?;
+        let dialect = oxyn_query::dialect_for(&config.driver);
         let text = targeted_text(&run.sql, run.target, dialect).map_err(IpcError::invalid)?;
         let text = if run.explain {
             capabilities::explain_sql(&text, dialect).map_err(IpcError::invalid)?
@@ -287,7 +288,7 @@ impl Backend {
         }
         let params = bind(&run.parameters).map_err(|error| IpcError::invalid(error.to_string()))?;
         let mut request = ExecRequest::new(QueryLanguage::Sql(dialect), text).with_params(params);
-        request.limits.read_only = self.is_read_only(connection);
+        request.limits.read_only = config.read_only;
         self.run(
             id,
             Command::Execute {

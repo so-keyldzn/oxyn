@@ -9,14 +9,16 @@
 
 use std::fmt;
 
-use oxyn_ai::external::presets::{PRESETS, PresetDraft};
+use oxyn_ai::external::presets::{AgentPreset, PresetDraft};
 use oxyn_core::{AiProviderConfig, AiProviderKind, ExternalAgentConfig};
 use oxyn_llm::Reach;
 use serde::{Deserialize, Serialize};
 
 mod conversation;
+mod startup;
 
 pub use self::conversation::*;
+pub use self::startup::*;
 
 /// Where an endpoint resolved, as the screen says it.
 ///
@@ -133,6 +135,9 @@ pub struct ExternalAgent {
     pub env_names: Vec<String>,
     /// The preset the declaration was made from, recognized by its package.
     pub preset: Option<&'static str>,
+    /// Oxyn confines it at launch: a preset at its measured version, with no
+    /// other argument (ADR-0032). The screen warns about any other agent.
+    pub confined: bool,
 }
 
 impl ExternalAgent {
@@ -144,19 +149,12 @@ impl ExternalAgent {
             arg_count: config.args.len(),
             env_names: config.env.iter().map(|(name, _)| name.clone()).collect(),
             preset: preset_of(config).map(|preset| preset.id),
+            confined: oxyn_ai::external::presets::pinned_preset_of(config).is_some(),
         }
     }
 }
 
-/// The preset whose package this declaration runs, if any.
-pub fn preset_of(config: &ExternalAgentConfig) -> Option<oxyn_ai::external::presets::AgentPreset> {
-    PRESETS.into_iter().find(|preset| {
-        config
-            .args
-            .iter()
-            .any(|arg| arg == preset.package || arg.starts_with(&format!("{}@", preset.package)))
-    })
-}
+pub use oxyn_ai::external::presets::preset_of;
 
 /// One environment variable of a draft.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -186,12 +184,19 @@ pub struct AgentPresetDraft {
     pub launcher: Option<String>,
     /// Where the agent's own program was found, if it was.
     pub agent_program: Option<String>,
-    /// The terminal command that signs in with this agent.
-    pub sign_in: &'static str,
+    /// The terminal command that signs in with this agent, quoted for a
+    /// shell.
+    pub sign_in: String,
 }
 
 impl AgentPresetDraft {
     pub fn of(draft: PresetDraft, detected: bool) -> Self {
+        let sign_in = preset_sign_in(
+            draft.preset,
+            &draft.command,
+            &draft.args,
+            draft.agent_program.is_some(),
+        );
         Self {
             id: draft.preset.id,
             label: draft.preset.label,
@@ -207,8 +212,28 @@ impl AgentPresetDraft {
             detected,
             launcher: draft.launcher,
             agent_program: draft.agent_program,
-            sign_in: draft.preset.sign_in,
+            sign_in,
         }
+    }
+}
+
+/// The terminal command that signs in with a preset: the agent's own program
+/// when the machine has it, else the CLI the adapter bundles, run by the
+/// declared command — proposing `claude auth login` where there is no `claude`
+/// sends the user to a command that does not exist.
+pub fn preset_sign_in(
+    preset: AgentPreset,
+    command: &str,
+    args: &[String],
+    agent_program_found: bool,
+) -> String {
+    match preset.adapter_sign_in(command, args) {
+        Some(words) if !agent_program_found => words
+            .iter()
+            .map(|word| shell_quote(word))
+            .collect::<Vec<_>>()
+            .join(" "),
+        _ => preset.sign_in.to_owned(),
     }
 }
 
@@ -258,6 +283,10 @@ impl fmt::Debug for ProviderDraft {
 #[derive(Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AgentDraft {
+    /// The declaration this one replaces, in a single write — `None` declares
+    /// a new agent.
+    #[serde(default)]
+    pub id: Option<String>,
     pub label: String,
     pub command: String,
     #[serde(default)]
@@ -269,6 +298,7 @@ pub struct AgentDraft {
 impl fmt::Debug for AgentDraft {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AgentDraft")
+            .field("id", &self.id)
             .field("label", &self.label)
             .field("args", &self.args.len())
             .field("env", &self.env.len())
@@ -346,6 +376,33 @@ mod tests {
     use oxyn_core::ProviderId;
 
     use super::*;
+
+    #[test]
+    fn without_claude_the_sign_in_goes_through_the_adapter() {
+        use oxyn_ai::external::presets::{CLAUDE_CODE, CODEX};
+        let mut draft = PresetDraft::blank(CLAUDE_CODE);
+        draft.command = "/Users/me/.nvm/versions/node/v22.23.2/bin/npx".to_owned();
+        assert_eq!(
+            AgentPresetDraft::of(draft.clone(), true).sign_in,
+            "/Users/me/.nvm/versions/node/v22.23.2/bin/npx -y \
+             @agentclientprotocol/claude-agent-acp@0.78.0 --cli auth login --claudeai"
+        );
+        draft.agent_program = Some("/Users/me/.local/bin/claude".to_owned());
+        assert_eq!(
+            AgentPresetDraft::of(draft, true).sign_in,
+            "claude auth login"
+        );
+        // Codex's adapter has no verified sign-in of its own.
+        assert_eq!(
+            AgentPresetDraft::of(PresetDraft::blank(CODEX), true).sign_in,
+            "codex login"
+        );
+        // A command with a space reaches the terminal as one word.
+        assert_eq!(
+            preset_sign_in(CLAUDE_CODE, "/opt/my tools/npx", &[], false),
+            "'/opt/my tools/npx' --cli auth login --claudeai"
+        );
+    }
 
     #[test]
     fn an_effort_crosses_as_the_provider_writes_it_and_nothing_else() {

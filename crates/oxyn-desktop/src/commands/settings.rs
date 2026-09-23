@@ -37,7 +37,10 @@ pub async fn connection_details(
     backend: State<'_, Backend>,
     connection: String,
 ) -> Result<ConnectionDetails, IpcError> {
-    backend.connection_details(parse("connection", &connection)?)
+    let connection = parse("connection", &connection)?;
+    backend
+        .on_blocking_pool(move |backend| backend.connection_details(connection))
+        .await
 }
 
 #[tauri::command]
@@ -81,5 +84,8 @@ pub async fn connection_marking(
     backend: State<'_, Backend>,
     connection: String,
 ) -> Result<SavedConnection, IpcError> {
-    backend.connection_marking(parse("connection", &connection)?)
+    let connection = parse("connection", &connection)?;
+    backend
+        .on_blocking_pool(move |backend| backend.connection_marking(connection))
+        .await
 }

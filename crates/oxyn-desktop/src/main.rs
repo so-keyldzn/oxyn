@@ -132,6 +132,8 @@ fn main() -> Result<()> {
             commands::ai::ai_select_version,
             commands::ai::ai_authenticate,
             commands::ai::ai_set_agent_setting,
+            commands::ai::ai_start_agent,
+            commands::ai::ai_stop_agent_start,
             commands::ai::ai_request_sample,
             commands::ai::ai_withdraw_sample,
             commands::ai::ai_forget,

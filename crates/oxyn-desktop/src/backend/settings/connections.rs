@@ -73,7 +73,7 @@ impl Backend {
         connection: ConnectionId,
         edit: ConnectionEdit,
     ) -> Result<ConnectionChange, IpcError> {
-        let current = self.config(connection)?;
+        let current = self.read_config(connection).await?;
         let config = self.edited(&current, &edit)?;
         let inner = &self.inner;
         let cancel = self.track(id);
@@ -120,7 +120,7 @@ impl Backend {
         id: CommandId,
         connection: ConnectionId,
     ) -> Result<ConnectionChange, IpcError> {
-        let config = self.config(connection)?;
+        let config = self.read_config(connection).await?;
         let inner = &self.inner;
         let cancel = self.track(id);
         let _running = Running { inner, id };

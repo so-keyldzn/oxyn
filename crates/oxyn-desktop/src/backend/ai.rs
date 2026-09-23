@@ -79,13 +79,14 @@ impl Backend {
 
     /// The declared external agents. Nothing to classify: their reach is
     /// unknowable ([ADR-0026](../../../../docs/adr/0026-agents-externes-acp.md)).
+    ///
+    /// Whether each is confined reads Codex's managed configuration, off the
+    /// IPC thread (I-05).
     pub async fn external_agents(&self) -> Result<Vec<ExternalAgent>, IpcError> {
-        Ok(self
-            .declared_agents()
-            .await?
-            .iter()
-            .map(ExternalAgent::of)
-            .collect())
+        let agents = self.declared_agents().await?;
+        tokio::task::spawn_blocking(move || agents.iter().map(agent_view).collect())
+            .await
+            .map_err(|error| IpcError::invalid(format!("reading the agents: {error}")))
     }
 
     /// Declares a provider, or edits one: key to the keyring first, then the
@@ -220,13 +221,48 @@ impl Backend {
     /// native dialog: declaring an agent is declaring a program Oxyn will run
     /// ([`crate::commands::ai::ai_save_external_agent`]).
     pub async fn save_external_agent(&self, draft: AgentDraft) -> Result<ExternalAgent, IpcError> {
-        let agent = agent_of(&draft);
-        agent.validate()?;
+        // Reviewed again: the agent it replaces may have been removed while
+        // the dialog was open, and a replacement must not bring it back.
+        let agent = self.review_external_agent(&draft).await?;
         self.dispatch_ai(Command::SaveExternalAgent {
             agent: Box::new(agent.clone()),
         })
         .await?;
-        Ok(ExternalAgent::of(&agent))
+        tokio::task::spawn_blocking(move || agent_view(&agent))
+            .await
+            .map_err(|error| IpcError::invalid(format!("reading the agent: {error}")))
+    }
+
+    /// The declaration a draft becomes, validated — what the confirmation
+    /// dialog must show, and must show only once it is known to be valid: a
+    /// dialog confirmed for a declaration then refused is a question asked for
+    /// nothing, and a label full of newlines hides the command below it.
+    ///
+    /// A draft naming an agent replaces it, which must still be declared.
+    pub async fn review_external_agent(
+        &self,
+        draft: &AgentDraft,
+    ) -> Result<ExternalAgentConfig, IpcError> {
+        let id = match draft.id.as_deref() {
+            None => ProviderId::for_new_agent(),
+            Some(id) => {
+                let id = parse_provider_id(id)?;
+                if !self
+                    .declared_agents()
+                    .await?
+                    .iter()
+                    .any(|agent| agent.id == id)
+                {
+                    return Err(IpcError::invalid(
+                        "the agent to replace is no longer declared",
+                    ));
+                }
+                id
+            }
+        };
+        let agent = agent_of(id, draft);
+        agent.validate()?;
+        Ok(agent)
     }
 
     /// The ready-made agent declarations, as they are before looking at the
@@ -241,8 +277,8 @@ impl Backend {
 
     /// A preset completed with what the machine has, for the user to review.
     ///
-    /// Only when the user clicks « Detect »: nothing is read at startup and
-    /// nothing is saved here (ADR-0023). Reads `PATH` and `HOME` of this
+    /// Asked when the AI settings screen opens, and by « Detect again ».
+    /// Nothing is run and nothing is saved here. Reads `PATH` and `HOME` of this
     /// process, then the file system, off the IPC thread (I-05).
     pub async fn ai_detect_agent(&self, id: &str) -> Result<AgentPresetDraft, IpcError> {
         let preset = oxyn_ai::external::presets::preset(id)
@@ -251,7 +287,11 @@ impl Backend {
             let home = std::env::var_os("HOME")
                 .or_else(|| std::env::var_os("USERPROFILE"))
                 .map(std::path::PathBuf::from);
-            let search = SearchPath::usual(std::env::var_os("PATH").as_deref(), home.as_deref());
+            let search = SearchPath::usual(
+                std::env::var_os("PATH").as_deref(),
+                home.as_deref(),
+                preset.node_major,
+            );
             AgentPresetDraft::of(PresetDraft::detect(preset, &search), true)
         })
         .await
@@ -346,13 +386,19 @@ fn compose_provider(
     config
 }
 
-fn agent_of(draft: &AgentDraft) -> ExternalAgentConfig {
-    let mut agent = ExternalAgentConfig::new(
-        ProviderId::for_new_agent(),
-        draft.label.trim(),
-        draft.command.trim(),
-    )
-    .with_args(draft.args.iter().map(|arg| arg.trim().to_owned()));
+/// An agent as the screen shows it. Not confined when Codex's managed
+/// configuration turns on what Oxyn switches off: the organization's layer
+/// ranks above Oxyn's (ADR-0033). Blocks on the file system.
+fn agent_view(config: &ExternalAgentConfig) -> ExternalAgent {
+    let mut agent = ExternalAgent::of(config);
+    agent.confined = agent.confined && !oxyn_ai::external::confine::managed_turns_on(config);
+    agent
+}
+
+/// The store keeps the first `created_at` of an agent it replaces.
+fn agent_of(id: ProviderId, draft: &AgentDraft) -> ExternalAgentConfig {
+    let mut agent = ExternalAgentConfig::new(id, draft.label.trim(), draft.command.trim())
+        .with_args(draft.args.iter().map(|arg| arg.trim().to_owned()));
     agent.env = draft
         .env
         .iter()
@@ -484,5 +530,50 @@ mod tests {
             .validate()
             .expect_err("credentials in the authority are refused");
         assert!(!error.to_string().contains("hunter2"));
+    }
+
+    fn agent_draft(id: Option<String>, command: &str) -> AgentDraft {
+        serde_json::from_value(serde_json::json!({
+            "id": id,
+            "label": "Codex",
+            "command": command,
+        }))
+        .expect("valid draft")
+    }
+
+    #[test]
+    fn a_replacement_rewrites_the_agent_in_place_and_never_revives_a_removed_one() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("a runtime for the executor");
+        let backend = Backend::open_temporary().expect("temporary backend");
+        runtime.block_on(async {
+            let declared = backend
+                .save_external_agent(agent_draft(None, "/old/codex-acp"))
+                .await
+                .expect("declared");
+
+            backend
+                .save_external_agent(agent_draft(Some(declared.id.clone()), "/new/codex-acp"))
+                .await
+                .expect("replaced");
+            let agents = backend.declared_agents().await.expect("listed");
+            assert_eq!(agents.len(), 1, "one declaration, not two");
+            assert_eq!(agents[0].id.to_string(), declared.id);
+            assert_eq!(agents[0].command, "/new/codex-acp");
+
+            backend
+                .remove_external_agent(&declared.id)
+                .await
+                .expect("removed");
+            assert!(
+                backend
+                    .save_external_agent(agent_draft(Some(declared.id.clone()), "/new/codex-acp"))
+                    .await
+                    .is_err()
+            );
+            assert!(backend.declared_agents().await.expect("listed").is_empty());
+        });
     }
 }

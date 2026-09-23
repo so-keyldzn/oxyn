@@ -33,7 +33,7 @@ use oxyn_ai::external::mcp::ToolTurns;
 use oxyn_ai::external::session::ExternalSession;
 use oxyn_core::{
     Actor, AgentId, AgentSessionId, CancelToken, ConnectionId, ConversationId, Environment,
-    PrivacyTier, ProviderId,
+    ExternalAgentConfig, PrivacyTier, SessionId,
 };
 use oxyn_exec::Executor;
 use parking_lot::Mutex;
@@ -78,6 +78,56 @@ pub(crate) struct AiState {
     threads: Mutex<HashMap<ConnectionId, Vec<Arc<Thread>>>>,
     /// Row samples offered and not yet presented.
     pub(crate) samples: super::samples::SampleGrants,
+    /// The external agent started before its first question, per connection:
+    /// the panel opened on it, and its first question takes it
+    /// ([`AiState::take_waiting`]) rather than launching another.
+    waiting: Mutex<HashMap<ConnectionId, Waiting>>,
+    /// Held across « is one already there? » and « launch one »: without it,
+    /// the panel's start and a question asked at the same moment would each
+    /// see none, and launch two agents where the user asked for one.
+    pub(crate) launching: tokio::sync::Mutex<()>,
+}
+
+/// An external agent launched ahead of its first question.
+///
+/// Launched under the same refusal, the same tools and the same confinement
+/// as a question's own launch — it **is** that launch, done earlier — so the
+/// question that takes it runs exactly as if it had started it.
+pub(crate) struct Waiting {
+    /// As a conversation will hold it, answering nothing yet.
+    pub(crate) link: AgentLink,
+    /// The session its tools are scoped to: a question asked from another
+    /// session must not reach the database through this one's.
+    pub(crate) session: SessionId,
+    /// Ends the wait for its start when the agent is released before a
+    /// question took it. Not when a question takes it: the start goes on, and
+    /// the question waits for the same one.
+    pub(crate) stop: CancelToken,
+}
+
+impl Waiting {
+    fn serves(&self, agent: &ExternalAgentConfig, tier: PrivacyTier, session: SessionId) -> bool {
+        launches_as(&self.link.agent, agent)
+            && self.link.tier == tier
+            && self.session == session
+            && self.link.session.is_open()
+    }
+
+    /// Releases the agent: the wait for its start ends, and the agent itself
+    /// with the last handle on its session.
+    fn release(self) {
+        self.stop.cancel();
+    }
+}
+
+/// Whether a process launched from `launched` is the one `declared` would
+/// start. Not the label, nor the dates: the store rewrites `updated_at` on
+/// every save, and a renamed agent is the same program.
+fn launches_as(launched: &ExternalAgentConfig, declared: &ExternalAgentConfig) -> bool {
+    launched.id == declared.id
+        && launched.command == declared.command
+        && launched.args == declared.args
+        && launched.env == declared.env
 }
 
 impl fmt::Debug for AiState {
@@ -202,6 +252,7 @@ impl AiState {
     /// Drops every conversation of a connection: they belong to it.
     pub(crate) fn forget(&self, connection: ConnectionId) {
         self.samples.forget_connection(connection);
+        self.release_waiting(connection, None);
         if let Some(list) = self.threads.lock().remove(&connection) {
             for thread in list {
                 thread.stop_everything();
@@ -217,6 +268,7 @@ impl AiState {
     /// the session until it ends, and its tool calls re-read the tier; the
     /// next question relaunches under what holds now (I-04).
     pub(crate) fn release_agents(&self, connection: ConnectionId) {
+        self.release_waiting(connection, None);
         let threads = self
             .threads
             .lock()
@@ -226,6 +278,84 @@ impl AiState {
         for thread in threads {
             thread.state.lock().agent = None;
         }
+    }
+
+    /// The agent waiting on this connection, if it is `agent`'s, launched
+    /// under `tier` for `session`, and still running — with the token that
+    /// ends the wait for its start.
+    pub(crate) fn waiting_agent(
+        &self,
+        connection: ConnectionId,
+        agent: &ExternalAgentConfig,
+        tier: PrivacyTier,
+        session: SessionId,
+    ) -> Option<(Arc<ExternalSession>, CancelToken)> {
+        self.waiting
+            .lock()
+            .get(&connection)
+            .filter(|waiting| waiting.serves(agent, tier, session))
+            .map(|waiting| (Arc::clone(&waiting.link.session), waiting.stop.clone()))
+    }
+
+    /// The connection's waiting agent, whichever it is, while it runs: the
+    /// one its next question to that agent will take.
+    pub(crate) fn waiting_session(&self, connection: ConnectionId) -> Option<Arc<ExternalSession>> {
+        self.waiting
+            .lock()
+            .get(&connection)
+            .filter(|waiting| waiting.link.session.is_open())
+            .map(|waiting| Arc::clone(&waiting.link.session))
+    }
+
+    /// Keeps `waiting` for the connection's next question, releasing the one
+    /// it replaces: one waiting agent per connection.
+    pub(crate) fn wait(&self, connection: ConnectionId, waiting: Waiting) {
+        let replaced = self.waiting.lock().insert(connection, waiting);
+        // Released outside the lock: the release withdraws requests at the
+        // executor.
+        if let Some(replaced) = replaced {
+            replaced.release();
+        }
+    }
+
+    /// Hands the waiting agent to the question that is about to launch one —
+    /// if it is the one this question needs. Another is released: the user
+    /// chose someone else, and it would only hold a process.
+    pub(crate) fn take_waiting(
+        &self,
+        connection: ConnectionId,
+        agent: &ExternalAgentConfig,
+        tier: PrivacyTier,
+        session: SessionId,
+    ) -> Option<AgentLink> {
+        let found = self.waiting.lock().remove(&connection)?;
+        if found.serves(agent, tier, session) {
+            return Some(found.link);
+        }
+        found.release();
+        None
+    }
+
+    /// Releases the connection's waiting agent — only if its session is
+    /// `only`, when given, so a start that timed out cannot release the agent
+    /// a newer start put in its place. Answers whether one was released.
+    pub(crate) fn release_waiting(
+        &self,
+        connection: ConnectionId,
+        only: Option<&Arc<ExternalSession>>,
+    ) -> bool {
+        let released = {
+            let mut all = self.waiting.lock();
+            let matches = all.get(&connection).is_some_and(|waiting| {
+                only.is_none_or(|session| Arc::ptr_eq(session, &waiting.link.session))
+            });
+            if matches {
+                all.remove(&connection)
+            } else {
+                None
+            }
+        };
+        released.map(Waiting::release).is_some()
     }
 
     /// Ends the external agents other conversations of this connection keep
@@ -332,7 +462,10 @@ pub(crate) struct Memory {
 
 /// A live external agent session, and the node it last answered.
 pub(crate) struct AgentLink {
-    pub(crate) agent: ProviderId,
+    /// The declaration as it was launched, whole: « Replace… » keeps the id,
+    /// and a link matched on the id alone would answer the next question with
+    /// the process of the command the user just replaced.
+    pub(crate) agent: ExternalAgentConfig,
     pub(crate) tier: PrivacyTier,
     pub(crate) leaf: Option<u32>,
     pub(crate) session: Arc<ExternalSession>,
@@ -712,7 +845,7 @@ impl Thread {
     /// last answered exactly `parent`. Anything else starts over.
     pub(crate) fn agent_for(
         &self,
-        agent: &ProviderId,
+        agent: &ExternalAgentConfig,
         tier: PrivacyTier,
         parent: Option<u32>,
     ) -> Option<LinkedAgent> {
@@ -721,7 +854,7 @@ impl Thread {
             .agent
             .as_ref()
             .filter(|link| {
-                link.agent == *agent
+                launches_as(&link.agent, agent)
                     && link.tier == tier
                     && link.leaf == parent
                     && link.session.is_open()

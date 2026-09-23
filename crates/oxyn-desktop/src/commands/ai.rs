@@ -23,9 +23,10 @@ use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 use crate::backend::Backend;
 use crate::ipc::ai::{
-    AgentDraft, AgentPresetDraft, AgentSettingAnswer, AgentSettingChange, AiUpdate, AskRequest,
-    AskStarted, DeclaredProvider, DestinationChoice, ExternalAgent, ModelChoice, ProposalTarget,
-    ProviderDraft, SampleRequest, SchemaProposal, ThreadSummary, ThreadView,
+    AgentDraft, AgentPresetDraft, AgentSettingAnswer, AgentSettingChange, AgentStart,
+    AgentStartRequest, AiUpdate, AskRequest, AskStarted, DeclaredProvider, DestinationChoice,
+    ExternalAgent, ModelChoice, ProposalTarget, ProviderDraft, SampleRequest, SchemaProposal,
+    ThreadSummary, ThreadView, shell_quote,
 };
 use crate::ipc::{CatalogAddress, IpcError};
 
@@ -82,28 +83,27 @@ pub async fn ai_save_external_agent<R: Runtime>(
     backend: State<'_, Backend>,
     draft: AgentDraft,
 ) -> Result<Option<ExternalAgent>, IpcError> {
-    let mut command_line = String::new();
-    for var in &draft.env {
-        command_line.push_str(&format!("{}={} ", var.name.trim(), var.value));
-    }
-    command_line.push_str(draft.command.trim());
-    for arg in &draft.args {
-        command_line.push(' ');
-        command_line.push_str(arg.trim());
-    }
+    // Validated before the dialog, and shown as it will be saved: the user
+    // confirms the declaration itself, not a draft that may still be refused.
+    let agent = backend.review_external_agent(&draft).await?;
+    let (title, confirm) = if draft.id.is_some() {
+        ("Replace this external agent?", "Replace agent")
+    } else {
+        ("Declare an external agent?", "Declare agent")
+    };
     let (sender, receiver) = tokio::sync::oneshot::channel();
     app.dialog()
         .message(format!(
             "“{}” will run this program on your machine each time you ask it a question:\n\n{}\n\n\
              Oxyn cannot see where it sends your prompts, so it never serves a local-only \
              connection.",
-            draft.label.trim(),
-            command_line
+            agent.label,
+            command_line(&agent)
         ))
-        .title("Declare an external agent?")
+        .title(title)
         .kind(MessageDialogKind::Warning)
         .buttons(MessageDialogButtons::OkCancelCustom(
-            "Declare agent".to_owned(),
+            confirm.to_owned(),
             "Cancel".to_owned(),
         ))
         .show(move |confirmed| {
@@ -113,6 +113,20 @@ pub async fn ai_save_external_agent<R: Runtime>(
         return Ok(None);
     }
     backend.save_external_agent(draft).await.map(Some)
+}
+
+/// The declaration as one shell line, each word quoted as a shell reads it
+/// back: joined by spaces, `["-y foo"]` and `["-y", "foo"]` would read the same
+/// in the dialog and run differently.
+fn command_line(agent: &oxyn_core::ExternalAgentConfig) -> String {
+    let env = agent
+        .env
+        .iter()
+        .map(|(name, value)| format!("{}={}", shell_quote(name), shell_quote(value)));
+    let words = std::iter::once(&agent.command)
+        .chain(&agent.args)
+        .map(|word| shell_quote(word));
+    env.chain(words).collect::<Vec<_>>().join(" ")
 }
 
 #[tauri::command]
@@ -129,7 +143,8 @@ pub fn ai_agent_presets(backend: State<'_, Backend>) -> Vec<AgentPresetDraft> {
     backend.ai_agent_presets()
 }
 
-/// Looks for a known agent on the machine, on the user's click. Saves nothing:
+/// Looks for a known agent on the machine, when the AI settings screen opens.
+/// Runs nothing and saves nothing:
 /// the draft comes back to be read, and declaring it goes through
 /// [`ai_save_external_agent`] and its native confirmation.
 #[tauri::command]
@@ -229,16 +244,46 @@ pub async fn ai_select_version(
 
 /// Asks the conversation's agent to sign its user in, by a method it offered.
 /// The agent does it; Oxyn neither reads nor keeps a token.
+///
+/// `thread` is `None` before the first question: the sign-in then goes to the
+/// agent the panel started for the connection.
 #[tauri::command]
 pub async fn ai_authenticate(
     backend: State<'_, Backend>,
     connection: String,
-    thread: String,
+    thread: Option<String>,
     method: String,
 ) -> Result<(), IpcError> {
     backend
-        .ai_authenticate(self::connection(&connection)?, &thread, &method)
+        .ai_authenticate(self::connection(&connection)?, thread.as_deref(), &method)
         .await
+}
+
+/// Starts the external agent the next question would use, before it is asked,
+/// and answers with the models, efforts and options it declares.
+///
+/// What a script in the webview gains: launching an agent the user declared —
+/// behind the native confirmation — on a connection it chooses, which the
+/// panel already does on a question. The refusal under `Local` falls before
+/// anything starts, the tools and the confinement are a question's, and no
+/// prompt is sent: nothing of the database leaves.
+#[tauri::command]
+pub async fn ai_start_agent(
+    backend: State<'_, Backend>,
+    request: AgentStartRequest,
+) -> Result<AgentStart, IpcError> {
+    backend.ai_start_agent(request).await
+}
+
+/// Stops the agent started ahead of a question, if no question took it.
+/// Asynchronous although in memory: releasing the agent withdraws its requests
+/// at the executor.
+#[tauri::command]
+pub async fn ai_stop_agent_start(
+    backend: State<'_, Backend>,
+    connection: String,
+) -> Result<bool, IpcError> {
+    Ok(backend.ai_stop_agent_start(self::connection(&connection)?))
 }
 
 /// Offers a row sample of a relation for the next question — what would be
@@ -263,16 +308,18 @@ pub async fn ai_request_sample(
         .await
 }
 
-/// Asks the conversation's agent to change a mode or an option it declared.
+/// Asks the conversation's agent to change a mode or an option it declared —
+/// or, before the first question (`thread` `None`), the agent the panel
+/// started for the connection.
 #[tauri::command]
 pub async fn ai_set_agent_setting(
     backend: State<'_, Backend>,
     connection: String,
-    thread: String,
+    thread: Option<String>,
     change: AgentSettingChange,
 ) -> Result<AgentSettingAnswer, IpcError> {
     backend
-        .ai_set_agent_setting(self::connection(&connection)?, &thread, change)
+        .ai_set_agent_setting(self::connection(&connection)?, thread.as_deref(), change)
         .await
 }
 
@@ -300,4 +347,39 @@ pub async fn ai_propose_schema_change(
     })
     .await
     .map_err(|_| IpcError::invalid("The proposal stopped before it finished"))?
+}
+
+#[cfg(test)]
+mod tests {
+    use oxyn_core::{ExternalAgentConfig, ProviderId};
+
+    use super::command_line;
+
+    #[test]
+    fn the_dialog_tells_one_argument_from_two() {
+        let agent = |args: &[&str]| {
+            ExternalAgentConfig::new(ProviderId::for_new_agent(), "Agent", "npx")
+                .with_args(args.iter().copied())
+        };
+        let one = command_line(&agent(&["-y foo"]));
+        let two = command_line(&agent(&["-y", "foo"]));
+        assert_eq!(one, "npx '-y foo'");
+        assert_eq!(two, "npx -y foo");
+    }
+
+    #[test]
+    fn the_environment_is_quoted_before_the_command() {
+        let mut agent = ExternalAgentConfig::new(
+            ProviderId::for_new_agent(),
+            "Agent",
+            "/Users/me/.nvm/versions/node/v22.23.2/bin/npx",
+        )
+        .with_args(["-y", "@agentclientprotocol/claude-agent-acp@0.78.0"]);
+        agent.env = vec![("PATH".to_owned(), "/opt/my bin:/usr/bin".to_owned())];
+        assert_eq!(
+            command_line(&agent),
+            "PATH='/opt/my bin:/usr/bin' /Users/me/.nvm/versions/node/v22.23.2/bin/npx -y \
+             @agentclientprotocol/claude-agent-acp@0.78.0"
+        );
+    }
 }
