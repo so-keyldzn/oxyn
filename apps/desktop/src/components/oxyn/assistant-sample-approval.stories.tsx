@@ -51,17 +51,30 @@ const body = () => within(document.body)
  * boundary (WCAG 1.4.11). An unticked checkbox is nothing but its boundary, so
  * on a consent screen that opens with every box unticked, this is measured
  * here rather than trusted to a rule that does not exist.
+ *
+ * The theme is written in OKLCH, and so is what `getComputedStyle` returns: a
+ * canvas paints each colour to read it back as sRGB, whatever its notation.
  */
 function contrast(first: string, second: string) {
   const luminance = (color: string) => {
-    const match = /^rgba?\((\d+),\s*(\d+),\s*(\d+)/.exec(color)
-    // An unreadable format fails the story loudly rather than passing it.
-    if (!match) throw new Error(`Unreadable colour: ${color}`)
-    const [red, green, blue] = [match[1], match[2], match[3]].map((channel) => {
-      const value = Number(channel) / 255
+    const canvas = document.createElement("canvas")
+    canvas.width = 1
+    canvas.height = 1
+    const context = canvas.getContext("2d", { willReadFrequently: true })
+    if (!context) throw new Error("No 2D context")
+    // A colour the canvas cannot read would keep the sentinel and measure a
+    // wrong ratio in silence: the story fails loudly instead.
+    context.fillStyle = "#010203"
+    context.fillStyle = color
+    if (context.fillStyle === "#010203" && color !== "#010203")
+      throw new Error(`Unreadable colour: ${color}`)
+    context.fillRect(0, 0, 1, 1)
+    const [red = 0, green = 0, blue = 0] = context.getImageData(0, 0, 1, 1).data
+    const [r, g, b] = [red, green, blue].map((channel) => {
+      const value = channel / 255
       return value <= 0.04045 ? value / 12.92 : ((value + 0.055) / 1.055) ** 2.4
     }) as [number, number, number]
-    return 0.2126 * red + 0.7152 * green + 0.0722 * blue
+    return 0.2126 * r + 0.7152 * g + 0.0722 * b
   }
   const [light, dark] = [luminance(first), luminance(second)].sort(
     (a, b) => b - a
