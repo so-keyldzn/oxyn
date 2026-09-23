@@ -63,8 +63,9 @@ describe("pinning an object to the question", () => {
     expect(canPin(offered, relation("customers"))).toBe(true)
     expect(canPin({ ...offered, tier: "metadata" }, relation("c"))).toBe(false)
     expect(canPin({ ...offered, tier: "local" }, relation("c"))).toBe(false)
+    // An external agent receives an approved sample too (ADR-0034).
     expect(canPin({ ...offered, destination: "agent" }, relation("c"))).toBe(
-      false
+      true
     )
     expect(canPin({ ...offered, destination: null }, relation("c"))).toBe(false)
     // A sample is rows: an object that holds none has nothing to offer.

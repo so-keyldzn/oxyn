@@ -228,8 +228,11 @@ export const NoPinUnderMetadata: Story = {
   },
 }
 
-/** An external agent assembles its own prompt: no sample goes to it. */
-export const NoPinForAnExternalAgent: Story = {
+/**
+ * An external agent receives an approved sample too, through the same gate as
+ * a provider (ADR-0034): the pin is offered for it under `sampled`.
+ */
+export const PinForAnExternalAgent: Story = {
   args: {
     onCopyName: fn(),
     pin: { tier: "sampled", destination: "agent", onPin: fn() },
@@ -237,8 +240,8 @@ export const NoPinForAnExternalAgent: Story = {
   play: async ({ canvas }) => {
     const menu = await openInvoicesMenu(canvas)
     await expect(
-      menu.queryByRole("menuitem", { name: "Pin to question" })
-    ).toBeNull()
+      menu.getByRole("menuitem", { name: "Pin to question" })
+    ).toBeVisible()
     await userEvent.keyboard("{Escape}")
     await waitFor(() => expect(menu.queryByRole("menu")).toBeNull())
   },

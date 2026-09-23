@@ -3,8 +3,8 @@
 // The catalog sidebar offers « Pin to question » and the assistant panel sends
 // it: they are siblings in the workspace, and neither can hand props to the
 // other. The chosen destination lives here for the same reason — the menu
-// shows the action only for a built-in provider, and must read the choice the
-// panel made, not guess it again.
+// shows the action only when the panel has a usable destination, and must read
+// the choice the panel made, not guess it again.
 
 import * as React from "react"
 

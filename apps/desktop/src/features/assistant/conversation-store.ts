@@ -283,6 +283,19 @@ export function withdrawSample(connection: string, request: SampleRequest) {
   void ai.withdrawSample(connection, request.id).catch(() => undefined)
 }
 
+/**
+ * The user's answer to an agent's request for a sample: the ticked columns, or
+ * `null` to decline. The agent's call, waiting in the backend, reads the rows
+ * itself; the screen closes on the `sampleAnswered` that follows.
+ */
+export function answerSampleAsk(
+  connection: string,
+  request: string,
+  columns: ReadonlyArray<string> | null
+): Promise<void> {
+  return ai.answerSample(connection, request, columns)
+}
+
 export const SAMPLE_WAITS =
   "A sample goes with a question sent now. Wait for the answer, then ask for the sample again."
 

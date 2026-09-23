@@ -397,6 +397,7 @@ describe("a declined sample", () => {
     backend.withdrawSample.mockResolvedValue(undefined)
     withdrawSample("connection-declined", {
       id: "grant",
+      requestedBy: null,
       source: "main.customers",
       address: { catalog: null, namespace: "main", relation: "customers" },
       rows: 5,

@@ -113,6 +113,7 @@ describe("an approved sample", () => {
   it("reads the backend's offer, address included", () => {
     const offer = SampleRequest.parse({
       id: "grant",
+      requestedBy: null,
       source: "main.customers",
       address: { catalog: null, namespace: "main", relation: "customers" },
       rows: 5,
@@ -121,6 +122,51 @@ describe("an approved sample", () => {
       reach: "local",
     })
     expect(offer.address.relation).toBe("customers")
+  })
+
+  it("reads an agent's request, who asked, and its answer", () => {
+    const asked = AiUpdate.parse({
+      node: 1,
+      event: {
+        kind: "sampleRequested",
+        call: 0,
+        request: {
+          id: "ask",
+          requestedBy: "Claude Code",
+          source: "main.customers",
+          address: { catalog: null, namespace: "main", relation: "customers" },
+          rows: 5,
+          fields: [],
+          destination: "Claude Code",
+          reach: "unresolved",
+        },
+      },
+    })
+    expect(
+      asked.event.kind === "sampleRequested" && asked.event.request.requestedBy
+    ).toBe("Claude Code")
+    const answered = AiUpdate.parse({
+      node: 1,
+      event: { kind: "sampleAnswered", request: "ask", approved: false },
+    })
+    expect(answered.event).toEqual({
+      kind: "sampleAnswered",
+      request: "ask",
+      approved: false,
+    })
+    // `requestedBy` is always there, `null` for a pinned sample: a missing
+    // key is a mirror out of step, not a pinned sample.
+    expect(() =>
+      SampleRequest.parse({
+        id: "grant",
+        source: "main.customers",
+        address: { catalog: null, namespace: "main", relation: "customers" },
+        rows: 5,
+        fields: [],
+        destination: "Local model",
+        reach: "local",
+      })
+    ).toThrow()
   })
 
   it("reads that a sample went, and that the next question starts over", () => {

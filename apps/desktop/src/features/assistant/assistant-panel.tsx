@@ -1,6 +1,7 @@
 import * as React from "react"
 
 import {
+  answerSampleAsk,
   askQuestion,
   changeAgentSetting,
   continueAnswer,
@@ -102,17 +103,22 @@ export function AssistantPanel({
   const destinations = entry.status === "absent" ? [] : entry.destinations
   const selected = selectedDestination(destinations, chosenKey)
   // The pin stands only where a sample can follow: the menu offered it under
-  // the same condition, and either side may have changed since.
+  // the same condition, and either side may have changed since. A provider or
+  // an external agent: the sample enters either prompt by the same gate.
   const pinnable =
     entry.status === "enabled" &&
     open.privacyTier === "sampled" &&
-    selected?.kind === "provider" &&
+    selected !== null &&
     selected.usable
   const pin = pinnable ? pinned : null
   React.useEffect(() => {
     if (!pinnable && pinned !== null) unpin(open.connection)
   }, [pinnable, pinned, open.connection])
   const sampleApproval = useSampleApproval()
+  const agentAsk = useAgentSampleAsk(
+    open.connection,
+    state.thread.nodes.find((node) => node.id === state.thread.running) ?? null
+  )
   const model =
     selected?.kind === "provider"
       ? (chosenModels[selected.id] ?? selected.model)
@@ -336,16 +342,62 @@ export function AssistantPanel({
         onSendQueued={(key) => void sendQueued(open.connection, key)}
         onRemoveQueued={(key) => removeQueued(open.connection, key)}
       />
+      {/* The user's own pin first: it is what they are doing now. An agent's
+            request waits behind it, and its call waits with it. */}
       <AssistantSampleApproval
-        request={sampleApproval.request}
+        request={sampleApproval.request ?? agentAsk.request}
         connectionName={open.name}
         environment={open.environment}
         tier={open.privacyTier}
-        deciding={sampleApproval.deciding}
-        onDecide={sampleApproval.decide}
+        deciding={
+          sampleApproval.request !== null
+            ? sampleApproval.deciding
+            : agentAsk.deciding
+        }
+        onDecide={
+          sampleApproval.request !== null
+            ? sampleApproval.decide
+            : agentAsk.decide
+        }
       />
     </>
   )
+}
+
+/**
+ * The request for a sample an agent waits on, in the running exchange — and
+ * the user's answer to it, sent once.
+ *
+ * Answered here only: nothing the agent sends can approve it (ADR-0034). The
+ * screen closes when the backend says the request was answered, or when the
+ * run ends; until then it stays open and inert, so a second click cannot
+ * answer twice.
+ */
+function useAgentSampleAsk(connection: string, running: ExchangeNode | null) {
+  const request = running?.exchange.sampleAsk ?? null
+  const [answered, setAnswered] = React.useState<string | null>(null)
+  const deciding = request !== null && answered === request.id
+  return {
+    request,
+    deciding,
+    decide: (columns: ReadonlyArray<string> | null) => {
+      if (request === null || deciding) return
+      setAnswered(request.id)
+      answerSampleAsk(
+        connection,
+        request.id,
+        columns === null || columns.length === 0 ? null : columns
+      ).catch((error: unknown) => {
+        // Expired or withdrawn meanwhile: the backend already told the agent
+        // « declined », and the screen closes with the run.
+        toast.add({
+          title: "Sample not sent",
+          description: error instanceof Error ? error.message : String(error),
+          type: "error",
+        })
+      })
+    },
+  }
 }
 
 /**

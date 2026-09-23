@@ -22,6 +22,7 @@ import type {
   FailureCategory,
   MemoryReset,
   PlanEntry,
+  SampleRequest,
   SignInHelp,
   ToolStatus,
 } from "@/lib/ipc/ai"
@@ -226,6 +227,12 @@ export interface Exchange {
    * by `ToolOutcome`, owned by ia-tauri): set by `reduce`.
    */
   sources: ReadonlyArray<AssistantSource> | null
+  /**
+   * The row sample an agent asked for and waits on, until the user answers —
+   * drawn by the same approval screen as a pinned sample, naming the agent
+   * (ADR-0034). `null` when nothing waits.
+   */
+  sampleAsk: SampleRequest | null
 }
 
 export function emptyExchange(question: string): Exchange {
@@ -240,6 +247,7 @@ export function emptyExchange(question: string): Exchange {
     plan: null,
     agentSettings: null,
     sources: null,
+    sampleAsk: null,
   }
 }
 
@@ -332,6 +340,16 @@ export function reduce(current: Exchange, event: AiEvent): Exchange {
         rows: event.rows,
         columns: event.columns,
       })
+    // Only while the run goes on: a reopened exchange replays the request,
+    // and the call that waited for it is long gone.
+    case "sampleRequested":
+      return current.running
+        ? { ...current, sampleAsk: event.request }
+        : current
+    case "sampleAnswered":
+      return current.sampleAsk?.id === event.request
+        ? { ...current, sampleAsk: null }
+        : current
     case "turnStarted":
       return push({
         kind: "turn",
@@ -601,12 +619,17 @@ export function reduce(current: Exchange, event: AiEvent): Exchange {
   }
 }
 
-/** A run is over: drafts that never became calls are dropped, not left spinning. */
+/**
+ * A run is over: drafts that never became calls are dropped, not left
+ * spinning, and an agent's request for a sample closes with its run — the
+ * backend withdrew it with the call.
+ */
 function settle(current: Exchange): Exchange {
   return {
     ...current,
     running: false,
     stopRequested: false,
+    sampleAsk: null,
     entries: current.entries.filter((entry) => entry.kind !== "toolDraft"),
   }
 }

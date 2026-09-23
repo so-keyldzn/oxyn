@@ -446,3 +446,51 @@ describe("an approved sample", () => {
     ])
   })
 })
+
+describe("an agent's request for a sample", () => {
+  const asked: AiEvent = {
+    kind: "sampleRequested",
+    call: 0,
+    request: {
+      id: "ask",
+      requestedBy: "Claude Code",
+      source: "main.customers",
+      address: { catalog: null, namespace: "main", relation: "customers" },
+      rows: 5,
+      fields: [],
+      destination: "Claude Code",
+      reach: "unresolved",
+    },
+  }
+
+  it("waits on the running exchange until its answer", () => {
+    const running = exchangeOf("q", [{ kind: "question", text: "q" }, asked])
+    expect(running.sampleAsk?.id).toBe("ask")
+    // Another request's answer closes nothing.
+    expect(
+      reduce(running, {
+        kind: "sampleAnswered",
+        request: "other",
+        approved: true,
+      }).sampleAsk?.id
+    ).toBe("ask")
+    expect(
+      reduce(running, {
+        kind: "sampleAnswered",
+        request: "ask",
+        approved: false,
+      }).sampleAsk
+    ).toBeNull()
+  })
+
+  it("closes with the run, and never reopens on a replay of a finished one", () => {
+    const ended = exchangeOf("q", [
+      { kind: "question", text: "q" },
+      asked,
+      failed("provider"),
+    ])
+    expect(ended.sampleAsk).toBeNull()
+    // Replayed without its question event: not running, so not reopened.
+    expect(reduce(emptyExchange("q"), asked).sampleAsk).toBeNull()
+  })
+})

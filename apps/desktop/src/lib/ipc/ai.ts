@@ -176,12 +176,17 @@ export const DestinationChoice = z.discriminatedUnion("kind", [
 export type DestinationChoice = z.infer<typeof DestinationChoice>
 
 /**
- * An offer to send rows of one relation with the next question: names and a
- * bound, never a value. `id` is the backend's one-use grant — sent back with
- * the approval, never rendered.
+ * An offer to send rows of one relation: names and a bound, never a value.
+ * `id` is the backend's one-use grant, or an agent's pending request — sent
+ * back with the answer, never rendered.
+ *
+ * `requestedBy` names the agent when an agent asked (`request_sample`), and is
+ * `null` when the user pinned the relation: a request the user did not start
+ * must never look like one they did (ADR-0034).
  */
 export const SampleRequest = z.object({
   id: z.string(),
+  requestedBy: z.string().nullable(),
   source: z.string(),
   address: CatalogAddress,
   rows: z.number().int().nonnegative(),
@@ -529,6 +534,21 @@ export const AiEvent = z.discriminatedUnion("kind", [
     rows: z.number().int().nonnegative(),
     columns: z.number().int().nonnegative(),
   }),
+  /**
+   * An agent asked for a row sample through `call`: the approval screen opens,
+   * and the call waits for `answerSample`. Nothing is read yet.
+   */
+  z.object({
+    kind: z.literal("sampleRequested"),
+    call: z.number().int().nonnegative(),
+    request: SampleRequest,
+  }),
+  /** The agent's request was answered, expired or withdrawn: the screen closes. */
+  z.object({
+    kind: z.literal("sampleAnswered"),
+    request: z.string(),
+    approved: z.boolean(),
+  }),
   z.object({
     kind: z.literal("turnStarted"),
     turn: z.number().int().nonnegative(),
@@ -812,8 +832,8 @@ export const ai = {
     }),
 
   /**
-   * Offers a sample of `address` for the next question to `destination`.
-   * Refused below the `sampled` tier and for an external agent.
+   * Offers a sample of `address` for the next question to `destination` — a
+   * provider or an external agent. Refused below the `sampled` tier.
    */
   requestSample: (
     connection: string,
@@ -833,6 +853,21 @@ export const ai = {
   /** The user declined the offer: its grant can no longer be presented. */
   withdrawSample: (connection: string, request: string) =>
     call("ai_withdraw_sample", Nothing, { connection, request }),
+
+  /**
+   * The user's answer to an agent's request for a sample: the ticked columns,
+   * or `null` to decline. The agent's call waiting on it does the read.
+   */
+  answerSample: (
+    connection: string,
+    request: string,
+    columns: ReadonlyArray<string> | null
+  ) =>
+    call("ai_answer_sample", Nothing, {
+      connection,
+      request,
+      columns: columns === null ? null : [...columns],
+    }),
 
   forget: (connection: string) => call("ai_forget", Nothing, { connection }),
 

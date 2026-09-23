@@ -27,6 +27,7 @@ function field(
 
 const REQUEST: SampleRequest = {
   id: "approval-1",
+  requestedBy: null,
   source: "public.clients",
   rows: 12,
   destination: "Claude Sonnet",
@@ -237,6 +238,55 @@ export const NextSendOnTheSameSourceStartsUnticked: Story = {
   },
 }
 
+/**
+ * An agent's ask waited behind the user's pin: once the pin is decided, the
+ * dialog stays open and shows the ask. `initialFocus` does not act again, so
+ * Cancel must take the focus back on its own — the screen the user did not
+ * start is the last one where the focus may rest on a checkbox.
+ */
+export const AgentAskAfterThePinTakesCancelsFocus: Story = {
+  render: function Harness(args) {
+    const [pinDecided, setPinDecided] = React.useState(false)
+    return (
+      <AssistantSampleApproval
+        {...args}
+        request={
+          pinDecided
+            ? {
+                ...REQUEST,
+                id: "ask-after-pin",
+                requestedBy: "Claude Code",
+                destination: "Claude Code",
+                reach: "unresolved",
+              }
+            : REQUEST
+        }
+        onDecide={(columns) => {
+          args.onDecide(columns)
+          setPinDecided(true)
+        }}
+      />
+    )
+  },
+  play: async ({ args }) => {
+    const screen = body()
+    const email = await screen.findByRole("checkbox", { name: /email/ })
+    await userEvent.click(email)
+    await userEvent.click(
+      await screen.findByRole("button", { name: /Send 1 of 4 columns/ })
+    )
+    await expect(args.onDecide).toHaveBeenCalledWith(["email"])
+
+    const [title] = await screen.findAllByText("An agent asks for a row sample")
+    await waitFor(() => expect(title).toBeVisible())
+    const cancel = await screen.findByRole("button", { name: "Cancel" })
+    await waitFor(() => expect(cancel).toHaveFocus())
+    for (const box of screen.getAllByRole("checkbox")) {
+      await expect(box).not.toBeChecked()
+    }
+  },
+}
+
 /** Closing without approving is a refusal, not « approved nothing ». */
 export const Cancelled: Story = {
   play: async ({ args }) => {
@@ -297,6 +347,101 @@ export const RefusedUnderLocal: Story = {
     const [line] = await screen.findAllByText(/Nothing leaves this machine/)
     await waitFor(() => expect(line).toBeVisible())
     await expect(screen.queryAllByRole("checkbox")).toHaveLength(0)
+  },
+}
+
+/**
+ * An external agent asked for the sample itself (`request_sample`, ADR-0034).
+ *
+ * The screen says so before anything else — who asks, that it was not the
+ * user, that Cancel declines — and offers only the columns the agent named,
+ * none ticked. Everything else is the pinned sample's screen: Cancel holds the
+ * focus, Enter does not send, the destination is named with its reach.
+ */
+export const AskedByAnAgent: Story = {
+  args: {
+    request: {
+      ...REQUEST,
+      id: "ask-1",
+      requestedBy: "Claude Code",
+      destination: "Claude Code",
+      reach: "unresolved",
+      rows: 5,
+      fields: [
+        field("email", "text", {
+          comment: "Login address, unique per account",
+        }),
+        field("notes", "text"),
+      ],
+    },
+  },
+  play: async ({ args }) => {
+    const screen = body()
+    const [title] = await screen.findAllByText("An agent asks for a row sample")
+    await waitFor(() => expect(title).toBeVisible())
+    const [asker] = await screen.findAllByText(/asked for it, not you/)
+    await expect(asker).toHaveTextContent(
+      "Claude Code asked for it, not you, and waits for your answer. Cancel declines."
+    )
+    const cancel = await screen.findByRole("button", { name: "Cancel" })
+    await waitFor(() => expect(cancel).toHaveFocus())
+    const boxes = await screen.findAllByRole("checkbox")
+    await expect(boxes).toHaveLength(2)
+    for (const box of boxes) await expect(box).not.toBeChecked()
+
+    await userEvent.click(
+      await screen.findByRole("checkbox", { name: /email/ })
+    )
+    await userEvent.keyboard("{Enter}")
+    await expect(args.onDecide).not.toHaveBeenCalled()
+    await userEvent.click(
+      await screen.findByRole("button", {
+        name: /Send 1 of 2 columns to Claude Code · to an unresolved address/,
+      })
+    )
+    await expect(args.onDecide).toHaveBeenCalledWith(["email"])
+  },
+}
+
+/** Declining an agent's request is Cancel, and it answers `null`. */
+export const AgentRequestDeclined: Story = {
+  args: {
+    request: {
+      ...REQUEST,
+      id: "ask-2",
+      requestedBy: "Codex",
+      destination: "Codex",
+      reach: "unresolved",
+    },
+  },
+  play: async ({ args }) => {
+    const screen = body()
+    await userEvent.click(await screen.findByRole("button", { name: "Cancel" }))
+    await expect(args.onDecide).toHaveBeenCalledWith(null)
+  },
+}
+
+/**
+ * An agent's request under `metadata`: the backend refuses it before any
+ * screen, and were one to open, it would still offer nothing.
+ */
+export const AgentRequestRefusedUnderMetadata: Story = {
+  args: {
+    tier: "metadata",
+    request: {
+      ...REQUEST,
+      id: "ask-3",
+      requestedBy: "Codex",
+      destination: "Codex",
+      reach: "unresolved",
+    },
+  },
+  play: async () => {
+    const screen = body()
+    const [line] = await screen.findAllByText(/row values never leave/)
+    await waitFor(() => expect(line).toBeVisible())
+    await expect(screen.queryAllByRole("checkbox")).toHaveLength(0)
+    await expect(screen.queryByRole("button", { name: /^Send/ })).toBeNull()
   },
 }
 

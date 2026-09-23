@@ -37,6 +37,8 @@ import type { Environment, PrivacyTier, RelationField } from "@/lib/ipc/types"
  *   nullability, default and comment — all metadata. **They carry no value**,
  *   which is why they are the right type here (I-03).
  * - `reach` says whether the destination is off this machine.
+ * - `requestedBy` names the agent when an agent asked for the sample
+ *   (`request_sample`, ADR-0034), `null` when the user pinned the relation.
  */
 export type SampleRequest = Omit<SampleOffer, "address">
 
@@ -144,6 +146,13 @@ function ColumnRow({
  *
  * Like `ApprovalDialog`, it cannot be confirmed by reflex: `Cancel` takes the
  * initial focus and comes first at every width, and Enter alone never approves.
+ *
+ * **The same screen when an agent asks** (ADR-0034). A request the user did
+ * not start is the one most likely to be clicked through, so it says so first
+ * — who asks, and that Cancel declines — and changes nothing else: the same
+ * unticked boxes, the same destination named, the same refusal outside
+ * `sampled`. The agent may have named the columns it wants; those are the
+ * ones offered, and none is ticked for the user.
  */
 export function AssistantSampleApproval({
   request,
@@ -228,6 +237,14 @@ function ApprovalBody({
   onDecide: (columns: ReadonlyArray<string> | null) => void
 }) {
   const [ticked, setTicked] = React.useState<ReadonlyArray<string>>([])
+  // `initialFocus` acts when the dialog opens, and only then. A request that
+  // follows another without the dialog closing — an agent's ask waiting behind
+  // the user's pin — remounts this body under a dialog already open: the
+  // focus was on a control of the body just removed, and Cancel would not get
+  // it back. Taken here, on every mount, it is Cancel's for every request.
+  React.useEffect(() => {
+    cancelRef.current?.focus()
+  }, [cancelRef])
   const allowed = tier === "sampled"
   const fields = request.fields
   const where = whereItGoes(request.reach)
@@ -237,10 +254,23 @@ function ApprovalBody({
     <>
       <AlertDialogHeader>
         <div className="flex flex-wrap items-center gap-2">
-          <AlertDialogTitle>Approve a row sample</AlertDialogTitle>
+          <AlertDialogTitle>
+            {request.requestedBy === null
+              ? "Approve a row sample"
+              : "An agent asks for a row sample"}
+          </AlertDialogTitle>
           <EnvironmentBadge environment={environment} />
         </div>
         <AlertDialogDescription>
+          {request.requestedBy !== null ? (
+            <>
+              <strong className="font-medium text-foreground">
+                <bdi>{request.requestedBy}</bdi>
+              </strong>{" "}
+              asked for it, not you, and waits for your answer. Cancel
+              declines.{" "}
+            </>
+          ) : null}
           {allowed ? (
             <>
               {request.rows.toLocaleString()} rows of{" "}

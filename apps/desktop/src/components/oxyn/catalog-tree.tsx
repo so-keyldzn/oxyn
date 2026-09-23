@@ -38,8 +38,9 @@ import { cn } from "@/lib/utils"
  * What decides whether an object can be pinned to the assistant's question.
  *
  * A pin exists to offer a row sample, and a sample leaves only under
- * `sampled`, to a built-in provider (docs/AI-PROVIDERS.md, « Échantillon
- * approuvé »). Anywhere else the action is absent rather than disabled: a
+ * `sampled`, to the destination the assistant would ask — a built-in provider
+ * or an external agent (docs/AI-PROVIDERS.md, « Échantillon approuvé »,
+ * ADR-0034). Anywhere else the action is absent rather than disabled: a
  * greyed item would advertise a path the tier closes.
  */
 export interface PinToQuestion {
@@ -54,7 +55,7 @@ export function canPin(pin: PinToQuestion | undefined, node: CatalogNode) {
   return (
     pin !== undefined &&
     pin.tier === "sampled" &&
-    pin.destination === "provider" &&
+    pin.destination !== null &&
     node.address.relation !== null &&
     node.holdsRecords
   )
