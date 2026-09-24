@@ -17,9 +17,7 @@ Les décisions sont justifiées dans les [ADR](adr/) ; ce document en dérive et
 rejuge pas.
 
 Ce qu'il **ne** décrit pas : ce qui reste à faire, qui vit dans
-[IMPLEMENTATION-PLAN](IMPLEMENTATION-PLAN.md). Les encadrés « où on en est » du §11 sont
-la seule exception, parce qu'un lecteur qui prend ce document pour la description d'un
-produit fini se tromperait sur tout le reste.
+[IMPLEMENTATION-PLAN](IMPLEMENTATION-PLAN.md), phasage compris : le §11 y renvoie.
 
 ---
 
@@ -1024,60 +1022,17 @@ permissions n'accorde rien. Voir [ADR-0005](adr/0005-wasm-plugins.md).
 
 ## 11. Phasage
 
-**Phase 0 — Le squelette porteur.** `oxyn-core`, traits driver, buffers Arrow, Command bus,
-Policy gate. Deux drivers : **PostgreSQL** et **SQLite**. Grille virtualisée, éditeur SQL,
-arbre de catalogue. *Critère de sortie : `SELECT` de 10 M de lignes, premier affichage dans
-le budget de [PERFORMANCE](PERFORMANCE.md#budgets-dinteraction), mémoire stable, `Échap` annule
-vraiment.*
-
-> **Ce document ne chiffre plus ce seuil**, et c'est une correction du
-> 2026-09-15. Il portait « sous 100 ms » quand
-> [PERFORMANCE](PERFORMANCE.md#budgets-dinteraction) pose **300 ms après la première
-> réponse du serveur**. Deux valeurs pour un même seuil rendent toute régression
-> inarbitrable : à 150 ms, l'un dit défaut, l'autre dit conforme.
-> [CLAUDE.md](../CLAUDE.md#la-documentation-fait-autorité) donne l'autorité sur
-> les budgets chiffrés à PERFORMANCE ; ce document renvoie désormais, au lieu de
-> concurrencer.
-
-> **Où on en est.** Les quatorze crates et le front existent, compilent, et
-> `make qualite` passe : front, format, `clippy -D warnings`, la suite de tests,
-> `cargo doc -D warnings`. `make desktop-dev` ouvre la fenêtre Tauri, et
-> `⌘Entrée` exécute réellement à travers le command bus contre la session choisie
-> dans le formulaire de connexion.
->
-> **Le critère de sortie est partiellement mesuré.** Le catalogue est branché par
-> paliers sur le command bus. Ce qui est **mesuré** depuis, et consigné dans
-> [PERFORMANCE](PERFORMANCE.md#confrontation-aux-budgets) : le premier lot arrive
-> en 2,6 ms quelle que soit la taille de la table, et la stabilité mémoire est
-> établie à la valeur réelle du budget — 2 Gio traversent un tampon de 256 Mo
-> pour 195 Mio de croissance RSS. Ce qui **reste à produire** : le `SELECT` de
-> 10 M de lignes de bout en bout, et le défilement d'une grille peuplée sous
-> instrument — désormais dans la webview. L'éditeur n'est plus à écrire : c'est
-> CodeMirror 6, coloré par dialecte, avec la complétion de base de `basicSetup` ;
-> une complétion nourrie du catalogue n'y est pas branchée.
-
-**Phase 1 — Le client se suffit à lui-même.** MySQL/MariaDB, DuckDB, ClickHouse. Export.
-Historique. Édition de données avec prévisualisation du DML. *À ce stade Oxyn est un bon
-client SQL, sans une ligne d'IA.*
-
-> **MySQL/MariaDB est reporté** après la porte de sortie de la phase IA, dont un lot
-> est daté au plus tard au 2026-10-31 : le workspace IA est engagé, et PostgreSQL et
-> SQLite suffisent à éprouver les traits de la couche driver. Le calendrier et la
-> raison font foi dans
-> [IMPLEMENTATION-PLAN § Phase 2](IMPLEMENTATION-PLAN.md#phase-2--les-protocoles-qui-comptent),
-> dont la numérotation des phases diffère de celle-ci.
-
-**Phase 2 — Le workspace IA.** `oxyn-llm` (Ollama + un fournisseur cloud), `oxyn-ai`,
-compaction de contexte, deux agents : SQL et Schema. Le socle d'approbation et de
-journalisation existe déjà — c'est ce qui rend cette phase courte.
-
-**Phase 3 — Au-delà du relationnel.** MongoDB, Redis, Elasticsearch/OpenSearch. C'est ici
-que le modèle de capacités et `QueryLanguage` sont mis à l'épreuve ; s'ils sont mal conçus,
-on le découvre maintenant plutôt qu'au vingtième driver.
-
-**Phase 4 — Élargissement.** Plugins WASM. Sidecar (Oracle, Snowflake, BigQuery,
-Couchbase). Neo4j, Qdrant, Cassandra, DynamoDB, Influx. Agents restants. Diagrammes ER,
-dictionnaires de données, comparaison de versions.
+Les phases, leur ordre, leurs portes de sortie et l'état de chacune vivent dans
+[IMPLEMENTATION-PLAN](IMPLEMENTATION-PLAN.md#phase-0--charpente), qui fait autorité
+dessus. Ce document en portait un second découpage, numéroté autrement ; il a été
+retiré le 2026-09-25, parce que deux phasages divergent — c'était déjà le cas — et
+qu'un lecteur ne peut pas savoir lequel croire. Le report de MySQL/MariaDB et son
+calendrier sont à la
+[phase 2 du plan](IMPLEMENTATION-PLAN.md#phase-2--les-protocoles-qui-comptent) ; le
+critère du `SELECT` de 10 M de lignes, à sa
+[phase 1](IMPLEMENTATION-PLAN.md#phase-1--premier-trajet-visible) ; ce que ses phases
+ne plaçaient pas encore y est recopié en tête des phases, non tranché. Le principe qui
+guidait ce découpage reste celui-ci : **chaque phase livre un outil complet en soi**.
 
 ---
 
@@ -1095,4 +1050,4 @@ dictionnaires de données, comparaison de versions.
 | Oracle / Couchbase : dépendances C | Moyenne | Sidecar §4.4 ; reportés en phase 4 |
 | Contexte IA trop gros ou trop coûteux | Moyenne | Compaction + sélection de tables ; niveau `Metadata` par défaut |
 | Un agent casse une base de production | **Critique** | Policy gate §7.2 ; reclassification systématique §8 ; refus strict en production ; journal inviolable |
-| Périmètre de la vision vs. réalité | Élevée | Le phasage §11 : chaque phase livre un outil complet en soi |
+| Périmètre de la vision vs. réalité | Élevée | Le phasage d'[IMPLEMENTATION-PLAN](IMPLEMENTATION-PLAN.md) : chaque phase livre un outil complet en soi |
