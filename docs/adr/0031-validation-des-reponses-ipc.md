@@ -44,7 +44,7 @@ chaque défilement. Ce qu'elle demande est borné par `pageSizeFor` dans
 `components/oxyn/result-grid.tsx` — `min(PAGE_SIZE 200, PAGE_CELLS 20 000 /
 colonnes)`, soit **20 000 cellules au pire**, jamais les 2 000 lignes que la
 commande accepte. Le budget de trame pendant une interaction continue est de
-**8 ms p99** ([PERFORMANCE](../PERFORMANCE.md#les-budgets)).
+**8 ms p99** ([PERFORMANCE](../PERFORMANCE.md#budgets-dinteraction)).
 
 `Cell` est par ailleurs le **seul type `untagged`** qui traverse la frontière :
 validé en union, chacune de ses quatre formes est essayée en séquence. Mesuré le

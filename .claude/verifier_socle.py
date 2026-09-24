@@ -14,6 +14,7 @@ from __future__ import annotations
 import re
 import sys
 import tomllib
+import unicodedata
 from pathlib import Path
 
 RACINE = Path(__file__).resolve().parents[1]
@@ -25,7 +26,8 @@ REPERTOIRE_TAURI = "oxyn-desktop"
 
 # Les invariants sont ancrés dans CLAUDE.md par <a id="i-NN"></a>.
 MOTIF_ANCRE = re.compile(r'<a id="(i-\d+)"></a>')
-MOTIF_LIEN = re.compile(r"\[[^\]]+\]\(([^)#]+)(#[^)]+)?\)")
+# Le chemin est vide pour un lien vers une section du même fichier : `(#titre)`.
+MOTIF_LIEN = re.compile(r"\[[^\]]+\]\(([^)#]*)(#[^)]+)?\)")
 
 # Un gabarit contient des emplacements à remplir, écrits sous forme de lien pour
 # montrer la forme attendue : `[ADR-XXXX](XXXX-titre.md)`. Ce ne sont pas des
@@ -42,22 +44,85 @@ def _fichiers_markdown() -> list[Path]:
     return [f for f in fichiers if f.is_file()]
 
 
+MOTIF_TITRE = re.compile(r"^#{1,6}\s+(.+?)(?:\s+#+)?\s*$")
+MOTIF_ID_HTML = re.compile(r'<a\s+(?:id|name)="([^"]+)"')
+MOTIF_CLOTURE = re.compile(r"^\s*(```|~~~)")
+MOTIF_LIEN_EN_LIGNE = re.compile(r"!?\[([^\]]*)\]\([^)]*\)")
+
+
+def _slug(titre: str) -> str:
+    """Le slug que GitHub donne à un titre, calculé sur son texte rendu.
+
+    La ponctuation disparaît sans que ses espaces voisins fusionnent : « Les
+    “budgets” » garde ses deux espaces, donc deux tirets. C'est ce détail qu'un
+    fragment écrit à la main rate le plus souvent.
+    """
+    # Les segments impairs sont du code en ligne : rendus tels quels, `<u8>` compris.
+    segments = titre.split("`")
+    for i in range(0, len(segments), 2):
+        prose = MOTIF_LIEN_EN_LIGNE.sub(r"\1", segments[i])
+        segments[i] = re.sub(r"<[^>]+>", "", prose).replace("*", "")
+    texte = "".join(segments)
+    garde = (
+        c for c in texte.lower()
+        if c in " -" or unicodedata.category(c)[0] in "LMN" or unicodedata.category(c) == "Pc"
+    )
+    return "".join(garde).replace(" ", "-")
+
+
+def _ancres(fichier: Path) -> set[str]:
+    """Titres (avec le suffixe -1, -2 des doublons) et <a id> d'un fichier."""
+    ancres: set[str] = set()
+    vus: dict[str, int] = {}
+    en_code = False
+    for ligne in fichier.read_text(encoding="utf-8").splitlines():
+        if MOTIF_CLOTURE.match(ligne):
+            en_code = not en_code
+            continue
+        if en_code:
+            continue
+        ancres.update(MOTIF_ID_HTML.findall(ligne))
+        titre = MOTIF_TITRE.match(ligne)
+        if titre:
+            slug = _slug(titre.group(1))
+            n = vus.get(slug, 0)
+            vus[slug] = n + 1
+            ancres.add(slug if n == 0 else f"{slug}-{n}")
+    return ancres
+
+
 def controler_liens() -> list[str]:
     """Un lien mort dans un document d'autorité renvoie vers une règle qui
-    n'existe plus : le lecteur conclut que la règle a disparu."""
+    n'existe plus : le lecteur conclut que la règle a disparu. Un fragment mort
+    est plus sournois : la page s'ouvre, en haut, et le lecteur conclut que la
+    section citée n'existe pas ou cherche ailleurs."""
     erreurs = []
+    ancres: dict[Path, set[str]] = {}
     for fichier in _fichiers_markdown():
         texte = fichier.read_text(encoding="utf-8")
+        rel = fichier.relative_to(RACINE)
         for lien in MOTIF_LIEN.finditer(texte):
             cible = lien.group(1).strip()
             if cible.startswith(("http://", "https://", "mailto:")):
                 continue
             if MOTIF_EMPLACEMENT.search(cible):
                 continue
-            resolu = (fichier.parent / cible).resolve()
+            if not cible and not lien.group(2):
+                continue
+            resolu = (fichier.parent / cible).resolve() if cible else fichier.resolve()
             if not resolu.exists():
-                rel = fichier.relative_to(RACINE)
                 erreurs.append(f"{rel} : lien mort vers « {cible} »")
+                continue
+            fragment = lien.group(2)
+            if not fragment or resolu.suffix != ".md":
+                continue
+            if resolu not in ancres:
+                ancres[resolu] = _ancres(resolu)
+            if fragment[1:] not in ancres[resolu]:
+                erreurs.append(
+                    f"{rel} : ancre morte « {cible}{fragment} » — aucun titre "
+                    "ni <a id> n'y correspond"
+                )
     return erreurs
 
 

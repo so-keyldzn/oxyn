@@ -117,8 +117,9 @@ quatre faits à ne pas re-découvrir sont dans [hooks/README.md](hooks/README.md
 make socle
 ```
 
-Liens morts, règles sans `paths:`, invariants orphelins, hooks non exécutables,
-et les tests des hooks. Le socle a un mode de panne propre : il se dégrade en
+Liens morts — fichier absent, ou fragment `#…` qui ne correspond à aucun titre
+(slug GitHub) ni `<a id>` —, règles sans `paths:`, invariants orphelins, hooks
+non exécutables, et les tests des hooks et du calcul des slugs. Le socle a un mode de panne propre : il se dégrade en
 silence, et devient décoratif sans que personne ne le remarque.
 
 ## Étendre

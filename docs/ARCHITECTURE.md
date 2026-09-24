@@ -1027,12 +1027,12 @@ permissions n'accorde rien. Voir [ADR-0005](adr/0005-wasm-plugins.md).
 **Phase 0 — Le squelette porteur.** `oxyn-core`, traits driver, buffers Arrow, Command bus,
 Policy gate. Deux drivers : **PostgreSQL** et **SQLite**. Grille virtualisée, éditeur SQL,
 arbre de catalogue. *Critère de sortie : `SELECT` de 10 M de lignes, premier affichage dans
-le budget de [PERFORMANCE](PERFORMANCE.md#les-budgets), mémoire stable, `Échap` annule
+le budget de [PERFORMANCE](PERFORMANCE.md#budgets-dinteraction), mémoire stable, `Échap` annule
 vraiment.*
 
 > **Ce document ne chiffre plus ce seuil**, et c'est une correction du
 > 2026-09-15. Il portait « sous 100 ms » quand
-> [PERFORMANCE](PERFORMANCE.md#les-budgets) pose **300 ms après la première
+> [PERFORMANCE](PERFORMANCE.md#budgets-dinteraction) pose **300 ms après la première
 > réponse du serveur**. Deux valeurs pour un même seuil rendent toute régression
 > inarbitrable : à 150 ms, l'un dit défaut, l'autre dit conforme.
 > [CLAUDE.md](../CLAUDE.md#la-documentation-fait-autorité) donne l'autorité sur
