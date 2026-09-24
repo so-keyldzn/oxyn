@@ -31,3 +31,6 @@ uuid.workspace = true
 arrow.workspace = true
 oxyn-driver-sqlite.workspace = true
 rstest.workspace = true
+# Only the test binary needs more than one worker thread: the abandonment
+# tests race a real blocking-pool write against a dropped future.
+tokio = { workspace = true, features = ["rt-multi-thread"] }

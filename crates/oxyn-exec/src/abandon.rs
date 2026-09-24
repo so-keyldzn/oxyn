@@ -41,6 +41,14 @@
 //! only builds the record in memory and queues it in [`AbandonedOutcomes`];
 //! [`Executor::journal_abandoned`](crate::Executor::journal_abandoned) writes
 //! the queue from the blocking pool.
+//!
+//! [`OutcomeGuard`] is armed before its command's decision is even written
+//! ([ADR-0035](../../../docs/adr/0035-ecritures-locales-de-l-ordonnanceur-sur-le-pool-bloquant.md)):
+//! an abandonment during that write leaves the same `Ambiguous` outcome
+//! queued here, even though nothing ran. Once the decision write is
+//! submitted to the blocking pool, it belongs to that pool's task the same
+//! way the outcome write does — dropping the caller's future no longer
+//! cancels it.
 
 use std::collections::VecDeque;
 use std::sync::Arc;
@@ -195,7 +203,8 @@ impl std::fmt::Debug for AbandonedOutcomes {
     }
 }
 
-/// Armed around one command's execution; settled once its outcome is known.
+/// Armed as soon as the policy allows a command, before its decision is
+/// written; settled once its outcome is known.
 pub(crate) struct OutcomeGuard<'a> {
     outcomes: &'a AbandonedOutcomes,
     command: CommandId,
@@ -225,7 +234,8 @@ impl<'a> OutcomeGuard<'a> {
         }
     }
 
-    /// The outcome is known and will be journaled by the caller.
+    /// The outcome will be journaled by the caller, or nothing ran because
+    /// the decision could not be written.
     pub(crate) fn settle(mut self) {
         self.settled = true;
     }

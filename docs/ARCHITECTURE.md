@@ -924,6 +924,12 @@ donc que de l'état déjà en mémoire ; toute autre est `async`, et ce qui lit 
 store, le trousseau ou un lot débordé passe en outre par le pool bloquant
 (`spawn_blocking`). La règle et son contrôle : [front.md](../.claude/rules/front.md).
 
+**Dans l'ordonnanceur, tout accès au store, au trousseau ou au disque — journal
+d'audit et historique compris — est une opération possédée soumise au pool
+bloquant, jamais exécutée en ligne sur le worker de dispatch.** L'issue d'une
+commande autorisée est gardée dès l'autorisation rendue, avant l'écriture de sa
+décision. Détail et fenêtres d'abandon assumées : [ADR-0035](adr/0035-ecritures-locales-de-l-ordonnanceur-sur-le-pool-bloquant.md).
+
 **Les événements d'exécution traversent par un `Channel` Tauri**
 (`subscribe_events`), alimenté par le canal de diffusion de l'exécuteur. Une
 webview lente en perd — c'est journalisé, jamais masqué —, mais l'issue de chaque

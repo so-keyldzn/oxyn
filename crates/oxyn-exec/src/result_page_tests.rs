@@ -3,7 +3,7 @@
 use super::*;
 use arrow::array::{Int64Array, RecordBatch};
 use arrow::datatypes::{DataType, Field, Schema};
-use oxyn_core::{AgentId, AgentSessionId, DefaultPolicy, DriverId};
+use oxyn_core::{AgentId, AgentSessionId, DefaultPolicy, DriverId, ExportFormat};
 use oxyn_data::BatchIndex;
 
 #[tokio::test]
@@ -187,4 +187,114 @@ async fn page_read_is_local_audited_and_scoped_for_both_actors() {
             .await,
         Err(OxynError::Cancelled)
     ));
+}
+
+fn export_fixture() -> (
+    Arc<Store>,
+    Arc<DefaultPolicy>,
+    WorkspaceId,
+    ConnectionConfig,
+) {
+    let store = Arc::new(Store::open_in_memory().expect("store"));
+    let workspace = store.workspaces().create("export").expect("workspace").id;
+    let connection =
+        ConnectionConfig::new("export", DriverId::sqlite()).with_environment(Environment::Local);
+    store
+        .connections()
+        .save(workspace, &connection)
+        .expect("save configuration");
+    let policy = Arc::new(DefaultPolicy::new());
+    policy.register(&connection);
+    (store, policy, workspace, connection)
+}
+
+#[tokio::test]
+async fn export_csv_writes_the_file_and_reports_exact_rows() {
+    let (store, policy, workspace, connection) = export_fixture();
+    let executor = Executor::builder(store, policy)
+        .with_workspace(workspace)
+        .build();
+    executor.register_connection(&connection);
+
+    let schema = Arc::new(Schema::new(vec![Field::new("n", DataType::Int64, false)]));
+    let buffer = Arc::new(ResultBuffer::new(schema.clone(), 64 * 1024));
+    buffer
+        .push(
+            RecordBatch::try_new(
+                schema.clone(),
+                vec![Arc::new(Int64Array::from_iter_values(0..10))],
+            )
+            .expect("batch"),
+        )
+        .expect("push");
+    buffer.mark_complete(ExecStats::default());
+    let result = ResultId::new();
+    executor.results.write().insert(
+        result,
+        StoredResult {
+            connection: connection.id,
+            buffer,
+        },
+    );
+
+    let destination = std::env::temp_dir().join(format!("oxyn-export-{}.csv", ResultId::new()));
+    let outcome = executor
+        .dispatch(
+            Actor::Human,
+            Command::Export {
+                connection: connection.id,
+                result,
+                format: ExportFormat::Csv,
+                destination: destination.clone(),
+            },
+            &CancelToken::new(),
+        )
+        .await
+        .expect("export");
+    let Outcome::Exported { rows, .. } = outcome else {
+        panic!("expected an exported outcome");
+    };
+    assert_eq!(rows, 10);
+    let content = std::fs::read_to_string(&destination).expect("exported file");
+    assert_eq!(content.lines().count(), 11, "header plus ten rows");
+    std::fs::remove_file(&destination).expect("temporary file cleanup");
+}
+
+#[test]
+fn export_without_a_runtime_fails_and_creates_no_file() {
+    let (store, policy, workspace, connection) = export_fixture();
+    let executor = Executor::builder(store, policy)
+        .with_workspace(workspace)
+        .build();
+    executor.register_connection(&connection);
+
+    let schema = Arc::new(Schema::new(vec![Field::new("n", DataType::Int64, false)]));
+    let buffer = Arc::new(ResultBuffer::new(schema, 64 * 1024));
+    buffer.mark_complete(ExecStats::default());
+    let result = ResultId::new();
+    executor.results.write().insert(
+        result,
+        StoredResult {
+            connection: connection.id,
+            buffer,
+        },
+    );
+
+    let destination =
+        std::env::temp_dir().join(format!("oxyn-export-no-runtime-{}.csv", ResultId::new()));
+    let outcome = futures::executor::block_on(executor.dispatch(
+        Actor::Human,
+        Command::Export {
+            connection: connection.id,
+            result,
+            format: ExportFormat::Csv,
+            destination: destination.clone(),
+        },
+        &CancelToken::new(),
+    ));
+    assert!(matches!(outcome, Err(OxynError::Config(_))));
+    assert!(
+        !destination.exists(),
+        "a missing runtime must not create a partial export file"
+    );
 }

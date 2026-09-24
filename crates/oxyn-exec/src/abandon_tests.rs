@@ -5,6 +5,7 @@
 
 use super::*;
 use async_trait::async_trait;
+use futures::FutureExt;
 use oxyn_core::{Capabilities, DefaultPolicy, DriverId, ExecLimits, QueryLanguage, SqlDialect};
 use oxyn_driver::Session;
 use oxyn_driver_sqlite::{BatchLimits, SqliteDriver};
@@ -388,4 +389,121 @@ async fn an_execution_dropped_while_preparing_cancels_the_token_the_driver_holds
     .await
     .expect("an abandoned execution announces its end");
     assert_eq!(terminal, Event::Cancelled);
+}
+
+/// Every decision journaled for a command id has exactly one outcome:
+/// either the ordinary one `run` writes, or — if the caller stops waiting
+/// while the decision itself is still being written to the pool (ADR-0035) —
+/// the `Ambiguous` one `OutcomeGuard` queues on drop. Never zero, never two.
+#[tokio::test(flavor = "multi_thread")]
+async fn an_allowed_command_abandoned_around_its_decision_write_leaves_no_hole() {
+    let bench = bench().await;
+    let id = CommandId::new();
+    let command = execute(&bench, "SELECT 1", ExecLimits::default());
+
+    // A single poll: if the decision's `spawn_blocking` has not resolved yet
+    // — the common case, since it was only just submitted — this drops the
+    // future mid-write, exactly the window `OutcomeGuard` exists to cover.
+    // If it *did* resolve within that one poll, the command ran normally and
+    // there is nothing abandoned to check beyond "exactly one outcome".
+    let completed = bench
+        .executor
+        .dispatch_as(id, Actor::Human, command, &CancelToken::new())
+        .now_or_never();
+
+    let of_command = |executor: &Executor| {
+        executor
+            .store()
+            .journal()
+            .recent(100)
+            .expect("journal")
+            .into_iter()
+            .filter(|entry| entry.record.command_id == Some(id))
+            .map(|entry| entry.record)
+            .collect::<Vec<_>>()
+    };
+
+    // Bounded wait: the decision write was already submitted to the blocking
+    // pool before the future above was dropped, so it lands regardless.
+    tokio::time::timeout(FREED_WITHIN, async {
+        while of_command(&bench.executor).is_empty() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .expect("the decision was never journaled");
+
+    let executor = Arc::clone(&bench.executor);
+    tokio::task::spawn_blocking(move || executor.journal_abandoned())
+        .await
+        .expect("the audit writer stopped");
+
+    let records = of_command(&bench.executor);
+    let outcomes: Vec<_> = records
+        .iter()
+        .filter(|record| record.error.is_some())
+        .collect();
+    assert_eq!(
+        outcomes.len(),
+        1,
+        "a decision must have exactly one outcome, never zero and never two: {records:?}"
+    );
+    if completed.is_none() {
+        assert_eq!(
+            outcomes[0].error.as_deref(),
+            Some(crate::abandon::ABANDONED_OUTCOME)
+        );
+        assert_eq!(
+            outcomes[0].error_class,
+            Some(oxyn_core::ErrorClass::Ambiguous)
+        );
+    }
+}
+
+/// A denial still journals its decision and records itself in the query
+/// history — both writes now go through the blocking pool (ADR-0035), and
+/// this is the ordinary path, under a live runtime.
+#[tokio::test(flavor = "multi_thread")]
+async fn a_denial_under_a_runtime_journals_the_decision_and_the_history_entry() {
+    let bench = bench().await;
+    // An unregistered connection is closed by default (I-02): a mutating
+    // statement against it is denied regardless of who asks.
+    let statement = "DELETE FROM an_unregistered_connection_marker";
+    let command = Command::Execute {
+        connection: ConnectionId::new(),
+        session: bench.session,
+        request: Box::new(ExecRequest::new(
+            QueryLanguage::Sql(SqlDialect::Sqlite),
+            statement,
+        )),
+    };
+
+    let outcome = bench
+        .executor
+        .dispatch(Actor::Human, command, &CancelToken::new())
+        .await
+        .expect("a denial is not an error");
+    assert!(matches!(outcome, Outcome::Denied { .. }));
+
+    let decided = bench
+        .executor
+        .store()
+        .journal()
+        .recent(100)
+        .expect("journal")
+        .into_iter()
+        .find(|entry| entry.record.statement.as_deref() == Some(statement))
+        .expect("the denial was journaled");
+    assert_eq!(decided.record.decision, oxyn_store::PolicyOutcome::Denied);
+
+    let denied = bench
+        .executor
+        .store()
+        .history()
+        .recent(100)
+        .expect("history")
+        .into_iter()
+        .find(|entry| entry.record.statement == statement)
+        .expect("the denial was recorded in the query history");
+    assert_eq!(denied.record.status, oxyn_store::HistoryStatus::Denied);
 }

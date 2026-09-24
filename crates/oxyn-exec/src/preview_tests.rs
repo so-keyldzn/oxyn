@@ -4,7 +4,7 @@ use super::*;
 use arrow::array::{Int64Array, RecordBatch};
 use arrow::datatypes::{DataType, Field, Schema, SchemaRef};
 use async_trait::async_trait;
-use futures::{FutureExt, executor::block_on};
+use futures::executor::block_on;
 use oxyn_catalog::{CatalogPath, CatalogProvider, CatalogScope, Freshness};
 use oxyn_core::{
     AgentId, AgentSessionId, Capabilities, DefaultPolicy, DriverId, ExecLimits, QueryLanguage,
@@ -14,9 +14,34 @@ use oxyn_driver::Session;
 use oxyn_driver_sqlite::SqliteDriver;
 use oxyn_store::{ActorKind, PolicyOutcome};
 use parking_lot::Mutex;
+use std::future::Future;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 const HOSTILE: &str = "t\"; DROP TABLE audit; --";
+
+/// Polls `future` until `ready` holds, without ever seeing it resolve —
+/// yielding to the runtime between polls so a decision or history write that
+/// now runs on the blocking pool (ADR-0035) gets a chance to land before the
+/// next poll. A single `poll!` no longer carries `dispatch` past its first
+/// audit write, so tests that used to observe mid-flight state after one poll
+/// need this instead. Bounded: a condition that never holds panics rather
+/// than hanging the suite.
+async fn poll_until_ready(
+    future: &mut (impl Future<Output = Result<Outcome>> + Unpin),
+    mut ready: impl FnMut() -> bool,
+) {
+    for _ in 0..10_000 {
+        assert!(
+            futures::poll!(&mut *future).is_pending(),
+            "the command resolved before the awaited condition held"
+        );
+        if ready() {
+            return;
+        }
+        tokio::task::yield_now().await;
+    }
+    panic!("condition never held after repeated polls of the pending command");
+}
 
 fn actors() -> [Actor; 2] {
     [
@@ -636,8 +661,7 @@ async fn preview_metadata_cancellation_never_executes_the_preview() {
     let token = CancelToken::new();
     let mut run =
         Box::pin(executor.dispatch(Actor::Human, preview(connection, session, 200), &token));
-    assert!(futures::poll!(&mut run).is_pending());
-    assert_eq!(probe.prepared.lock().len(), 1);
+    poll_until_ready(&mut run, || probe.prepared.lock().len() == 1).await;
     token.cancel();
     assert!(matches!(run.await, Err(OxynError::Cancelled)));
     assert!(probe.executed.lock().is_empty());
@@ -657,7 +681,10 @@ async fn preview_cancellation_uses_the_existing_statement_and_command_identity()
         let mut events = executor.subscribe();
         let run = executor.dispatch_as(id, Actor::Human, preview(connection, session, 200), &token);
         futures::pin_mut!(run);
-        assert!(run.as_mut().now_or_never().is_none());
+        poll_until_ready(&mut run, || {
+            !executor.running.for_connection(connection).is_empty()
+        })
+        .await;
         let schema = events.try_recv().expect("schema event");
         assert_eq!(schema.command, id);
         assert!(matches!(schema.event, Event::SchemaReady { .. }));

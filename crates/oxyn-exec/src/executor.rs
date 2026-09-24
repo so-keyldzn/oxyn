@@ -37,25 +37,38 @@
 //!
 //! # Ce que cette version ne fait pas
 //!
-//! Page reads use the application's Tokio blocking pool; the executor does not
-//! create a runtime. Other local Store accesses and export writes remain inline
-//! on the dispatching worker, never on the UI thread.
-// TODO(2026-09-10): move remaining Store and export I/O to the blocking pool
-// when their command handlers are split into owned operations.
+//! Page and value reads, preferences, the query library, connections (save,
+//! delete, read), credential resolution, exports, and every write to the
+//! audit journal and the query history all go through the application's
+//! Tokio blocking pool as owned operations
+//! ([ADR-0035](../../../docs/adr/0035-ecritures-locales-de-l-ordonnanceur-sur-le-pool-bloquant.md)).
+//! The executor does not create a runtime of its own: without one, the
+//! handlers that need it return a configuration error, while audit writes
+//! run inline instead of failing outright — the audit trail must not go
+//! silent at shutdown. Evicting retained results after an execution
+//! ([`prune_results`](Executor::prune_results), called from
+//! `execute_statement`), which can delete spill files, stays on the
+//! dispatching worker on purpose.
+//! [`load_connections`](Executor::load_connections) is synchronous too, but
+//! never runs there: it is reserved for assembling state before the window
+//! opens. Because journal rows are
+//! now inserted from the blocking pool, their insertion order can differ from
+//! the order of their `ts` field. An abandonment while a `RequireApproval`
+//! decision is being written leaves no pending approval request behind: the
+//! outcome is the same as one later rejected or expired.
 
 use std::collections::HashMap;
 use std::fmt;
 use std::fs::File;
 use std::io::BufWriter;
-use std::path::Path;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use oxyn_catalog::SharedCatalog;
 use oxyn_core::{
     Actor, CancelToken, CatalogRefreshScope, Command, CommandId, ConnectionConfig, ConnectionId,
-    Decision, DocumentId, Environment, Event, ExecRequest, ExecStats, ExportFormat, OxynError,
-    PolicyGate, Preview, Result, ResultId, SessionId, StatementHandle, WorkspaceId,
+    Decision, DocumentId, Environment, Event, ExecRequest, ExecStats, OxynError, PolicyGate,
+    Preview, Result, ResultId, SessionId, StatementHandle, WorkspaceId,
 };
 use oxyn_data::{
     BatchProgress, BatchSink, BatchSource, BufferLimits, DEFAULT_MEMORY_BUDGET, ExportOptions,
@@ -63,7 +76,7 @@ use oxyn_data::{
 };
 use oxyn_driver::{Cursor, DriverRegistry};
 use oxyn_store::{Document, HistoryRecord, JournalRecord, Store};
-use parking_lot::RwLock;
+use parking_lot::{Mutex, RwLock};
 
 use crate::abandon::{AbandonGuard, AbandonedOutcomes, OutcomeGuard};
 use crate::approval::{ApprovalRegistry, PendingCommand};
@@ -358,7 +371,14 @@ pub struct Executor {
     events: EventBus,
     results: RwLock<crate::retained::RetainedResults>,
     catalogs: RwLock<HashMap<ConnectionId, Arc<crate::catalog::ConnectionCatalog>>>,
-    connections: RwLock<HashMap<ConnectionId, ConnectionConfig>>,
+    connections: Arc<RwLock<HashMap<ConnectionId, ConnectionConfig>>>,
+    /// Orders every write of a connection — to the store, then to
+    /// `connections` — inside one blocking task. The cache feeds the
+    /// environment given to the `PolicyGate` (I-02): two saves whose disk and
+    /// cache writes interleave, or a save abandoned between the two, would
+    /// leave `production` on disk and `development` in the cache. Readers of
+    /// `connections` never take this lock.
+    connection_writes: Arc<Mutex<()>>,
     workspace: WorkspaceId,
     memory_budget: usize,
     abandoned: AbandonedOutcomes,
@@ -425,17 +445,34 @@ impl Executor {
         // 3. Le point de passage unique.
         let decision = self.policy.authorize(&actor, &command, env);
 
-        // 4. Journal AVANT. Une décision qui ne s'écrit pas ne s'exécute pas.
-        if let Err(erreur) = self.journal_decision(id, &actor, &command, &decision, None) {
-            tracing::error!(error = %erreur, command = %id, "policy decision could not be journaled");
-            if !decision.is_denied() {
-                return Err(erreur);
-            }
-        }
-
-        match decision {
+        // 4. Journal AVANT, dans chaque branche : voir ADR-0035. Une décision
+        // qui ne s'écrit pas ne s'exécute pas.
+        match &decision {
             Decision::Deny { reason } => {
-                self.history_denied(&actor, &command, &reason);
+                let reason = reason.clone();
+                let record = decision_record(id, &actor, &command, &decision, None);
+                let denied = self
+                    .history_record(&actor, &command)
+                    .map(|entry| entry.denied(reason.clone()));
+                // Both writes are attempted independently: a failure on the
+                // decision must never swallow the denial's history entry, and
+                // vice versa — unchanged by this move to the blocking pool.
+                if self
+                    .write_audit(move |store| {
+                        if let Err(erreur) = store.journal().append(&record) {
+                            tracing::error!(error = %erreur, command = %id, "policy decision could not be journaled");
+                        }
+                        if let Some(entry) = denied
+                            && let Err(erreur) = store.history().record(&entry)
+                        {
+                            tracing::error!(error = %erreur, "a denied statement could not be recorded in the query history");
+                        }
+                    })
+                    .await
+                    .is_err()
+                {
+                    tracing::error!(command = %id, "policy decision could not be journaled");
+                }
                 self.events.publish(
                     id,
                     connection,
@@ -450,6 +487,25 @@ impl Executor {
             }
 
             Decision::RequireApproval { reason, preview } => {
+                let reason = reason.clone();
+                let preview = preview.clone();
+                let record = decision_record(id, &actor, &command, &decision, None);
+                let write = self
+                    .write_audit(move |store| -> Result<()> {
+                        store.journal().append(&record)?;
+                        Ok(())
+                    })
+                    .await
+                    .and_then(|inner| inner);
+                if let Err(erreur) = write {
+                    tracing::error!(error = %erreur, command = %id, "policy decision could not be journaled");
+                    return Err(erreur);
+                }
+                // If the caller drops this future right here, the decision
+                // stays in the journal with no approval request pending:
+                // nothing is queued and nothing runs — the same outcome as a
+                // request later rejected or expired (see ADR-0035).
+                //
                 // Rien n'est exécuté. La commande mise de côté est celle que le
                 // gate a vue — reclassifiée — pas le texte d'origine.
                 let attente = self.approvals.submit(id, actor, command, reason, preview)?;
@@ -469,7 +525,10 @@ impl Executor {
                 })
             }
 
-            Decision::Allow => self.run(id, &actor, command, cancel, None).await,
+            Decision::Allow => {
+                self.run(id, &actor, &command, &decision, cancel, None)
+                    .await
+            }
         }
     }
 
@@ -503,14 +562,31 @@ impl Executor {
 
         if let Decision::Deny { reason } = &decision {
             let reason = reason.clone();
+            let record =
+                decision_record(command, &attente.actor, &attente.command, &decision, None);
+            let denied = self
+                .history_record(&attente.actor, &attente.command)
+                .map(|entry| entry.denied(reason.clone()));
             // Le refus tardif est journalisé lui aussi : c'est même la trace la
             // plus intéressante de toutes, puisqu'un accord avait été donné.
-            if let Err(erreur) =
-                self.journal_decision(command, &attente.actor, &attente.command, &decision, None)
+            // Both writes are attempted independently, same as an ordinary
+            // denial in `dispatch_as`.
+            if self
+                .write_audit(move |store| {
+                    if let Err(erreur) = store.journal().append(&record) {
+                        tracing::error!(error = %erreur, command = %command, "late denial could not be journaled");
+                    }
+                    if let Some(entry) = denied
+                        && let Err(erreur) = store.history().record(&entry)
+                    {
+                        tracing::error!(error = %erreur, "a denied statement could not be recorded in the query history");
+                    }
+                })
+                .await
+                .is_err()
             {
-                tracing::error!(error = %erreur, command = %command, "late denial could not be journaled");
+                tracing::error!(command = %command, "late denial could not be journaled");
             }
-            self.history_denied(&attente.actor, &attente.command, &reason);
             self.events.publish(
                 command,
                 connection,
@@ -521,21 +597,17 @@ impl Executor {
             return Ok(Outcome::Denied { command, reason });
         }
 
-        self.journal_decision(
+        // Plus de destructuration de `attente` avant l'exécution : `run` écrit
+        // lui-même la décision, comme première opération de sa fenêtre.
+        self.run(
             command,
             &attente.actor,
             &attente.command,
             &decision,
+            cancel,
             Some(approved_by),
-        )?;
-
-        let PendingCommand {
-            actor,
-            command: a_executer,
-            ..
-        } = attente;
-        self.run(command, &actor, a_executer, cancel, Some(approved_by))
-            .await
+        )
+        .await
     }
 
     /// Retire une demande à laquelle l'utilisateur a répondu « non ».
@@ -548,28 +620,112 @@ impl Executor {
 
     // ── Exécution ───────────────────────────────────────────────────────────
 
-    /// Exécute une commande autorisée, et journalise son issue.
+    /// Exécute une commande déjà autorisée, et journalise sa décision et son
+    /// issue autour de l'exécution.
+    ///
+    /// `decision` est ce que `PolicyGate::authorize` a rendu à l'appelant —
+    /// jamais `Deny`, que les deux appelants traitent avant d'atteindre cette
+    /// méthode.
+    ///
+    /// # Erreurs
+    /// Celles d'[`execute_command`](Self::execute_command), et
+    /// [`OxynError::Internal`] si la décision n'a pas pu être journalisée —
+    /// auquel cas **rien n'est exécuté**.
     async fn run(
         &self,
         id: CommandId,
         actor: &Actor,
-        command: Command,
+        command: &Command,
+        decision: &Decision,
         cancel: &CancelToken,
         approved_by: Option<&str>,
     ) -> Result<Outcome> {
-        // L'historique s'inscrit ici et pas au dispatch : une commande mise en
-        // attente d'accord puis rejetée laisserait sinon une ligne « en cours »
-        // éternelle, alors qu'elle n'a jamais été soumise au serveur.
-        let en_cours = self.history_start(actor, &command);
+        // Armed as soon as the policy allows this command, before its
+        // decision is even written (ADR-0035): no `.await` runs between the
+        // `Allow` a caller matched and this line, so no abandonment can slip
+        // in ahead of the guard.
+        let guard = OutcomeGuard::new(&self.abandoned, id, actor, command, approved_by);
+
+        // One operation: the decision, then — only if it was written — the
+        // "in progress" entry in the query history. L'historique s'inscrit
+        // ici et pas au dispatch : une commande mise en attente d'accord puis
+        // rejetée laisserait sinon une ligne « en cours » éternelle, alors
+        // qu'elle n'a jamais été soumise au serveur.
+        let record = decision_record(id, actor, command, decision, approved_by);
+        let starting = self.history_record(actor, command);
+        let write = self
+            .write_audit(move |store| -> Result<Option<(i64, HistoryRecord)>> {
+                store.journal().append(&record)?;
+                Ok(
+                    starting.and_then(|record| match store.history().record(&record) {
+                        Ok(history_id) => Some((history_id, record)),
+                        Err(erreur) => {
+                            tracing::error!(
+                                error = %erreur,
+                                "a submitted statement could not be recorded in the query history"
+                            );
+                            None
+                        }
+                    }),
+                )
+            })
+            .await
+            .and_then(|inner| inner);
+
+        let en_cours = match write {
+            Ok(en_cours) => en_cours,
+            Err(erreur) => {
+                tracing::error!(error = %erreur, command = %id, "policy decision could not be journaled");
+                // Nothing ran: there is no outcome to write, and no hole in
+                // the audit trail to leave behind.
+                guard.settle();
+                return Err(erreur);
+            }
+        };
+
         let debut = Instant::now();
-        // A caller that drops this future skips everything after the `.await`:
-        // the guard queues the audit outcome the lines below would have written.
-        let guard = OutcomeGuard::new(&self.abandoned, id, actor, &command, approved_by);
-        let issue = self.execute_command(id, &command, cancel).await;
+        let issue = self.execute_command(id, command, cancel).await;
         guard.settle();
         let duree = debut.elapsed();
-        self.journal_result(id, actor, &command, &issue, duree, approved_by);
-        self.history_finish(en_cours, &issue, duree);
+
+        let mut outcome = outcome_record(
+            id,
+            actor,
+            command,
+            duree,
+            issue.as_ref().ok().and_then(Outcome::rows),
+            approved_by,
+        );
+        if let Err(erreur) = &issue {
+            outcome = outcome.failed(erreur);
+        }
+        let finishing = finished_history_record(en_cours, &issue, duree);
+
+        // Submitted right away, with no `.await` between `guard.settle()`
+        // above and this call: the window `OutcomeGuard` covers stays
+        // exactly the one it covers today, between the start of execution
+        // and the moment this operation is queued.
+        if self
+            .write_audit(move |store| {
+                if let Err(erreur) = store.journal().append(&outcome) {
+                    tracing::error!(
+                        error = %erreur,
+                        command = %id,
+                        "failed to journal the outcome of a command that already ran"
+                    );
+                }
+                if let Some((history_id, record)) = finishing
+                    && let Err(erreur) = store.history().finish(history_id, &record)
+                {
+                    tracing::error!(error = %erreur, "the outcome of a statement could not be written to the query history");
+                }
+            })
+            .await
+            .is_err()
+        {
+            tracing::error!(command = %id, "the audit writer stopped after a command already ran");
+        }
+
         issue
     }
 
@@ -809,8 +965,42 @@ impl Executor {
                 destination,
                 ..
             } => {
-                self.result_on_connection(*connection, *result)?;
-                self.export_result(*result, *format, destination, cancel)
+                let buffer = self.result_on_connection(*connection, *result)?;
+                // Avant `File::create` : sinon un format que cette version ne sait pas
+                // écrire laisse un fichier de zéro octet à l'emplacement que
+                // l'utilisateur vient de nommer. La vérification vit ici et non dans la
+                // vue parce que cette commande est aussi atteignable par un plugin et
+                // par un `Actor::Agent` — un contrôle qui n'existe que dans l'interface
+                // n'est pas un contrôle du bus (I-01).
+                if !oxyn_data::is_supported(*format) {
+                    return Err(OxynError::NotSupported {
+                        capability: format!("export:{}", format.extension()),
+                    });
+                }
+                let format = *format;
+                let destination = destination.clone();
+                let cancel_owned = cancel.clone();
+                let runtime = tokio::runtime::Handle::try_current().map_err(|_| {
+                    OxynError::Config("export requires the application runtime".into())
+                })?;
+                let resume = runtime
+                    .spawn_blocking(move || -> Result<_> {
+                        let fichier = File::create(&destination)?;
+                        Ok(export(
+                            &buffer,
+                            format,
+                            BufWriter::new(fichier),
+                            &ExportOptions::default(),
+                            &cancel_owned,
+                        )?)
+                    })
+                    .await
+                    .map_err(|_| OxynError::Internal("export worker stopped".into()))??;
+                Ok(Outcome::Exported {
+                    result: *result,
+                    rows: resume.rows,
+                    bytes: resume.bytes,
+                })
             }
 
             Command::ReadWorkspacePreferences { workspace } => {
@@ -988,10 +1178,12 @@ impl Executor {
             }
 
             Command::CreateConnection { config } | Command::UpdateConnection { config } => {
-                self.save_connection(config)
+                self.save_connection(config, cancel).await
             }
 
-            Command::DeleteConnection { connection } => self.delete_connection(*connection).await,
+            Command::DeleteConnection { connection } => {
+                self.delete_connection(*connection, cancel).await
+            }
 
             // Les trois commandes de fournisseur restent locales : rien ici ne
             // résout un nom ni n'ouvre de connexion vers un modèle. Le
@@ -1065,9 +1257,18 @@ impl Executor {
 
     /// Ouvre une session.
     async fn connect(&self, connection: ConnectionId, cancel: &CancelToken) -> Result<Outcome> {
-        let config = self.connection_config(connection)?;
+        let config = self.connection_config(connection, cancel).await?;
         let driver = self.drivers.require(&config.driver)?;
-        let credentials = self.credentials.resolve(&config)?;
+        // The system keyring lookup is blocking; it never runs on the shared
+        // runtime that also carries drivers, network I/O and LLM calls (I-05).
+        let resolver = Arc::clone(&self.credentials);
+        let lookup = config.clone();
+        let runtime = tokio::runtime::Handle::try_current()
+            .map_err(|_| OxynError::Config("connecting requires the application runtime".into()))?;
+        let credentials = runtime
+            .spawn_blocking(move || resolver.resolve(&lookup))
+            .await
+            .map_err(|_| OxynError::Internal("credential worker stopped".into()))??;
         let session = driver.connect(&config, &credentials, cancel).await?;
         let slot = self.sessions.insert(SessionSlot::new(connection, session));
         let catalog = self
@@ -1487,48 +1688,6 @@ impl Executor {
         }
     }
 
-    /// Écrit un résultat dans un fichier.
-    ///
-    /// Synchrone : voir la note de module sur l'absence de pool bloquant.
-    fn export_result(
-        &self,
-        result: ResultId,
-        format: ExportFormat,
-        destination: &Path,
-        cancel: &CancelToken,
-    ) -> Result<Outcome> {
-        // Avant `File::create` : sinon un format que cette version ne sait pas
-        // écrire laisse un fichier de zéro octet à l'emplacement que
-        // l'utilisateur vient de nommer. La vérification vit ici et non dans la
-        // vue parce que cette commande est aussi atteignable par un plugin et
-        // par un `Actor::Agent` — un contrôle qui n'existe que dans l'interface
-        // n'est pas un contrôle du bus (I-01).
-        if !oxyn_data::is_supported(format) {
-            return Err(OxynError::NotSupported {
-                capability: format!("export:{}", format.extension()),
-            });
-        }
-
-        let buffer = self
-            .result(result)
-            .ok_or_else(|| OxynError::Config("this result is no longer available".to_owned()))?;
-
-        let fichier = File::create(destination)?;
-        let resume = export(
-            &buffer,
-            format,
-            BufWriter::new(fichier),
-            &ExportOptions::default(),
-            cancel,
-        )?;
-
-        Ok(Outcome::Exported {
-            result,
-            rows: resume.rows,
-            bytes: resume.bytes,
-        })
-    }
-
     fn check_workspace(&self, workspace: WorkspaceId) -> Result<()> {
         if workspace != self.workspace {
             return Err(OxynError::Config(
@@ -1552,6 +1711,36 @@ impl Executor {
             .await
             .map_err(|_| OxynError::Internal("local library worker stopped".into()))?
             .map_err(Into::into)
+    }
+
+    /// Runs a write meant for the audit trail — the policy journal or the
+    /// query history — on the blocking pool, and awaits it before returning.
+    ///
+    /// Unlike [`local_worker`](Self::local_worker), this never fails for want
+    /// of a runtime: the audit trail must not go silent at shutdown, when no
+    /// Tokio runtime may be current any more ([`journal_abandoned_off_runtime`](Self::journal_abandoned_off_runtime)
+    /// already relied on this fallback before it moved here). With a runtime,
+    /// `spawn_blocking` is the first thing this call does — before any other
+    /// `.await` in its body — so a caller that submits an operation and
+    /// awaits it right away leaves no window where the operation is queued
+    /// but not yet running. Without one, `write` runs inline.
+    ///
+    /// # Errors
+    /// [`OxynError::Internal`] if the blocking task was cancelled or
+    /// panicked. Once submitted, though, the write belongs to that task:
+    /// dropping the future this call returns does not cancel it.
+    async fn write_audit<T: Send + 'static>(
+        &self,
+        write: impl FnOnce(&Store) -> T + Send + 'static,
+    ) -> Result<T> {
+        let store = Arc::clone(&self.store);
+        match tokio::runtime::Handle::try_current() {
+            Ok(runtime) => runtime
+                .spawn_blocking(move || write(&store))
+                .await
+                .map_err(|_| OxynError::Internal("audit writer stopped".into())),
+            Err(_) => Ok(write(&store)),
+        }
     }
 
     async fn open_document(
@@ -1631,19 +1820,39 @@ impl Executor {
     }
 
     /// Enregistre ou met à jour une connexion.
-    fn save_connection(&self, config: &ConnectionConfig) -> Result<Outcome> {
+    async fn save_connection(
+        &self,
+        config: &ConnectionConfig,
+        cancel: &CancelToken,
+    ) -> Result<Outcome> {
         // `Connections::save` **refuse** un paramètre portant un nom de secret :
         // c'est le dernier point où un mot de passe peut être arrêté avant le
         // disque (I-03). Rien n'est dupliqué ici.
-        self.store.connections().save(self.workspace, config)?;
-        self.register_connection(config);
-        Ok(Outcome::ConnectionSaved {
-            connection: config.id,
+        let store = Arc::clone(&self.store);
+        let connections = Arc::clone(&self.connections);
+        let writes = Arc::clone(&self.connection_writes);
+        let workspace = self.workspace;
+        let config = config.clone();
+        let connection = config.id;
+        // The cache is updated by the blocking task itself, under
+        // `connection_writes`: it runs to completion even if this future is
+        // dropped, and in the same order as the disk writes.
+        self.local_worker(cancel, move |_cancel| {
+            let _ordered = writes.lock();
+            store.connections().save(workspace, &config)?;
+            connections.write().insert(config.id, config);
+            Ok(())
         })
+        .await?;
+        Ok(Outcome::ConnectionSaved { connection })
     }
 
     /// Supprime une connexion, après avoir fermé ce qui l'utilisait.
-    async fn delete_connection(&self, connection: ConnectionId) -> Result<Outcome> {
+    async fn delete_connection(
+        &self,
+        connection: ConnectionId,
+        cancel: &CancelToken,
+    ) -> Result<Outcome> {
         self.running
             .cancel_connection(&self.sessions, connection)
             .await;
@@ -1652,142 +1861,39 @@ impl Executor {
                 tracing::warn!(error = %erreur, "the server refused a clean session close");
             }
         }
-        let existed = self.store.connections().delete(connection)?;
-        self.connections.write().remove(&connection);
+        let store = Arc::clone(&self.store);
+        let connections = Arc::clone(&self.connections);
+        let writes = Arc::clone(&self.connection_writes);
+        let existed = self
+            .local_worker(cancel, move |_cancel| {
+                let _ordered = writes.lock();
+                let existed = store.connections().delete(connection)?;
+                connections.write().remove(&connection);
+                Ok(existed)
+            })
+            .await?;
         Ok(Outcome::ConnectionDeleted {
             connection,
             existed,
         })
     }
 
-    // ── Journal ─────────────────────────────────────────────────────────────
-
-    /// Écrit la décision de politique, **avant** toute exécution.
-    ///
-    /// # Erreurs
-    /// Celles de l'état local. L'appelant en fait un refus d'exécuter.
-    fn journal_decision(
-        &self,
-        id: CommandId,
-        actor: &Actor,
-        command: &Command,
-        decision: &Decision,
-        approved_by: Option<&str>,
-    ) -> Result<()> {
-        let mut record = JournalRecord::new(actor, command, decision).with_command_id(id);
-        if let Some(who) = approved_by {
-            record = record.approved_by(who);
-        }
-        self.store.journal().append(&record)?;
-        Ok(())
-    }
-
-    /// Écrit l'issue de l'exécution, **après** coup.
-    ///
-    /// Ne rend pas d'erreur : la commande a eu lieu, et la faire échouer
-    /// maintenant laisserait croire le contraire. L'échec est crié.
-    fn journal_result(
-        &self,
-        id: CommandId,
-        actor: &Actor,
-        command: &Command,
-        issue: &Result<Outcome>,
-        duration: Duration,
-        approved_by: Option<&str>,
-    ) {
-        let mut record = outcome_record(
-            id,
-            actor,
-            command,
-            duration,
-            issue.as_ref().ok().and_then(Outcome::rows),
-            approved_by,
-        );
-        if let Err(erreur) = issue {
-            record = record.failed(erreur);
-        }
-
-        if let Err(erreur) = self.store.journal().append(&record) {
-            tracing::error!(
-                error = %erreur,
-                command = %id,
-                "failed to journal the outcome of a command that already ran"
-            );
-        }
-    }
-
-    // ── L'historique du requêteur ───────────────────────────────────────────
+    // ── Journal et historique ────────────────────────────────────────────────
     //
-    // Il répond à « qu'est-ce que j'ai lancé hier ? », là où le journal d'audit
-    // répond à « qu'est-ce qui a été autorisé, et à qui ? ». C'est pourquoi
-    // aucune des trois méthodes ci-dessous ne rend d'erreur : un historique
-    // qu'on ne peut pas écrire est une gêne, pas une promesse rompue, et refuser
-    // d'exécuter pour autant serait pire que le défaut. L'échec est crié.
+    // Chaque écriture est construite en mémoire ici — [`decision_record`],
+    // [`Self::history_record`], [`finished_history_record`] — puis soumise au
+    // pool bloquant par [`Self::write_audit`], appelée depuis [`Self::run`] et
+    // [`Self::dispatch_as`] (ADR-0035). Aucune de ces méthodes ne touche le
+    // `Store` : elles ne font que fabriquer la valeur qu'une opération possédée
+    // écrira plus loin.
     //
+    // L'historique répond à « qu'est-ce que j'ai lancé hier ? », là où le
+    // journal d'audit répond à « qu'est-ce qui a été autorisé, et à qui ? ».
     // Seules les exécutions y figurent : `HistoryRecord::from_command` rend
     // `None` pour tout le reste, et une `Connect` au milieu des requêtes rendrait
-    // la liste illisible. Le journal, lui, les consigne toutes.
-
-    /// Inscrit une exécution qui démarre, et rend de quoi la compléter.
-    fn history_start(&self, actor: &Actor, command: &Command) -> Option<(i64, HistoryRecord)> {
-        let record = self.history_record(actor, command)?;
-        match self.store.history().record(&record) {
-            Ok(id) => Some((id, record)),
-            Err(erreur) => {
-                tracing::error!(error = %erreur, "a submitted statement could not be recorded in the query history");
-                None
-            }
-        }
-    }
-
-    /// Complète l'entrée inscrite par [`Self::history_start`].
-    fn history_finish(
-        &self,
-        en_cours: Option<(i64, HistoryRecord)>,
-        issue: &Result<Outcome>,
-        duration: Duration,
-    ) {
-        let Some((id, record)) = en_cours else {
-            return;
-        };
-        let mut record = match issue {
-            // Un drainage interrompu rend `Ok` : la commande n'a pas échoué,
-            // mais elle n'a pas rendu son résultat entier. La classer « réussie »
-            // ferait lire un résultat tronqué comme un résultat complet.
-            Ok(Outcome::Executed {
-                stats,
-                sink: SinkOutcome::Cancelled,
-                ..
-            }) => record
-                .succeeded(duration, Some(stats.rows))
-                .failed(&OxynError::Cancelled),
-            Ok(outcome) => record.succeeded(duration, outcome.rows()),
-            Err(erreur) => {
-                // Un échec a une durée, lui aussi : « expiré après 30 s » et
-                // « rejeté en 2 ms » ne décrivent pas le même incident.
-                let mut echouee = record.failed(erreur);
-                echouee.duration = Some(duration);
-                echouee
-            }
-        };
-        if let Ok(Outcome::Executed { result, .. }) = issue {
-            record.result = Some(*result);
-        }
-        if let Err(erreur) = self.store.history().finish(id, &record) {
-            tracing::error!(error = %erreur, "the outcome of a statement could not be written to the query history");
-        }
-    }
-
-    /// Inscrit un refus, en une seule ligne : il n'a jamais démarré, donc il n'y
-    /// a pas d'entrée « en cours » à compléter.
-    fn history_denied(&self, actor: &Actor, command: &Command, reason: &str) {
-        let Some(record) = self.history_record(actor, command) else {
-            return;
-        };
-        if let Err(erreur) = self.store.history().record(&record.denied(reason)) {
-            tracing::error!(error = %erreur, "a denied statement could not be recorded in the query history");
-        }
-    }
+    // la liste illisible. Le journal, lui, les consigne toutes. Un historique
+    // qu'on ne peut pas écrire est une gêne, pas une promesse rompue : l'échec
+    // est crié, jamais propagé.
 
     /// L'entrée d'historique d'une commande d'exécution, connexion nommée.
     ///
@@ -1815,11 +1921,13 @@ impl Executor {
     /// frontière, pas un registre —, donc `oxyn-desktop` appelle aussi
     /// [`DefaultPolicy::register`](oxyn_core::DefaultPolicy::register).
     pub fn register_connection(&self, config: &ConnectionConfig) {
+        let _ordered = self.connection_writes.lock();
         self.connections.write().insert(config.id, config.clone());
     }
 
     /// Oublie une connexion.
     pub fn forget_connection(&self, connection: ConnectionId) {
+        let _ordered = self.connection_writes.lock();
         self.connections.write().remove(&connection);
     }
 
@@ -1829,6 +1937,7 @@ impl Executor {
     /// # Erreurs
     /// Celles de l'état local.
     pub fn load_connections(&self) -> Result<usize> {
+        let _ordered = self.connection_writes.lock();
         let configs = self.store.connections().list(self.workspace)?;
         let mut guard = self.connections.write();
         for config in &configs {
@@ -1838,15 +1947,34 @@ impl Executor {
     }
 
     /// La configuration d'une connexion, du cache ou de l'état local.
-    fn connection_config(&self, connection: ConnectionId) -> Result<ConnectionConfig> {
-        if let Some(config) = self.connections.read().get(&connection).cloned() {
+    async fn connection_config(
+        &self,
+        connection: ConnectionId,
+        cancel: &CancelToken,
+    ) -> Result<ConnectionConfig> {
+        // Read in its own statement: the guard is released before the `.await`
+        // below, never held across it.
+        let cached = self.connections.read().get(&connection).cloned();
+        if let Some(config) = cached {
             return Ok(config);
         }
-        match self.store.connections().get(connection)? {
-            Some(config) => {
-                self.register_connection(&config);
-                Ok(config)
-            }
+        let store = Arc::clone(&self.store);
+        let connections = Arc::clone(&self.connections);
+        let writes = Arc::clone(&self.connection_writes);
+        // Read and cached under `connection_writes`: a delete that lands
+        // between the two would otherwise be undone by re-caching its config.
+        let found = self
+            .local_worker(cancel, move |_cancel| {
+                let _ordered = writes.lock();
+                let found = store.connections().get(connection)?;
+                if let Some(config) = &found {
+                    connections.write().insert(config.id, config.clone());
+                }
+                Ok(found)
+            })
+            .await?;
+        match found {
+            Some(config) => Ok(config),
             None => Err(OxynError::Config(
                 "this connection does not exist in the workspace".to_owned(),
             )),
@@ -1993,29 +2121,21 @@ impl Executor {
 
     /// [`journal_abandoned`](Self::journal_abandoned) for an async caller.
     ///
-    /// The queue is taken here, in memory; the writes go to the blocking pool.
-    /// Once taken, the records belong to the blocking task: dropping this future
-    /// does not cancel it, so they are written even if the caller gives up.
+    /// The queue is taken here, in memory; the write goes through
+    /// [`write_audit`](Self::write_audit). Once taken, the records belong to
+    /// the blocking task: dropping this future does not cancel it, so they
+    /// are written even if the caller gives up.
     async fn journal_abandoned_off_runtime(&self) {
         let records = self.abandoned.take();
         if records.is_empty() {
             return;
         }
-        let store = Arc::clone(&self.store);
-        match tokio::runtime::Handle::try_current() {
-            Ok(runtime) => {
-                if runtime
-                    .spawn_blocking(move || append_outcomes(&store, records))
-                    .await
-                    .is_err()
-                {
-                    tracing::error!("the audit writer stopped during shutdown");
-                }
-            }
-            // No Tokio runtime means no runtime thread to block.
-            Err(_) => {
-                append_outcomes(&store, records);
-            }
+        if self
+            .write_audit(move |store| append_outcomes(store, records))
+            .await
+            .is_err()
+        {
+            tracing::error!("the audit writer stopped during shutdown");
         }
     }
 
@@ -2059,6 +2179,62 @@ fn append_outcomes(store: &Store, records: std::collections::VecDeque<JournalRec
         }
     }
     written
+}
+
+/// Builds the audit record for a policy decision, without writing it.
+///
+/// Pure: no `Store` access, so the record it returns is safe to move into a
+/// `spawn_blocking` closure ([`Executor::write_audit`]).
+fn decision_record(
+    id: CommandId,
+    actor: &Actor,
+    command: &Command,
+    decision: &Decision,
+    approved_by: Option<&str>,
+) -> JournalRecord {
+    let mut record = JournalRecord::new(actor, command, decision).with_command_id(id);
+    if let Some(who) = approved_by {
+        record = record.approved_by(who);
+    }
+    record
+}
+
+/// Builds the finished entry for [`Executor::history_record`]'s "in
+/// progress" row, without writing it. `None` when nothing was started —
+/// either the command carries no history entry, or starting it already
+/// failed.
+///
+/// Pure, for the same reason as [`decision_record`].
+fn finished_history_record(
+    en_cours: Option<(i64, HistoryRecord)>,
+    issue: &Result<Outcome>,
+    duration: Duration,
+) -> Option<(i64, HistoryRecord)> {
+    let (id, record) = en_cours?;
+    let mut record = match issue {
+        // Un drainage interrompu rend `Ok` : la commande n'a pas échoué,
+        // mais elle n'a pas rendu son résultat entier. La classer « réussie »
+        // ferait lire un résultat tronqué comme un résultat complet.
+        Ok(Outcome::Executed {
+            stats,
+            sink: SinkOutcome::Cancelled,
+            ..
+        }) => record
+            .succeeded(duration, Some(stats.rows))
+            .failed(&OxynError::Cancelled),
+        Ok(outcome) => record.succeeded(duration, outcome.rows()),
+        Err(erreur) => {
+            // Un échec a une durée, lui aussi : « expiré après 30 s » et
+            // « rejeté en 2 ms » ne décrivent pas le même incident.
+            let mut echouee = record.failed(erreur);
+            echouee.duration = Some(duration);
+            echouee
+        }
+    };
+    if let Ok(Outcome::Executed { result, .. }) = issue {
+        record.result = Some(*result);
+    }
+    Some((id, record))
 }
 
 /// The audit record of a command that ran, before its failure is known.
@@ -2225,7 +2401,8 @@ impl ExecutorBuilder {
             events: self.events,
             results: RwLock::new(crate::retained::RetainedResults::default()),
             catalogs: RwLock::new(HashMap::new()),
-            connections: RwLock::new(HashMap::new()),
+            connections: Arc::new(RwLock::new(HashMap::new())),
+            connection_writes: Arc::new(Mutex::new(())),
             workspace: self.workspace,
             memory_budget: self.memory_budget,
             abandoned: AbandonedOutcomes::default(),
@@ -2940,3 +3117,7 @@ mod provider_tests;
 #[cfg(test)]
 #[path = "abandon_tests.rs"]
 mod abandon_tests;
+
+#[cfg(test)]
+#[path = "connection_tests.rs"]
+mod connection_tests;
