@@ -5,6 +5,7 @@ import {
   CatalogNode,
   CommandOutcome,
   ConnectResponse,
+  ConnectionTest,
   DriverChoice,
   ExecutionEvent,
   IpcError,
@@ -134,6 +135,9 @@ export const backend = {
 
   connect: (commandId: string, draft: ConnectionDraft) =>
     call("connect", ConnectResponse, { commandId, draft }),
+
+  testConnection: (commandId: string, draft: ConnectionDraft) =>
+    call("test_connection", ConnectionTest, { commandId, draft }),
 
   decideConnection: (command: string, approved: boolean) =>
     call("decide_connection", ConnectResponse.nullable(), {

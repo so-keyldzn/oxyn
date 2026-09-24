@@ -458,6 +458,20 @@ pub enum Command {
         config: Box<ConnectionConfig>,
     },
 
+    /// Open a session on a configuration, then close it at once.
+    ///
+    /// Nothing is saved and no session outlives the command: it answers "would
+    /// this connection open?" before the user commits to it (UX-SPEC,
+    /// « Navigation du premier workspace »). It reaches the server, so the
+    /// `PolicyGate` refuses it to an [`Actor::Agent`]: an agent that could
+    /// point it at the host of its choice would hold an exfiltration channel,
+    /// the same one [`CreateConnection`](Self::CreateConnection) guards.
+    TestConnection {
+        /// The configuration to try, carrying a secret reference and never a
+        /// secret in clear.
+        config: Box<ConnectionConfig>,
+    },
+
     /// Modifier une connexion existante.
     UpdateConnection {
         /// La configuration complète après modification.
@@ -584,7 +598,10 @@ impl Command {
             | Self::RemoveAiProvider { .. }
             | Self::ListExternalAgents
             | Self::SaveExternalAgent { .. }
-            | Self::RemoveExternalAgent { .. } => StatementIntent::Read,
+            | Self::RemoveExternalAgent { .. }
+            // Opens and closes a session, writes nothing: the same effect as
+            // `Connect`, on a configuration the workspace does not hold yet.
+            | Self::TestConnection { .. } => StatementIntent::Read,
             Self::CreateConnection { .. }
             | Self::UpdateConnection { .. }
             | Self::DeleteConnection { .. } => StatementIntent::Ddl,
@@ -614,9 +631,9 @@ impl Command {
             | Self::InspectResultValue { connection, .. }
             | Self::Export { connection, .. }
             | Self::DeleteConnection { connection } => Some(*connection),
-            Self::CreateConnection { config } | Self::UpdateConnection { config } => {
-                Some(config.id)
-            }
+            Self::CreateConnection { config }
+            | Self::UpdateConnection { config }
+            | Self::TestConnection { config } => Some(config.id),
             Self::ListQueryDocuments { .. }
             | Self::SaveQueryDocument { .. }
             | Self::CloseQueryDocument { .. }
@@ -668,6 +685,7 @@ impl Command {
                 | Self::RefreshCatalogScope { .. }
                 | Self::PreviewRelation { .. }
                 | Self::Export { .. }
+                | Self::TestConnection { .. }
         )
     }
 
@@ -710,6 +728,7 @@ impl Command {
             Self::WriteWorkspacePreferences { .. } => "WriteWorkspacePreferences",
             Self::WriteDocument { .. } => "WriteDocument",
             Self::CreateConnection { .. } => "CreateConnection",
+            Self::TestConnection { .. } => "TestConnection",
             Self::UpdateConnection { .. } => "UpdateConnection",
             Self::DeleteConnection { .. } => "DeleteConnection",
             Self::ListAiProviders => "ListAiProviders",
@@ -943,6 +962,46 @@ mod tests {
         assert!(
             !cmd.touches_database(),
             "créer une connexion n'atteint aucun serveur"
+        );
+    }
+
+    #[test]
+    fn tester_une_connexion_est_une_lecture_du_serveur_refusee_a_un_agent() {
+        use crate::{DefaultPolicy, Environment, PolicyGate};
+
+        let config = ConnectionConfig::new("à tester", DriverId::postgres())
+            .with_secret_ref("keychain://oxyn/essai");
+        let cmd = Command::TestConnection {
+            config: Box::new(config.clone()),
+        };
+        assert_eq!(cmd.intent(), StatementIntent::Read);
+        assert!(!cmd.is_mutating(), "nothing is saved or written");
+        assert!(cmd.touches_database(), "the server is reached");
+        assert_eq!(cmd.target_connection(), Some(config.id));
+        assert_eq!(cmd.name(), "TestConnection");
+        assert_eq!(cmd.statement_text(), None);
+
+        // The configuration is unknown to the gate, and marked production by
+        // default: the human may still try it, since nothing is written.
+        let gate = DefaultPolicy::new();
+        assert!(
+            gate.authorize(&Actor::Human, &cmd, Environment::Production)
+                .is_allowed()
+        );
+        // An agent may not, even on a local connection: choosing the host is
+        // the exfiltration channel, whatever the marking.
+        let agent = Actor::agent(AgentId::new(), AgentSessionId::new());
+        let decision = gate.authorize(&agent, &cmd, Environment::Local);
+        assert!(decision.is_denied(), "{decision:?}");
+        assert!(!decision.requires_approval(), "a refusal (I-02)");
+
+        // I-03: the reference is not in the `Debug`, and a round trip keeps
+        // the command whole.
+        assert!(!format!("{cmd:?}").contains("keychain://oxyn/essai"));
+        let json = serde_json::to_string(&cmd).expect("serializable command");
+        assert_eq!(
+            serde_json::from_str::<Command>(&json).expect("typed round trip"),
+            cmd
         );
     }
 

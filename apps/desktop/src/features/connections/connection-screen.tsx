@@ -125,6 +125,19 @@ export function ConnectionScreen() {
     },
   })
 
+  // Cancellable like an opening, and through the same id: Esc and Cancel
+  // reach the server whichever of the two is in flight. A cancelled test
+  // answers `null`, and the status bar goes back to « Not tested ».
+  const test = useMutation({
+    mutationFn: (draft: WithoutSecrets<ConnectionDraft>) =>
+      cancellable((commandId) =>
+        backend.testConnection(commandId, {
+          ...draft,
+          secrets: typedSecrets.take(draft),
+        })
+      ),
+  })
+
   const reconnect = useMutation({
     mutationFn: async (connection: ConnectionSummary) => {
       const held: { late: OpenConnection | null } = { late: null }
@@ -180,16 +193,18 @@ export function ConnectionScreen() {
       driver={driver}
       onChooseDriver={(choice) => {
         connect.reset()
+        test.reset()
         setDriver(choice)
       }}
       onLeaveDriver={() => {
         connect.reset()
+        test.reset()
         setDriver(null)
       }}
       opening={reconnect.isPending ? reconnect.variables.id : null}
       openError={failureOf(reconnect.error)}
       onOpen={(connection) => {
-        if (reconnect.isPending || connect.isPending) return
+        if (reconnect.isPending || connect.isPending || test.isPending) return
         reconnect.mutate(connection)
       }}
       onRetryOpen={() => {
@@ -198,9 +213,19 @@ export function ConnectionScreen() {
       submitting={connect.isPending || decide.isPending}
       formError={failureOf(connect.error ?? decide.error)}
       onSubmit={(draft) => {
-        if (connect.isPending) return
+        if (connect.isPending || test.isPending) return
         connect.mutate(typedSecrets.hold(draft))
       }}
+      testing={test.isPending}
+      testResult={
+        test.data && test.data.type !== "cancelled" ? test.data : null
+      }
+      testError={failureOf(test.error)}
+      onTest={(draft) => {
+        if (connect.isPending || test.isPending) return
+        test.mutate(typedSecrets.hold(draft))
+      }}
+      onDraftChange={test.reset}
       onBrowse={browse}
       cancelling={cancelling}
       onCancelOpening={cancelOpening}

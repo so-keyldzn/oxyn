@@ -297,6 +297,12 @@ impl PolicyGate for DefaultPolicy {
                 reason: "only the human may declare or remove an AI provider".into(),
             };
         }
+        // Trying a configuration is choosing the host a session opens on: for
+        // an agent, the exfiltration channel `CreateConnection` is guarded
+        // against, without even a saved connection to show for it.
+        if actor.is_agent() && matches!(cmd, Command::TestConnection { .. }) {
+            return Decision::deny("only the human may test a connection configuration");
+        }
         let intent = cmd.intent();
         let mutating = cmd.is_mutating();
         let facts = cmd.target_connection().and_then(|id| self.facts(id));

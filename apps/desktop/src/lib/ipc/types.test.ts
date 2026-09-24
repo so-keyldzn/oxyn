@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest"
 import {
   Cell,
   ConnectionDraft,
+  ConnectionTest,
   ExecutionEvent,
   RelationDetail,
   ResultWindow,
@@ -139,6 +140,33 @@ describe("connection drafts", () => {
   it("refuses an environment it does not know, rather than treating it as local", () => {
     expect(
       ConnectionDraft.safeParse({ ...draft, environment: "prod" }).success
+    ).toBe(false)
+  })
+})
+
+describe("connection tests", () => {
+  it("reads the three answers `ConnectionTest` serializes to", () => {
+    for (const value of [
+      { type: "succeeded", elapsedMs: 42 },
+      {
+        type: "failed",
+        message: "connection failed: connection refused",
+        class: "transient",
+        retryable: true,
+      },
+      { type: "cancelled" },
+    ]) {
+      expect(ConnectionTest.safeParse(value).success).toBe(true)
+    }
+  })
+
+  it("never reads a success out of a failure missing its class", () => {
+    expect(
+      ConnectionTest.safeParse({
+        type: "failed",
+        message: "refused",
+        retryable: false,
+      }).success
     ).toBe(false)
   })
 })

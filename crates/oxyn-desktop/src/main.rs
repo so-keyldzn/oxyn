@@ -56,6 +56,7 @@ fn main() -> Result<()> {
             commands::list_drivers,
             commands::list_connections,
             commands::connect,
+            commands::test_connection,
             commands::decide_connection,
             commands::reconnect,
             commands::disconnect,

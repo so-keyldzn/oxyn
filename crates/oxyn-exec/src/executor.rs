@@ -228,6 +228,15 @@ pub enum Outcome {
         document: DocumentId,
     },
 
+    /// A configuration opened a session, which was closed at once.
+    ///
+    /// Nothing was saved and no session remains: the outcome says the server
+    /// accepted these parameters, at this moment, and nothing more.
+    ConnectionTested {
+        /// The configuration tried, never registered with the executor.
+        connection: ConnectionId,
+    },
+
     /// Une connexion a été enregistrée ou modifiée.
     ConnectionSaved {
         /// La connexion.
@@ -743,6 +752,7 @@ impl Executor {
     ) -> Result<Outcome> {
         match command {
             Command::Connect { connection } => self.connect(*connection, cancel).await,
+            Command::TestConnection { config } => self.test_connection(config, cancel).await,
 
             Command::Disconnect { connection } => self.disconnect(*connection).await,
             Command::CloseSession {
@@ -1258,18 +1268,7 @@ impl Executor {
     /// Ouvre une session.
     async fn connect(&self, connection: ConnectionId, cancel: &CancelToken) -> Result<Outcome> {
         let config = self.connection_config(connection, cancel).await?;
-        let driver = self.drivers.require(&config.driver)?;
-        // The system keyring lookup is blocking; it never runs on the shared
-        // runtime that also carries drivers, network I/O and LLM calls (I-05).
-        let resolver = Arc::clone(&self.credentials);
-        let lookup = config.clone();
-        let runtime = tokio::runtime::Handle::try_current()
-            .map_err(|_| OxynError::Config("connecting requires the application runtime".into()))?;
-        let credentials = runtime
-            .spawn_blocking(move || resolver.resolve(&lookup))
-            .await
-            .map_err(|_| OxynError::Internal("credential worker stopped".into()))??;
-        let session = driver.connect(&config, &credentials, cancel).await?;
+        let session = self.open_driver_session(&config, cancel).await?;
         let slot = self.sessions.insert(SessionSlot::new(connection, session));
         let catalog = self
             .catalogs
@@ -1289,6 +1288,48 @@ impl Executor {
             connection,
             session: slot.id(),
         })
+    }
+
+    /// Opens a session on a configuration the workspace does not hold, then
+    /// closes it.
+    ///
+    /// The session never enters the registry: nothing can run on it, and no
+    /// catalog is attached to it. The error, if any, is the driver's own,
+    /// class included — the one a real opening would give.
+    async fn test_connection(
+        &self,
+        config: &ConnectionConfig,
+        cancel: &CancelToken,
+    ) -> Result<Outcome> {
+        let session = self.open_driver_session(config, cancel).await?;
+        if let Err(erreur) = session.close().await {
+            // The opening succeeded, which is what was asked; a refused close
+            // frees the local resources all the same.
+            tracing::warn!(error = %erreur, "the server refused a clean close of a test session");
+        }
+        Ok(Outcome::ConnectionTested {
+            connection: config.id,
+        })
+    }
+
+    /// Resolves the credentials and asks the driver for a session.
+    async fn open_driver_session(
+        &self,
+        config: &ConnectionConfig,
+        cancel: &CancelToken,
+    ) -> Result<Box<dyn oxyn_driver::Session>> {
+        let driver = self.drivers.require(&config.driver)?;
+        // The system keyring lookup is blocking; it never runs on the shared
+        // runtime that also carries drivers, network I/O and LLM calls (I-05).
+        let resolver = Arc::clone(&self.credentials);
+        let lookup = config.clone();
+        let runtime = tokio::runtime::Handle::try_current()
+            .map_err(|_| OxynError::Config("connecting requires the application runtime".into()))?;
+        let credentials = runtime
+            .spawn_blocking(move || resolver.resolve(&lookup))
+            .await
+            .map_err(|_| OxynError::Internal("credential worker stopped".into()))??;
+        driver.connect(config, &credentials, cancel).await
     }
 
     /// Ferme les sessions d'une connexion, après avoir annulé ce qui y tourne.
@@ -1997,9 +2038,9 @@ impl Executor {
         match command {
             // La connexion n'est pas encore enregistrée : c'est sa propre
             // déclaration qui fait foi, et le gate la recoupera.
-            Command::CreateConnection { config } | Command::UpdateConnection { config } => {
-                config.environment
-            }
+            Command::CreateConnection { config }
+            | Command::UpdateConnection { config }
+            | Command::TestConnection { config } => config.environment,
             autre => autre
                 .target_connection()
                 .and_then(|id| self.connections.read().get(&id).map(|c| c.environment))

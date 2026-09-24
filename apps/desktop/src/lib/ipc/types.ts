@@ -143,6 +143,26 @@ export const ConnectResponse = z.discriminatedUnion("type", [
 ])
 export type ConnectResponse = z.infer<typeof ConnectResponse>
 
+/**
+ * The answer to `test_connection`. A failed test is an answer, not a rejected
+ * call: `class` is `ErrorClass::as_str`, an open set on the Rust side, so it
+ * stays a string; `retryable` comes from it, never from the message (I-13).
+ */
+export const ConnectionTest = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("succeeded"),
+    elapsedMs: z.number().int().nonnegative(),
+  }),
+  z.object({
+    type: z.literal("failed"),
+    message: z.string(),
+    class: z.string(),
+    retryable: z.boolean(),
+  }),
+  z.object({ type: z.literal("cancelled") }),
+])
+export type ConnectionTest = z.infer<typeof ConnectionTest>
+
 export const ResultColumn = z.object({
   name: z.string(),
   dataType: z.string(),
