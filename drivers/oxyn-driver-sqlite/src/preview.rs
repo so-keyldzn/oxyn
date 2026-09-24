@@ -130,9 +130,9 @@ pub(crate) fn request(
 /// The select list: `*`, or the requested columns, each quoted.
 ///
 /// # Erreurs
-/// Those of [`PreviewShape::projection`], and [`OxynError::CatalogUnavailable`]
-/// when a name is not a column of the relation — the same refusal as an
-/// unknown sort column, before the engine sees it.
+/// Those of [`PreviewShape::projection`], and [`OxynError::Query`] when a name
+/// is not a column of the relation — the same permanent refusal as an unknown
+/// sort column, before the engine sees it.
 fn projection(shape: &PreviewShape, facts: &RelationFacts) -> Result<String> {
     let Some(columns) = shape.projection()? else {
         return Ok("*".to_owned());
@@ -148,7 +148,7 @@ fn projection(shape: &PreviewShape, facts: &RelationFacts) -> Result<String> {
 }
 
 fn unknown_projected(column: &str) -> OxynError {
-    OxynError::CatalogUnavailable(format!(
+    OxynError::Query(format!(
         "cannot read `{column}` in a preview: the relation does not declare that column"
     ))
 }
@@ -161,9 +161,9 @@ fn unknown_projected(column: &str) -> OxynError {
 /// at the boundary nobody inspects.
 ///
 /// # Erreurs
-/// [`OxynError::CatalogUnavailable`] when a sort names a column the relation
-/// does not declare — sent to the engine, it would be rejected far from the
-/// column that caused it — and [`OxynError::NotSupported`] when a page is asked
+/// [`OxynError::Query`] when a sort names a column the relation does not
+/// declare — sent to the engine, it would be rejected far from the column that
+/// caused it; retrying would not make the column appear — and [`OxynError::NotSupported`] when a page is asked
 /// for without any unique key to make the order total.
 fn order_by(shape: &PreviewShape, facts: &RelationFacts) -> Result<Option<String>> {
     if shape.sort.is_empty() && shape.offset == 0 {
@@ -172,7 +172,7 @@ fn order_by(shape: &PreviewShape, facts: &RelationFacts) -> Result<Option<String
     let mut terms = Vec::with_capacity(shape.sort.len() + facts.key.len());
     for sort in &shape.sort {
         if !facts.columns.contains(&sort.column) {
-            return Err(OxynError::CatalogUnavailable(format!(
+            return Err(OxynError::Query(format!(
                 "cannot sort a preview on `{}`: the relation does not declare that column",
                 sort.column
             )));
@@ -301,10 +301,18 @@ mod tests {
             ..PreviewShape::default()
         };
         let erreur = compose(&shape, &facts(&[("id", true)])).expect_err("refus attendu");
+        refus_permanent(&erreur);
+    }
+
+    /// Une colonne que la relation ne déclare pas ne réapparaîtra pas au
+    /// prochain essai : l'erreur est permanente, jamais `Transient`.
+    fn refus_permanent(erreur: &OxynError) {
         assert!(
-            matches!(&erreur, OxynError::CatalogUnavailable(message) if message.contains("absente")),
+            matches!(erreur, OxynError::Query(message) if message.contains("absente")),
             "{erreur}"
         );
+        assert_eq!(erreur.class(), oxyn_core::ErrorClass::Permanent);
+        assert!(!erreur.is_retryable(), "{erreur}");
     }
 
     #[test]
@@ -414,10 +422,7 @@ mod tests {
             ..PreviewShape::default()
         };
         let erreur = compose(&absente, &facts(&[("id", true)])).expect_err("refus attendu");
-        assert!(
-            matches!(&erreur, OxynError::CatalogUnavailable(message) if message.contains("absente")),
-            "{erreur}"
-        );
+        refus_permanent(&erreur);
         let vide = PreviewShape {
             columns: Some(Vec::new()),
             ..PreviewShape::default()
