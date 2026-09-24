@@ -111,6 +111,15 @@ export interface Row {
   /** 1-based position among the visible siblings, for `aria-posinset`. */
   posInSet: number
   setSize: number
+  /**
+   * Set on the row that stands for the contents of an open level showing no
+   * child; `node` is then that level. `unloaded`: its contents are not in
+   * memory — never read, a failed read, or evicted to keep the catalog cache
+   * bounded (docs/ARCHITECTURE.md). `empty`: it was read and holds nothing.
+   * `hidden`: it holds only system objects, and they are hidden. Without this
+   * row all three look alike, and an evicted schema reads as empty.
+   */
+  placeholder?: "unloaded" | "empty" | "hidden"
 }
 
 /** Flattens the visible part of the tree. Pure, so it is tested without a DOM. */
@@ -168,17 +177,35 @@ export function visibleRows(
     }
     siblings.push(row)
     rows.push(row)
-    if (isOpen)
-      rows.push(
-        ...visibleRows(
-          node.children,
-          expanded,
-          filter,
-          depth + 1,
-          hideSystem,
-          key
-        )
-      )
+    if (!isOpen) continue
+    const childRows = visibleRows(
+      node.children,
+      expanded,
+      filter,
+      depth + 1,
+      hideSystem,
+      key
+    )
+    if (expandable && childRows.length === 0) {
+      rows.push({
+        node,
+        depth: depth + 1,
+        key: `${key}:contents`,
+        parentKey: key,
+        expandable: false,
+        expanded: false,
+        posInSet: 1,
+        setSize: 1,
+        placeholder:
+          node.children.length > 0
+            ? "hidden"
+            : node.loaded
+              ? "empty"
+              : "unloaded",
+      })
+      continue
+    }
+    rows.push(...childRows)
   }
   siblings.forEach((row, index) => {
     row.posInSet = index + 1
@@ -209,7 +236,7 @@ export function boundedFocus(
  * through the names that start with it. Pure, so it is tested.
  */
 export function typeaheadMatch(
-  rows: ReadonlyArray<Pick<Row, "node">>,
+  rows: ReadonlyArray<Pick<Row, "node" | "placeholder">>,
   buffer: string,
   from: number
 ): number {
@@ -221,8 +248,10 @@ export function typeaheadMatch(
   const prefix = repeated ? (needle[0] ?? "") : needle
   for (let step = 0; step < rows.length; step++) {
     const index = (start + step) % rows.length
-    const name = rows[index]?.node.name.toLocaleLowerCase() ?? ""
-    if (name.startsWith(prefix)) return index
+    const row = rows[index]
+    // A contents row carries its level's name, which is not its own.
+    if (!row || row.placeholder) continue
+    if (row.node.name.toLocaleLowerCase().startsWith(prefix)) return index
   }
   return -1
 }
@@ -250,6 +279,23 @@ const TYPEAHEAD_MS = 500
 
 /** Where the object view should open on a relation. */
 export type OpenTarget = "data" | "structure" | "definition"
+
+/** What the contents row of an open level says, when it shows no child. */
+const PLACEHOLDER: Record<
+  NonNullable<Row["placeholder"]>,
+  { label: string; title: string }
+> = {
+  unloaded: {
+    label: "Not loaded — click to read",
+    title:
+      "The contents of this level are not in memory: never read, a read that failed, or unloaded to keep the catalog cache bounded. Click or press Enter to read them.",
+  },
+  empty: { label: "No objects", title: "This level was read and is empty." },
+  hidden: {
+    label: "Only system objects (hidden)",
+    title: "This level holds only system objects, and they are hidden.",
+  },
+}
 
 const MATCHED: Record<CatalogSearchHit["matched"], string> = {
   relationName: "name",
@@ -385,6 +431,17 @@ export function CatalogTree({
       onExpand(row.node.address)
   }
 
+  const activate = (row: Row) => {
+    // Reading an unloaded level is asked for, never automatic: two open
+    // schemas that do not fit the cache together would evict each other.
+    if (row.placeholder === "unloaded") {
+      if (!loading.has(row.parentKey ?? "")) onExpand(row.node.address)
+    } else if (row.placeholder === undefined) {
+      if (row.expandable) toggle(row)
+      else onSelect(row.node)
+    }
+  }
+
   const onKeyDown = (event: React.KeyboardEvent) => {
     const row = focusRow
     const index = Math.max(focus, 0)
@@ -413,8 +470,7 @@ export function CatalogTree({
         break
       case "Enter":
         if (!row) return
-        if (row.expandable) toggle(row)
-        else onSelect(row.node)
+        activate(row)
         break
       case " ":
         if (
@@ -425,8 +481,7 @@ export function CatalogTree({
           break
         }
         if (!row) return
-        if (row.expandable) toggle(row)
-        else onSelect(row.node)
+        activate(row)
         break
       default:
         if (
@@ -558,7 +613,9 @@ export function CatalogTree({
               {virtualizer.getVirtualItems().map((item) => {
                 const row = rows[item.index]
                 if (!row) return null
-                const isLoading = loading.has(row.key)
+                const isLoading = loading.has(
+                  row.placeholder ? (row.parentKey ?? "") : row.key
+                )
                 const isFocused = item.index === focus
                 const isSelected = selected === row.key
                 return (
@@ -576,20 +633,22 @@ export function CatalogTree({
                     aria-busy={isLoading || undefined}
                     onClick={() => {
                       setFocusKey(row.key)
-                      if (row.expandable) toggle(row)
-                      else onSelect(row.node)
+                      activate(row)
                     }}
                     onContextMenu={() => {
                       setFocusKey(row.key)
                       setMenuNode(row.node)
                     }}
                     title={
-                      row.node.comment
-                        ? `${row.node.name} — ${row.node.comment}`
-                        : row.node.name
+                      row.placeholder
+                        ? PLACEHOLDER[row.placeholder].title
+                        : row.node.comment
+                          ? `${row.node.name} — ${row.node.comment}`
+                          : row.node.name
                     }
                     className={cn(
                       "absolute inset-x-0 top-0 flex items-center gap-1.5 rounded-md pr-2 text-[length:var(--reading-text)] text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+                      row.placeholder && "text-muted-foreground",
                       isSelected &&
                         "bg-sidebar-accent font-medium text-sidebar-accent-foreground",
                       // The ring sits on the row, and only while the tree has
@@ -603,42 +662,52 @@ export function CatalogTree({
                       paddingInlineStart: 4 + row.depth * 14,
                     }}
                   >
-                    <span className="flex size-4 shrink-0 items-center justify-center text-muted-foreground">
-                      {row.expandable ? (
-                        isLoading ? (
-                          <Spinner aria-hidden className="size-3" />
-                        ) : (
-                          <HugeiconsIcon
-                            icon={ArrowRight01Icon}
-                            strokeWidth={2}
-                            className={cn(
-                              "size-3.5 motion-safe:transition-transform rtl:-scale-x-100",
-                              row.expanded && "rotate-90 rtl:-rotate-90"
-                            )}
-                          />
-                        )
-                      ) : null}
-                    </span>
-                    <HugeiconsIcon
-                      icon={iconFor(row.node.kind)}
-                      strokeWidth={1.8}
-                      className="size-4 shrink-0 text-muted-foreground"
-                    />
-                    <span dir="auto" className="min-w-0 truncate">
-                      {row.node.name}
-                    </span>
-                    {row.node.stale ? (
-                      <Badge
-                        variant="outline"
-                        className="ms-auto h-4 shrink-0 px-1 text-[length:var(--reading-caption)] text-warning"
-                      >
-                        stale
-                      </Badge>
-                    ) : row.node.system ? (
-                      <span className="ms-auto shrink-0 text-[length:var(--reading-caption)] text-muted-foreground">
-                        system
+                    {row.placeholder ? (
+                      <span className="min-w-0 truncate ps-5.5 text-[length:var(--reading-caption)]">
+                        {isLoading
+                          ? "Reading…"
+                          : PLACEHOLDER[row.placeholder].label}
                       </span>
-                    ) : null}
+                    ) : (
+                      <>
+                        <span className="flex size-4 shrink-0 items-center justify-center text-muted-foreground">
+                          {row.expandable ? (
+                            isLoading ? (
+                              <Spinner aria-hidden className="size-3" />
+                            ) : (
+                              <HugeiconsIcon
+                                icon={ArrowRight01Icon}
+                                strokeWidth={2}
+                                className={cn(
+                                  "size-3.5 motion-safe:transition-transform rtl:-scale-x-100",
+                                  row.expanded && "rotate-90 rtl:-rotate-90"
+                                )}
+                              />
+                            )
+                          ) : null}
+                        </span>
+                        <HugeiconsIcon
+                          icon={iconFor(row.node.kind)}
+                          strokeWidth={1.8}
+                          className="size-4 shrink-0 text-muted-foreground"
+                        />
+                        <span dir="auto" className="min-w-0 truncate">
+                          {row.node.name}
+                        </span>
+                        {row.node.stale ? (
+                          <Badge
+                            variant="outline"
+                            className="ms-auto h-4 shrink-0 px-1 text-[length:var(--reading-caption)] text-warning"
+                          >
+                            stale
+                          </Badge>
+                        ) : row.node.system ? (
+                          <span className="ms-auto shrink-0 text-[length:var(--reading-caption)] text-muted-foreground">
+                            system
+                          </span>
+                        ) : null}
+                      </>
+                    )}
                   </div>
                 )
               })}

@@ -108,11 +108,6 @@ export function CatalogSidebar({
         setProblem(problemOf(caught))
       } finally {
         running.current.delete(id)
-        setLoading((current) => {
-          const next = new Set(current)
-          next.delete(key)
-          return next
-        })
         if (!address) {
           setRootCommand((current) => (current === id ? null : current))
           setCancelling(false)
@@ -122,6 +117,13 @@ export function CatalogSidebar({
         })
         await queryClient.invalidateQueries({
           queryKey: ["catalog-search", open.connection],
+        })
+        // Only once the tree read again is shown: released earlier, a level
+        // just read would still say « Not loaded » for one round trip.
+        setLoading((current) => {
+          const next = new Set(current)
+          next.delete(key)
+          return next
         })
       }
     },

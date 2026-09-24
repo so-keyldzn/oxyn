@@ -1,7 +1,9 @@
+import * as React from "react"
 import type { Meta, StoryObj } from "@storybook/react-vite"
 import { expect, fn, userEvent, waitFor, within } from "storybook/test"
 
 import { CatalogTree, addressKey } from "./catalog-tree"
+import { Button } from "@/components/ui/button"
 import { catalog } from "./fixtures"
 import {
   HOSTILE,
@@ -107,6 +109,85 @@ export const StaleLevel: Story = {
     await expect(canvas.getByText("invoices")).toBeVisible()
     // Opening a stale level reads it again.
     await expect(args.onExpand).toHaveBeenCalledWith(catalog[0]?.address)
+  },
+}
+
+/** `public` as the cache leaves it after an eviction: listed, never read. */
+const evicted = catalog.map((node, index) =>
+  index === 0 ? { ...node, loaded: false, children: [] } : node
+)
+
+/**
+ * Stands in for the sidebar: « Evict public » publishes the tree the bus
+ * leaves after evicting that schema, and reading a level publishes it again.
+ */
+function EvictionHarness(props: React.ComponentProps<typeof CatalogTree>) {
+  const [nodes, setNodes] = React.useState(catalog)
+  return (
+    <>
+      <CatalogTree
+        {...props}
+        nodes={nodes}
+        onExpand={(address) => {
+          props.onExpand(address)
+          setNodes(catalog)
+        }}
+      />
+      <Button variant="outline" size="sm" onClick={() => setNodes(evicted)}>
+        Evict public
+      </Button>
+    </>
+  )
+}
+
+/**
+ * Expanded, then evicted to keep the catalog cache bounded: the open schema
+ * says its contents are not loaded, instead of looking empty, and reads them
+ * again only when asked — never on its own, so two schemas that do not fit
+ * together cannot evict each other in a loop.
+ */
+export const ExpandedThenEvicted: Story = {
+  render: (args) => <EvictionHarness {...args} />,
+  play: async ({ canvas, args }) => {
+    await userEvent.click(canvas.getByText("public"))
+    await expect(canvas.getByText("invoices")).toBeVisible()
+
+    await userEvent.click(canvas.getByRole("button", { name: "Evict public" }))
+    const unloaded = canvas.getByText("Not loaded — click to read")
+    await expect(unloaded).toBeVisible()
+    await expect(canvas.queryByText("invoices")).toBeNull()
+    await expect(args.onExpand).not.toHaveBeenCalled()
+
+    await userEvent.click(unloaded)
+    await expect(args.onExpand).toHaveBeenCalledOnce()
+    await expect(args.onExpand).toHaveBeenCalledWith(catalog[0]?.address)
+    await expect(canvas.getByText("invoices")).toBeVisible()
+    await expect(canvas.queryByText("Not loaded — click to read")).toBeNull()
+  },
+}
+
+/** A level read and legitimately empty: said, not left blank. */
+export const EmptySchema: Story = {
+  args: {
+    nodes: catalog.map((node, index) =>
+      index === 1 ? { ...node, loaded: true } : node
+    ),
+  },
+  play: async ({ canvas, args }) => {
+    await userEvent.click(canvas.getByText("reporting"))
+    await expect(canvas.getByText("No objects")).toBeVisible()
+    await expect(args.onExpand).not.toHaveBeenCalled()
+  },
+}
+
+/** Reading an unloaded level: the contents row says so while it runs. */
+export const ReadingUnloadedSchema: Story = {
+  args: {
+    loading: new Set([addressKey(catalog[1]!.address)]),
+    expanded: new Set([addressKey(catalog[1]!.address)]),
+  },
+  play: async ({ canvas }) => {
+    await expect(canvas.getByText("Reading…")).toBeVisible()
   },
 }
 
