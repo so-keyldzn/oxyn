@@ -404,8 +404,10 @@ async fn an_allowed_command_abandoned_around_its_decision_write_leaves_no_hole()
     // A single poll: if the decision's `spawn_blocking` has not resolved yet
     // — the common case, since it was only just submitted — this drops the
     // future mid-write, exactly the window `OutcomeGuard` exists to cover.
-    // If it *did* resolve within that one poll, the command ran normally and
-    // there is nothing abandoned to check beyond "exactly one outcome".
+    // On a loaded machine the blocking pool and the SQLite worker can both
+    // finish while this thread is preempted inside that one poll: the command
+    // then ran normally, and its ordinary outcome is either already written
+    // or submitted to the pool and still in flight when the future is dropped.
     let completed = bench
         .executor
         .dispatch_as(id, Actor::Human, command, &CancelToken::new())
@@ -423,36 +425,44 @@ async fn an_allowed_command_abandoned_around_its_decision_write_leaves_no_hole()
             .collect::<Vec<_>>()
     };
 
-    // Bounded wait: the decision write was already submitted to the blocking
-    // pool before the future above was dropped, so it lands regardless.
-    tokio::time::timeout(FREED_WITHIN, async {
-        while of_command(&bench.executor).is_empty() {
+    // An outcome is whatever carries a duration — `outcome_record` sets one,
+    // `decision_record` never does — not whatever carries an error: the
+    // ordinary outcome of a command that ran is a success.
+    let is_decision = |record: &JournalRecord| record.duration.is_none();
+    let is_outcome = |record: &JournalRecord| record.duration.is_some();
+
+    // Bounded wait for both halves: every write involved was submitted to
+    // the blocking pool or queued by `OutcomeGuard` before the future above
+    // was dropped, so each lands regardless — the queue once
+    // `journal_abandoned` writes it.
+    let records = tokio::time::timeout(FREED_WITHIN, async {
+        loop {
+            let executor = Arc::clone(&bench.executor);
+            tokio::task::spawn_blocking(move || executor.journal_abandoned())
+                .await
+                .expect("the audit writer stopped");
+            let records = of_command(&bench.executor);
+            if records.iter().any(is_decision) && records.iter().any(is_outcome) {
+                return records;
+            }
             tokio::time::sleep(Duration::from_millis(5)).await;
         }
     })
     .await
-    .expect("the decision was never journaled");
+    .expect("the decision or its outcome was never journaled");
 
-    let executor = Arc::clone(&bench.executor);
-    tokio::task::spawn_blocking(move || executor.journal_abandoned())
-        .await
-        .expect("the audit writer stopped");
-
-    let records = of_command(&bench.executor);
-    let outcomes: Vec<_> = records
-        .iter()
-        .filter(|record| record.error.is_some())
-        .collect();
+    let outcomes: Vec<_> = records.iter().filter(|record| is_outcome(record)).collect();
     assert_eq!(
         outcomes.len(),
         1,
         "a decision must have exactly one outcome, never zero and never two: {records:?}"
     );
-    if completed.is_none() {
-        assert_eq!(
-            outcomes[0].error.as_deref(),
-            Some(crate::abandon::ABANDONED_OUTCOME)
-        );
+    // Either the command ran — its ordinary outcome, whether written within
+    // the poll or after it — or it was abandoned before `guard.settle()` and
+    // the queued outcome says so, as `Ambiguous` (I-13).
+    if let Some(error) = outcomes[0].error.as_deref() {
+        assert!(completed.is_none(), "{records:?}");
+        assert_eq!(error, crate::abandon::ABANDONED_OUTCOME);
         assert_eq!(
             outcomes[0].error_class,
             Some(oxyn_core::ErrorClass::Ambiguous)

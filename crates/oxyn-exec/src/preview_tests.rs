@@ -15,32 +15,38 @@ use oxyn_driver_sqlite::SqliteDriver;
 use oxyn_store::{ActorKind, PolicyOutcome};
 use parking_lot::Mutex;
 use std::future::Future;
+use std::pin::Pin;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::task::Poll;
 
 const HOSTILE: &str = "t\"; DROP TABLE audit; --";
 
-/// Polls `future` until `ready` holds, without ever seeing it resolve —
-/// yielding to the runtime between polls so a decision or history write that
-/// now runs on the blocking pool (ADR-0035) gets a chance to land before the
-/// next poll. A single `poll!` no longer carries `dispatch` past its first
-/// audit write, so tests that used to observe mid-flight state after one poll
-/// need this instead. Bounded: a condition that never holds panics rather
-/// than hanging the suite.
+/// Drives `future` until `ready` holds, without ever seeing it resolve.
+///
+/// Every condition awaited here is state the command itself sets while it
+/// runs, so the future's own wake-ups are the only signal worth waiting on:
+/// the decision and history writes that `dispatch` hands to the blocking pool
+/// (ADR-0035) wake this task when they land, however long a loaded machine
+/// takes to run them. Counting `yield_now` rounds instead was a hidden delay —
+/// ten thousand yields last well under a millisecond, and a blocking-pool
+/// thread under load routinely takes longer to be scheduled. A condition that
+/// never holds hangs, and nextest's `slow-timeout` names the test.
 async fn poll_until_ready(
     future: &mut (impl Future<Output = Result<Outcome>> + Unpin),
     mut ready: impl FnMut() -> bool,
 ) {
-    for _ in 0..10_000 {
+    futures::future::poll_fn(|context| {
         assert!(
-            futures::poll!(&mut *future).is_pending(),
+            Pin::new(&mut *future).poll(context).is_pending(),
             "the command resolved before the awaited condition held"
         );
         if ready() {
-            return;
+            Poll::Ready(())
+        } else {
+            Poll::Pending
         }
-        tokio::task::yield_now().await;
-    }
-    panic!("condition never held after repeated polls of the pending command");
+    })
+    .await;
 }
 
 fn actors() -> [Actor; 2] {
