@@ -815,8 +815,9 @@ présent que l'utilisateur choisit, ce que le code ne fait pas encore ;
 l'indisponibilité sur une session sans `Capabilities::SQL` est expliquée plutôt
 que masquée, par analogie avec ADR-0003, mais aucun document ne la nomme ; aucune
 icône d'assistant n'existe dans `assets/ui` et le glyphe employé est un emprunt ;
-aucun écran ne permet encore de **régler** le niveau de confidentialité, qui se
-persiste désormais mais ne s'édite pas. Les réserves natives et de performance
+le niveau de confidentialité se persiste et se règle désormais dans le
+formulaire de connexion
+([AI-PROVIDERS](AI-PROVIDERS.md#régler-le-niveau)). Les réserves natives et de performance
 restent ouvertes.
 
 Validation d'accessibilité — lot clavier : un recensement des contrôles du dépôt
