@@ -174,9 +174,22 @@ const loading = new Map<Grammar, Promise<void>>()
 async function ensureGrammar(core: HighlighterCore, grammar: Grammar) {
   let pending = loading.get(grammar)
   if (!pending) {
-    pending = GRAMMARS[grammar]().then((module) =>
-      core.loadLanguage(module.default)
-    )
+    pending = GRAMMARS[grammar]()
+      .then((module) => core.loadLanguage(module.default))
+      .then(() => {
+        // shiki stops a line past `tokenizeTimeLimit` (500 ms in
+        // @shikijs/primitive 4.4.3) and returns the rest uncoloured without
+        // saying so — and the first line also pays for compiling the
+        // grammar's root patterns. On a loaded machine the first block came
+        // back half coloured, and stayed so in `cache`. One character,
+        // tokenised without a limit (0, in vscode-textmate), compiles them
+        // here; real blocks keep the limit against a runaway pattern.
+        core.codeToTokens("x", {
+          lang: grammar,
+          theme: "oxyn",
+          tokenizeTimeLimit: 0,
+        })
+      })
     loading.set(grammar, pending)
   }
   await pending
