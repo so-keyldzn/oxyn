@@ -7,6 +7,8 @@ import { open as openDialog } from "@tauri-apps/plugin-dialog"
 import type { BackendFailure } from "@/components/oxyn/backend-error-alert"
 import { ConnectionScreenView } from "@/features/connections/connection-screen-view"
 import type { PendingConnectionApproval } from "@/features/connections/connection-screen-view"
+import { useTypedSecrets } from "@/features/connections/typed-secrets"
+import type { WithoutSecrets } from "@/features/connections/typed-secrets"
 import { openConnection, session } from "@/features/session"
 import { BackendError, backend, newCommandId } from "@/lib/ipc/client"
 import { settingsBackend } from "@/lib/ipc/settings"
@@ -43,6 +45,9 @@ function failureOf(error: unknown): BackendFailure | null {
 export function ConnectionScreen() {
   const navigate = useNavigate()
   const queryClient = useQueryClient()
+  // Keeps the entered secrets out of `connect`'s variables, so neither the
+  // MutationCache nor the React Query Devtools ever retain them (I-03).
+  const typedSecrets = useTypedSecrets()
   const leftOpen = useStore(session, (state) => state.open)
   const drivers = useQuery({
     queryKey: ["drivers"],
@@ -91,10 +96,13 @@ export function ConnectionScreen() {
   }
 
   const connect = useMutation({
-    mutationFn: async (draft: ConnectionDraft) => {
+    mutationFn: async (draft: WithoutSecrets<ConnectionDraft>) => {
       const held: { late: ConnectResponse | null } = { late: null }
       const response = await cancellable(async (commandId) => {
-        held.late = await backend.connect(commandId, draft)
+        held.late = await backend.connect(commandId, {
+          ...draft,
+          secrets: typedSecrets.take(draft),
+        })
         return held.late
       })
       if (response === null) discardLate(held.late)
@@ -191,7 +199,7 @@ export function ConnectionScreen() {
       formError={failureOf(connect.error ?? decide.error)}
       onSubmit={(draft) => {
         if (connect.isPending) return
-        connect.mutate(draft)
+        connect.mutate(typedSecrets.hold(draft))
       }}
       onBrowse={browse}
       cancelling={cancelling}

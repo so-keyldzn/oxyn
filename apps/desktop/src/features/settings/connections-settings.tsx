@@ -13,6 +13,8 @@ import { BackendErrorAlert } from "@/components/oxyn/backend-error-alert"
 import type { BackendFailure } from "@/components/oxyn/backend-error-alert"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Skeleton } from "@/components/ui/skeleton"
+import { useTypedSecrets } from "@/features/connections/typed-secrets"
+import type { WithoutSecrets } from "@/features/connections/typed-secrets"
 import { BackendError, backend, newCommandId } from "@/lib/ipc/client"
 import { settingsBackend } from "@/lib/ipc/settings"
 import type { ConnectionChange, ConnectionSummary } from "@/lib/ipc/settings"
@@ -48,6 +50,7 @@ export function ConnectionsSettings({
   onUnsavedEditChange?: (unsaved: boolean) => void
 }) {
   const queryClient = useQueryClient()
+  const typedSecrets = useTypedSecrets()
   const connections = useQuery({
     queryKey: ["connections"],
     queryFn: settingsBackend.listConnections,
@@ -137,7 +140,7 @@ export function ConnectionsSettings({
       result,
     }: {
       target: ConnectionSummary
-      result: ConnectionDraft
+      result: WithoutSecrets<ConnectionDraft>
     }) =>
       settingsBackend.updateConnection(newCommandId(), target.id, {
         name: result.name,
@@ -145,7 +148,7 @@ export function ConnectionsSettings({
         privacyTier: result.privacyTier,
         readOnly: result.readOnly,
         values: result.values,
-        secrets: result.secrets,
+        secrets: typedSecrets.take(result),
       }),
     onSuccess: (change, { target }) => settle(change, target),
   })
@@ -189,7 +192,12 @@ export function ConnectionsSettings({
             existing={details.data}
             submitting={update.isPending || decide.isPending}
             error={failureOf(update.error ?? decide.error)}
-            onSubmit={(result) => update.mutate({ target: editing, result })}
+            onSubmit={(result) =>
+              update.mutate({
+                target: editing,
+                result: typedSecrets.hold(result),
+              })
+            }
             onCancel={() => {
               if (dirty) setConfirmingCancel(true)
               else stopEditing()
