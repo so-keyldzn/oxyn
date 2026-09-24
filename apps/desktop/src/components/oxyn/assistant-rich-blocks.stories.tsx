@@ -37,8 +37,11 @@ export const Highlighted: Story = {
   play: async ({ canvasElement, args }) => {
     const canvas = within(canvasElement)
     const code = canvas.getByLabelText("Proposed SQL")
-    await waitFor(() =>
-      expect(code).toHaveAttribute("data-highlighted", "true")
+    // Shiki and its grammar load on demand: on a cold module cache the first
+    // colouring takes seconds, well past `waitFor`'s default second.
+    await waitFor(
+      () => expect(code).toHaveAttribute("data-highlighted", "true"),
+      { timeout: 15_000 }
     )
     await expect(code.querySelector("b")).toBeNull()
     await expect(code).toHaveTextContent("<b>not HTML</b>")
