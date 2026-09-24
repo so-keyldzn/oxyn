@@ -426,12 +426,12 @@ mod tests {
     fn null_se_rend_en_majuscules_et_se_distingue_du_vide() {
         assert_eq!(ScalarValue::Null.to_string(), "NULL");
         assert_eq!(ScalarValue::Text(String::new()).to_string(), "");
-        // Le piège, énoncé comme tel : `Display` ne distingue pas `NULL` de la
-        // chaîne « NULL ». C'est délibéré — `Display` rend une valeur, il ne
-        // porte pas de typographie — et c'est pour cette raison que
-        // `oxyn_ui::data_grid` rend `CellValue::Null` en italique et dans une
-        // couleur propre. Quiconque écrirait une comparaison de valeurs sur ce
-        // rendu prendrait l'un pour l'autre.
+        // The trap, stated as such: `Display` does not tell `NULL` apart from
+        // the string "NULL". That is deliberate — `Display` renders a value, it
+        // carries no typography — and it is why the grid draws an absent value
+        // as `∅ NULL` in its own colour token
+        // (`apps/desktop/src/components/oxyn/cell-value.tsx`). Anyone comparing
+        // values through this rendering would take one for the other.
         assert_eq!(
             ScalarValue::Null.to_string(),
             ScalarValue::Text("NULL".into()).to_string(),

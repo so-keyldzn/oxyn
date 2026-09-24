@@ -7,7 +7,9 @@
 État au 2026-09-18 : l'interface est l'application Tauri (`apps/desktop` et
 `crates/oxyn-desktop`) ; l'interface GPUI a été retirée ce jour-là, voir
 [Migration vers l'interface Tauri](#migration-vers-linterface-tauri). Les états
-datés qui suivent décrivent le produit à leur date.
+datés qui suivent décrivent le produit à leur date — souvent l'interface GPUI :
+ce qu'ils disent fait ne l'est pas forcément dans `apps/desktop`, et la porte de
+cette section tient la liste de ce qui y manque.
 
 État au 2026-09-10 : les quinze crates existent, avec une application GPUI,
 un formulaire de connexion et un parcours d'exécution SQL. L'intégration UI/UX
@@ -180,7 +182,9 @@ la fenêtre Tauri.
 
 La liste qui restait alors à faire avant de supprimer `oxyn-ui` et `oxyn-app` :
 
-- ~~bascule compacte sous 1 200 px et menu `More`~~ — fait (`COMPACT_BELOW_PX`, `features/workspace/use-compact.ts`) ;
+- bascule compacte sous 1 200 px et menu `More` — **en partie** : la bascule
+  existe (`COMPACT_BELOW_PX`, `features/workspace/use-compact.ts`), le menu `More`
+  et le menu `Actions` non, voir la porte ci-dessous ;
 - ~~réglages d'affichage des cellules (`FormatOptions`) et thème clair commutable~~ — fait (`features/settings/`) ;
 - ~~restauration des brouillons après arrêt brutal~~ — fait (`features/recovery/`) ;
 - campagne de mesure des budgets de [PERFORMANCE](PERFORMANCE.md) **dans la webview**,
@@ -192,11 +196,33 @@ La liste qui restait alors à faire avant de supprimer `oxyn-ui` et `oxyn-app` :
   2026-09-24). Tant qu'elle n'est pas désignée, la campagne ne peut pas démarrer ;
 - vérification du rendu sous WebView2 et WebKitGTK — **non faite**.
 
-**Porte de sortie — franchie le 2026-09-18** (commit `6ecb8ce`) : chaque parcours
-de l'interface GPUI a son équivalent dans `apps/desktop`, avec ses stories ;
-`oxyn-ui`, `oxyn-app` et la dépendance `gpui` ont été retirés dans un même
-commit, avec les cibles `make app` et `make lancer` — `make desktop-dev` lance
-désormais l'application. `.claude/verifier_socle.py` refuse `gpui` partout.
+**Porte de sortie — rouverte le 2026-09-25.** Elle exigeait que chaque parcours
+de l'interface GPUI ait son équivalent dans `apps/desktop`, avec ses stories.
+Elle a été déclarée franchie le 2026-09-18 (commit `6ecb8ce`), qui a retiré
+`oxyn-ui`, `oxyn-app` et la dépendance `gpui` dans un même commit, avec les
+cibles `make app` et `make lancer` — `make desktop-dev` lance désormais
+l'application, et `.claude/verifier_socle.py` refuse `gpui` partout. Le retrait
+tient ; **la parité, non**. L'audit du 2026-09-24, re-vérifié dans le code le
+2026-09-25, trouve des parcours que ce plan déclare faits, ou tenus par des tests
+GPUI que `6ecb8ce` a supprimés, et qui n'existent pas dans `apps/desktop` :
+
+| Parcours | Ce que le plan en disait | État dans `apps/desktop` au 2026-09-25 |
+|---|---|---|
+| Menu `Actions` en largeur compacte | Columns, Export et l'inspecteur passent dans `Actions` en compact (état au 2026-09-10) | **absent.** La colonne de droite passe bien en superposition sous 1 200 px (`components/oxyn/workspace-layout.tsx`), mais Columns et Export restent dans la barre, contre [UX-SPEC](UX-SPEC.md) |
+| Menu `More` | Indexes, Relations et Constraints y passent en compact ; porte cochée plus haut | **absent.** `object-view-frame.tsx` affiche les onglets à plat, qui défilent à l'horizontale |
+| Préférences de panneaux persistées | sidebar large conservée, poignée de l'inspecteur « avec sauvegarde en fin de geste », persistance des panneaux selon ADR-0013 | **backend seul.** `read_preferences` porte `sidebar_collapsed`, `inspector_open`, `inspector_width`, mais l'écran démarre toujours sidebar ouverte, l'aside est figé à 320 px et rien n'est écrit |
+| Bibliothèque en lecture seule | History / Saved queries / Recent results, inspection en lecture seule sans exécution | **en partie.** History et Saved existent, paginés, filtrés, recherche à 250 ms ; ouvrir une entrée ouvre une copie dans une console, pas une inspection ; la bibliothèque n'existe que dans un workspace connecté |
+| Recent results | une vue dédiée aux résultats retenus ; tenu par `history_and_recent_results_read_the_same_execution_without_replaying_it` | **absent** comme vue. Un résultat retenu se rouvre sans réexécution depuis une ligne d'History (`features/library/retained-result-tab.tsx`) ; aucune commande ne liste les résultats retenus |
+| Restauration hors ligne des éditeurs | les brouillons repris restent modifiables et sauvegardables sans session, puis se rattachent à une connexion choisie | **absent.** La reprise sélective existe (`features/recovery/`), mais le texte ne rouvre qu'une fois une connexion choisie, dans un workspace |
+| Export d'un résultat retenu | la bibliothèque exporte le tampon retenu sans le rejouer | **absent.** `ExportMenu` n'est monté que dans la console et l'aperçu, pas dans `retained-result-view.tsx` — qui affiche pourtant « Opening, scrolling and exporting do not rerun the query » |
+| Panneau DDL latéral | panneau DDL en lecture seule (`193:2433`), redimensionnable | **absent** comme panneau : le DDL est un onglet de la vue d'objet (`RelationDefinition`) |
+| `Edit rows…` désactivé et son infobulle | exigé par [UX-SPEC](UX-SPEC.md) dans l'aperçu en lecture seule | **absent** : aucune occurrence dans `apps/desktop` |
+| La bibliothèque suit les exécutions | la bibliothèque ouverte se relit après une exécution (lot rafraîchissement automatique, ADR-0022) | **absent.** `LIBRARY_QUERY_KEY` n'est invalidée que par Refresh et les actions de la bibliothèque ; le commentaire « a run invalidates it » n'a pas de code derrière lui |
+| Restauration de l'emplacement d'objet | « réalisée (`ObjectLocation`) », tenue par `a_restored_location_and_its_sub_tab_come_back_without_reading_anything` | **absent côté front.** `ObjectLocation` est stocké par `oxyn-store`, mais `ipc/settings.rs` l'exclut délibérément de ce qui traverse l'IPC, et rien ne le relit |
+
+Le menu Columns, lui, est livré (`ef2ada8`, `components/oxyn/columns-menu.tsx`)
+dans la console, l'aperçu et le résultat retenu. Chaque lot qui livre un de ces
+parcours remet sa ligne à « fait » ici, avec le test ou la story qui le prouve.
 
 Ce qui reste ouvert après le retrait, sans qu'aucun de ces points ne soit tranché
 ici :
@@ -219,12 +245,12 @@ ici :
   porter ou y renoncer est à décider ;
 - **`assets/fonts/` et `assets/ui/`**, que seul `oxyn-ui` lisait, n'ont plus de
   lecteur ;
-- **des commentaires de code nomment encore `oxyn-app`, `oxyn-ui` ou GPUI** comme
-  s'ils existaient, dans `oxyn-core`, `oxyn-exec`, `oxyn-driver`, `oxyn-plugin`,
-  `oxyn-secrets`, `oxyn-ai`, `oxyn-data`, `oxyn-catalog`, le driver PostgreSQL,
-  `oxyn-desktop`, `apps/desktop` et le `[profile.dev]` du `Cargo.toml` racine.
-  `grep -rn -i "gpui\|oxyn-ui\|oxyn-app" crates drivers apps/desktop/src Cargo.toml`
-  en donne la liste.
+- ~~**des commentaires de code nomment encore `oxyn-app`, `oxyn-ui` ou GPUI**~~ —
+  fait le 2026-09-25 : le dernier, dans les tests de `oxyn-core/src/value.rs`,
+  renvoie désormais au rendu `∅ NULL` de
+  `apps/desktop/src/components/oxyn/cell-value.tsx`.
+  `grep -rn -i "gpui\|oxyn-ui\|oxyn_ui\|oxyn-app\|oxyn_app" crates drivers apps/desktop/src Cargo.toml`
+  ne rend plus rien.
 
 Les validations datées de ce document qui citent un « test GPUI » ou un test
 d'`oxyn-ui` décrivent l'état de leur date : ces tests ont été supprimés avec les
@@ -504,7 +530,7 @@ Parcours importants encore à raccorder, vérifiés dans le code :
 |---|---|
 | Accueil : recette native | La superposition est corrigée et testée sur les rectangles rendus ; l'observer à l'écran, à plusieurs largeurs et dans les deux thèmes, reste à faire |
 | Aperçu de table | Réalisé, selon [ADR-0020](adr/0020-apercu-trie-filtre-parcouru.md) : `PreviewSort` et `PreviewFilter` sont dans la commande, les capacités `PREVIEW_SORT` et `PREVIEW_FILTER` sont déclarées, les deux drivers composent la traduction citée, et la page suivante existe quand l'ordre est déterministe. Une réserve d'arbitrage subsiste sur le tri par défaut — voir les questions ouvertes en fin de document |
-| Reprise de session | Le marqueur d'arrêt est en place ([ADR-0021](adr/0021-marqueur-d-arret.md)) : un `⌘Q` ne déclenche plus la reprise, une session sans fermeture au battement vieilli si. La restauration de l'emplacement d'objet qu'[UX-SPEC](UX-SPEC.md#restauration-après-un-arrêt-brutal) promet est réalisée (`ObjectLocation`) |
+| Reprise de session | Le marqueur d'arrêt est en place ([ADR-0021](adr/0021-marqueur-d-arret.md)) : un `⌘Q` ne déclenche plus la reprise, une session sans fermeture au battement vieilli si. La restauration de l'emplacement d'objet qu'[UX-SPEC](UX-SPEC.md#restauration-après-un-arrêt-brutal) promet était réalisée dans l'interface GPUI (`ObjectLocation`) ; `apps/desktop` ne la relit pas — voir la [porte de la migration](#migration-vers-linterface-tauri) |
 | Bibliothèque inter-workspaces | Réalisé : les filtres portent les connexions historiques supprimées ou extérieures au workspace courant, par `Command::ListHistoryConnections` |
 | Workspace IA | La fuite [I-04](../CLAUDE.md#i-04) est fermée : `ToolOutcome::Failed` porte un rapport aux champs privés dont le seul constructeur exige le niveau de la connexion, et le filtre s'applique **à la construction** — sous `Local`/`Metadata`, le message du serveur n'entre jamais dans la structure. `PrivacyTier` vit désormais sur la `ConnectionConfig`, comme sa documentation l'affirmait déjà. La configuration des fournisseurs, l'entrée conditionnelle `Ask AI` (`190:1549`), les propositions par le bus et la provenance persistante des documents sont réalisées, et `oxyn-ai` est une dépendance déclarée d'`oxyn-app` — d'`oxyn-desktop` depuis le retrait de GPUI |
 | Recette produit | Rendu natif complet, accessibilité et mesures de performance, distincts des tests GPUI sans GPU — aujourd'hui des stories Storybook, qui ne remplacent pas davantage la recette |
@@ -643,7 +669,8 @@ performance ainsi que les avertissements préexistants de la porte restent
 ouverts.
 
 Écarts documentaires relevés : le phasage du §11 d'ARCHITECTURE diffère de
-celui du présent document, qui fait autorité sur l'ordre des phases ;
+celui du présent document, qui fait autorité sur l'ordre des phases — le §11
+y renvoie depuis le 2026-09-25 ;
 la formulation périmée de PERFORMANCE affirmant l'absence de code a été
 corrigée. Les budgets restent à mesurer.
 
@@ -1384,7 +1411,7 @@ droite se rejoue avec `cargo test -p <crate> <motif>`.
 | **0 — état et découpage** | tenu | Documents d'autorité relus, planches Figma confrontées par le serveur MCP, propriété des fichiers répartie sans chevauchement entre sous-agents |
 | **1 — aperçu trié, filtré, paginé** | tenu | `PreviewShape { sort, predicate, offset }` dans `oxyn-core/src/preview.rs`, porté par le bus et implémenté dans les **deux** drivers. 16 tests, dont `un_ordre_total_est_exige_par_le_tri_autant_que_par_la_page`, `le_texte_de_l_utilisateur_n_est_pas_reecrit`, `preview_reclassifies_driver_sql_and_refuses_writes_for_both_actors`, `preview_sqlite_is_bounded_preserves_hostile_table_and_correlates_events_and_audit`, `preview_enforces_read_only_and_row_limit_even_for_an_incorrect_driver`, `two_consecutive_pages_do_not_overlap` |
 | **2 — sécurité et IA** | tenu | `PrivacyTier` gouverne `oxyn-ai/src/context.rs` au titre d'[I-04](../CLAUDE.md#i-04) ; `un_appel_d_outil_devient_une_commande_portant_actor_agent` tient [I-07](../CLAUDE.md#i-07) ; `declarer_un_fournisseur_n_atteint_aucune_base_et_reste_refuse_a_un_agent` et `une_reference_de_secret_vide_est_refusee` tiennent la configuration des fournisseurs ; `un_point_d_acces_non_resolu_est_traite_comme_distant` retient le parti prudent ; `sous_sampled_le_message_du_serveur_arrive_entier` couvre la sortie serveur brute |
-| **3 — reprise et bibliothèque** | tenu | `recovery_opens_only_after_an_abnormal_shutdown` et `l_ecran_de_reprise_annonce_l_arret_anormal_et_seulement_alors` tiennent le marqueur d'arrêt ([ADR-0021](adr/0021-marqueur-d-arret.md)) ; `returning_to_a_connection_restores_all_of_its_console_entities` la restauration ; `a_deleted_connection_stays_choosable_in_the_history_filter`, `merging_history_connections_appends_and_marks_without_moving_ranks` et `history_and_recent_results_read_the_same_execution_without_replaying_it` les filtres inter-workspaces |
+| **3 — reprise et bibliothèque** | tenu le 2026-09-14, **dans l'interface GPUI** : les tests cités ici vivaient dans `oxyn-app` et ont disparu avec `6ecb8ce` ; l'état dans `apps/desktop` est à la [porte de la migration](#migration-vers-linterface-tauri) | `recovery_opens_only_after_an_abnormal_shutdown` et `l_ecran_de_reprise_annonce_l_arret_anormal_et_seulement_alors` tiennent le marqueur d'arrêt ([ADR-0021](adr/0021-marqueur-d-arret.md)) ; `returning_to_a_connection_restores_all_of_its_console_entities` la restauration ; `a_deleted_connection_stays_choosable_in_the_history_filter`, `merging_history_connections_appends_and_marks_without_moving_ranks` et `history_and_recent_results_read_the_same_execution_without_replaying_it` les filtres inter-workspaces |
 | **4 — fidélité Figma et accessibilité** | tenu, **sauf une surface** | `la_marque_et_les_actions_de_l_accueil_ne_se_superposent_pas` éprouve l'accueil **aux quatre largeurs × deux thèmes** ; `chaque_theme_garde_son_texte_lisible` tient le contraste WCAG ; `un_controle_focalise_nest_pas_active_par_le_clavier` et `production_focus_stays_inside_review_and_enter_never_approves` tiennent [I-02](../CLAUDE.md#i-02) au clavier. Reste `Messages` — voir ci-dessous |
 | **5 — validation finale** | tenu | `make qualite` verte à chaque lot, sortie réelle citée ; budgets mesurés et datés dans [PERFORMANCE](PERFORMANCE.md), « non mesuré » assumé là où ils ne le sont pas |
 
@@ -1398,7 +1425,9 @@ en amont.
   2026-09-24 (D13) ; l'état amont est suivi dans
   [RESEARCH-NOTES](RESEARCH-NOTES.md#suivis-amont).
 
-Tout le reste de la maquette est implémenté et éprouvé.
+Tout le reste de la maquette était alors implémenté et éprouvé — dans
+l'interface GPUI. Ce que le portage vers `apps/desktop` n'a pas repris est listé
+à la [porte de la migration](#migration-vers-linterface-tauri).
 
 ### Vérification exigence par exigence
 
@@ -1448,6 +1477,19 @@ Le reste — le contenu de chaque phase et sa porte de sortie — est **proposé
 demande validation. Il n'a pas valeur d'autorité tant que le premier commit de
 code ne l'a pas éprouvé.
 
+> **Ce que le §11 d'ARCHITECTURE ordonnait et que ces phases ne placent pas**,
+> recopié à son retrait le 2026-09-25 pour ne pas le perdre. Rien n'y est
+> tranché : ces éléments attendent d'être rangés dans une phase, ou abandonnés
+> explicitement.
+> - avant l'IA, un client SQL qui se suffit à lui-même : DuckDB, ClickHouse,
+>   export, historique, **édition de données avec prévisualisation du DML** ;
+> - après l'IA, une phase « au-delà du relationnel » — MongoDB, Redis,
+>   Elasticsearch/OpenSearch — placée **avant** les plugins parce que c'est là
+>   que le modèle de capacités et `QueryLanguage` sont mis à l'épreuve : s'ils
+>   sont mal conçus, mieux vaut le découvrir maintenant qu'au vingtième driver ;
+> - en élargissement : Neo4j, Qdrant, Cassandra, DynamoDB, Influx, agents
+>   restants, diagrammes ER, dictionnaires de données, comparaison de versions.
+
 ## Phase 0 — Charpente
 
 Le but n'est pas d'afficher quelque chose, c'est de rendre les décisions
@@ -1479,6 +1521,19 @@ exécutables. Une phase 0 bâclée se paie sur toutes les suivantes.
 **Porte de sortie** : les budgets de [PERFORMANCE](PERFORMANCE.md) sont
 **mesurés**, pas supposés — c'est la première campagne de mesure, et elle
 confirme ou amende les budgets par un ADR.
+
+> **Repris du §11 d'ARCHITECTURE**, retiré le 2026-09-25 au profit de ce plan.
+> Son critère de sortie éprouve la porte ci-dessus sur un cas précis : un
+> `SELECT` de 10 M de lignes, premier affichage dans le
+> [budget de PERFORMANCE](PERFORMANCE.md#budgets-dinteraction), mémoire stable,
+> `Échap` qui annule vraiment. **Mesuré**
+> ([PERFORMANCE](PERFORMANCE.md#confrontation-aux-budgets)) : le premier lot en
+> 2,6 ms quelle que soit la taille de la table, et 2 Gio qui traversent un tampon
+> de 256 Mo pour 195 Mio de croissance RSS. **Reste à produire** : ce `SELECT` de
+> bout en bout, et le défilement d'une grille peuplée sous instrument, désormais
+> dans la webview. L'éditeur est CodeMirror 6, coloré par dialecte, avec la
+> complétion de base de `basicSetup` ; une complétion nourrie du catalogue n'y est
+> pas branchée.
 
 > **[ADR]** ~~C'est la dernière phase où la bascule vers egui reste une réécriture
 > de deux crates ([ADR-0001](adr/0001-ui-toolkit.md)). Après, le coût change de
@@ -1590,17 +1645,22 @@ couvrir.
 | I-03 — canal presse-papiers | Éprouve le retrait d'une garde existante — le choix de l'appelant de `copyToClipboard` de ne jamais lui passer un identifiant de connexion ou de session. `describe("copying from an open connection's object inspector")` / `it("copies the qualified name only, never the connection or session that opened it")` (`apps/desktop/src/features/metadata/clipboard.test.tsx`) — limité aux copies qui passent par `copyToClipboard` (`src/features/metadata/clipboard.ts`) ; les copies directes d'`assistant-panel.tsx` et de `result-grid.tsx` n'y sont pas couvertes |
 | I-03 — canal rapport de plantage | **N'existe pas.** Aucune crate de rapport de plantage (`sentry`, `minidump`, `crashpad` absents de `Cargo.lock`), aucun `std::panic::set_hook`, et `panic = "abort"` en profil `release` (racine `Cargo.toml`). Le seul texte d'un plantage est le message de panique par défaut sur `stderr` : rien à balayer |
 
-### Reprise et bibliothèque — tenu
+### Reprise et bibliothèque — tenu en partie
+
+Relu le 2026-09-25 : les tests marqués « supprimé » vivaient dans `oxyn-app` et
+ont disparu avec `6ecb8ce`, sans équivalent dans `apps/desktop`. Leur ligne
+n'est plus tenue ; la [porte de la migration](#migration-vers-linterface-tauri)
+dit ce qui manque.
 
 | Exigence | Ce qui la tient |
 |---|---|
 | Marqueur d'arrêt propre/anormal | `PreviousShutdown { Never, Clean, Abnormal }` ([ADR-0021](adr/0021-marqueur-d-arret.md)) |
-| Tests de crash/restart | `une_premiere_ouverture_ne_signale_aucun_arret_anormal`, `une_fermeture_ordinaire_ne_declenche_pas_la_reprise`, `une_session_laissee_ouverte_et_muette_est_un_arret_anormal`, `une_instance_qui_bat_encore_n_est_pas_un_plantage`, `un_battement_ne_ressuscite_pas_une_session_fermee` |
-| Emplacement d'objet et sous-onglet restaurés sans lecture | `a_restored_location_and_its_sub_tab_come_back_without_reading_anything` |
-| Restauration sans écraser les données | `a_restored_object_that_vanished_is_explained_and_never_erased` |
-| Connexions supprimées ou hors workspace dans les filtres | `a_deleted_connection_stays_choosable_in_the_history_filter`, `merging_history_connections_appends_and_marks_without_moving_ranks` |
-| Pagination bornée | `document_pages_are_bounded_literal_and_do_not_open_oversized_bodies` |
-| Inspection en lecture seule | `saved_and_working_copies_are_inspected_without_modification`, `history_and_recent_results_read_the_same_execution_without_replaying_it` |
+| Tests de crash/restart | `une_premiere_ouverture_ne_signale_aucun_arret_anormal`, `une_fermeture_ordinaire_ne_declenche_pas_la_reprise`, `une_session_laissee_ouverte_et_muette_est_un_arret_anormal`, `une_instance_qui_bat_encore_n_est_pas_un_plantage`, `un_battement_ne_ressuscite_pas_une_session_fermee` (`oxyn-store/src/sessions.rs`) |
+| Emplacement d'objet et sous-onglet restaurés sans lecture | **non tenu** — `a_restored_location_and_its_sub_tab_come_back_without_reading_anything` supprimé |
+| Restauration sans écraser les données | **non tenu** — `a_restored_object_that_vanished_is_explained_and_never_erased` supprimé |
+| Connexions supprimées ou hors workspace dans les filtres | **non tenu côté interface** — `a_deleted_connection_stays_choosable_in_the_history_filter` et `merging_history_connections_appends_and_marks_without_moving_ranks` supprimés |
+| Pagination bornée | `document_pages_are_bounded_literal_and_do_not_open_oversized_bodies` (`oxyn-store`) |
+| Inspection en lecture seule | **non tenu** — `saved_and_working_copies_are_inspected_without_modification` et `history_and_recent_results_read_the_same_execution_without_replaying_it` supprimés |
 
 ### Ce qui reste non tenu, et pourquoi
 
@@ -1707,7 +1767,20 @@ réfuté — il a été contourné. Un ADR ne se réécrit pas en douce : c'est 
 **nouvel ADR** qui doit dire lequel des deux comportements est voulu, et pourquoi
 la pagination reste correcte dans le cas retenu.
 
+**Répondue par [ADR-0028](adr/0028-pas-dordre-par-defaut-pas-de-page-sans-ordre-total.md)**,
+le nouvel ADR que ce paragraphe demandait : aucun ordre imposé, aucune page
+offerte tant que l'ordre n'est pas total — c'est ainsi que la pagination reste
+correcte. Il porte `accepté` depuis la
+[revue du 2026-09-24](#3-le-statut-des-adr--revue-du-2026-09-24), qui cite ses deux
+tests. Le statut d'ADR-0020, qu'il précise, relève de cette même revue.
+
 ### 2. Deux valeurs pour le seuil de premier affichage
+
+**Résolue.** [ARCHITECTURE](ARCHITECTURE.md) ne chiffre plus ce seuil depuis le
+2026-09-15 et renvoie aux
+[budgets d'interaction de PERFORMANCE](PERFORMANCE.md#budgets-dinteraction) :
+**300 ms après la première réponse du serveur**. Son §11, qui portait ce renvoi,
+renvoie lui-même à ce plan depuis le 2026-09-25. Le constat d'origine suit.
 
 [ARCHITECTURE](ARCHITECTURE.md) fixe le critère de sortie de la phase 0 à un
 premier affichage **sous 100 ms** et déclare le critère non mesuré.
