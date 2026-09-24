@@ -841,6 +841,14 @@ export const ai = {
   threads: (connection: string) =>
     call("ai_threads", z.array(ThreadSummary), { connection }),
 
+  /**
+   * Lists on the server the tables and views of the schemas never expanded,
+   * within the bounds of a question's own reads; resolves once they are in
+   * the catalog cache. Names only: nothing is described, no row is read.
+   */
+  listMentionable: (connection: string) =>
+    call("ai_list_mentionable", Nothing, { connection }),
+
   /** A read: the conversation so far, then what follows, on `onUpdate`. */
   openThread: (
     connection: string,

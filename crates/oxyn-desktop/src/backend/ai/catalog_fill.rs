@@ -100,6 +100,9 @@ pub(super) enum Want<'a> {
     /// `refresh_catalog`, after the server level was read again: the
     /// relations of every schema, listed again even when fresh.
     Relist,
+    /// The first `@` of the panel: the names of the relations, for the
+    /// user to choose from — listings only, nothing described.
+    Names,
 }
 
 impl Want<'_> {
@@ -357,7 +360,7 @@ fn wanted(cache: &CatalogCache, want: Want<'_>, policy: &ContextPolicy) -> Vec<C
         }
         Want::Mentions(mentions) => wanted_relations(cache, policy, "", mentions, false),
         Want::Search(focus) => wanted_relations(cache, policy, focus, &[], true),
-        Want::Relist => Vec::new(),
+        Want::Relist | Want::Names => Vec::new(),
     }
 }
 

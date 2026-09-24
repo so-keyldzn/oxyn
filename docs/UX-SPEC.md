@@ -867,6 +867,12 @@ modèle** : c'est une complétion de nom, un résultat déterministe
   prépare ces deux sources à son ouverture ; le premier `@` n'attend ni le
   backend ni un délai, et les 60 ms d'attente de la bibliothèque ne valent
   qu'entre deux frappes ;
+* **le premier `@` sur une connexion fait lister ce que l'arbre n'a pas
+  déplié** : les tables et vues des schémas jamais listés, sous les bornes d'une
+  question ([AI-PROVIDERS](AI-PROVIDERS.md#ce-que-lia-voit-du-schéma-et-quand-cest-lu)), puis la
+  liste relit le cache. Pendant ce temps, ce qui est déjà connu reste affiché,
+  marqué comme se complétant ; un échec ne se dit pas et laisse ce qui est
+  chargé. L'ouverture du panneau, elle, ne lit rien sur le serveur ;
 * la liste a ses états : une ligne « Loading… » en squelette tant qu'aucune
   réponse n'est arrivée, « No matching object » **seulement** quand une réponse
   l'a dit, « Type to search tables, views, columns and queries » quand l'arbre

@@ -12,6 +12,7 @@ import type {
   MentionResults,
   MentionSource,
 } from "@/components/oxyn/assistant-composer"
+import { ai } from "@/lib/ipc/ai"
 import { library } from "@/lib/ipc/library"
 import type { DocumentEntry } from "@/lib/ipc/library"
 import { metadata } from "@/lib/ipc/metadata"
@@ -187,6 +188,8 @@ export function treeHits(
 
 /** The same key as the sidebar's tree: one cache, filled by whoever asks first. */
 const treeKey = (connection: string) => ["catalog", connection] as const
+const listedKey = (connection: string) =>
+  ["assistant", "mentions", "listed", connection] as const
 const savedKey = (search: string) =>
   ["assistant", "mentions", "saved", search] as const
 
@@ -235,8 +238,30 @@ export function useMentionSearch(connection: string): MentionSource {
     queryFn: () => metadata.catalogTree(connection),
     staleTime: Infinity,
   })
+  // The tree lists a schema's tables when it is expanded: the first `@` has
+  // them listed instead, once per connection, then reads the cache again.
+  // A failure is left unsaid: `@` offers what is loaded, as before.
+  const listed = useQuery({
+    queryKey: listedKey(connection),
+    queryFn: async () => {
+      await ai.listMentionable(connection)
+      await queryClient.invalidateQueries({ queryKey: treeKey(connection) })
+      return true
+    },
+    enabled: query !== null,
+    staleTime: Infinity,
+  })
   const catalog = useQuery({
-    queryKey: ["assistant", "mentions", "catalog", connection, search],
+    // In the key, not invalidated: a search still in flight when the listing
+    // lands would be joined by an invalidation, and answer from before it.
+    queryKey: [
+      "assistant",
+      "mentions",
+      "catalog",
+      connection,
+      search,
+      listed.isSuccess,
+    ],
     queryFn: () => metadata.searchCatalog(connection, search ?? ""),
     enabled: search !== null && search !== "",
     placeholderData: keepPreviousData,
@@ -264,6 +289,7 @@ export function useMentionSearch(connection: string): MentionSource {
   const completing =
     query !== null &&
     (reading ||
+      listed.isFetching ||
       (!query.includes(".") &&
         (saved.fetchStatus !== "idle" || savedQuery !== query)))
   const shown = React.useRef<ReadonlyArray<MentionChoice> | null>(null)

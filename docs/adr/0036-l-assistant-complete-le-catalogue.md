@@ -46,7 +46,11 @@ appelé, Oxyn lit lui-même ce qui manque au cache — sans modèle.**
    relations que la porte **retiendra** — mentions `@` d'abord, puis la
    recherche orientée par la question. Une question qui suit une session déjà
    informée ne lit que ses mentions. `refresh_catalog` relit le serveur puis
-   **reliste** chaque schéma, frais ou non ; il ne décrit rien.
+   **reliste** chaque schéma, frais ou non ; il ne décrit rien. Le premier `@`
+   du panneau sur une connexion (`ai_list_mentionable`) lit le serveur et
+   liste les schémas jamais listés, sans rien décrire : la liste des mentions
+   ne propose que ce que le cache nomme, et attendre la première question
+   pour la remplir revenait à demander à l'utilisateur de déplier l'arbre.
 2. **La sélection est celle de la porte.** `oxyn_ai::context::wanted_relations`
    est la fonction que `ContextBuilder::build` appelle pour choisir ; l'hôte
    l'appelle pour charger. Une seule sélection : deux divergeraient.
@@ -59,8 +63,9 @@ appelé, Oxyn lit lui-même ce qui manque au cache — sans modèle.**
    l'arbre : lectures de métadonnées, `StatementIntent::Read`, permises partout,
    `production` comprise. Une demande d'approbation, si une politique future en
    levait une, est retirée et le palier reste non lu.
-4. **L'acteur est celui qui est à l'origine.** Pour une question,
-   `Actor::Human` : poser la question est le geste de l'utilisateur, et ce
+4. **L'acteur est celui qui est à l'origine.** Pour une question et pour le
+   premier `@`, `Actor::Human` : poser la question, taper `@`, sont des gestes
+   de l'utilisateur, et ce
    qu'elle fait lire est décidé par Oxyn à partir de ses mots et de ses
    mentions — aucun modèle n'a rien demandé. Pour `describe_schema` et
    `refresh_catalog`, `Actor::Agent` de l'agent, par son puits lié

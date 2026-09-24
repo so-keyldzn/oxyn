@@ -260,6 +260,61 @@ fn a_question_on_a_never_expanded_connection_reads_its_tables_and_their_fields()
 }
 
 #[test]
+fn the_first_mention_lists_the_tables_and_describes_none() {
+    let shop = shop(Environment::Production);
+    let _guard = shop.runtime.enter();
+    let sink = shop.human();
+    let (seen, emit) = events();
+    let filled = shop.runtime.block_on(shop.fill(&sink, Actor::Human).run(
+        Want::Names,
+        &CancelToken::new(),
+        &emit,
+    ));
+    assert_eq!((filled.listed, filled.described), (2, 0), "{filled:?}");
+    assert_eq!((filled.failed, filled.unlisted), (0, 0), "{filled:?}");
+
+    // What `@` asks next: the local search, which now finds every table.
+    for table in ["customers", "orders", "audit"] {
+        let hits = shop
+            .backend
+            .search_catalog(shop.connection, table)
+            .expect("a local search");
+        let hit = hits
+            .iter()
+            .find(|hit| hit.name == table)
+            .unwrap_or_else(|| panic!("{table} not offered"));
+        let path = hit.address.to_path().expect("an address the cache gave");
+        assert!(
+            !fetched(
+                shop.catalog()
+                    .read()
+                    .freshness(&CatalogScope::Relation(path))
+            ),
+            "{table}: a name to choose from, not a structure"
+        );
+    }
+    assert!(
+        shop.reads()
+            .iter()
+            .all(|read| read.decision == PolicyOutcome::Allowed),
+        "the tree's own reads, allowed on production"
+    );
+    assert!(
+        matches!(seen.lock().last(), Some(AiEvent::CatalogRead { .. })),
+        "the caller decides where to show it"
+    );
+
+    let (quiet, emit) = events();
+    let again = shop.runtime.block_on(shop.fill(&sink, Actor::Human).run(
+        Want::Names,
+        &CancelToken::new(),
+        &emit,
+    ));
+    assert_eq!(again.attempted, 0, "listed once: {again:?}");
+    assert!(quiet.lock().is_empty());
+}
+
+#[test]
 fn each_read_is_a_command_of_the_bus_journaled_as_its_actor_and_allowed_on_production() {
     let shop = shop(Environment::Production);
     let _guard = shop.runtime.enter();

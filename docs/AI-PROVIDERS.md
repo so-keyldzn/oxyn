@@ -188,6 +188,7 @@ donc le cache **lui-même**, sans modèle, avant de le rendre
 |---|---|---|
 | une question ouvre une session — fournisseur, ou agent externe à sa première question | le serveur s'il n'a jamais été lu ; la liste des relations de chaque schéma jamais listé ; puis champs, index et clés étrangères des relations **que la porte retiendra** — mentions `@` d'abord, puis la recherche orientée par la question | `Actor::Human` |
 | une question qui suit une session déjà informée | les relations **mentionnées** seulement | `Actor::Human` |
+| le premier `@` du panneau sur une connexion (`ai_list_mentionable`) | le serveur s'il n'a jamais été lu, puis la liste des relations de chaque schéma jamais listé — des noms à choisir, **aucune description** | `Actor::Human` |
 | l'outil `describe_schema` | comme une ouverture, orienté par ses mots de recherche | `Actor::Agent` |
 | l'outil `refresh_catalog` | le serveur, puis la liste des relations de chaque schéma, **même fraîche** | `Actor::Agent` |
 
