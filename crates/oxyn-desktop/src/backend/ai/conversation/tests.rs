@@ -92,6 +92,7 @@ fn sink_on(
     let sink = AgentSink {
         sink: ExecutorSink::for_agent(Arc::clone(&backend.inner.executor), agent, session),
         executor: Arc::clone(&backend.inner.executor),
+        decisions: Arc::clone(&backend.inner.ai.decisions),
         thread: Arc::clone(&thread),
         node,
         question: QuestionOpen::new(),
@@ -362,6 +363,7 @@ fn a_tool_call_really_runs_the_query_on_the_database() {
     let sink = AgentSink {
         sink: ExecutorSink::for_agent(Arc::clone(&backend.inner.executor), spec.id, session.id()),
         executor: Arc::clone(&backend.inner.executor),
+        decisions: Arc::clone(&backend.inner.ai.decisions),
         thread: Arc::clone(&thread),
         node,
         question: QuestionOpen::new(),
@@ -484,6 +486,7 @@ fn the_rows_of_a_tool_call_reach_the_panel_and_never_the_model() {
     let sink = AgentSink {
         sink: ExecutorSink::for_agent(Arc::clone(&backend.inner.executor), spec.id, session.id()),
         executor: Arc::clone(&backend.inner.executor),
+        decisions: Arc::clone(&backend.inner.ai.decisions),
         thread: Arc::clone(&thread),
         node,
         question: QuestionOpen::new(),
@@ -592,6 +595,7 @@ fn an_external_agents_query_shows_its_rows_to_the_user_and_never_to_the_agent() 
                 conversation,
             ),
             executor: Arc::clone(&backend.inner.executor),
+            decisions: Arc::clone(&backend.inner.ai.decisions),
             thread: Arc::clone(&thread),
             node,
             question: QuestionOpen::new(),
@@ -713,6 +717,7 @@ fn linked(
         actor: (AgentId::new(), AgentSessionId::new()),
         _requests: WithdrawOnRelease::new(
             Arc::clone(&backend.inner.executor),
+            Arc::clone(&backend.inner.ai.decisions),
             Actor::agent(AgentId::new(), AgentSessionId::new()),
         ),
     }));
@@ -901,7 +906,8 @@ fn a_write_that_reached_the_executor_marks_the_run_and_a_refused_one_does_not() 
     ));
     assert!(!thread.wrote());
 
-    // Held for approval elsewhere: the user may approve it, so it counts.
+    // Held for approval elsewhere: the user may approve it, so it counts —
+    // from the moment it waits, before any decision.
     let staging = open(&runtime, &backend, Environment::Staging);
     let (sink, thread, actor, _received) = sink_on(&backend, &staging);
     thread.open_call(
@@ -910,12 +916,30 @@ fn a_write_that_reached_the_executor_marks_the_run_and_a_refused_one_does_not() 
         staging.connection.parse().ok(),
         true,
     );
-    runtime.block_on(sink.dispatch(
-        actor,
-        execute(&staging, "CREATE TABLE t (a INTEGER)"),
-        &CancelToken::new(),
-    ));
+    let command = execute(&staging, "CREATE TABLE t (a INTEGER)");
+    let call =
+        runtime.spawn(async move { sink.dispatch(actor, command, &CancelToken::new()).await });
+    let mut waiting = None;
+    for _ in 0..500 {
+        waiting = backend
+            .inner
+            .executor
+            .approvals()
+            .pending()
+            .first()
+            .map(|p| p.id);
+        if waiting.is_some() {
+            break;
+        }
+        runtime.block_on(tokio::time::sleep(std::time::Duration::from_millis(10)));
+    }
+    let waiting = waiting.expect("the write waits for the user");
     assert!(thread.wrote());
+    runtime
+        .block_on(backend.decide(waiting, false))
+        .map_err(|error| error.message)
+        .expect("rejected");
+    runtime.block_on(call).expect("the call ends once decided");
 }
 
 #[test]
@@ -984,72 +1008,6 @@ fn a_request_born_after_its_question_closed_is_withdrawn_not_shown() {
         "nothing may be shown under a closed question"
     );
     assert!(!thread.wrote(), "a withdrawn request ran nothing");
-}
-
-#[test]
-fn releasing_an_agent_withdraws_its_pending_requests() {
-    // Its author gone, a request would stay approvable, and approving it would
-    // run a command nobody reads the result of.
-    let runtime = runtime();
-    let _guard = runtime.enter();
-    let backend = Backend::open_temporary().expect("temporary backend");
-    let staging = open(&runtime, &backend, Environment::Staging);
-    let (sink, thread, actor, _received) = sink_on(&backend, &staging);
-    thread.open_call(
-        "execute_query",
-        "Execute",
-        staging.connection.parse().ok(),
-        true,
-    );
-    let outcome = runtime.block_on(sink.dispatch(
-        actor,
-        execute(&staging, "CREATE TABLE t (a INTEGER)"),
-        &CancelToken::new(),
-    ));
-    assert!(
-        matches!(outcome, DispatchOutcome::AwaitingApproval { .. }),
-        "{outcome:?}"
-    );
-    let pending = backend.inner.executor.approvals().pending();
-    assert_eq!(pending.len(), 1);
-    let request = pending[0].id;
-
-    // An unrelated agent's request is left alone.
-    let (other_sink, other_thread, other_actor, _other) = sink_on(&backend, &staging);
-    other_thread.open_call(
-        "execute_query",
-        "Execute",
-        staging.connection.parse().ok(),
-        true,
-    );
-    runtime.block_on(other_sink.dispatch(
-        other_actor,
-        execute(&staging, "CREATE TABLE u (a INTEGER)"),
-        &CancelToken::new(),
-    ));
-
-    let (ours, _theirs) = agent_client_protocol::Channel::duplex();
-    let (session, _driver) = ExternalSession::over(ours, std::env::temp_dir().join("unused"));
-    thread.link_agent(Some(AgentLink {
-        agent: agent("unused"),
-        tier: PrivacyTier::Metadata,
-        leaf: None,
-        session: Arc::new(session),
-        tools: ToolTurns::new(8, Arc::new(|| false)),
-        actor: (AgentId::new(), AgentSessionId::new()),
-        _requests: WithdrawOnRelease::new(Arc::clone(&backend.inner.executor), actor),
-    }));
-    thread.link_agent(None);
-
-    let left = backend.inner.executor.approvals().pending();
-    assert_eq!(left.len(), 1, "only the other agent's request remains");
-    assert!(left.iter().all(|pending| pending.id != request));
-    let approved = runtime.block_on(backend.inner.executor.approve(
-        "human",
-        request,
-        &CancelToken::new(),
-    ));
-    assert!(approved.is_err(), "a withdrawn request is not approvable");
 }
 
 #[test]
@@ -1173,6 +1131,7 @@ fn an_agents_settings_reach_the_panel_between_two_questions() {
         actor: (AgentId::new(), AgentSessionId::new()),
         _requests: WithdrawOnRelease::new(
             Arc::clone(&backend.inner.executor),
+            Arc::clone(&backend.inner.ai.decisions),
             Actor::agent(AgentId::new(), AgentSessionId::new()),
         ),
     }));
@@ -2646,6 +2605,7 @@ mod approved_samples {
                     actor: (AgentId::new(), AgentSessionId::new()),
                     _requests: WithdrawOnRelease::new(
                         Arc::clone(&fixture.backend.inner.executor),
+                        Arc::clone(&fixture.backend.inner.ai.decisions),
                         Actor::agent(AgentId::new(), AgentSessionId::new()),
                     ),
                 },
@@ -2779,6 +2739,7 @@ mod approved_samples {
                 conversation,
             ),
             executor: Arc::clone(&fixture.backend.inner.executor),
+            decisions: Arc::clone(&fixture.backend.inner.ai.decisions),
             thread: Arc::clone(&thread),
             node,
             question: QuestionOpen::new(),
@@ -2969,3 +2930,6 @@ mod approved_samples {
     /// the tree shows — on a fixture whose explorer was never expanded.
     mod catalog_reads;
 }
+
+/// A write an agent proposes waits, inside its call, for the user's decision.
+mod approvals;

@@ -31,8 +31,8 @@ use oxyn_ai::{
 use oxyn_core::ai::MAX_PROVIDER_MODEL_BYTES;
 use oxyn_core::{
     Actor, AgentId, AgentSessionId, AiProviderConfig, CancelToken, Capabilities, Command,
-    ConnectionConfig, ConnectionId, Environment, ErrorClass, ExternalAgentConfig, PrivacyTier,
-    Provenance, QueryLanguage, SessionId,
+    CommandId, ConnectionConfig, ConnectionId, Environment, ErrorClass, ExternalAgentConfig,
+    PrivacyTier, Provenance, QueryLanguage, SessionId,
 };
 use oxyn_exec::{DispatchReport, Executor, ExecutorSink};
 use oxyn_llm::Reach;
@@ -53,6 +53,7 @@ use crate::ipc::ai::{
 };
 use crate::ipc::ai::{SampleApproval, SampleRequest};
 use crate::ipc::{CatalogAddress, IpcError, RelationField};
+use decisions::{Decisions, RequestEnd, Withdrawn};
 use sampling::Sampling;
 
 /// The longest question accepted.
@@ -349,6 +350,8 @@ impl Drop for ForgetResult {
 pub(super) struct AgentSink {
     sink: ExecutorSink,
     executor: Arc<Executor>,
+    /// Where `decide` finds this sink's calls waiting on the user.
+    decisions: Arc<Decisions>,
     thread: Arc<Thread>,
     node: u32,
     question: QuestionOpen,
@@ -389,6 +392,166 @@ impl Drop for CloseQuestion {
 /// Said to the agent when its request was withdrawn with the question.
 const REQUEST_WITHDRAWN: &str = "the question this call answered has ended, so its request for \
      approval was withdrawn; nothing ran";
+
+/// A command the policy held back, as the call knows it.
+struct Request {
+    call: u32,
+    mutating: bool,
+    command: CommandId,
+    reason: String,
+    /// The statement as the agent submitted it, when the command carries one.
+    statement: Option<String>,
+    connection: String,
+    environment: Option<Environment>,
+}
+
+impl AgentSink {
+    /// Shows the request on the call's card, then waits for its end — see
+    /// [`decisions`]. A request that ends without the user's
+    /// decision is said on the card here: nothing else will.
+    async fn await_user(&self, request: Request, cancel: &CancelToken) -> RequestEnd {
+        let Request {
+            call,
+            mutating,
+            command,
+            reason,
+            statement,
+            connection,
+            environment,
+        } = request;
+        let awaited = {
+            // Held until the request is shown: `close` waits for it, or the
+            // request sees the question closed and is withdrawn.
+            let open = self.question.0.lock();
+            if !*open {
+                // Withdrawn by the executor itself, as a refusal it already
+                // knows: hiding it would leave it approvable.
+                let _withdrawn = self.executor.reject(command);
+                return RequestEnd::Withdrawn(Withdrawn {
+                    status: ToolStatus::Cancelled,
+                    detail: String::new(),
+                    reason: REQUEST_WITHDRAWN.to_owned(),
+                });
+            }
+            // Registered before it is shown: a decision given the instant it
+            // appears must find the call to tell.
+            let awaited = self.decisions.expect(command);
+            let Some(pending) = self
+                .executor
+                .approvals()
+                .pending()
+                .into_iter()
+                .find(|pending| pending.id == command)
+            else {
+                // Withdrawn between the gate and here: never shown, so
+                // nothing to take back on a card.
+                return RequestEnd::Withdrawn(Withdrawn {
+                    status: ToolStatus::Cancelled,
+                    detail: String::new(),
+                    reason: REQUEST_WITHDRAWN.to_owned(),
+                });
+            };
+            let deadline = tokio::time::Instant::from_std(pending.expires_at);
+            // Counted once shown, not once decided: the user may approve it
+            // while the run fails around the call — an agent that dies
+            // mid-wait — and « ask again » would propose a write that ran
+            // (I-13).
+            if mutating {
+                self.thread.note_write();
+            }
+            self.thread.emit(
+                self.node,
+                AiEvent::ApprovalRequested {
+                    call,
+                    approval: command.to_string(),
+                    reason,
+                    // The reclassified statement, as the executor will run it
+                    // if the user agrees.
+                    statement: pending
+                        .preview
+                        .map(|preview| preview.statement)
+                        .or(statement)
+                        .unwrap_or_default(),
+                    connection,
+                    environment,
+                    actor: "agent",
+                    expires_at_ms: wall_clock_ms(pending.expires_at),
+                },
+            );
+            (awaited, deadline)
+        };
+        let (awaited, deadline) = awaited;
+        // From here the card offers « Review… »: whatever ends this call takes
+        // it back — an external agent that hangs up drops this future
+        // mid-wait, and nothing after the `await` runs.
+        let mut shown = ShownRequest {
+            executor: Arc::clone(&self.executor),
+            thread: Arc::clone(&self.thread),
+            node: self.node,
+            call,
+            command,
+            settled: false,
+        };
+        let ending = decisions::wait(&self.executor, awaited, deadline, cancel).await;
+        shown.settled = true;
+        if let RequestEnd::Withdrawn(withdrawn) = &ending {
+            shown.say(withdrawn);
+        }
+        ending
+    }
+}
+
+/// A request on show on a call's card, taken back if the call goes away.
+struct ShownRequest {
+    executor: Arc<Executor>,
+    thread: Arc<Thread>,
+    node: u32,
+    call: u32,
+    command: CommandId,
+    /// Set once the wait ended; a drop without it is a hang-up.
+    settled: bool,
+}
+
+impl ShownRequest {
+    /// Tells the card that the request ended without the user's decision.
+    fn say(&self, withdrawn: &Withdrawn) {
+        self.thread.emit(
+            self.node,
+            AiEvent::ToolReported {
+                call: self.call,
+                status: withdrawn.status,
+                detail: withdrawn.detail.clone(),
+                error_class: None,
+                withheld: false,
+                rows: None,
+                result: None,
+            },
+        );
+    }
+}
+
+impl Drop for ShownRequest {
+    fn drop(&mut self) {
+        // Taken by `decide` meanwhile: its outcome reaches the card by its own
+        // answer, and the command may be running.
+        if !self.settled && self.executor.reject(self.command).is_some() {
+            self.say(&Withdrawn::hung_up());
+        }
+    }
+}
+
+/// An instant of the monotonic clock, as milliseconds since the epoch: what
+/// the card shows as a time of day.
+fn wall_clock_ms(at: std::time::Instant) -> u64 {
+    let now = std::time::SystemTime::now();
+    let wall = match at.checked_duration_since(std::time::Instant::now()) {
+        Some(ahead) => now.checked_add(ahead),
+        None => Some(now),
+    };
+    wall.and_then(|wall| wall.duration_since(std::time::UNIX_EPOCH).ok())
+        .and_then(|since| u64::try_from(since.as_millis()).ok())
+        .unwrap_or(0)
+}
 
 impl fmt::Debug for AgentSink {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -450,49 +613,37 @@ impl CommandSink for AgentSink {
                 ));
             }
         }
-        // Held until the request is shown: `close` waits for it, or the request
-        // sees the question closed and is withdrawn.
-        let open = self.question.0.lock();
-        if let DispatchReport::AwaitingApproval { command, .. } = &report
-            && !*open
-        {
-            // Withdrawn by the executor itself, as a refusal it already knows:
-            // hiding it would leave it approvable.
-            let _withdrawn = self.executor.reject(*command);
-            return DispatchOutcome::Denied {
-                reason: REQUEST_WITHDRAWN.to_owned(),
-            };
-        }
-        // A refused write ran nothing; any other answer — held for approval,
-        // completed, failed, even cancelled — may leave an effect behind.
+        // Held back by the policy: the call waits for the user's decision and
+        // answers with what it did — never « awaiting approval », which let
+        // the model write on and the answer end over a pending request.
+        let report = match report {
+            DispatchReport::AwaitingApproval { command, reason } => {
+                let request = Request {
+                    call,
+                    mutating,
+                    command,
+                    reason,
+                    statement,
+                    connection,
+                    environment,
+                };
+                match self.await_user(request, cancel).await {
+                    RequestEnd::Answered(report) => report,
+                    RequestEnd::Withdrawn(withdrawn) => {
+                        return DispatchOutcome::Denied {
+                            reason: withdrawn.reason,
+                        };
+                    }
+                }
+            }
+            other => other,
+        };
+        // A refused write ran nothing; any other answer — completed, failed,
+        // even cancelled — may leave an effect behind.
         if mutating && !matches!(report, DispatchReport::Denied { .. }) {
             self.thread.note_write();
         }
         match &report {
-            DispatchReport::AwaitingApproval { command, reason } => {
-                // The reclassified statement, as the executor will run it if
-                // the user agrees.
-                let held = self
-                    .executor
-                    .approvals()
-                    .pending()
-                    .into_iter()
-                    .find(|pending| pending.id == *command)
-                    .and_then(|pending| pending.preview)
-                    .map(|preview| preview.statement);
-                self.thread.emit(
-                    self.node,
-                    AiEvent::ApprovalRequested {
-                        call,
-                        approval: command.to_string(),
-                        reason: reason.clone(),
-                        statement: held.or(statement).unwrap_or_default(),
-                        connection,
-                        environment,
-                        actor: "agent",
-                    },
-                );
-            }
             // The result goes to the thread, for the panel; `translate` below
             // drops it, so the model never learns it exists.
             DispatchReport::Completed {
@@ -505,7 +656,6 @@ impl CommandSink for AgentSink {
             }
             _ => {}
         }
-        drop(open);
         translate(report)
     }
 
@@ -1851,6 +2001,7 @@ impl Run<'_> {
                 dialogue.id(),
             ),
             executor: Arc::clone(&self.inner.executor),
+            decisions: Arc::clone(&self.inner.ai.decisions),
             thread: Arc::clone(self.thread),
             node: self.node,
             // The internal loop awaits every call before its question ends.
@@ -2071,6 +2222,7 @@ impl Run<'_> {
                     conversation,
                 ),
                 executor: Arc::clone(&self.inner.executor),
+                decisions: Arc::clone(&self.inner.ai.decisions),
                 thread: Arc::clone(self.thread),
                 node: self.node,
                 question,
@@ -2401,6 +2553,7 @@ async fn launch_agent(
         actor: (identity, conversation),
         _requests: WithdrawOnRelease::new(
             Arc::clone(&inner.executor),
+            Arc::clone(&inner.ai.decisions),
             Actor::agent(identity, conversation),
         ),
     })
@@ -2449,6 +2602,7 @@ fn category_of(error: &AiError) -> FailureCategory {
     }
 }
 
+pub(super) mod decisions;
 mod sampling;
 mod startup;
 

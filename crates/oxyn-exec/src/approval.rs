@@ -26,8 +26,15 @@
 //! horloge de nettoyage qui ne tourne pas laisserait une entrée périmée
 //! utilisable, alors qu'une vérification au retrait ne peut pas être oubliée.
 //! [`sweep`](ApprovalRegistry::sweep) n'existe que pour vider l'affichage.
+//!
+//! Une demande périmée **reste dite périmée** une fois retirée : le registre
+//! garde les derniers identifiants expirés, et un accord qui arrive après dit
+//! « expired », pas « aucune commande n'attend ». Sans cela, la demande
+//! suivante — qui purge les périmées pour ne pas les compter dans la borne —
+//! changeait la réponse faite à l'utilisateur, qui lisait alors que sa demande
+//! n'avait jamais existé.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
 
 use oxyn_core::{Actor, Command, CommandId, OxynError, Preview};
@@ -139,7 +146,55 @@ impl From<ApprovalError> for OxynError {
 pub struct ApprovalRegistry {
     ttl: Duration,
     capacity: usize,
-    pending: Mutex<HashMap<CommandId, PendingCommand>>,
+    queue: Mutex<Queue>,
+}
+
+/// Ce qui attend, et ce qui a expiré sans réponse.
+#[derive(Debug, Default)]
+struct Queue {
+    pending: HashMap<CommandId, PendingCommand>,
+    /// Les derniers identifiants retirés parce que périmés, les plus anciens
+    /// en tête. Borné par la capacité : c'est la mémoire d'une file pleine,
+    /// pas un historique.
+    expired: VecDeque<CommandId>,
+}
+
+impl Queue {
+    fn remember_expired(&mut self, id: CommandId, capacity: usize) {
+        if capacity == 0 {
+            return;
+        }
+        while self.expired.len() >= capacity {
+            self.expired.pop_front();
+        }
+        self.expired.push_back(id);
+    }
+
+    /// Retire les demandes périmées à `now`, en s'en souvenant, et les rend.
+    fn purge(&mut self, now: Instant, capacity: usize) -> Vec<PendingCommand> {
+        let perimees: Vec<CommandId> = self
+            .pending
+            .values()
+            .filter(|e| e.is_expired_at(now))
+            .map(|e| e.id)
+            .collect();
+        let mut retirees = Vec::with_capacity(perimees.len());
+        for id in perimees {
+            if let Some(entree) = self.pending.remove(&id) {
+                self.remember_expired(id, capacity);
+                retirees.push(entree);
+            }
+        }
+        retirees
+    }
+
+    /// L'identifiant a-t-il expiré ? Oublié une fois lu : la réponse
+    /// « expired » est donnée une fois, comme un accord ne sert qu'une fois.
+    fn forget_expired(&mut self, id: CommandId) -> bool {
+        let before = self.expired.len();
+        self.expired.retain(|expired| *expired != id);
+        self.expired.len() != before
+    }
 }
 
 impl ApprovalRegistry {
@@ -155,7 +210,7 @@ impl ApprovalRegistry {
         Self {
             ttl,
             capacity: DEFAULT_CAPACITY,
-            pending: Mutex::new(HashMap::new()),
+            queue: Mutex::new(Queue::default()),
         }
     }
 
@@ -200,16 +255,16 @@ impl ApprovalRegistry {
             expires_at: now + self.ttl,
         };
 
-        let mut guard = self.pending.lock();
+        let mut guard = self.queue.lock();
         // Les périmées ne comptent pas dans la borne : sinon une file remplie
         // de demandes mortes bloquerait le produit jusqu'au redémarrage.
-        guard.retain(|_, e| !e.is_expired_at(now));
-        if guard.len() >= self.capacity {
+        guard.purge(now, self.capacity);
+        if guard.pending.len() >= self.capacity {
             return Err(ApprovalError::QueueFull {
                 limit: self.capacity,
             });
         }
-        guard.insert(id, entree.clone());
+        guard.pending.insert(id, entree.clone());
         Ok(entree)
     }
 
@@ -220,9 +275,10 @@ impl ApprovalRegistry {
     /// approuvé une seconde.
     ///
     /// # Erreurs
-    /// [`ApprovalError::Unknown`] si rien n'attend sous cet identifiant,
-    /// [`ApprovalError::Expired`] si la demande a expiré — rien n'est exécuté
-    /// dans les deux cas.
+    /// [`ApprovalError::Expired`] si la demande a expiré, qu'elle soit encore
+    /// là ou déjà retirée pour cette raison ; [`ApprovalError::Unknown`] si
+    /// rien n'attend sous cet identifiant — rien n'est exécuté dans les deux
+    /// cas.
     pub fn take(&self, id: CommandId) -> Result<PendingCommand, ApprovalError> {
         self.take_at(id, Instant::now())
     }
@@ -230,11 +286,14 @@ impl ApprovalRegistry {
     /// [`take`](Self::take), à un instant donné. Réservé aux tests.
     #[doc(hidden)]
     pub fn take_at(&self, id: CommandId, now: Instant) -> Result<PendingCommand, ApprovalError> {
-        let entree = self
-            .pending
-            .lock()
-            .remove(&id)
-            .ok_or(ApprovalError::Unknown)?;
+        let mut guard = self.queue.lock();
+        let Some(entree) = guard.pending.remove(&id) else {
+            return Err(if guard.forget_expired(id) {
+                ApprovalError::Expired { after: self.ttl }
+            } else {
+                ApprovalError::Unknown
+            });
+        };
         if entree.is_expired_at(now) {
             return Err(ApprovalError::Expired { after: self.ttl });
         }
@@ -246,7 +305,21 @@ impl ApprovalRegistry {
     /// Un refus explicite n'est pas une erreur : il n'y a rien à signaler
     /// au-delà du fait que la commande n'aura pas lieu.
     pub fn reject(&self, id: CommandId) -> Option<PendingCommand> {
-        self.pending.lock().remove(&id)
+        self.queue.lock().pending.remove(&id)
+    }
+
+    /// Retire une demande **comme périmée**, que son délai soit passé ou non
+    /// à l'horloge de ce registre.
+    ///
+    /// Pour qui tient lui-même l'échéance d'une demande — l'appel d'un agent
+    /// qui l'attend : il la retire quand son attente prend fin, et un accord
+    /// arrivé ensuite doit dire « expired ». `None` si elle n'attendait plus :
+    /// déjà tranchée, ou retirée.
+    pub fn expire(&self, id: CommandId) -> Option<PendingCommand> {
+        let mut guard = self.queue.lock();
+        let entree = guard.pending.remove(&id)?;
+        guard.remember_expired(id, self.capacity);
+        Some(entree)
     }
 
     /// Ce qui attend une réponse, sans rien retirer.
@@ -255,19 +328,19 @@ impl ApprovalRegistry {
     /// affiche, sur [`PendingCommand::requested_at`].
     #[must_use]
     pub fn pending(&self) -> Vec<PendingCommand> {
-        self.pending.lock().values().cloned().collect()
+        self.queue.lock().pending.values().cloned().collect()
     }
 
     /// Nombre de demandes en attente, périmées comprises.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.pending.lock().len()
+        self.queue.lock().pending.len()
     }
 
     /// Aucune demande en attente ?
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.pending.lock().is_empty()
+        self.queue.lock().pending.is_empty()
     }
 
     /// Retire les demandes périmées et les rend.
@@ -276,16 +349,7 @@ impl ApprovalRegistry {
     /// [`take`](Self::take), qui ne peut pas être oubliée. Ceci sert à retirer
     /// de l'écran des demandes auxquelles il ne sert plus à rien de répondre.
     pub fn sweep(&self) -> Vec<PendingCommand> {
-        let now = Instant::now();
-        let mut guard = self.pending.lock();
-        let (perimees, vivantes): (Vec<_>, Vec<_>) = guard
-            .drain()
-            .map(|(_, e)| e)
-            .partition(|e| e.is_expired_at(now));
-        for entree in vivantes {
-            guard.insert(entree.id, entree);
-        }
-        perimees
+        self.queue.lock().purge(Instant::now(), self.capacity)
     }
 }
 
@@ -440,6 +504,65 @@ mod tests {
             .expect("file vide");
         assert_eq!(mortes.sweep().len(), 1);
         assert!(mortes.is_empty());
+    }
+
+    #[test]
+    fn une_demande_purgee_par_la_suivante_reste_dite_perimee() {
+        // La régression : la demande suivante purgeait la périmée, et
+        // l'accord tardif lisait « no command is awaiting approval » — une
+        // demande qui n'aurait jamais existé.
+        let registre = ApprovalRegistry::with_ttl(Duration::ZERO);
+        let perimee = CommandId::new();
+        registre
+            .submit(perimee, agent(), commande(), "motif", None)
+            .expect("file vide");
+        registre
+            .submit(CommandId::new(), agent(), commande(), "motif", None)
+            .expect("la périmée a laissé la place");
+
+        let issue = registre.take(perimee);
+        assert!(
+            matches!(issue, Err(ApprovalError::Expired { .. })),
+            "{issue:?}"
+        );
+        // Dit une fois : ensuite, plus rien n'attend sous cet identifiant.
+        assert_eq!(registre.take(perimee), Err(ApprovalError::Unknown));
+    }
+
+    #[test]
+    fn expirer_retire_la_demande_et_l_accord_tardif_le_dit() {
+        let registre = ApprovalRegistry::new();
+        let id = CommandId::new();
+        registre
+            .submit(id, agent(), commande(), "motif", None)
+            .expect("file vide");
+
+        assert!(registre.expire(id).is_some());
+        assert!(registre.is_empty());
+        assert!(registre.expire(id).is_none(), "déjà retirée");
+        let issue = registre.take(id);
+        assert!(
+            matches!(issue, Err(ApprovalError::Expired { .. })),
+            "{issue:?}"
+        );
+    }
+
+    #[test]
+    fn la_memoire_des_perimees_est_bornee() {
+        let registre = ApprovalRegistry::new().with_capacity(2);
+        let ids: Vec<CommandId> = (0..3).map(|_| CommandId::new()).collect();
+        for id in &ids {
+            registre
+                .submit(*id, agent(), commande(), "motif", None)
+                .expect("sous la borne");
+            registre.expire(*id);
+        }
+        // La plus ancienne est oubliée : la borne vaut aussi pour la mémoire.
+        assert_eq!(registre.take(ids[0]), Err(ApprovalError::Unknown));
+        assert!(matches!(
+            registre.take(ids[2]),
+            Err(ApprovalError::Expired { .. })
+        ));
     }
 
     #[test]

@@ -25,7 +25,7 @@ use oxyn_data::SinkOutcome;
 use oxyn_driver::DriverRegistry;
 use oxyn_driver_postgres::PostgresDriver;
 use oxyn_driver_sqlite::SqliteDriver;
-use oxyn_exec::{ExecEvent, Executor, Outcome};
+use oxyn_exec::{DispatchReport, ExecEvent, Executor, Outcome};
 use oxyn_secrets::{KeyringSecretStore, SecretStore};
 use oxyn_store::Store;
 use parking_lot::Mutex;
@@ -513,21 +513,31 @@ impl Backend {
     }
 
     /// Resolves a human decision against the exact pending command.
+    ///
+    /// An agent's call may be waiting on it: it is told what the decision did,
+    /// and answers its model with that.
     pub async fn decide(
         &self,
         command: CommandId,
         approved: bool,
     ) -> Result<CommandOutcome, IpcError> {
         let inner = &self.inner;
+        let answer = inner.ai.decisions.answer(command);
         if !approved {
             inner.executor.reject(command);
+            answer.report(DispatchReport::Denied {
+                command,
+                reason: "the user rejected this statement".to_owned(),
+            });
             return Ok(CommandOutcome::Denied {
                 reason: "Operation rejected".into(),
             });
         }
         let cancel = self.track(command);
         let _running = Running { inner, id: command };
-        let outcome = inner.executor.approve("human", command, &cancel).await?;
+        let decided = inner.executor.approve("human", command, &cancel).await;
+        answer.report(DispatchReport::decided(command, &decided));
+        let outcome = decided?;
         self.hold_shown(&outcome);
         Ok(describe(outcome))
     }

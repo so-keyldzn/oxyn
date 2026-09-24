@@ -39,6 +39,7 @@ use oxyn_exec::Executor;
 use parking_lot::Mutex;
 use tauri::ipc::Channel;
 
+use super::conversation::decisions::Decisions;
 use crate::ipc::IpcError;
 use crate::ipc::ai::{
     AiEvent, AiUpdate, MentionView, NodeView, Selection, ThreadSummary, ThreadView,
@@ -83,6 +84,10 @@ pub(crate) struct AiState {
     /// Row samples agents asked for, waiting for the user's answer. Shared
     /// with the sinks whose calls wait on them.
     pub(crate) asks: Arc<super::samples::SampleAsks>,
+    /// Agents' calls waiting for the user's decision on a write they
+    /// proposed. Shared with the sinks, with `decide`, and with what releases
+    /// an agent.
+    pub(crate) decisions: Arc<Decisions>,
     /// The external agent started before its first question, per connection:
     /// the panel opened on it, and its first question takes it
     /// ([`AiState::take_waiting`]) rather than launching another.
@@ -497,15 +502,21 @@ pub(crate) struct AgentLink {
 /// approvable, and approving one would run a command whose author can no
 /// longer see its result, under a tier or a connection that may have changed.
 /// A rejection and not a filter on what is shown: a hidden request stays
-/// approvable.
+/// approvable. And the call still waiting on it is told, so that its card
+/// stops offering « Review… » now rather than failing on the click.
 pub(crate) struct WithdrawOnRelease {
     executor: Arc<Executor>,
+    decisions: Arc<Decisions>,
     actor: Actor,
 }
 
 impl WithdrawOnRelease {
-    pub(crate) fn new(executor: Arc<Executor>, actor: Actor) -> Self {
-        Self { executor, actor }
+    pub(crate) fn new(executor: Arc<Executor>, decisions: Arc<Decisions>, actor: Actor) -> Self {
+        Self {
+            executor,
+            decisions,
+            actor,
+        }
     }
 }
 
@@ -513,7 +524,7 @@ impl Drop for WithdrawOnRelease {
     fn drop(&mut self) {
         for request in self.executor.approvals().pending() {
             if request.actor == self.actor {
-                let _withdrawn = self.executor.reject(request.id);
+                let _withdrawn = self.decisions.release(&self.executor, request.id);
             }
         }
     }

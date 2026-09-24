@@ -204,8 +204,9 @@ fn after_a_refusal_an_external_agent_cannot_ask_again_in_the_same_answer() {
     assert!(fixture.egress().is_empty());
 }
 
-/// The internal assistant proposes a write, which waits for the user; its
-/// request for a sample, next, opens no screen over it.
+/// The internal assistant proposes a write, which waits for the user: its
+/// loop waits with it, so no sample screen opens over the write. Once the
+/// user decided, the model learns it — and only then asks for the sample.
 #[test]
 fn no_sample_screen_opens_while_a_write_of_the_assistant_waits() {
     let fixture = fixture();
@@ -225,19 +226,56 @@ fn no_sample_screen_opens_while_a_write_of_the_assistant_waits() {
             request_customers(),
         ],
     );
+    let write = waiting_write(&fixture);
+    fixture
+        .runtime
+        .block_on(tokio::time::sleep(std::time::Duration::from_millis(200)));
+    assert!(
+        !running.is_finished(),
+        "the loop went on past a waiting write"
+    );
+    assert_eq!(screens(&received), 0, "a sample screen opened over a write");
+
+    fixture
+        .runtime
+        .block_on(fixture.backend.decide(write, false))
+        .map_err(|error| error.message)
+        .expect("rejected");
+    let request = screen(&fixture, &received);
+    fixture
+        .backend
+        .ai_answer_sample(
+            fixture.connection,
+            request["id"].as_str().expect("an id"),
+            None,
+        )
+        .map_err(|error| error.message)
+        .expect("declined");
     let told = settled(&fixture, running);
 
     let [write, sample] = told.as_slice() else {
         panic!("two tool results: {told:?}");
     };
-    assert!(write.contains("status: awaiting_approval"), "{write}");
     assert!(
-        sample.contains("status: denied") && sample.contains("already waiting"),
-        "{sample}"
+        write.contains("status: denied") && write.contains("rejected"),
+        "{write}"
     );
-    assert_eq!(screens(&received), 0, "a sample screen opened over a write");
+    assert!(sample.contains("status: denied"), "{sample}");
     assert_eq!(fixture.reads(), 0);
     assert!(fixture.egress().is_empty());
+}
+
+/// The request for approval the assistant's write is waiting on.
+fn waiting_write(fixture: &Fixture) -> oxyn_core::CommandId {
+    for _ in 0..400 {
+        if let Some(pending) = fixture.backend.inner.executor.approvals().pending().first() {
+            return pending.id;
+        }
+        fixture
+            .runtime
+            .block_on(tokio::time::sleep(std::time::Duration::from_millis(25)));
+    }
+    panic!("the write asked for no approval");
 }
 
 /// The agent hangs up while the screen waits: its call's future is dropped,

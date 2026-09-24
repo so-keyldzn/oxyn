@@ -868,6 +868,9 @@ pub enum AiEvent {
         environment: Option<Environment>,
         /// `agent`: approving it does not make it the user's command.
         actor: &'static str,
+        /// When the request expires unanswered, in milliseconds since the
+        /// epoch: the bound of the wait, for the card to state.
+        expires_at_ms: u64,
     },
     #[serde(rename_all = "camelCase")]
     ToolReported {

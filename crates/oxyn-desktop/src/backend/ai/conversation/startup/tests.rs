@@ -160,6 +160,7 @@ fn waiting(
             actor: (AgentId::new(), AgentSessionId::new()),
             _requests: WithdrawOnRelease::new(
                 std::sync::Arc::clone(&backend.inner.executor),
+                std::sync::Arc::clone(&backend.inner.ai.decisions),
                 Actor::agent(AgentId::new(), AgentSessionId::new()),
             ),
         },

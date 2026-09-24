@@ -182,9 +182,25 @@ impl DispatchReport {
         }
     }
 
+    /// Le rapport d'une commande que l'utilisateur a approuvée : ce que
+    /// [`Executor::approve`] a rendu, dit comme [`ExecutorSink::dispatch`]
+    /// l'aurait dit si elle était partie sans attendre.
+    ///
+    /// Pour l'appel d'agent qui attendait cette décision : il rend au modèle
+    /// ce que la commande a réellement fait, sous la même forme que toute
+    /// autre. Une seconde traduction, écrite pour ce seul cas, dirait tôt ou
+    /// tard autre chose au modèle.
+    #[must_use]
+    pub fn decided(command: CommandId, decided: &oxyn_core::Result<Outcome>) -> Self {
+        match decided {
+            Ok(outcome) => Self::from_outcome(command, outcome),
+            Err(erreur) => Self::from_error(command, erreur),
+        }
+    }
+
     /// Traduit une issue d'exécution.
     #[must_use]
-    fn from_outcome(command: CommandId, outcome: Outcome) -> Self {
+    fn from_outcome(command: CommandId, outcome: &Outcome) -> Self {
         match outcome {
             Outcome::Executed {
                 result,
@@ -192,6 +208,7 @@ impl DispatchReport {
                 sink,
                 ..
             } => {
+                let (result, stats) = (*result, *stats);
                 let mut summary = format!("{} rows, {} batches", stats.rows, stats.batches);
                 if stats.truncated || sink.is_truncated() {
                     // Dit explicitement au modèle que ce n'est pas tout : un
@@ -207,17 +224,26 @@ impl DispatchReport {
                 }
             }
 
-            Outcome::CatalogDescribed { catalog, .. } => Self::CatalogRead { command, catalog },
+            Outcome::CatalogDescribed { catalog, .. } => Self::CatalogRead {
+                command,
+                catalog: catalog.clone(),
+            },
 
             Outcome::NeedsApproval {
                 command, reason, ..
-            } => Self::AwaitingApproval { command, reason },
+            } => Self::AwaitingApproval {
+                command: *command,
+                reason: reason.clone(),
+            },
 
-            Outcome::Denied { command, reason } => Self::Denied { command, reason },
+            Outcome::Denied { command, reason } => Self::Denied {
+                command: *command,
+                reason: reason.clone(),
+            },
 
             autre => Self::Completed {
                 command,
-                summary: summarize(&autre),
+                summary: summarize(autre),
                 stats: None,
                 result: None,
             },
@@ -331,7 +357,7 @@ impl ExecutorSink {
         }
 
         match self.executor.dispatch_as(id, actor, command, cancel).await {
-            Ok(outcome) => DispatchReport::from_outcome(id, outcome),
+            Ok(outcome) => DispatchReport::from_outcome(id, &outcome),
             Err(erreur) => DispatchReport::from_error(id, &erreur),
         }
     }

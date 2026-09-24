@@ -145,8 +145,18 @@ essai.
   raison `sampleNotKept`.
 
 Relâcher retire aussi les demandes d'approbation que cet agent laissait en
-attente (`WithdrawOnRelease`) : c'est la règle de tout relâchement, et une
-écriture proposée dans la même réponse qu'un échantillon est donc à redemander.
+attente (`WithdrawOnRelease`) : c'est la règle de tout relâchement. Une écriture
+proposée dans la même réponse qu'un échantillon n'en est pas une : son appel
+d'outil attend la décision de l'utilisateur, et la réponse ne finit — donc le
+processus n'est relâché — qu'une fois la demande tranchée, expirée ou retirée.
+
+*Précisé le 2026-09-24.* La première version disait l'écriture « à
+redemander » : l'appel rendait « awaiting approval » sur-le-champ, la réponse
+finissait, et le relâchement retirait la demande **sans le dire** — la carte
+offrait encore « Review… », et l'accord répondait « no command is awaiting
+approval under this identifier ». L'attente dans l'appel et la carte qui dit
+le retrait sont décrites dans
+`crates/oxyn-desktop/src/backend/ai/conversation/decisions.rs`.
 
 **L'option examinée et écartée** : ouvrir une nouvelle session ACP (`session/new`)
 dans le même processus. Elle efface l'historique **du protocole**, pas l'état

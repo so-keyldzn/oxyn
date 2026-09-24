@@ -650,6 +650,36 @@ dont les exigences de transport différeraient — un flux sur `GET`, par exempl
 ne serait pas détectée. À vérifier avec la prochaine montée de version de l'un
 ou l'autre adaptateur.
 
+### Délai d'un appel d'outil MCP côté agent — relevé du 2026-09-24
+
+Un appel `execute_query` dont l'écriture attend l'accord de l'utilisateur reste
+suspendu jusqu'à la décision, cinq minutes au plus (la durée de vie d'une
+demande, `oxyn_exec::approval::DEFAULT_TTL`). La question est de savoir si
+l'agent, de son côté, abandonne l'appel avant. Relevé dans les paquets
+téléchargés par `npm pack` le 2026-09-24, et dans les sources de Codex à
+l'étiquette correspondante — jamais de mémoire :
+
+| Agent | Ce que l'adaptateur transmet du serveur MCP d'Oxyn | Délai appliqué à un `tools/call` | Source |
+|---|---|---|---|
+| `@agentclientprotocol/claude-agent-acp` **0.78.0** | `type`, `url`, `headers` — aucun `timeout` | celui de `@anthropic-ai/claude-agent-sdk` **0.3.270** : `timeout` du serveur, sinon la variable `MCP_TOOL_TIMEOUT`, sinon un défaut que le SDK qualifie d'« effectively unbounded » | `dist/acp-agent.js:5864-5872` ; `sdk.d.ts:516-519` et le champ `timeout` de `McpHttpServerConfig` |
+| `@agentclientprotocol/codex-acp` **1.12.0** | `url`, `http_headers` — aucun `tool_timeout_sec` | celui de Codex : `tool_timeout_sec` du serveur, sinon `DEFAULT_TOOL_TIMEOUT` = **300 s** | `dist/index.js:28766-28783` ; dépendance `@openai/codex` `^0.154.0`, qui résout à **0.154.0** ; `codex-rs/codex-mcp/src/rmcp_client.rs:103` et `connection_manager.rs:314-317` à l'étiquette `rust-v0.154.0` |
+
+**Conséquence.** Avec Claude, l'appel attend la décision. Avec Codex, les
+300 s de Codex et les cinq minutes de la demande coïncident : l'une ou l'autre
+échéance l'emporte à quelques millisecondes près. Dans les deux cas rien ne
+s'exécute, et la carte le dit — « Expired », ou « Withdrawn: the agent stopped
+waiting » quand Codex raccroche le premier. Un accord donné dans la même
+milliseconde s'exécute ; Codex a déjà dit à son modèle que l'appel avait
+expiré, et une nouvelle tentative de sa part attend que la première soit
+tranchée — les appels d'un agent passent un par un
+(`crates/oxyn-ai/src/external/mcp/turn.rs`, « one call at a time ») —
+puis redemande l'accord, à l'écran : jamais un rejeu silencieux
+([I-13](../CLAUDE.md#i-13)).
+
+**À refaire** à chaque montée de version de l'un des deux adaptateurs ou de
+`@openai/codex` : un délai par défaut plus court que cinq minutes ferait
+abandonner l'appel avant l'échéance de la demande.
+
 ### Environnement minimal d'un agent ACP — mesure du 2026-09-16
 
 Oxyn lance l'agent avec une **liste blanche** d'environnement

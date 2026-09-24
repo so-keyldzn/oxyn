@@ -31,6 +31,7 @@ pub(super) fn sink(
             conversation,
         ),
         executor: Arc::clone(&fixture.backend.inner.executor),
+        decisions: Arc::clone(&fixture.backend.inner.ai.decisions),
         thread: Arc::clone(thread),
         node,
         question: QuestionOpen::new(),
@@ -693,6 +694,7 @@ pub(super) fn waiting(fixture: &Fixture, declared: &ExternalAgentConfig, session
                 actor: (AgentId::new(), AgentSessionId::new()),
                 _requests: WithdrawOnRelease::new(
                     Arc::clone(&fixture.backend.inner.executor),
+                    Arc::clone(&fixture.backend.inner.ai.decisions),
                     Actor::agent(AgentId::new(), AgentSessionId::new()),
                 ),
             },
