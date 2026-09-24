@@ -10,8 +10,14 @@
 //! * read a key — impossible: no command returns one, and `DeclaredProvider`
 //!   carries « configured », never a reference ([I-03](../../../../CLAUDE.md#i-03));
 //! * declare a provider pointing to its own server — possible, as through the
-//!   screen; the connection's tier still applies, and nothing is sent without a
-//!   question typed in the panel;
+//!   screen; the connection's tier still applies;
+//! * point an **existing** declaration to a different endpoint (scheme, host,
+//!   port, path, or query) or a different protocol — clears its key reference
+//!   and forgets the key, unless a key is typed in the same request. A key only
+//!   ever leaves toward the endpoint it was typed for
+//!   ([I-03](../../../../CLAUDE.md#i-03));
+//! * call [`ai_provider_models`] — sends no base content of its own, and a
+//!   conversation's context only leaves on a question typed in the panel;
 //! * declare an **external agent**, which is a program Oxyn will run — held
 //!   behind a native confirmation that names the exact command, drawn by the
 //!   host and not by the webview ([`ai_save_external_agent`]).
@@ -336,6 +342,18 @@ pub async fn ai_set_agent_setting(
 ) -> Result<AgentSettingAnswer, IpcError> {
     backend
         .ai_set_agent_setting(self::connection(&connection)?, thread.as_deref(), change)
+        .await
+}
+
+/// Reads from the server the names `@` offers and the cache lacks — never a
+/// row, never a column. Resolves once they are in the cache.
+#[tauri::command]
+pub async fn ai_list_mentionable(
+    backend: State<'_, Backend>,
+    connection: String,
+) -> Result<(), IpcError> {
+    backend
+        .list_mentionable(self::connection(&connection)?)
         .await
 }
 

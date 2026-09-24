@@ -115,6 +115,7 @@ export const EditingAProvider: Story = {
     await expect(
       canvas.getByRole("switch", { name: "Remove the stored key" })
     ).toBeInTheDocument()
+    await expect(canvas.getByText(/change the endpoint/i)).toBeInTheDocument()
   },
 }
 

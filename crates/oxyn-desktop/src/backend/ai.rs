@@ -35,10 +35,13 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use oxyn_ai::external::locate::SearchPath;
 use oxyn_ai::external::presets::PresetDraft;
-use oxyn_core::{Actor, AiProviderConfig, CancelToken, Command, ExternalAgentConfig, ProviderId};
-use oxyn_exec::Outcome;
+use oxyn_core::{
+    Actor, AiProviderConfig, CancelToken, Command, ConnectionId, ExternalAgentConfig, ProviderId,
+};
+use oxyn_exec::{ExecutorSink, Outcome};
 use oxyn_llm::Reach;
 
+use self::catalog_fill::{CatalogFill, Want};
 pub(crate) use self::threads::AiState;
 use super::Backend;
 use crate::ipc::IpcError;
@@ -98,7 +101,9 @@ impl Backend {
     /// refused endpoint leaves no orphan entry. After that the order is the
     /// connection's: a failure past the keyring write leaves an unreachable
     /// entry, while the reverse would leave a declaration whose key does not
-    /// exist.
+    /// exist. An edit that moves to another endpoint or kind forgets the old
+    /// key exactly as clearing it explicitly would
+    /// ([I-03](../../../../CLAUDE.md#i-03)).
     pub async fn save_ai_provider(
         &self,
         draft: ProviderDraft,
@@ -150,9 +155,12 @@ impl Backend {
         })
         .await?;
 
-        // The old key goes only once the declaration no longer references it.
+        // The old key goes only once the declaration no longer references
+        // it — whether the user asked to clear it, or the edit moved to
+        // another endpoint or kind and `compose_provider` already dropped
+        // `config.secret_ref` for that reason.
         if key.is_none()
-            && draft.clear_key
+            && config.secret_ref.is_none()
             && let Some(reference) = existing.and_then(|previous| previous.secret_ref)
         {
             self.forget_provider_key(reference);
@@ -308,6 +316,32 @@ impl Backend {
         Ok(())
     }
 
+    /// Lists the relations of the schemas never listed, so that `@` offers
+    /// them before the tree is expanded: the listings a question would read,
+    /// within the same bounds, and no description
+    /// ([ADR-0036](../../../../docs/adr/0036-l-assistant-complete-le-catalogue.md)).
+    ///
+    /// As [`Actor::Human`]: typing `@` is the user's gesture, and no model is
+    /// involved. The reads are the tree's expansions, through the bus
+    /// ([I-01](../../../../CLAUDE.md#i-01)). Nothing is shown on a thread: the
+    /// menu says it is completing while this runs.
+    pub async fn list_mentionable(&self, connection: ConnectionId) -> Result<(), IpcError> {
+        let catalog = self
+            .inner
+            .executor
+            .catalog(connection)
+            .ok_or_else(|| IpcError::invalid("This connection has no catalog cache"))?;
+        let sink = ExecutorSink::new(Arc::clone(&self.inner.executor));
+        let fill = CatalogFill {
+            sink: &sink,
+            actor: Actor::Human,
+            connection,
+            catalog,
+        };
+        fill.run(Want::Names, &CancelToken::new(), &|_| {}).await;
+        Ok(())
+    }
+
     pub(crate) async fn declared_providers(&self) -> Result<Vec<AiProviderConfig>, IpcError> {
         match self.dispatch_ai(Command::ListAiProviders).await? {
             Outcome::AiProvidersListed { providers } => Ok(providers),
@@ -360,8 +394,10 @@ impl Backend {
 ///
 /// A new declaration gets an opaque identity, never one derived from the
 /// label: two providers both called « Prod » must stay two declarations, keys
-/// included. An edit keeps its identity, its creation date, and — unless a new
-/// one is typed — its endpoint and its key reference.
+/// included. An edit keeps its identity and its creation date; it keeps its
+/// key reference only while the kind and the endpoint (scheme, host, port,
+/// path, query) stay the same — a changed endpoint takes a key typed for it
+/// ([I-03](../../../../CLAUDE.md#i-03)).
 fn compose_provider(
     draft: &ProviderDraft,
     existing: Option<&AiProviderConfig>,
@@ -383,7 +419,9 @@ fn compose_provider(
     );
     if let Some(previous) = existing {
         config.created_at = previous.created_at;
-        config.secret_ref.clone_from(&previous.secret_ref);
+        if previous.same_endpoint_as(&config) {
+            config.secret_ref.clone_from(&previous.secret_ref);
+        }
     }
     config
 }
@@ -515,6 +553,166 @@ mod tests {
         assert_eq!(config.secret_ref, previous.secret_ref);
         assert_eq!(config.label, "Ollama");
         assert_eq!(config.model, "llama3");
+    }
+
+    #[test]
+    fn a_kind_change_drops_the_key_reference() {
+        let previous = AiProviderConfig::new(
+            ProviderId::for_new_declaration(AiProviderKind::Anthropic),
+            AiProviderKind::Anthropic,
+            "Old",
+            "https://198.51.100.1/v1",
+            "old",
+        )
+        .with_secret_ref("oxyn:llm:anthropic-00000000");
+        let edited = provider_draft(
+            Some(previous.id.to_string()),
+            AiProviderKind::OpenAiCompatible,
+            "https://198.51.100.1/v1",
+            None,
+        );
+        let config = compose_provider(&edited, Some(&previous));
+        assert_eq!(config.secret_ref, None);
+    }
+
+    /// A draft naming every field, unlike [`draft`]: the tests below edit
+    /// across a host change and must control the endpoint and the kind.
+    fn provider_draft(
+        id: Option<String>,
+        kind: AiProviderKind,
+        base_url: &str,
+        key: Option<&str>,
+    ) -> ProviderDraft {
+        serde_json::from_value(serde_json::json!({
+            "id": id,
+            "kind": kind,
+            "label": "Provider",
+            "baseUrl": base_url,
+            "model": "model",
+            "key": key,
+        }))
+        .expect("valid draft")
+    }
+
+    #[test]
+    fn an_edit_to_another_host_without_a_key_drops_the_key_reference() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("a runtime for the executor");
+        let backend = Backend::open_temporary().expect("temporary backend");
+        runtime.block_on(async {
+            let declared = backend
+                .save_ai_provider(provider_draft(
+                    None,
+                    AiProviderKind::Anthropic,
+                    "https://198.51.100.1/v1",
+                    Some("not-a-real-key"),
+                ))
+                .await
+                .expect("declared");
+            assert!(declared.key_configured);
+
+            let edited = backend
+                .save_ai_provider(provider_draft(
+                    Some(declared.id.clone()),
+                    AiProviderKind::Anthropic,
+                    "https://203.0.113.7/v1",
+                    None,
+                ))
+                .await
+                .expect("edited without a key, to another host");
+            assert!(!edited.key_configured);
+
+            let stored = backend
+                .declared_providers()
+                .await
+                .expect("listed")
+                .into_iter()
+                .find(|config| config.id.to_string() == declared.id)
+                .expect("still declared");
+            assert_eq!(stored.secret_ref, None);
+        });
+    }
+
+    #[test]
+    fn an_edit_on_the_same_endpoint_keeps_the_key() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("a runtime for the executor");
+        let backend = Backend::open_temporary().expect("temporary backend");
+        runtime.block_on(async {
+            let declared = backend
+                .save_ai_provider(provider_draft(
+                    None,
+                    AiProviderKind::Anthropic,
+                    "https://198.51.100.1/v1",
+                    Some("not-a-real-key"),
+                ))
+                .await
+                .expect("declared");
+
+            let edited = backend
+                .save_ai_provider(provider_draft(
+                    Some(declared.id.clone()),
+                    AiProviderKind::Anthropic,
+                    "https://198.51.100.1:443/v1/",
+                    None,
+                ))
+                .await
+                .expect("edited without a key, to the same endpoint");
+            assert!(edited.key_configured);
+
+            let before = backend
+                .declared_providers()
+                .await
+                .expect("listed")
+                .into_iter()
+                .find(|config| config.id.to_string() == declared.id)
+                .expect("still declared")
+                .secret_ref;
+            assert!(before.is_some());
+        });
+    }
+
+    #[test]
+    fn models_after_a_host_change_read_no_key() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("a runtime for the executor");
+        let backend = Backend::open_temporary().expect("temporary backend");
+        runtime.block_on(async {
+            let declared = backend
+                .save_ai_provider(provider_draft(
+                    None,
+                    AiProviderKind::Anthropic,
+                    "https://198.51.100.1/v1",
+                    Some("not-a-real-key"),
+                ))
+                .await
+                .expect("declared");
+            backend
+                .save_ai_provider(provider_draft(
+                    Some(declared.id.clone()),
+                    AiProviderKind::Anthropic,
+                    "https://203.0.113.7/v1",
+                    None,
+                ))
+                .await
+                .expect("edited without a key, to another host");
+
+            let error = backend
+                .provider_models(&declared.id)
+                .await
+                .expect_err("no key follows a changed host");
+            assert!(
+                error.message.contains("no API key configured"),
+                "unexpected message: {}",
+                error.message
+            );
+        });
     }
 
     #[test]

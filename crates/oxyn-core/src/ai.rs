@@ -463,6 +463,39 @@ impl AiProviderConfig {
         }
         validate_base_url(&self.base_url)
     }
+
+    /// Whether a key typed for `self` may follow it to `other`'s endpoint.
+    ///
+    /// True only when both hold: (a) `self.kind == other.kind` — the protocol
+    /// family decides which header carries the key (`x-api-key` for
+    /// Anthropic, `Authorization` for an OpenAI-compatible transport), so two
+    /// declarations of different families never share a key even at the same
+    /// URL; (b) both `base_url` parse and resolve to the same access point —
+    /// same scheme, same host, same port (default ports included, via
+    /// [`Url::port_or_known_default`]), same path with trailing `/` ignored,
+    /// same query. The fragment is not compared: it never leaves the process
+    /// on the wire.
+    ///
+    /// An unreadable `base_url` on either side is never equal to anything —
+    /// in doubt, the key is forgotten, which only costs a retype
+    /// ([I-03](../../CLAUDE.md#i-03)). No I/O, and no URL is ever quoted in a
+    /// message, matching [`validate_base_url`]: an endpoint that fails to
+    /// parse says nothing here about what it contains.
+    #[must_use]
+    pub fn same_endpoint_as(&self, other: &Self) -> bool {
+        if self.kind != other.kind {
+            return false;
+        }
+        let (Ok(mine), Ok(theirs)) = (Url::parse(&self.base_url), Url::parse(&other.base_url))
+        else {
+            return false;
+        };
+        mine.scheme() == theirs.scheme()
+            && mine.host_str() == theirs.host_str()
+            && mine.port_or_known_default() == theirs.port_or_known_default()
+            && mine.path().trim_end_matches('/') == theirs.path().trim_end_matches('/')
+            && mine.query() == theirs.query()
+    }
 }
 
 /// Refuse une URL de base inutilisable ou porteuse d'identifiants.
@@ -1058,5 +1091,99 @@ mod tests {
         let premiere = ProviderId::for_new_declaration(AiProviderKind::Anthropic);
         let seconde = ProviderId::for_new_declaration(AiProviderKind::Anthropic);
         assert_ne!(premiere, seconde);
+    }
+
+    fn config_with(kind: AiProviderKind, base_url: &str) -> AiProviderConfig {
+        let mut config = ollama();
+        config.kind = kind;
+        config.base_url = base_url.to_owned();
+        config
+    }
+
+    #[test]
+    fn same_endpoint_as_is_true_for_a_host_written_in_a_different_case() {
+        let mine = config_with(
+            AiProviderKind::OpenAiCompatible,
+            "HTTPS://API.Example.com/v1",
+        );
+        let theirs = config_with(
+            AiProviderKind::OpenAiCompatible,
+            "https://api.example.com/v1",
+        );
+        assert!(mine.same_endpoint_as(&theirs));
+    }
+
+    #[test]
+    fn same_endpoint_as_is_true_for_an_explicit_default_port() {
+        let mine = config_with(AiProviderKind::OpenAi, "https://api.example.com:443/v1");
+        let theirs = config_with(AiProviderKind::OpenAi, "https://api.example.com/v1");
+        assert!(mine.same_endpoint_as(&theirs));
+    }
+
+    #[test]
+    fn same_endpoint_as_is_true_for_a_trailing_slash() {
+        let mine = config_with(AiProviderKind::OpenAi, "https://api.example.com/v1/");
+        let theirs = config_with(AiProviderKind::OpenAi, "https://api.example.com/v1");
+        assert!(mine.same_endpoint_as(&theirs));
+    }
+
+    #[test]
+    fn same_endpoint_as_is_false_for_a_different_host() {
+        let mine = config_with(AiProviderKind::OpenAi, "https://api.example.com/v1");
+        let theirs = config_with(AiProviderKind::OpenAi, "https://api.evil.example/v1");
+        assert!(!mine.same_endpoint_as(&theirs));
+    }
+
+    #[test]
+    fn same_endpoint_as_is_false_for_a_different_port() {
+        let mine = config_with(AiProviderKind::OpenAi, "https://api.example.com:8443/v1");
+        let theirs = config_with(AiProviderKind::OpenAi, "https://api.example.com/v1");
+        assert!(!mine.same_endpoint_as(&theirs));
+    }
+
+    #[test]
+    fn same_endpoint_as_is_false_for_http_against_https() {
+        let mine = config_with(AiProviderKind::OpenAi, "http://api.example.com/v1");
+        let theirs = config_with(AiProviderKind::OpenAi, "https://api.example.com/v1");
+        assert!(!mine.same_endpoint_as(&theirs));
+    }
+
+    #[test]
+    fn same_endpoint_as_is_false_for_a_different_path() {
+        let mine = config_with(AiProviderKind::OpenAi, "https://api.example.com/v1");
+        let theirs = config_with(AiProviderKind::OpenAi, "https://api.example.com/v2");
+        assert!(!mine.same_endpoint_as(&theirs));
+    }
+
+    #[test]
+    fn same_endpoint_as_is_false_for_a_different_query() {
+        let mine = config_with(
+            AiProviderKind::OpenAi,
+            "https://api.example.com/v1?region=eu",
+        );
+        let theirs = config_with(
+            AiProviderKind::OpenAi,
+            "https://api.example.com/v1?region=us",
+        );
+        assert!(!mine.same_endpoint_as(&theirs));
+    }
+
+    #[test]
+    fn same_endpoint_as_is_false_for_a_different_kind_with_the_same_url() {
+        let mine = config_with(AiProviderKind::Anthropic, "https://api.example.com/v1");
+        let theirs = config_with(
+            AiProviderKind::OpenAiCompatible,
+            "https://api.example.com/v1",
+        );
+        assert!(!mine.same_endpoint_as(&theirs));
+    }
+
+    #[test]
+    fn same_endpoint_as_is_false_for_an_unreadable_url_on_either_side() {
+        let readable = config_with(AiProviderKind::OpenAi, "https://api.example.com/v1");
+        let unreadable = config_with(AiProviderKind::OpenAi, "not a url");
+        assert!(!readable.same_endpoint_as(&unreadable));
+        assert!(!unreadable.same_endpoint_as(&readable));
+        assert!(!unreadable.same_endpoint_as(&unreadable));
     }
 }

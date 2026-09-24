@@ -443,7 +443,7 @@ export function ProviderForm({
                       />
                       <FieldDescription>
                         {editing?.keyConfigured
-                          ? "A key is stored in the system keychain. Leave empty to keep it."
+                          ? "A key is stored in the system keychain. Leave empty to keep it — unless you change the endpoint: the key is then removed, type it again."
                           : "Stored in the system keychain, never shown again. A local endpoint needs none."}
                       </FieldDescription>
                     </Field>
