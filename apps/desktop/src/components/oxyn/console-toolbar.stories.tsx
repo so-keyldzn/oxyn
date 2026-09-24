@@ -98,15 +98,58 @@ export const Cancelling: Story = {
   },
 }
 
+/** One save at a time, with the way to cancel it beside it. */
 export const Saving: Story = {
-  args: { save: { status: "saving" }, parameterCount: 2, parametersOpen: true },
-  play: async ({ canvas }) => {
+  args: {
+    save: { status: "saving" },
+    parameterCount: 2,
+    parametersOpen: true,
+    onCancelWrite: fn(),
+  },
+  play: async ({ canvas, args }) => {
     await expect(
       canvas.getByRole("button", { name: /Save query/ })
     ).toBeDisabled()
     await expect(
       canvas.getByRole("button", { name: /Parameters/ })
     ).toHaveAttribute("aria-pressed", "true")
+    await userEvent.click(canvas.getByRole("button", { name: "Cancel save" }))
+    await expect(args.onCancelWrite).toHaveBeenCalledOnce()
+  },
+}
+
+/** Nothing to cancel once idle: the action is not offered. */
+export const NoCancelWhenIdle: Story = {
+  args: { onCancelWrite: fn() },
+  play: async ({ canvas }) => {
+    await expect(
+      canvas.queryByRole("button", { name: /^Cancel (save|close)$/ })
+    ).toBeNull()
+  },
+}
+
+/**
+ * Closing: the name stays readable but typing changes nothing, Enter saves
+ * nothing, and the close can be cancelled.
+ */
+export const Closing: Story = {
+  args: {
+    closing: true,
+    onCancelWrite: fn(),
+    save: { status: "idle", notice: "Closing the saved query…" },
+  },
+  play: async ({ canvas, args }) => {
+    const name = canvas.getByRole("textbox", { name: "Query name" })
+    await expect(name).toHaveValue("console_1.sql")
+    await expect(name).toHaveAttribute("readonly")
+    await userEvent.type(name, "x{Enter}")
+    await expect(args.onTitleChange).not.toHaveBeenCalled()
+    await expect(args.onSave).not.toHaveBeenCalled()
+    await expect(
+      canvas.getByRole("button", { name: /Save query/ })
+    ).toBeDisabled()
+    await userEvent.click(canvas.getByRole("button", { name: "Cancel close" }))
+    await expect(args.onCancelWrite).toHaveBeenCalledOnce()
   },
 }
 

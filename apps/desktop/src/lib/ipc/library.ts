@@ -165,11 +165,19 @@ export const library = {
   /** Minted by the backend: library pages order documents by identifier age. */
   newDocument: () => call("new_query_document", z.string()),
 
-  saveDocument: (change: DocumentChange) =>
-    call("save_query_document", DocumentWrite, { change }),
+  /** `commandId` lets `backend.cancel` stop the write before it commits. */
+  saveDocument: (commandId: string, change: DocumentChange) =>
+    call("save_query_document", DocumentWrite, { commandId, change }),
 
-  closeDocument: (document: string, revision: number, discard: boolean) =>
+  /** `commandId` lets `backend.cancel` stop the close before it commits. */
+  closeDocument: (
+    commandId: string,
+    document: string,
+    revision: number,
+    discard: boolean
+  ) =>
     call("close_query_document", DocumentWrite, {
+      commandId,
       document,
       revision,
       discard,

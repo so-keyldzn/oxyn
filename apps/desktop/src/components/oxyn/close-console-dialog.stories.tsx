@@ -68,11 +68,16 @@ export const Conflict: Story = {
   },
 }
 
+/** While saving, Cancel stays live: it cancels the save under way. */
 export const Saving: Story = {
   args: { busy: true },
-  play: async () => {
+  play: async ({ args }) => {
     await expect(
       await screen.findByRole("button", { name: "Discard and close" })
     ).toBeDisabled()
+    const cancel = await screen.findByRole("button", { name: "Cancel" })
+    await expect(cancel).toBeEnabled()
+    await userEvent.click(cancel)
+    await expect(args.onCancel).toHaveBeenCalled()
   },
 }

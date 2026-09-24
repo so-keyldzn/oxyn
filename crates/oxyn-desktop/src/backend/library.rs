@@ -208,6 +208,7 @@ mod tests {
         let document = DocumentId::new();
         runtime
             .block_on(backend.save_query_document(
+                CommandId::new(),
                 document,
                 None,
                 DocumentChange {
