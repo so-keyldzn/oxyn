@@ -36,6 +36,24 @@ export interface ConsoleSeed {
   needsValues: boolean
 }
 
+/** A named save or close; `cancelled` is set by `cancelWrite`, meanwhile. */
+interface Cancellable {
+  id: string
+  cancelled: boolean
+}
+
+function cancellable(): Cancellable {
+  return { id: newCommandId(), cancelled: false }
+}
+
+/**
+ * Read after each await: the type checker keeps a property it saw false as
+ * false across an await, while `cancelWrite` may have set it meanwhile.
+ */
+function isCancelled(request: Cancellable) {
+  return request.cancelled
+}
+
 function message(error: unknown) {
   return error instanceof Error ? error.message : String(error)
 }
@@ -76,7 +94,7 @@ export function useConsoleDocument({
   const revision = React.useRef(seed.revision)
   const lastDraft = React.useRef({ title: seed.title, text: seed.text })
   /** The named save or close under way, which the user may still cancel. */
-  const inFlight = React.useRef<{ id: string; cancelled: boolean } | null>(null)
+  const inFlight = React.useRef<Cancellable | null>(null)
 
   const onConflict = (write: DocumentWrite) => {
     if (write.type !== "conflict") return false
@@ -162,7 +180,7 @@ export function useConsoleDocument({
       if (lastDraft.current === sent) lastDraft.current = before
       debouncer.maybeExecute()
     }
-    const request = { id: newCommandId(), cancelled: false }
+    const request = cancellable()
     inFlight.current = request
     setSaving(true)
     setProblem(false)
@@ -252,12 +270,12 @@ export function useConsoleDocument({
     if (saving || closing) return false
     // Held from the start: a cancellation during the flush must stop the
     // close before it is sent, not be lost.
-    const request = { id: newCommandId(), cancelled: false }
+    const request = cancellable()
     inFlight.current = request
     if (!discard) await flush()
     debouncer.cancel()
     const current = latest.current
-    if (request.cancelled) {
+    if (isCancelled(request)) {
       if (inFlight.current === request) inFlight.current = null
       setNotice("Closing was cancelled. The console stays open.")
       return false
@@ -281,7 +299,7 @@ export function useConsoleDocument({
       // Committed before the cancellation reached it: the console goes.
       if (write.type === "closed") return true
       if (onConflict(write)) return false
-      if (request.cancelled && write.type === "superseded") {
+      if (isCancelled(request) && write.type === "superseded") {
         setProblem(false)
         setNotice("Closing was cancelled. The console stays open.")
       } else {
