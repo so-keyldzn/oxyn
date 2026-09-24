@@ -4,6 +4,10 @@
 # qui rend cette phrase vraie. Il n'ajoute AUCUN contrôle : un contrôle qui
 # n'existerait qu'ici serait invisible en local, et personne ne saurait le
 # reproduire avant de pousser. Tout ce qui doit tourner est dans `make qualite`.
+# Ce qui suit n'installe que l'environnement dont la porte a besoin.
+#
+# Versions des actions et des outils : docs/RESEARCH-NOTES.md, § CI et
+# livraison GitHub.
 name: qualite
 
 on:
@@ -13,7 +17,7 @@ on:
     branches: ["**"]
 
 # Une deuxième poussée sur la même branche rend la première sans objet : la
-# laisser finir consomme un runner macOS pour un résultat que personne ne lira.
+# laisser finir consomme un runner pour un résultat que personne ne lira.
 concurrency:
   group: qualite-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -28,17 +32,30 @@ env:
 
 jobs:
   qualite:
-    # macOS et pas Linux : la cible de référence de l'application est macOS
-    # (ADR-0029), et `oxyn-desktop` y compile avec WebKit et le trousseau du
-    # système. Construire ailleurs vérifierait une autre application en
-    # laissant croire au contraire.
-    runs-on: macos-latest
-    timeout-minutes: 60
+    # macOS et Linux passent la MÊME porte (décision D10 du 2026-09-24,
+    # ADR-0029) : la webview n'est pas la même (WKWebView, WebKitGTK), et un
+    # rendu vérifié sur l'une ne l'est pas sur l'autre. Windows n'y est pas :
+    # la porte suppose un shell POSIX (Makefile, scripts du socle).
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [macos-latest, ubuntu-24.04]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 75
 
     steps:
       - name: Récupérer le dépôt
         # actions/checkout v7.0.1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+
+      - name: Installer les bibliothèques système de Tauri
+        # Liste de la documentation Tauri (prérequis Debian), sans ajout :
+        # `keyring` passe par zbus, du Rust pur, et ne demande pas libdbus.
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
+            libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
 
       - name: Installer la chaîne d'outils épinglée
         # Aucune action tierce : `rust-toolchain.toml` fait autorité (ADR-0008),
@@ -50,12 +67,44 @@ jobs:
         # Swatinem/rust-cache v2.9.2
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
 
+      - name: Installer Node
+        # actions/setup-node v7.0.0. La ligne 22 satisfait vite 8.3.0
+        # (`^20.19.0 || >=22.12.0`) et vitest 4.1.11, et c'est celle de la
+        # machine de développement.
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: "22"
+
+      - name: Installer pnpm
+        # pnpm/action-setup v6.1.0. Sans `version` : il lit le champ
+        # `packageManager` du paquet, seule source de la version de pnpm.
+        # Son absence faisait échouer la porte avant même le front.
+        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413
+        with:
+          package_json_file: apps/desktop/package.json
+          cache: true
+          cache_dependency_path: apps/desktop/pnpm-lock.yaml
+
+      - name: Installer les dépendances du front
+        run: pnpm -C apps/desktop install --frozen-lockfile
+
+      - name: Installer le navigateur des stories
+        # Les stories tournent dans Chromium via Playwright
+        # (apps/desktop/vite.config.ts). La version du navigateur suit celle
+        # de `playwright` dans le lockfile.
+        run: pnpm -C apps/desktop exec playwright install --with-deps chromium
+
       - name: Installer cargo-nextest
         # Le profil de `.config/nextest.toml` — exécution sérialisée des tests
         # de driver, arrêt d'un test qui pend — ne s'applique que si nextest est
         # présent. Sans cette étape, `make test` retomberait silencieusement sur
         # `cargo test` et le profil ne servirait jamais.
-        run: curl -LsSf https://get.nexte.st/latest/mac | tar zxf - -C "${CARGO_HOME:-$HOME/.cargo}/bin"
+        run: |
+          case "$RUNNER_OS" in
+            macOS) platform=mac ;;
+            Linux) platform=linux ;;
+          esac
+          curl -LsSf "https://get.nexte.st/latest/$platform" | tar zxf - -C "${CARGO_HOME:-$HOME/.cargo}/bin"
 
       - name: make qualite
         run: make qualite
