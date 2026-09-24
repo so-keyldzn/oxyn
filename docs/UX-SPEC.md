@@ -471,6 +471,14 @@ jamais ajouté : il exécuterait réellement la requête analysée, suppression
 comprise. Le brouillon de la console reste celui que l'utilisateur a écrit, et
 le plan revient comme un résultat ordinaire, sans revue d'écriture.
 
+Ordinaire par son chemin, pas par sa présentation : **la zone de résultat dit
+que c'est un plan**. Au-dessus des lignes, tant qu'elles sont affichées, une
+mention `Execution plan` précise que c'est la façon dont le serveur exécuterait
+l'instruction, et non ses données, et que l'instruction elle-même n'a pas été
+exécutée. Quelqu'un qui lance Explain, s'absente et revient lit la grille, pas
+le bouton qu'il a pressé ; sans la mention, il lirait un plan comme des
+données. La mention disparaît au lancement suivant qui n'est pas un Explain.
+
 ## Contexte de session d'une console
 
 Le sélecteur de la barre lit `<connexion> / <schéma>` : le nom donné par

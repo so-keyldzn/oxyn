@@ -65,6 +65,37 @@ export const Populated: Story = {
 }
 
 /**
+ * An `Explain` result: the rows are a plan, and the result area says so above
+ * them, where someone coming back to the grid will read it.
+ */
+export const ExecutionPlan: Story = {
+  args: {
+    plan: true,
+    state: {
+      status: "populated",
+      result: "panel-plan",
+      columns: [{ name: "QUERY PLAN", dataType: "Utf8", nullable: true }],
+      rows: 4,
+      complete: true,
+      truncated: false,
+      cancelled: false,
+    },
+  },
+  play: async ({ canvas }) => {
+    await expect(canvas.getByText("Execution plan")).toBeVisible()
+    await expect(canvas.getByText(/not its rows/)).toBeVisible()
+  },
+}
+
+/** A statement's own rows carry no such mention. */
+export const DataIsNotAPlan: Story = {
+  args: Populated.args,
+  play: async ({ canvas }) => {
+    await expect(canvas.queryByText("Execution plan")).toBeNull()
+  },
+}
+
+/**
  * Columns hides a column from the grid only: the other headers stay, the
  * footer's export keeps it, and Show all brings it back.
  */
