@@ -78,6 +78,23 @@ n'existe. La version est celle que `tauri-plugin-dialog@2.7.3` résout déjà
 fonctionnalités par défaut : celles du plugin (`gtk3`, `common-controls-v6`)
 s'unifient sur la même crate.
 
+Comportements du dialogue de message sur lesquels repose
+[ADR-0037](adr/0037-dialogue-natif-pour-les-confirmations-critiques.md),
+vérifiés dans la source le 2026-09-25 — **à relire à chaque montée du plugin
+ou de `rfd`** :
+
+- `tauri-plugin-dialog` 2.7.3, `src/lib.rs`, `MessageDialogBuilder::show` : le
+  rappel reçoit `true` pour `Ok`, `Yes`, ou un bouton personnalisé dont le
+  libellé **égale** celui de confirmation ; `false` pour toute autre issue,
+  fermeture comprise. Deux libellés égaux feraient d'Annuler une confirmation ;
+- même crate, `src/desktop.rs`, `show_message_dialog` : le dialogue s'ouvre
+  par `run_on_main_thread`, dont l'échec est ignoré ; le rappel n'est alors
+  jamais appelé, et un canal abandonné doit valoir refus ;
+- `rfd` 0.16.0 (dépendance du plugin), `src/backend/macos/message_dialog.rs` :
+  les boutons sont ajoutés à l'`NSAlert` dans l'ordre, confirmation en premier ;
+  le premier bouton d'un `NSAlert` répond à Entrée, et le plugin n'offre aucun
+  moyen d'en désigner un autre.
+
 ### Paquets npm
 
 | Paquet | Version retenue | Dernière publiée | Pourquoi l'écart |
