@@ -1,7 +1,7 @@
 import * as React from "react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 import { act, renderHook, waitFor } from "@testing-library/react"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
 import { useMentionSearch } from "./mention-search"
 import type { CatalogNode } from "@/lib/ipc/types"
@@ -62,8 +62,15 @@ function withClient(client: QueryClient) {
   }
 }
 
-const client = () =>
-  new QueryClient({ defaultOptions: { queries: { retry: false } } })
+const clients: Array<QueryClient> = []
+
+const client = () => {
+  const created = new QueryClient({
+    defaultOptions: { queries: { retry: false } },
+  })
+  clients.push(created)
+  return created
+}
 
 const labels = (
   results: ReturnType<typeof useMentionSearch>["results"]
@@ -77,6 +84,15 @@ beforeEach(() => {
   ipc.catalogTree.mockImplementation(() => later(TREE))
   ipc.searchCatalog.mockImplementation(() => later([]))
   ipc.listDocuments.mockImplementation(() => later({ entries: [] }))
+})
+
+// A test may end with an answer still on its way: it would land after the
+// environment is torn down and notify a React root that no longer has a window.
+afterEach(async () => {
+  await waitFor(() =>
+    expect(clients.every((each) => each.isFetching() === 0)).toBe(true)
+  )
+  clients.splice(0).forEach((each) => each.clear())
 })
 
 describe("the first @", () => {
