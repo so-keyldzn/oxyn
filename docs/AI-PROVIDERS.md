@@ -215,6 +215,54 @@ du texte imitant une instruction. Ce sont des **données**, à tout niveau, y
 compris quand elles arrivent dans une invite. Voir
 [SECURITY](SECURITY.md#surface-dentrée).
 
+## Mentions
+
+Un objet que l'utilisateur nomme d'un `@` dans sa question
+([UX-SPEC](UX-SPEC.md#nommer-un-objet-dun-)) est **imposé** au contexte. Il
+entre par le point de passage unique, et par aucune autre voie :
+`ContextBuilder::with_mentions` (`crates/oxyn-ai/src/context/mentions.rs`).
+
+Ce qu'une mention envoie, et ce qu'elle n'envoie pas :
+
+1. **La structure de l'objet, sous le niveau de la connexion.** Une table, une
+   vue, une collection est décrite comme toute relation du contexte — champs,
+   types, clés, index, commentaires encadrés —, **en tête**, avant ce que la
+   recherche lexicale trouve, et sous le **même** budget. Une colonne
+   (`table.colonne`) fait décrire sa relation et désigne la colonne par une
+   ligne « mentioned by the user ». **Aucune valeur de ligne** : sous
+   `Metadata` comme sous `Sampled`, une mention n'ajoute rien de ce que
+   l'échantillon approuvé transporte. Nommer n'est pas envoyer.
+2. **Une adresse vérifiée, jamais crue.** La webview envoie une adresse du
+   catalogue (et un nom de colonne), pas un libellé. Un objet absent du cache
+   local, une colonne que sa description ne liste pas, sont **écartés** : rien
+   n'en part, et le compte en est montré (`ignoredMentions`). Au-delà de seize
+   mentions, la question est refusée avant de partir.
+3. **Ce qui ne tient pas se dit.** Une mention qui dépasse le budget n'est pas
+   perdue en silence : son nom figure dans l'encadré, « mentioned by the user
+   but not described, over the context budget », et l'en-tête du panneau la
+   compte (`omittedMentions`).
+4. **Une requête sauvegardée** — de cette connexion, ou d'aucune — part comme
+   le texte que l'utilisateur a écrit, encadré et borné à 4 000 caractères. Le
+   backend la relit par le bus (`Command::OpenDocument`), sa version
+   **enregistrée** seulement ; une requête d'une autre connexion est écartée,
+   car ses littéraux ne sont pas ceux de cette base.
+5. **Toutes les destinations, par la même porte.** Pour une session qui
+   s'ouvre — fournisseur ou agent externe —, les mentions mènent le contexte
+   initial. Pour une session **déjà ouverte**, qui connaît le schéma depuis son
+   ouverture et dont le message système ne se réécrit pas, les objets mentionnés
+   sont rendus par le même `ContextBuilder`, en mode `mentioned_only` — sans
+   recherche, puisque le reste est dit —, et **précèdent la question** dans le
+   message de l'utilisateur, préambule `untrusted` compris. Le même texte
+   (`AgentContext::follow_up`) sert `AgentSession::ask_about` et
+   `AgentPrompt::following` : un agent externe déjà lancé n'a pas de second
+   chemin.
+6. **Ce qui est gardé.** La question enregistrée garde ses mentions — sorte,
+   libellé, adresse du catalogue ou identifiant du document — dans une colonne
+   JSON lisible sans Oxyn ([I-11](../CLAUDE.md#i-11)), bornée à seize mentions
+   et 32 Kio. Des noms, **jamais une valeur** ni le texte d'une requête
+   sauvegardée. Ce qui est gardé sert à redessiner les puces, rien d'autre :
+   une conversation relue n'en renvoie rien au modèle.
+
 ## Échantillon approuvé
 
 Ce que chaque niveau laisse sortir est tranché par

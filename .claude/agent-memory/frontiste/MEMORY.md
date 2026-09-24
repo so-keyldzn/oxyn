@@ -18,4 +18,6 @@
 - [Spinner et nom du bouton](spinner-change-le-nom-du-bouton.md) — un `Spinner` dans un `Button` ajoute « Loading » au nom : chercher par `/Declare$/`
 - [Spinner porte role="status"](spinner-porte-role-status.md) — chaque spinner visible est une région live : `aria-hidden` à côté d'un libellé
 - [Port Vitest partagé](port-vitest-browser-partage.md) — « Port 63315 already in use » + « no tests » : un autre agent teste, relancer
+- [Lexical dans les stories](lexical-dans-les-stories.md) — `type` marche, `toHaveValue` non ; le menu typeahead réécrit son `aria-label` à chaque frappe
+- [Puce inline : ligne de base](puce-inline-ligne-de-base.md) — une icône SVG en premier enfant d'un inline-flex fait flotter la puce : texte seul en `self-baseline`
 - [Requête désactivée = pending](query-desactivee-est-pending.md) — `enabled: false` reste `isPending` : « en cours » = `fetchStatus !== "idle"`

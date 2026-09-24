@@ -39,6 +39,7 @@ import { ai } from "@/lib/ipc/ai"
 import type {
   AiUpdate,
   DestinationChoice,
+  Mention,
   SampleApproval,
   SampleRequest,
   ThreadSummary,
@@ -92,8 +93,11 @@ interface Slot {
   state: AssistantState
   generation: number
   buffered: Array<AiUpdate>
-  /** Where each queued message was meant to go. */
-  queued: Map<string, AskTarget>
+  /**
+   * Where each queued message was meant to go, and what it named with `@`:
+   * the chips are gone from the field once queued, the mentions are not.
+   */
+  queued: Map<string, { target: AskTarget; mentions: Array<Mention> }>
   listeners: Set<() => void>
 }
 
@@ -210,7 +214,8 @@ async function send(
   target: AskTarget,
   text: string,
   parent: number | null,
-  sample: SampleApproval | null = null
+  sample: SampleApproval | null = null,
+  mentions: ReadonlyArray<Mention> = []
 ) {
   const found = slot(connection)
   const thread = found.state.thread
@@ -226,6 +231,7 @@ async function send(
         question: text,
         destination: target.destination,
         sample,
+        mentions: [...mentions],
       },
       listener(connection, generation)
     )
@@ -258,7 +264,8 @@ export async function askQuestion(
   connection: string,
   target: AskTarget,
   text: string,
-  sample: SampleApproval | null = null
+  sample: SampleApproval | null = null,
+  mentions: ReadonlyArray<Mention> = []
 ): Promise<"sent" | "queued"> {
   const { state } = slot(connection)
   if (state.thread.running !== null || state.sending) {
@@ -266,12 +273,12 @@ export async function askQuestion(
     // it after another one: the approval would cover a question it never saw.
     if (sample !== null) throw new Error(SAMPLE_WAITS)
     const key = `queued-${(queueCounter += 1)}`
-    slot(connection).queued.set(key, target)
+    slot(connection).queued.set(key, { target, mentions: [...mentions] })
     setThread(connection, (thread) => enqueue(thread, key, text))
     return "queued"
   }
   const last = activePath(state.thread).at(-1)
-  await send(connection, target, text, last?.id ?? null, sample)
+  await send(connection, target, text, last?.id ?? null, sample, mentions)
   return "sent"
 }
 
@@ -358,22 +365,34 @@ async function drainQueue(connection: string) {
   const { state, queued } = slot(connection)
   const next = state.thread.queue[0]
   if (!next || state.thread.running !== null) return
-  const target = queued.get(next.key)
+  const waiting = queued.get(next.key)
   queued.delete(next.key)
   setThread(connection, (thread) => dequeue(thread, next.key))
-  if (!target) return
-  await askQuestion(connection, target, next.text).catch(() => undefined)
+  if (!waiting) return
+  await askQuestion(
+    connection,
+    waiting.target,
+    next.text,
+    null,
+    waiting.mentions
+  ).catch(() => undefined)
 }
 
 /** Sends a queued message now — after a failure, when the user chooses to. */
 export async function sendQueued(connection: string, key: string) {
   const { state, queued } = slot(connection)
   const waiting = state.thread.queue.find((entry) => entry.key === key)
-  const target = queued.get(key)
-  if (!waiting || !target || state.thread.running !== null) return
+  const meant = queued.get(key)
+  if (!waiting || !meant || state.thread.running !== null) return
   queued.delete(key)
   setThread(connection, (thread) => dequeue(thread, key))
-  await askQuestion(connection, target, waiting.text)
+  await askQuestion(
+    connection,
+    meant.target,
+    waiting.text,
+    null,
+    meant.mentions
+  )
 }
 
 export function removeQueued(connection: string, key: string) {

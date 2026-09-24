@@ -30,7 +30,7 @@ const answeredThread = threadOfEvents([
   {
     question,
     events: [
-      { kind: "question", text: question },
+      { kind: "question", text: question, mentions: [] },
       started,
       { kind: "turnStarted", turn: 1, maxTurns: 8 },
       {
@@ -167,7 +167,7 @@ export const Initial: Story = {
     const field = canvas.getByRole("textbox", {
       name: "Question for the assistant",
     })
-    await expect(field).toHaveValue(
+    await expect(field).toHaveTextContent(
       "What are the main tables here, and how are they related?"
     )
     await expect(field).toHaveFocus()
@@ -215,7 +215,7 @@ export const Running: Story = {
           {
             question,
             events: [
-              { kind: "question", text: question },
+              { kind: "question", text: question, mentions: [] },
               started,
               { kind: "turnStarted", turn: 1, maxTurns: 8 },
             ],
@@ -267,6 +267,78 @@ export const Answered: Story = {
   },
 }
 
+const mentionedQuestion = "How many @clients per @clients.country?"
+
+/**
+ * A sent question keeps its chips — the composer's own — and a chip opens
+ * its object. A table dropped since is dimmed and said, not hidden.
+ */
+export const QuestionWithMentions: Story = {
+  args: {
+    state: assistantState(
+      threadOfEvents([
+        {
+          question: mentionedQuestion,
+          events: [
+            {
+              kind: "question",
+              text: mentionedQuestion,
+              mentions: [
+                {
+                  kind: "table",
+                  label: "clients",
+                  mention: {
+                    kind: "relation",
+                    address: {
+                      catalog: null,
+                      namespace: "public",
+                      relation: "clients",
+                    },
+                    field: null,
+                  },
+                  missing: false,
+                },
+                {
+                  kind: "column",
+                  label: "clients.country",
+                  mention: {
+                    kind: "relation",
+                    address: {
+                      catalog: null,
+                      namespace: "public",
+                      relation: "clients",
+                    },
+                    field: "country",
+                  },
+                  missing: true,
+                },
+              ],
+            },
+            started,
+            { kind: "textDelta", text: "About 4 200." },
+            answered,
+          ],
+        },
+      ])
+    ),
+  },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement)
+    await userEvent.click(
+      canvas.getByRole("button", { name: "Open table clients" })
+    )
+    await expect(args.onOpenObject).toHaveBeenCalledWith({
+      catalog: null,
+      namespace: "public",
+      relation: "clients",
+    })
+    await expect(canvas.getByText("· not found")).toBeVisible()
+    await expect(
+      canvas.queryByRole("button", { name: /clients\.country/ })
+    ).toBeNull()
+  },
+}
+
 export const ThePriceOfAnotherModelIsNotShown: Story = {
   args: {
     state: assistantState(answeredThread),
@@ -289,7 +361,7 @@ export const ThinkingThenAnswering: Story = {
         {
           question,
           events: [
-            { kind: "question", text: question },
+            { kind: "question", text: question, mentions: [] },
             started,
             {
               kind: "thinkingDelta",
@@ -316,7 +388,7 @@ export const SeveralExchangesWithVersions: Story = {
       {
         question,
         events: [
-          { kind: "question", text: question },
+          { kind: "question", text: question, mentions: [] },
           started,
           { kind: "textDelta", text: "1,204." },
           answered,
@@ -325,7 +397,7 @@ export const SeveralExchangesWithVersions: Story = {
       {
         question: "And last month?",
         events: [
-          { kind: "question", text: "And last month?" },
+          { kind: "question", text: "And last month?", mentions: [] },
           started,
           { kind: "textDelta", text: "1,190." },
           answered,
@@ -366,7 +438,11 @@ export const Empty: Story = {
       threadOfEvents([
         {
           question,
-          events: [{ kind: "question", text: question }, started, answered],
+          events: [
+            { kind: "question", text: question, mentions: [] },
+            started,
+            answered,
+          ],
         },
       ])
     ),
@@ -387,7 +463,7 @@ export const ProviderFailed: Story = {
         {
           question,
           events: [
-            { kind: "question", text: question },
+            { kind: "question", text: question, mentions: [] },
             started,
             {
               kind: "failed",
@@ -419,7 +495,7 @@ export const FailedAfterAWrite: Story = {
         {
           question,
           events: [
-            { kind: "question", text: question },
+            { kind: "question", text: question, mentions: [] },
             started,
             {
               kind: "failed",
@@ -453,7 +529,7 @@ export const RefusedByTier: Story = {
         {
           question,
           events: [
-            { kind: "question", text: question },
+            { kind: "question", text: question, mentions: [] },
             {
               kind: "failed",
               message:
@@ -485,7 +561,7 @@ export const AgentNeedsSignIn: Story = {
         {
           question,
           events: [
-            { kind: "question", text: question },
+            { kind: "question", text: question, mentions: [] },
             {
               kind: "failed",
               message: "the agent needs you to sign in before it can answer",
@@ -523,6 +599,7 @@ export const AgentWorkingAndRefused: Story = {
             {
               kind: "question",
               text: "Read /etc/hosts and tell me the tables",
+              mentions: [],
             },
             agentStarted,
             { kind: "agentTool", id: "t1", tool: "read", status: "failed" },
@@ -563,7 +640,11 @@ export const ExternalAgentQueryWithRows: Story = {
         {
           question: "Show me the last three invoices",
           events: [
-            { kind: "question", text: "Show me the last three invoices" },
+            {
+              kind: "question",
+              text: "Show me the last three invoices",
+              mentions: [],
+            },
             agentStarted,
             { kind: "agentTool", id: "t1", tool: "think", status: "completed" },
             {
@@ -628,7 +709,7 @@ export const TruncatedOffersToContinue: Story = {
         {
           question,
           events: [
-            { kind: "question", text: question },
+            { kind: "question", text: question, mentions: [] },
             started,
             { kind: "textDelta", text: "The slowest queries are" },
             {
@@ -713,7 +794,11 @@ export const PendingApproval: Story = {
         {
           question: "Mark invoice 4211 as paid",
           events: [
-            { kind: "question", text: "Mark invoice 4211 as paid" },
+            {
+              kind: "question",
+              text: "Mark invoice 4211 as paid",
+              mentions: [],
+            },
             started,
             {
               kind: "toolCall",
@@ -768,7 +853,7 @@ export const PendingApproval: Story = {
       name: "Question for the assistant",
     })
     await userEvent.type(field, "yes, go ahead{Enter}")
-    await expect(args.onAsk).toHaveBeenCalledWith("yes, go ahead")
+    await expect(args.onAsk).toHaveBeenCalledWith("yes, go ahead", [])
     await expect(args.onDecide).not.toHaveBeenCalled()
 
     // The review names the connection, focuses Cancel, and Enter does not approve.
@@ -798,7 +883,10 @@ export const QueuedWhileAnswering: Story = {
         [
           {
             question,
-            events: [{ kind: "question", text: question }, started],
+            events: [
+              { kind: "question", text: question, mentions: [] },
+              started,
+            ],
           },
         ],
         { running: true }
@@ -856,7 +944,7 @@ export const SendingClosesTheHistory: Story = {
       canvas.getByRole("textbox", { name: "Question for the assistant" }),
       "And by region?{Enter}"
     )
-    await expect(args.onAsk).toHaveBeenCalledWith("And by region?")
+    await expect(args.onAsk).toHaveBeenCalledWith("And by region?", [])
     // The question lands in a conversation the user can see.
     await expect(
       canvas.queryByRole("heading", { name: "Conversations" })
@@ -901,7 +989,7 @@ export const HostileAnswerRendersNothingActive: Story = {
         {
           question,
           events: [
-            { kind: "question", text: question },
+            { kind: "question", text: question, mentions: [] },
             started,
             hostile,
             answered,
@@ -1007,7 +1095,7 @@ export const AgentSettingsAboveTheField: Story = {
         {
           question,
           events: [
-            { kind: "question", text: question },
+            { kind: "question", text: question, mentions: [] },
             agentStarted,
             SETTINGS_EVENT,
             { kind: "textDelta", text: answer },
@@ -1148,7 +1236,7 @@ export const AgentSettingsForgottenAfterRestart: Story = {
         {
           question,
           events: [
-            { kind: "question", text: question },
+            { kind: "question", text: question, mentions: [] },
             agentStarted,
             SETTINGS_EVENT,
             answered,
@@ -1157,7 +1245,7 @@ export const AgentSettingsForgottenAfterRestart: Story = {
         {
           question: "And now?",
           events: [
-            { kind: "question", text: "And now?" },
+            { kind: "question", text: "And now?", mentions: [] },
             { kind: "memoryReset", reason: "agentRestarted" },
             agentStarted,
             answered,
@@ -1181,7 +1269,7 @@ export const ASampleServedOneQuestion: Story = {
         {
           question,
           events: [
-            { kind: "question", text: question },
+            { kind: "question", text: question, mentions: [] },
             { kind: "sampleApproved", rows: 5, columns: 2 },
             started,
             { kind: "textDelta", text: answer },
@@ -1191,7 +1279,7 @@ export const ASampleServedOneQuestion: Story = {
         {
           question: "And the others?",
           events: [
-            { kind: "question", text: "And the others?" },
+            { kind: "question", text: "And the others?", mentions: [] },
             { kind: "memoryReset", reason: "sampleNotKept" },
             started,
             { kind: "textDelta", text: answer },
@@ -1221,7 +1309,7 @@ export const ReopenedFromTheWorkspace: Story = {
         {
           question,
           events: [
-            { kind: "question", text: question },
+            { kind: "question", text: question, mentions: [] },
             { kind: "olderNotLoaded" },
             { kind: "textDelta", text: answer },
             {
@@ -1239,7 +1327,7 @@ export const ReopenedFromTheWorkspace: Story = {
         {
           question: "And their emails?",
           events: [
-            { kind: "question", text: "And their emails?" },
+            { kind: "question", text: "And their emails?", mentions: [] },
             { kind: "sampleApproved", rows: 5, columns: 2 },
             { kind: "answerNotKept" },
             answered,
@@ -1248,7 +1336,7 @@ export const ReopenedFromTheWorkspace: Story = {
         {
           question: "And now?",
           events: [
-            { kind: "question", text: "And now?" },
+            { kind: "question", text: "And now?", mentions: [] },
             { kind: "memoryReset", reason: "restarted" },
             { kind: "notSaved" },
             started,

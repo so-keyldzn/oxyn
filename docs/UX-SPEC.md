@@ -769,6 +769,77 @@ attend derrière elle. L'appel d'outil se lit dans le fil comme les autres ; son
 rapport ne dit que des compteurs (« sent 5 rows of 1 column you approved »),
 jamais un nom de colonne ni une valeur.
 
+### Nommer un objet d'un `@`
+
+Dans le champ de la question, `@` ouvre au-dessus du champ la liste des objets de
+la connexion : tables, vues, collections, colonnes (`table.colonne`) et requêtes
+sauvegardées de cette connexion ou d'aucune. Ce qui suit le `@` la filtre. Elle
+vient du catalogue local et de la bibliothèque du workspace, **jamais d'un
+modèle** : c'est une complétion de nom, un résultat déterministe
+(`.claude/rules/ia.md`). Elle doit répondre en 100 ms au plus
+([PERFORMANCE](PERFORMANCE.md)) ; elle est bornée à douze objets.
+
+* la liste s'ouvre **au-dessus** du champ, et bascule dessous seulement si la
+  place y manque ; elle garde 8 px du bord, ne dépasse jamais la largeur du
+  champ ni la fenêtre, et sa hauteur est `min(18rem, place disponible)`, avec
+  défilement interne. La ligne active reste visible quand le clavier la
+  déplace. Les stories la tiennent à 360 px de large et dans une fenêtre basse ;
+* **une seule ligne active** : la souris et le clavier déplacent la même
+  surbrillance, sans style de survol distinct ;
+* les colonnes (`table.colonne`) viennent des champs que la recherche du
+  catalogue a déjà trouvés (`matchedFields`), trois par relation au plus. La
+  liste ne charge aucune description pour en proposer : ce qui est en cache
+  s'affiche d'abord, le reste complète ;
+* chaque ligne porte l'icône de sa sorte et, à droite, son schéma — de quoi
+  distinguer deux `orders` ;
+* **un `@` seul montre déjà des objets** : ceux de l'arbre du catalogue que la
+  barre latérale a lus (le même cache), dans l'ordre de l'arbre, sans les
+  objets système, puis les requêtes sauvegardées les plus récentes. Le panneau
+  prépare ces deux sources à son ouverture ; le premier `@` n'attend ni le
+  backend ni un délai, et les 60 ms d'attente de la bibliothèque ne valent
+  qu'entre deux frappes ;
+* la liste a ses états : une ligne « Loading… » en squelette tant qu'aucune
+  réponse n'est arrivée, « No matching object » **seulement** quand une réponse
+  l'a dit, « Type to search tables, views, columns and queries » quand l'arbre
+  n'est pas lisible, et l'erreur du backend telle qu'elle arrive. Pendant une
+  recherche, ce qui est affiché reste affiché : la liste ne clignote pas à
+  chaque lettre ;
+* le focus **reste dans le champ** : les flèches déplacent la surbrillance, que
+  le champ désigne par `aria-activedescendant` ;
+* **Entrée ou Tab choisit l'objet et n'envoie rien** ; **Échap ferme la liste et
+  n'arrête rien** — c'est l'Échap suivant, liste fermée, qui arrête une réponse
+  en cours. Les stories tiennent ces deux-là ;
+* l'objet choisi devient une **puce** `@orders` dans le texte. Retour arrière
+  l'efface entière : un libellé sans son adresse n'existe pas ;
+* la puce se lit **comme un mot** : à la taille du texte, sur sa ligne de base,
+  centrée à 1 px près sur le texte voisin, jamais plus haute que la ligne.
+  Insérer ou effacer une puce ne change la hauteur d'aucune ligne, le caret
+  reste au niveau de part et d'autre, et une puce en fin de ligne passe entière
+  à la suivante. Les stories le mesurent, dans le champ comme dans le fil, en
+  clair et en sombre.
+
+La puce porte une **adresse** — celle du catalogue, et le nom de colonne s'il y
+en a un —, jamais un texte que le backend reparserait. La question garde le
+libellé lisible ; le backend vérifie l'adresse contre son cache. Seize objets au
+plus par question.
+
+À l'envoi, les objets nommés sont **imposés** au contexte, avant ce que la
+question fait trouver, pour **toute** destination
+([AI-PROVIDERS](AI-PROVIDERS.md#mentions)). Nommer n'est pas envoyer de valeurs :
+l'épingle d'échantillon ci-dessus reste un geste distinct. L'en-tête dit, après
+la question, ce qui n'est pas parti : « 1 mentioned object(s) not found », « 2
+mentioned object(s) named only, over the budget ».
+
+Dans le fil, la question envoyée montre ses mentions avec **la même puce** que
+le champ : même composant, même icône par sorte, mêmes couleurs. Les puces
+viennent de ce que la question **porte**, enregistré avec elle — jamais d'une
+relecture du texte : un `@maison` tapé à la main reste du texte. Une puce de
+table, de vue, de collection ou de colonne est un bouton qui ouvre l'objet. Une
+conversation relue revérifie chaque adresse contre le cache : un objet que le
+cache sait disparu s'affiche atténué, avec « not found », et n'ouvre rien. Sans
+preuve de sa disparition, une puce reste normale. Le libellé vient du catalogue :
+c'est une entrée hostile, rendue comme du texte.
+
 ### Ce que le panneau montre d'un agent externe
 
 Un agent externe travaille avec ses propres outils, qui ne sont pas des `Command`

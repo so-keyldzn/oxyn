@@ -40,6 +40,7 @@ import { useProviderModels } from "./use-provider-models"
 import { declaredEfforts, effortToSend } from "./reasoning-effort"
 import type { ExchangeNode } from "./thread"
 import { useAssistantAvailable } from "./use-assistant-available"
+import { useMentionSearch } from "./mention-search"
 import { ToolRows } from "./tool-rows"
 import { AssistantEntryButton } from "@/components/oxyn/assistant-entry-button"
 import type { AgentStartupControls } from "@/components/oxyn/assistant-agent-startup"
@@ -50,6 +51,7 @@ import { toast } from "@/components/ui/toast"
 import { openObject } from "@/features/workspace/object-requests"
 import type {
   AgentProvenance,
+  Mention,
   ReasoningEffort,
   SampleRequest,
 } from "@/lib/ipc/ai"
@@ -87,6 +89,8 @@ export function AssistantPanel({
 }) {
   const entry = useAssistantAvailable(open)
   const state = useAssistant(open.connection)
+  // From the local catalog and library: no model completes a name.
+  const mentionSource = useMentionSearch(open.connection)
   const { chosenKey, pin: pinned } = usePinState(open.connection)
   const [chosenModels, setChosenModels] = React.useState<
     Record<string, string>
@@ -222,7 +226,8 @@ export function AssistantPanel({
   const askWithSample = async (
     asked: AskTarget,
     question: string,
-    object: ObjectPin
+    object: ObjectPin,
+    mentions: Array<Mention>
   ) => {
     if (state.thread.running !== null || state.sending) {
       toast.add({ title: "Not sent", description: SAMPLE_WAITS, type: "error" })
@@ -245,11 +250,17 @@ export function AssistantPanel({
       return false
     }
     try {
-      await askQuestion(open.connection, asked, question, {
-        request: request.id,
-        source: request.address,
-        columns: [...columns],
-      })
+      await askQuestion(
+        open.connection,
+        asked,
+        question,
+        {
+          request: request.id,
+          source: request.address,
+          columns: [...columns],
+        },
+        mentions
+      )
     } finally {
       sampleApproval.settle()
     }
@@ -291,12 +302,13 @@ export function AssistantPanel({
         modelList={modelList}
         pins={pin ? [{ key: pin.key, kind: "object", label: pin.label }] : []}
         onRemovePin={() => unpin(open.connection)}
-        onAsk={(question) =>
+        mentionSource={mentionSource}
+        onAsk={(question, mentions) =>
           pin && target
             ? // A refusal is already published by the store; the draft stays.
-              askWithSample(target, question, pin).catch(() => false)
+              askWithSample(target, question, pin, mentions).catch(() => false)
             : withTarget((asked) =>
-                askQuestion(open.connection, asked, question)
+                askQuestion(open.connection, asked, question, null, mentions)
               )
         }
         onStop={() => void stopAssistant(open.connection)}

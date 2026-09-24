@@ -3,6 +3,8 @@ import { HugeiconsIcon } from "@hugeicons/react"
 import { PencilEdit02Icon } from "@hugeicons/core-free-icons"
 
 import { AssistantCopyButton } from "@/components/oxyn/assistant-copy-button"
+import { MentionChip } from "@/components/oxyn/assistant-mention-chip"
+import { questionSegments } from "@/components/oxyn/assistant-question-segments"
 import { AssistantVersions } from "@/components/oxyn/assistant-versions"
 import { Bubble, BubbleContent } from "@/components/ui/bubble"
 import { Button } from "@/components/ui/button"
@@ -15,6 +17,8 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import type { Versions } from "@/features/assistant/thread"
+import type { MentionView } from "@/lib/ipc/ai"
+import type { CatalogAddress } from "@/lib/ipc/types"
 
 /**
  * A question the user asked, with what can be done with it.
@@ -25,6 +29,8 @@ import type { Versions } from "@/features/assistant/thread"
  */
 export function AssistantQuestion({
   text,
+  mentions = [],
+  onOpenObject,
   versions,
   busy,
   onEdit,
@@ -32,6 +38,10 @@ export function AssistantQuestion({
   onCopy,
 }: {
   text: string
+  /** What the question named with `@`: drawn as the composer draws them. */
+  mentions?: ReadonlyArray<MentionView>
+  /** Opens a mentioned table, view or column's relation. Runs nothing. */
+  onOpenObject?: (address: CatalogAddress) => void
   versions: Versions
   /** An answer is running: editing and switching wait. */
   busy: boolean
@@ -133,7 +143,11 @@ export function AssistantQuestion({
             dir="auto"
             data-selectable
           >
-            {text}
+            <QuestionText
+              text={text}
+              mentions={mentions}
+              onOpenObject={onOpenObject}
+            />
           </BubbleContent>
         </Bubble>
         <div className="flex items-center gap-0.5">
@@ -171,5 +185,50 @@ export function AssistantQuestion({
         </div>
       </MessageContent>
     </Message>
+  )
+}
+
+/** The question, its mentions drawn as the chips the composer showed. */
+function QuestionText({
+  text,
+  mentions,
+  onOpenObject,
+}: {
+  text: string
+  mentions: ReadonlyArray<MentionView>
+  onOpenObject?: (address: CatalogAddress) => void
+}) {
+  const { segments, unplaced } = questionSegments(text, mentions)
+  const chip = (view: MentionView, key: string) => {
+    const target = view.mention
+    // A relation opens where the catalog would open it; a saved query, and a
+    // mention whose object is gone, open nothing.
+    const open =
+      target.kind === "relation" && !view.missing && onOpenObject
+        ? () => onOpenObject(target.address)
+        : undefined
+    return (
+      <MentionChip
+        key={key}
+        kind={view.kind}
+        label={view.label}
+        missing={view.missing}
+        onOpen={open}
+      />
+    )
+  }
+  return (
+    <>
+      {segments.map((segment, at) =>
+        segment.kind === "text" ? (
+          <React.Fragment key={`text-${at}`}>{segment.text}</React.Fragment>
+        ) : (
+          chip(segment.view, `mention-${segment.index}`)
+        )
+      )}
+      {unplaced.length > 0 ? (
+        <> {unplaced.map((view, at) => chip(view, `unplaced-${at}`))}</>
+      ) : null}
+    </>
   )
 }

@@ -53,7 +53,7 @@ export function threadOf(view: ThreadView): Thread {
       id: node.id,
       parent: node.parent,
       exchange: {
-        ...exchangeOf(node.question, node.events),
+        ...exchangeOf(node.question, node.events, node.mentions),
         // A run the backend no longer drives is not running, whatever its log
         // says: only `view.running` knows.
         running: view.running === node.id,

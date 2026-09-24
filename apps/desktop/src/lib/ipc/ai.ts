@@ -204,6 +204,40 @@ export const SampleApproval = z.object({
 })
 export type SampleApproval = z.infer<typeof SampleApproval>
 
+/**
+ * An object the user named with `@`: an address the backend checks against
+ * the catalog, never text it reparses. Naming sends structure, not values —
+ * a row sample is its own approval (`SampleApproval`).
+ */
+export const Mention = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("relation"),
+    address: CatalogAddress,
+    field: z.string().nullable(),
+  }),
+  z.object({ kind: z.literal("savedQuery"), document: z.string() }),
+])
+export type Mention = z.infer<typeof Mention>
+
+/**
+ * A mention as the thread shows it. `label` is the object's name as the
+ * catalog gave it — hostile, rendered as text. `missing` is claimed by the
+ * backend on evidence only. `kind` comes from a closed `match` whose last arm
+ * is `other`: an unknown word degrades one icon (front.md).
+ */
+export const MentionView = z.object({
+  kind: z
+    .enum(["table", "view", "collection", "column", "savedQuery", "other"])
+    .catch("other"),
+  label: z.string(),
+  mention: Mention,
+  missing: z.boolean(),
+})
+export type MentionView = z.infer<typeof MentionView>
+
+/** The backend's cap on the objects one question names. */
+export const MAX_MENTIONS = 16
+
 export const AskRequest = z.object({
   connection: z.string(),
   session: z.string(),
@@ -215,6 +249,8 @@ export const AskRequest = z.object({
   destination: DestinationChoice,
   /** For this question only: the backend does not keep it for the next one. */
   sample: SampleApproval.nullable(),
+  /** In the order they were typed; imposed on the context, no row value. */
+  mentions: z.array(Mention).max(MAX_MENTIONS),
 })
 export type AskRequest = z.infer<typeof AskRequest>
 
@@ -254,6 +290,10 @@ export const ContextSummary = z.object({
   omittedRelations: z.number().int().nonnegative(),
   droppedSamples: z.number().int().nonnegative(),
   estimatedTokens: z.number().int().nonnegative(),
+  /** Named with `@` but nothing sent: unknown to the catalog, or unreadable. */
+  ignoredMentions: z.number().int().nonnegative(),
+  /** Named in the prompt, not described: over the context budget. */
+  omittedMentions: z.number().int().nonnegative(),
 })
 export type ContextSummary = z.infer<typeof ContextSummary>
 
@@ -502,7 +542,11 @@ export const AgentSettingAnswer = z.discriminatedUnion("type", [
 export type AgentSettingAnswer = z.infer<typeof AgentSettingAnswer>
 
 export const AiEvent = z.discriminatedUnion("kind", [
-  z.object({ kind: z.literal("question"), text: z.string() }),
+  z.object({
+    kind: z.literal("question"),
+    text: z.string(),
+    mentions: z.array(MentionView),
+  }),
   z.object({
     kind: z.literal("started"),
     destination: Destination,
@@ -692,6 +736,7 @@ export const NodeView = z.object({
   id: z.number().int().nonnegative(),
   parent: z.number().int().nonnegative().nullable(),
   question: z.string(),
+  mentions: z.array(MentionView),
   events: z.array(AiEvent),
 })
 export type NodeView = z.infer<typeof NodeView>

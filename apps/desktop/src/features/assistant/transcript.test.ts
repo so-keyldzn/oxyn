@@ -464,7 +464,10 @@ describe("an agent's request for a sample", () => {
   }
 
   it("waits on the running exchange until its answer", () => {
-    const running = exchangeOf("q", [{ kind: "question", text: "q" }, asked])
+    const running = exchangeOf("q", [
+      { kind: "question", text: "q", mentions: [] },
+      asked,
+    ])
     expect(running.sampleAsk?.id).toBe("ask")
     // Another request's answer closes nothing.
     expect(
@@ -485,7 +488,7 @@ describe("an agent's request for a sample", () => {
 
   it("closes with the run, and never reopens on a replay of a finished one", () => {
     const ended = exchangeOf("q", [
-      { kind: "question", text: "q" },
+      { kind: "question", text: "q", mentions: [] },
       asked,
       failed("provider"),
     ])

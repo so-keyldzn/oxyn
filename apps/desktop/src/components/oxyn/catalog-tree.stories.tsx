@@ -239,9 +239,12 @@ export const PinForAnExternalAgent: Story = {
   },
   play: async ({ canvas }) => {
     const menu = await openInvoicesMenu(canvas)
-    await expect(
-      menu.getByRole("menuitem", { name: "Pin to question" })
-    ).toBeVisible()
+    // The popup fades in: read it once the transition lets it be seen.
+    await waitFor(() =>
+      expect(
+        menu.getByRole("menuitem", { name: "Pin to question" })
+      ).toBeVisible()
+    )
     await userEvent.keyboard("{Escape}")
     await waitFor(() => expect(menu.queryByRole("menu")).toBeNull())
   },

@@ -241,6 +241,8 @@ export function ExchangeView({
     <div className="flex flex-col gap-3">
       <AssistantQuestion
         text={exchange.question}
+        mentions={exchange.mentions}
+        onOpenObject={view.onOpenObject}
         versions={versionsOf(view.state.thread, node)}
         busy={busy}
         onEdit={(text) => view.onEdit(node, text)}

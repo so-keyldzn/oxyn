@@ -136,6 +136,8 @@ export const started: AiEvent = {
     omittedRelations: 3,
     droppedSamples: 1,
     estimatedTokens: 5_800,
+    ignoredMentions: 0,
+    omittedMentions: 0,
   },
   provenance: {
     agent: "018f0000-0000-7000-8000-0000000a9e17",

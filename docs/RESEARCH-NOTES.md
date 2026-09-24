@@ -91,6 +91,7 @@ Les versions sont écrites **exactes** dans `apps/desktop/package.json` et le
 | `playwright` | `1.63.0` | idem | Chromium seul, pour les stories |
 | `@uiw/react-codemirror` · `@codemirror/lang-sql` | `4.25.11` · `6.10.0` | idem | — |
 | `zod` | `4.6.5` | idem | relevé le 2026-09-16 ; valide les réponses IPC ([ADR-0031](adr/0031-validation-des-reponses-ipc.md)). Était déclaré depuis ADR-0029 et importé nulle part |
+| `lexical` · `@lexical/react` | `0.51.0` | idem | relevé le 2026-09-24 (`npm view`, dist-tag `latest`, publié le 2026-09-23) ; le champ de question de l'assistant et ses mentions `@`. `@lexical/react` déclare `yjs` en pair : il ne sert qu'au plugin de collaboration, non importé |
 
 ### Faits qui ont décidé du code
 
@@ -103,6 +104,7 @@ Les versions sont écrites **exactes** dans `apps/desktop/package.json` et le
 | `@storybook/tanstack-react@10.6.0` embarque `@tanstack/router-core@1.171.30` ; avec `react-router@1.170.36`, toute story échoue sur `path.endsWith is not a function` | constat, `vitest --project storybook` | 2026-09-15 |
 | Une commande sans `async` s'exécute **sur le thread principal**, sauf déclarée `#[tauri::command(async)]` ; une commande `async` ne peut prendre `State<'_, T>` qu'en renvoyant un `Result` | `https://v2.tauri.app/develop/calling-rust/` | 2026-09-15 |
 | `esbuild` et `unrs-resolver` livrent leur binaire en dépendance optionnelle : leurs scripts d'installation sont refusés (`allowBuilds`) | `pnpm install`, pnpm 11.1.2 | 2026-09-15 |
+| `LexicalTypeaheadMenuPlugin` pose `role="listbox"` et `aria-label="Typeahead menu"` sur son ancre **à chaque rattachement** — l'ancre est retirée puis remise à chaque frappe —, et laisse `aria-activedescendant` sur `typeahead-item-0` quand la liste se vide : axe échoue en `aria-valid-attr-value` et, sur une liste sans option, en `aria-required-children` | sources de `@lexical/react@0.51.0` (`shared/LexicalMenu.tsx`) et constat, `vitest --project storybook` | 2026-09-24 |
 
 ## GPUI
 

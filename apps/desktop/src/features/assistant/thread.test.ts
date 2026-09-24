@@ -62,9 +62,10 @@ describe("a conversation tree", () => {
         {
           id: 0,
           parent: null,
+          mentions: [],
           question: "How many?",
           events: [
-            { kind: "question", text: "How many?" },
+            { kind: "question", text: "How many?", mentions: [] },
             { kind: "textDelta", text: "Some" },
           ],
         },

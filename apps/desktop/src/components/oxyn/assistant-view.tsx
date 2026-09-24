@@ -7,7 +7,10 @@ import { AssistantAgentSettings } from "@/components/oxyn/assistant-agent-settin
 import type { AgentSettingIntent } from "@/components/oxyn/assistant-agent-settings"
 import type { AgentStartupControls } from "@/components/oxyn/assistant-agent-startup"
 import { AssistantComposer } from "@/components/oxyn/assistant-composer"
-import type { AssistantComposerHandle } from "@/components/oxyn/assistant-composer"
+import type {
+  AssistantComposerHandle,
+  MentionSource,
+} from "@/components/oxyn/assistant-composer"
 import { AssistantContextPins } from "@/components/oxyn/assistant-context-pins"
 import type { ContextPin } from "@/components/oxyn/assistant-context-pins"
 import {
@@ -51,6 +54,7 @@ import { outcomeOf } from "@/features/assistant/transcript"
 import type { ToolCallEntry } from "@/features/assistant/transcript"
 import type {
   AgentProvenance,
+  Mention,
   ModelChoice,
   ModelCost,
   ReasoningEffort,
@@ -111,8 +115,16 @@ export interface AssistantViewProps {
   agentStartup?: AgentStartupControls | null
   /** The selected provider's model list, while it is loading or failed. */
   modelList?: ModelListState | null
-  /** Sends or queues; `false` when the backend refused and the draft stays. */
-  onAsk: (question: string) => Promise<boolean> | boolean
+  /**
+   * Sends or queues, with what the question names with `@`; `false` when the
+   * backend refused and the draft stays.
+   */
+  onAsk: (
+    question: string,
+    mentions: Array<Mention>
+  ) => Promise<boolean> | boolean
+  /** The `@` list of this connection's objects; without it, no list. */
+  mentionSource?: MentionSource | null
   onStop: () => void
   onDecide: (node: number, approval: string, approved: boolean) => void
   /** Puts the text in a console, as text. Nothing runs (I-07). */
@@ -428,9 +440,10 @@ export function AssistantView(props: AssistantViewProps) {
           disabledReason={disabledReason}
           // The question goes to the current conversation: it is shown again
           // first, so nothing is sent into a thread the user cannot see.
-          onSubmit={(question) => {
+          mentions={props.mentionSource ?? null}
+          onSubmit={(question, mentions) => {
             setHistoryOpen(false)
-            return onAsk(question)
+            return onAsk(question, mentions)
           }}
           onStop={onStop}
         />

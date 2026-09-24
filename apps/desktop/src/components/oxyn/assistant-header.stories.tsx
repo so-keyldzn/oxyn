@@ -257,6 +257,8 @@ export const AfterAQuestion: Story = {
       omittedRelations: 3,
       droppedSamples: 1,
       estimatedTokens: 5_800,
+      ignoredMentions: 1,
+      omittedMentions: 2,
     },
   },
   play: async ({ canvasElement }) => {
@@ -265,6 +267,13 @@ export const AfterAQuestion: Story = {
     await expect(canvas.getByText(/3 omitted to fit/)).toBeVisible()
     await expect(
       canvas.getByText(/1 row sample\(s\) withheld by the tier/)
+    ).toBeVisible()
+    // A mention the user typed and that did not go is never silent.
+    await expect(
+      canvas.getByText(/1 mentioned object\(s\) not found/)
+    ).toBeVisible()
+    await expect(
+      canvas.getByText(/2 mentioned object\(s\) named only/)
     ).toBeVisible()
   },
 }

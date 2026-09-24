@@ -101,6 +101,14 @@ function contextLine(context: ContextSummary) {
     parts.push(
       `${context.droppedSamples.toLocaleString()} row sample(s) withheld by the tier`
     )
+  if (context.ignoredMentions > 0)
+    parts.push(
+      `${context.ignoredMentions.toLocaleString()} mentioned object(s) not found`
+    )
+  if (context.omittedMentions > 0)
+    parts.push(
+      `${context.omittedMentions.toLocaleString()} mentioned object(s) named only, over the budget`
+    )
   parts.push(`≈ ${context.estimatedTokens.toLocaleString()} tokens`)
   return parts.join(" · ")
 }

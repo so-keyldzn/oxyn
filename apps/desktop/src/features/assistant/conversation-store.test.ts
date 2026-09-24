@@ -11,9 +11,10 @@ import {
   withdrawSample,
 } from "./conversation-store"
 import { activePath } from "./thread"
+import { AiUpdate } from "@/lib/ipc/ai"
+import type * as IpcAi from "@/lib/ipc/ai"
 import type {
   AgentSettingsState,
-  AiUpdate,
   AskStarted,
   ThreadSummary,
   ThreadView,
@@ -30,7 +31,11 @@ const backend = vi.hoisted(() => ({
   withdrawSample: vi.fn(),
 }))
 
-vi.mock("@/lib/ipc/ai", () => ({ ai: backend }))
+// The real schemas, a fake backend: an event is parsed as the webview would.
+vi.mock("@/lib/ipc/ai", async (actual) => ({
+  ...(await actual<typeof IpcAi>()),
+  ai: backend,
+}))
 vi.mock("@/lib/ipc/client", () => ({
   backend: { decide: vi.fn() },
   BackendError: class extends Error {},
@@ -104,6 +109,70 @@ describe("an approved sample", () => {
     ).rejects.toThrow(/sample/)
     expect(getAssistant(id).thread.queue).toHaveLength(0)
     expect(backend.ask).toHaveBeenCalledTimes(1)
+  })
+})
+
+describe("mentions", () => {
+  const orders = {
+    kind: "relation" as const,
+    address: { catalog: null, namespace: "main", relation: "orders" },
+    field: null,
+  }
+
+  it("go with their question, and a queued question keeps its own", async () => {
+    const id = connection()
+    const captured: { stream?: (update: AiUpdate) => void } = {}
+    let node = 0
+    backend.ask.mockImplementation(
+      async (_request: unknown, onUpdate: (update: AiUpdate) => void) => {
+        captured.stream = onUpdate
+        return { thread: "7", node: node++ } satisfies AskStarted
+      }
+    )
+
+    await askQuestion(id, target, "first @orders", null, [orders])
+    expect(await askQuestion(id, target, "and this", null, [orders])).toBe(
+      "queued"
+    )
+    captured.stream?.(answered)
+    await vi.waitFor(() => expect(backend.ask).toHaveBeenCalledTimes(2))
+    captured.stream?.({ ...answered, node: 1 })
+    await askQuestion(id, target, "no mention")
+
+    expect(backend.ask.mock.calls[0]?.[0]).toMatchObject({
+      mentions: [orders],
+    })
+    expect(backend.ask.mock.calls[1]?.[0]).toMatchObject({
+      question: "and this",
+      mentions: [orders],
+    })
+    expect(backend.ask.mock.calls[2]?.[0]).toMatchObject({ mentions: [] })
+  })
+
+  it("reach the sent question as chips, from the backend's own event", async () => {
+    const id = connection()
+    // As the backend serializes it — and before its answer to `ask`.
+    const question = AiUpdate.parse({
+      node: 0,
+      event: {
+        kind: "question",
+        text: "@orders per month",
+        mentions: [
+          { kind: "table", label: "orders", mention: orders, missing: false },
+        ],
+      },
+    })
+    backend.ask.mockImplementation(
+      async (_request: unknown, onUpdate: (update: AiUpdate) => void) => {
+        onUpdate(question)
+        return { thread: "7", node: 0 } satisfies AskStarted
+      }
+    )
+
+    await askQuestion(id, target, "@orders per month", null, [orders])
+    expect(
+      activePath(getAssistant(id).thread)[0]?.exchange.mentions
+    ).toMatchObject([{ label: "orders", missing: false }])
   })
 })
 
@@ -190,7 +259,7 @@ describe("the assistant store", () => {
     const view: ThreadView = {
       id: "3",
       title: "Old one",
-      nodes: [{ id: 0, parent: null, question: "q", events: [] }],
+      nodes: [{ id: 0, parent: null, question: "q", mentions: [], events: [] }],
       selections: [],
       running: null,
     }
@@ -234,7 +303,7 @@ describe("the assistant store", () => {
     backend.openThread.mockResolvedValue({
       id: "2",
       title: "Live",
-      nodes: [{ id: 0, parent: null, question: "q", events: [] }],
+      nodes: [{ id: 0, parent: null, question: "q", mentions: [], events: [] }],
       selections: [],
       running: 0,
     } satisfies ThreadView)

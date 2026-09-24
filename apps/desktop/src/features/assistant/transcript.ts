@@ -21,6 +21,7 @@ import type {
   ErrorClass,
   FailureCategory,
   MemoryReset,
+  MentionView,
   PlanEntry,
   SampleRequest,
   SignInHelp,
@@ -197,6 +198,8 @@ export interface ContextWindow {
 
 export interface Exchange {
   question: string
+  /** What the question named with `@`, as the backend resolved it. */
+  mentions: ReadonlyArray<MentionView>
   entries: Array<Entry>
   running: boolean
   stopRequested: boolean
@@ -235,9 +238,13 @@ export interface Exchange {
   sampleAsk: SampleRequest | null
 }
 
-export function emptyExchange(question: string): Exchange {
+export function emptyExchange(
+  question: string,
+  mentions: ReadonlyArray<MentionView> = []
+): Exchange {
   return {
     question,
+    mentions,
     entries: [],
     running: false,
     stopRequested: false,
@@ -296,6 +303,7 @@ export function reduce(current: Exchange, event: AiEvent): Exchange {
       return {
         ...current,
         question: event.text,
+        mentions: event.mentions,
         running: true,
         stopRequested: false,
       }
@@ -634,8 +642,12 @@ function settle(current: Exchange): Exchange {
   }
 }
 
-export function exchangeOf(question: string, events: Array<AiEvent>) {
-  return events.reduce(reduce, emptyExchange(question))
+export function exchangeOf(
+  question: string,
+  events: Array<AiEvent>,
+  mentions: ReadonlyArray<MentionView> = []
+) {
+  return events.reduce(reduce, emptyExchange(question, mentions))
 }
 
 /** The user answered an approval; the backend is deciding. */
