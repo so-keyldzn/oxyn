@@ -13,6 +13,7 @@ import {
   pendingApprovals,
   reduce,
   saidSomething,
+  toolCardOf,
   touched,
 } from "./transcript"
 import type { AiEvent } from "@/lib/ipc/ai"
@@ -553,5 +554,99 @@ describe("a catalog reading (ADR-0036)", () => {
       "tool",
       "catalog",
     ])
+  })
+})
+
+describe("a conversation reopened from the workspace", () => {
+  const statement =
+    "WITH sales AS (\n  SELECT c.name AS category, SUM(oi.quantity) AS total\n  FROM main.order_items AS oi\n  GROUP BY c.name\n)\nSELECT * FROM sales ORDER BY total DESC;"
+
+  // What the panel read while the run went on…
+  const live = exchangeOf("Best category?", [
+    { kind: "question", text: "Best category?", mentions: [] },
+    { kind: "textDelta", text: "Let me count." },
+    {
+      kind: "toolCall",
+      call: 0,
+      tool: "execute_query",
+      command: "Execute",
+      statement,
+      connection: "commerce",
+      environment: "staging",
+      mutating: false,
+    },
+    {
+      kind: "toolReported",
+      call: 0,
+      status: "completed",
+      detail: "7 rows, 1 batches",
+      errorClass: null,
+      withheld: false,
+      rows: 7,
+      result: "result-1",
+    },
+    {
+      kind: "toolCall",
+      call: 1,
+      tool: "execute_query",
+      command: "Execute",
+      statement: "SELECT * FROM missing",
+      connection: "commerce",
+      environment: "staging",
+      mutating: false,
+    },
+    {
+      kind: "toolReported",
+      call: 1,
+      status: "failed",
+      detail: 'relation "missing" does not exist',
+      errorClass: "permanent",
+      withheld: false,
+      rows: null,
+      result: null,
+    },
+    { kind: "textDelta", text: " Done." },
+  ])
+
+  // …and what `restored_events` sends back for it after a restart.
+  const reopened = exchangeOf("Best category?", [
+    { kind: "question", text: "Best category?", mentions: [] },
+    { kind: "textDelta", text: "Let me count. Done." },
+    {
+      kind: "restoredCall",
+      tool: "execute_query",
+      summary: "7 rows, 1 batches",
+      statement,
+      status: "completed",
+      errorClass: null,
+      rowsNotKept: true,
+    },
+    {
+      kind: "restoredCall",
+      tool: "execute_query",
+      summary: 'relation "missing" does not exist',
+      statement: "SELECT * FROM missing",
+      status: "failed",
+      errorClass: "permanent",
+      rowsNotKept: false,
+    },
+  ])
+
+  const cards = (exchange: typeof live) =>
+    exchange.entries.flatMap((entry) =>
+      entry.kind === "tool" || entry.kind === "restoredCall"
+        ? [toolCardOf(entry)]
+        : []
+    )
+
+  it("draws each tool call with the card it had live, statement untouched", () => {
+    const restored = cards(reopened)
+    expect(restored).toHaveLength(2)
+    // Where it ran and whether it could write are not kept: left out, never
+    // guessed from the conversation's connection.
+    expect(restored).toEqual(
+      cards(live).map((card) => ({ ...card, target: null, mutating: null }))
+    )
+    expect(restored[0]?.statement).toBe(statement)
   })
 })

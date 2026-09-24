@@ -164,6 +164,36 @@ fn un_fil_relu_est_le_fil_ecrit() {
     assert_eq!(tour.usage.cache_write, Some(800));
 }
 
+/// Un appel d'outil relu garde son SQL à l'octet près, mise en page comprise.
+///
+/// Le panneau d'une conversation rouverte dessine l'instruction telle qu'elle
+/// revient du store : des retours à la ligne ou une indentation normalisés à
+/// l'écriture la montreraient d'un bloc, sans que rien n'échoue.
+#[test]
+fn un_appel_d_outil_relu_garde_la_mise_en_page_de_son_sql() {
+    let (store, workspace, connexion) = decor();
+    let id = fil(&store, workspace, connexion);
+    let sql = "WITH ventes AS (\n  SELECT c.name AS category,\n         SUM(oi.quantity) AS total\n  FROM main.order_items AS oi\n\tJOIN main.categories AS c ON c.id = oi.category_id\n  GROUP BY c.name\n)\nSELECT * FROM ventes ORDER BY total DESC;\n";
+    let tour =
+        TurnRecord::new(TurnRole::Assistant, PrivacyTier::Metadata, "").with_tool_calls(vec![
+            ToolCallRecord::new(
+                "call_1",
+                "execute_query",
+                "7 rows, 1 batches",
+                ToolCallStatus::Completed,
+            )
+            .with_statement(sql),
+        ]);
+    store.conversations().append(id, &tour).expect("écriture");
+
+    let relu = tout_le_fil(&store, id);
+    let appel = relu[0].record.tool_calls.first().expect("l'appel est relu");
+    assert_eq!(appel.statement.as_deref(), Some(sql));
+    assert_eq!(appel.tool, "execute_query");
+    assert_eq!(appel.summary, "7 rows, 1 batches");
+    assert_eq!(appel.status, ToolCallStatus::Completed);
+}
+
 /// Une raison d'arrêt propre au fournisseur se conserve telle quelle.
 ///
 /// La rabattre sur une variante voisine ferait passer une réponse incomplète

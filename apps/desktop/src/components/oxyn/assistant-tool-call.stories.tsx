@@ -1,9 +1,12 @@
 import type { Meta, StoryObj } from "@storybook/react-vite"
 import { expect, fn, userEvent, within } from "storybook/test"
 
-import { AssistantToolCall } from "./assistant-tool-call"
+import { AssistantRestoredCall, AssistantToolCall } from "./assistant-tool-call"
 import { APPROVAL_ID } from "./assistant-fixtures"
-import type { ToolCallEntry } from "@/features/assistant/transcript"
+import type {
+  RestoredCallEntry,
+  ToolCallEntry,
+} from "@/features/assistant/transcript"
 
 const base: ToolCallEntry = {
   kind: "tool",
@@ -153,5 +156,67 @@ export const Withheld: Story = {
       detail:
         'duplicate key value violates unique constraint "clients_email_key": Key (email)=(dupont@example.com) already exists.',
     },
+  },
+}
+
+const restored: RestoredCallEntry = {
+  kind: "restoredCall",
+  key: "restored-1",
+  tool: "execute_query",
+  summary: "7 rows, 1 batches",
+  statement:
+    "WITH category_sales AS (\n  SELECT c.name AS category,\n         SUM(oi.quantity * oi.unit_price * (1 - oi.discount)) AS revenue\n  FROM main.order_items AS oi\n  JOIN main.products AS p ON p.id = oi.product_id\n  JOIN main.categories AS c ON c.id = p.category_id\n  GROUP BY c.name\n)\nSELECT category, revenue\nFROM category_sales\nORDER BY revenue DESC;",
+  status: "completed",
+  errorClass: null,
+  rowsNotKept: true,
+}
+
+/**
+ * A call of a conversation reopened after a restart: the card it had live,
+ * without what the workspace does not keep — its connection, whether it could
+ * write, its rows.
+ */
+export const Restored: Story = {
+  render: () => <AssistantRestoredCall entry={restored} />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    await expect(
+      canvas.getByRole("region", { name: "Command execute_query: Completed" })
+    ).toBeVisible()
+    const statement = canvas.getByLabelText("Statement the agent submitted")
+    await expect(statement.textContent).toBe(restored.statement)
+    // Wrapped at spaces, never inside a word.
+    await expect(getComputedStyle(statement).whiteSpace).toBe("pre-wrap")
+    await expect(getComputedStyle(statement).wordBreak).not.toBe("break-all")
+    await expect(canvas.getByText("7 rows, 1 batches")).toBeVisible()
+    await expect(
+      canvas.getByText(/Result no longer available: the workspace keeps/)
+    ).toBeVisible()
+    // Not recorded, so not claimed.
+    await expect(canvas.queryByText("Read only")).toBeNull()
+    await expect(canvas.queryByText("May change data")).toBeNull()
+  },
+}
+
+export const RestoredFailed: Story = {
+  render: () => (
+    <AssistantRestoredCall
+      entry={{
+        ...restored,
+        summary: 'relation "main.missing" does not exist',
+        statement: "SELECT * FROM main.missing;",
+        status: "failed",
+        errorClass: "permanent",
+        rowsNotKept: false,
+      }}
+    />
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    await expect(
+      canvas.getByRole("region", { name: "Command execute_query: Failed" })
+    ).toBeVisible()
+    await expect(canvas.getByText(/permanent —/)).toBeVisible()
+    await expect(canvas.queryByText(/Result no longer available/)).toBeNull()
   },
 }

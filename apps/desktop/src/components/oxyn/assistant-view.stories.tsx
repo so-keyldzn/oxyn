@@ -1345,6 +1345,9 @@ export const ASampleServedOneQuestion: Story = {
   },
 }
 
+const reopenedStatement =
+  "SELECT c.segment,\n       count(*) AS clients\nFROM public.clients AS c\nGROUP BY c.segment\nORDER BY clients DESC;"
+
 /** A conversation reopened from the workspace: shown whole, remembered by nobody. */
 export const ReopenedFromTheWorkspace: Story = {
   args: {
@@ -1360,7 +1363,7 @@ export const ReopenedFromTheWorkspace: Story = {
               kind: "restoredCall",
               tool: "execute_query",
               summary: "1 rows, 1 batches",
-              statement: "SELECT count(*) FROM public.clients",
+              statement: reopenedStatement,
               status: "completed",
               errorClass: null,
               rowsNotKept: true,
@@ -1403,6 +1406,14 @@ export const ReopenedFromTheWorkspace: Story = {
       canvas.getByText(/not being saved to the workspace/)
     ).toBeVisible()
     await expect(canvas.getByText(/reopened from the workspace/)).toBeVisible()
+    // The call is drawn by the card it had live, its statement as written.
+    const call = canvas.getByRole("region", {
+      name: "Command execute_query: Completed",
+    })
+    await expect(call).toBeVisible()
+    await expect(
+      within(call).getByLabelText("Statement the agent submitted").textContent
+    ).toBe(reopenedStatement)
     // The rows the panel showed then are gone: said, and no grid pretends.
     await expect(
       canvas.getByText(/Result no longer available: the workspace keeps/)
