@@ -100,6 +100,48 @@ Ce qui entre dans Oxyn et n'est pas fiable, par ordre de sous-estimation :
    donnée reçue —, CSP stricte dans `crates/oxyn-desktop/tauri.conf.json`,
    *capabilities* minimales dans `capabilities/main.json`, et une surface IPC
    dont chaque commande est relue comme un changement de sécurité.
+
+   `style-src` y garde `'self' 'unsafe-inline'` : des composants posent un
+   `<style>` à l'exécution, dans le DOM de la webview, alors que Tauri ne pose
+   un `nonce` que sur les `<style>` déjà présents, en texte, dans le HTML
+   statique du build — et ce fichier n'en contient aucun (vérifié dans le
+   source de `tauri-codegen` 2.6.3 et `tauri-utils` 2.9.3, versions de
+   `Cargo.lock`, le 2026-09-24 — [I-12](../CLAUDE.md#i-12)). En dépendent :
+
+   - `ChartStyle` (`apps/desktop/src/components/ui/chart.tsx`) ;
+   - l'éditeur SQL CodeMirror (`sql-editor.tsx`), via `style-mod` 4.1.3 ;
+   - `ScrollArea` et `Select` de Base UI 1.8.0 (`scroll-area.tsx`,
+     `select.tsx`), qui masquent la barre de défilement par un `<style>`
+     injecté ;
+   - le rendu mermaid (`mermaid-render.ts`, mermaid 11.17.2) : `render()`
+     sans conteneur pose son diagramme (et un `<style>` de thème) dans
+     `document.body` le temps de mesurer les libellés, avant de sérialiser le
+     SVG et de retirer cet élément — vérifié dans le source installé,
+     `mermaid.core.mjs` (fonctions `render`, `appendDivSvgG`), le 2026-09-24.
+
+   Ce que la CSP borne autour : `script-src` reste `'self'`, `img-src`,
+   `font-src` et `connect-src` sont fermés — une règle CSS injectée ne peut
+   rien exfiltrer. Le contenu de `ChartStyle` n'est jamais une donnée reçue :
+   les clés (`s0`, `s1`…) viennent d'Oxyn, les couleurs d'une palette fixe
+   (commentaire de `assistant-result-chart.tsx`) — c'est ce qui le rend
+   compatible avec la règle du point 5 ci-dessus.
+
+   **Ce qui l'annulerait sans erreur visible :** qu'un `<style>` apparaisse un
+   jour dans le HTML du build — Tauri lui poserait alors un `nonce`, ce qui
+   rend `'unsafe-inline'` inopérant pour le navigateur (même mécanisme que
+   pour `script-src` en développement, voir
+   [RESEARCH-NOTES](RESEARCH-NOTES.md)), et ces composants perdraient leurs
+   styles sans qu'aucune erreur ne le signale — pour mermaid, un diagramme
+   mesuré avec la mauvaise police mais dessiné avec la bonne, donc des
+   libellés qui débordent de leurs boîtes, sans erreur non plus.
+
+   **Condition de retrait :** seulement quand chacun de ces `<style>` reçoit un
+   `nonce` transmis au front (`EditorView.cspNonce` pour CodeMirror,
+   `CSPProvider` pour Base UI) ou disparaît (`disableStyleElements` pour Base
+   UI, des variables CSS posées par `style={{}}` — CSSOM, non concerné par
+   `style-src` — pour `ChartStyle`) — et, pour mermaid, seulement quand une
+   version future accepte un `nonce` sur son `<style>` de thème, ou rend hors
+   du document principal de la webview.
 6. **Les réponses des fournisseurs IA.** Ce sont des propositions, pas des
    ordres : elles passent par le `PolicyGate` comme n'importe quelle commande
    ([ADR-0004](adr/0004-command-bus.md)). Voir [I-07](../CLAUDE.md#i-07).
