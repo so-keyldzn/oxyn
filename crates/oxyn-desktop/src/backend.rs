@@ -33,8 +33,8 @@ use tokio::sync::broadcast;
 
 use crate::credentials::KeyringCredentials;
 use crate::ipc::{
-    self, CommandOutcome, ConnectResponse, ConnectionDraft, DriverChoice, IpcError, OpenConnection,
-    ResultColumn,
+    self, CommandOutcome, ConnectResponse, ConnectionDraft, ConnectionTest, DriverChoice, IpcError,
+    OpenConnection, ResultColumn,
 };
 
 /// The assembled backend, shared by every IPC command.
@@ -307,18 +307,7 @@ impl Backend {
         let cancel = self.track(id);
         let _running = Running { inner, id };
 
-        let driver = DriverId::new(&draft.driver)
-            .map_err(|error| IpcError::invalid(format!("unknown driver: {error}")))?;
-        // The tier and the read-only flag are the user's choices on the form;
-        // dropped here, the connection would silently open under the defaults
-        // (I-04).
-        let mut config = ConnectionConfig::new(draft.name.clone(), driver)
-            .with_environment(draft.environment)
-            .with_privacy_tier(draft.privacy_tier);
-        config.read_only = draft.read_only;
-        for (key, value) in &draft.values {
-            config = config.with_param(key, value);
-        }
+        let mut config = config_from(&draft)?;
         if !draft.secrets.is_empty() {
             let reference = inner
                 .credentials
@@ -365,6 +354,92 @@ impl Backend {
             }
             Outcome::Denied { reason, .. } => Err(IpcError::invalid(reason)),
             _ => Err(IpcError::invalid("The connection was not saved")),
+        }
+    }
+
+    /// Opens a session on the draft and closes it, saving nothing.
+    ///
+    /// The draft's secrets must reach the driver through the keyring, the one
+    /// place the executor resolves them from: they are written under the
+    /// draft's own fresh id, then forgotten whatever the test gave. A crash
+    /// in between leaves an unreferenced entry, harmless like the one
+    /// [`Self::connect`] may leave. Cancellable under `id`, like an opening.
+    pub async fn test_connection(
+        &self,
+        id: CommandId,
+        draft: ConnectionDraft,
+    ) -> Result<ConnectionTest, IpcError> {
+        let inner = &self.inner;
+        let cancel = self.track(id);
+        let _running = Running { inner, id };
+
+        let mut config = config_from(&draft)?;
+        // Read only whatever the form says: opening SQLite read-write creates a
+        // mistyped file, and a test that leaves one behind is not a test. A
+        // file that does not exist yet fails here, and says so.
+        config.read_only = true;
+        let stored = if draft.secrets.is_empty() {
+            None
+        } else {
+            let lookup = config.clone();
+            let secrets = draft.secrets;
+            let reference = self
+                .on_blocking_pool(move |backend| {
+                    backend
+                        .inner
+                        .credentials
+                        .store_secrets(&lookup, &secrets)
+                        .map_err(IpcError::from)
+                })
+                .await?;
+            config = config.with_secret_ref(reference.as_str());
+            Some(reference)
+        };
+
+        let started = std::time::Instant::now();
+        let outcome = inner
+            .executor
+            .dispatch_as(
+                id,
+                Actor::Human,
+                Command::TestConnection {
+                    config: Box::new(config),
+                },
+                &cancel,
+            )
+            .await;
+        let elapsed = started.elapsed();
+
+        if let Some(reference) = stored {
+            let forgotten = self
+                .on_blocking_pool(move |backend| {
+                    backend
+                        .inner
+                        .credentials
+                        .forget_secrets(reference.as_str())
+                        .map_err(IpcError::from)
+                })
+                .await;
+            // Counted, never quoted: the entry is unreachable either way.
+            if forgotten.is_err() {
+                tracing::warn!("the secrets of a tested draft could not be forgotten");
+            }
+        }
+
+        match outcome {
+            Ok(Outcome::ConnectionTested { .. }) => Ok(ConnectionTest::Succeeded {
+                elapsed_ms: ipc::millis(elapsed),
+            }),
+            Ok(Outcome::Denied { reason, .. }) => Err(IpcError::invalid(reason)),
+            Ok(_) => Err(IpcError::invalid(
+                "The executor did not test the connection",
+            )),
+            Err(OxynError::Cancelled) => Ok(ConnectionTest::Cancelled),
+            Err(error) => Ok(ConnectionTest::Failed {
+                message: error.to_string(),
+                class: error.class().as_str(),
+                retryable: error.is_retryable(),
+            }),
         }
     }
 
@@ -623,6 +698,23 @@ impl Backend {
     ) -> Result<oxyn_core::SqlDialect, IpcError> {
         Ok(oxyn_query::dialect_for(&self.config(connection)?.driver))
     }
+}
+
+/// The configuration a draft describes, secrets aside, under a fresh id.
+fn config_from(draft: &ConnectionDraft) -> Result<ConnectionConfig, IpcError> {
+    let driver = DriverId::new(&draft.driver)
+        .map_err(|error| IpcError::invalid(format!("unknown driver: {error}")))?;
+    // The tier and the read-only flag are the user's choices on the form;
+    // dropped here, the connection would silently open under the defaults
+    // (I-04).
+    let mut config = ConnectionConfig::new(draft.name.clone(), driver)
+        .with_environment(draft.environment)
+        .with_privacy_tier(draft.privacy_tier);
+    config.read_only = draft.read_only;
+    for (key, value) in &draft.values {
+        config = config.with_param(key, value);
+    }
+    Ok(config)
 }
 
 /// The workspace the session works in — the first one, or a new one.
@@ -929,6 +1021,94 @@ mod tests {
         assert!(
             !backend.cancel(id),
             "a finished command leaves no token behind"
+        );
+    }
+
+    #[test]
+    fn a_tested_draft_is_not_saved() {
+        let runtime = runtime();
+        let _guard = runtime.enter();
+        let backend = Backend::open_temporary().expect("temporary backend");
+        let tested = runtime
+            .block_on(backend.test_connection(CommandId::new(), draft(Environment::Production)))
+            .expect("a test answers");
+        assert!(
+            matches!(tested, ConnectionTest::Succeeded { .. }),
+            "{tested:?}"
+        );
+        assert!(
+            backend.saved_connections().expect("list").is_empty(),
+            "testing saves nothing"
+        );
+    }
+
+    #[test]
+    fn testing_a_missing_sqlite_file_creates_nothing() {
+        let runtime = runtime();
+        let _guard = runtime.enter();
+        let backend = Backend::open_temporary().expect("temporary backend");
+        let directory = tempfile::tempdir().expect("temporary directory");
+        let path = directory.path().join("mistyped.sqlite");
+        let mut draft = draft(Environment::Local);
+        draft
+            .values
+            .insert("path".to_owned(), path.display().to_string());
+        let tested = runtime
+            .block_on(backend.test_connection(CommandId::new(), draft))
+            .expect("a test answers");
+        assert!(
+            matches!(tested, ConnectionTest::Failed { .. }),
+            "{tested:?}"
+        );
+        assert!(!path.exists(), "a test must not create the database file");
+    }
+
+    #[test]
+    fn a_failed_test_is_classified_and_quotes_no_secret() {
+        const CANARY: &str = "canary-password-3c71";
+        let runtime = runtime();
+        let _guard = runtime.enter();
+        let backend = Backend::open_temporary().expect("temporary backend");
+        // Port 1 on the loopback: refused at once, without a server.
+        let draft = ConnectionDraft {
+            driver: "postgres".into(),
+            name: "Unreachable".into(),
+            environment: Environment::Production,
+            privacy_tier: oxyn_core::PrivacyTier::Metadata,
+            read_only: false,
+            values: [
+                ("host".to_owned(), "127.0.0.1".to_owned()),
+                ("port".to_owned(), "1".to_owned()),
+                ("user".to_owned(), "oxyn".to_owned()),
+                ("database".to_owned(), "oxyn".to_owned()),
+            ]
+            .into_iter()
+            .collect(),
+            secrets: [("password".to_owned(), CANARY.to_owned())]
+                .into_iter()
+                .collect(),
+        };
+        let tested = runtime
+            .block_on(backend.test_connection(CommandId::new(), draft))
+            .expect("a failed test is an answer, not an IPC error");
+        let ConnectionTest::Failed {
+            message,
+            class,
+            retryable,
+        } = &tested
+        else {
+            panic!("nothing listens on port 1, got {tested:?}");
+        };
+        assert!(
+            !message.contains(CANARY),
+            "secret in the message: {message}"
+        );
+        assert!(["transient", "permanent", "ambiguous"].contains(class));
+        assert_eq!(*retryable, *class == "transient");
+        let serialized = serde_json::to_string(&tested).expect("serializable");
+        assert!(
+            !serialized.contains(CANARY),
+            "secret on the wire: {serialized}"
         );
     }
 

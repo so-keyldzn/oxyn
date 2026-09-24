@@ -134,6 +134,12 @@ export function missingFields(
  * the opening on the server side (docs/UX-SPEC.md « Annulation »). The submit
  * stays disabled while a required field is empty, and says which.
  *
+ * With `onTest`, a Test action sends the same draft to be opened and closed
+ * without being saved. While `testing`, the form is held as it is — the result
+ * describes exactly those values — and `onAbort` cancels the test the same way.
+ * `onValuesChange` reports every change, so the parent can tell a result from
+ * the values it no longer describes.
+ *
  * The fields scroll and the actions do not: in a bounded parent (a flex
  * column with `min-h-0`), Back and Connect stay reachable however many fields
  * the driver declares. `stickyActions` keeps them at the bottom of a scrolling
@@ -144,29 +150,37 @@ export function ConnectionForm({
   driver,
   existing,
   submitting = false,
+  testing = false,
   aborting = false,
   error,
   onSubmit,
+  onTest,
   onBrowse,
   onCancel,
   onAbort,
   onDirtyChange,
+  onValuesChange,
   stickyActions = false,
 }: {
   driver: DriverChoice
   existing?: ConnectionDetails
   submitting?: boolean
+  /** A test of the current values is in flight. */
+  testing?: boolean
   /** The cancellation was sent and the backend has not answered yet. */
   aborting?: boolean
   error?: BackendFailure | null
   onSubmit: (draft: ConnectionDraft) => void
+  onTest?: (draft: ConnectionDraft) => void
   onBrowse?: (field: FormField) => Promise<string | null>
   onCancel?: () => void
   onAbort?: () => void
   onDirtyChange?: (dirty: boolean) => void
+  onValuesChange?: (values: FormValues) => void
   stickyActions?: boolean
 }) {
   const editing = existing !== undefined
+  const busy = submitting || testing
   const form = useForm({
     defaultValues: initialValues(driver, existing),
     onSubmit: ({ value }) => onSubmit(draftFrom(driver, value)),
@@ -176,6 +190,9 @@ export function ConnectionForm({
   React.useEffect(() => {
     onDirtyChange?.(dirty)
   }, [dirty, onDirtyChange])
+  React.useEffect(() => {
+    onValuesChange?.(values)
+  }, [values, onValuesChange])
   const missing = missingFields(driver, values, existing)
   const malformed = driver.fields.some(
     (field) =>
@@ -184,7 +201,7 @@ export function ConnectionForm({
       !/^\d+$/.test(values.values[field.key] ?? "")
   )
   const verb = editing ? "Save" : "Connect"
-  const shownError = error && !submitting ? error : null
+  const shownError = error && !busy ? error : null
   const errorRef = React.useRef<HTMLDivElement>(null)
 
   // The failure lands at the end of the scrolling fields, next to the action
@@ -193,9 +210,9 @@ export function ConnectionForm({
     if (shownError) errorRef.current?.scrollIntoView({ block: "nearest" })
   }, [shownError])
 
-  // Esc cancels an opening in flight, from anywhere in the form.
+  // Esc cancels an opening or a test in flight, from anywhere in the form.
   React.useEffect(() => {
-    if (!submitting || !onAbort) return
+    if (!busy || !onAbort) return
     const onKey = (event: KeyboardEvent) => {
       if (event.key === "Escape" && !event.defaultPrevented) {
         event.preventDefault()
@@ -204,16 +221,18 @@ export function ConnectionForm({
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
-  }, [submitting, onAbort])
+  }, [busy, onAbort])
+
+  const ready = !busy && missing.length === 0 && !malformed
 
   return (
     <form
       noValidate
-      aria-busy={submitting || undefined}
+      aria-busy={busy || undefined}
       onSubmit={(event) => {
         event.preventDefault()
         // A second Enter while the first is in flight sends nothing.
-        if (submitting || missing.length > 0 || malformed) return
+        if (!ready) return
         void form.handleSubmit()
       }}
       className="flex min-h-0 flex-1 flex-col"
@@ -222,12 +241,12 @@ export function ConnectionForm({
       <div
         // While the fieldset is disabled nothing inside takes the focus: the
         // region itself must, or the keyboard cannot scroll it.
-        tabIndex={submitting ? 0 : undefined}
-        role={submitting ? "group" : undefined}
-        aria-label={submitting ? "Connection details" : undefined}
+        tabIndex={busy ? 0 : undefined}
+        role={busy ? "group" : undefined}
+        aria-label={busy ? "Connection details" : undefined}
         className="-m-1 flex min-h-0 flex-1 flex-col gap-6 overflow-y-auto rounded-md p-1 outline-none focus-visible:ring-2 focus-visible:ring-ring"
       >
-        <fieldset disabled={submitting} className="contents">
+        <fieldset disabled={busy} className="contents">
           <FieldGroup>
             <form.Field name="name">
               {(field) => (
@@ -259,7 +278,7 @@ export function ConnectionForm({
                 <EnvironmentPicker
                   value={field.state.value}
                   onChange={(environment) => field.handleChange(environment)}
-                  disabled={submitting}
+                  disabled={busy}
                 />
               )}
             </form.Field>
@@ -310,7 +329,7 @@ export function ConnectionForm({
                 <PrivacyTierField
                   value={field.state.value}
                   onChange={(tier) => field.handleChange(tier)}
-                  disabled={submitting}
+                  disabled={busy}
                 />
               )}
             </form.Field>
@@ -337,7 +356,7 @@ export function ConnectionForm({
           stickyActions && "sticky bottom-0 bg-card pb-1"
         )}
       >
-        {missing.length > 0 && !submitting ? (
+        {missing.length > 0 && !busy ? (
           <p
             id="connection-form-missing"
             className="mr-auto text-xs text-muted-foreground"
@@ -345,14 +364,16 @@ export function ConnectionForm({
             Required: {missing.join(", ")}
           </p>
         ) : null}
-        {submitting && onAbort ? (
+        {busy && onAbort ? (
           <>
             <p role="status" className="mr-auto text-xs text-muted-foreground">
               {aborting
                 ? "Cancelling…"
-                : editing
-                  ? "Saving…"
-                  : "Opening the connection…"}
+                : testing
+                  ? "Testing…"
+                  : editing
+                    ? "Saving…"
+                    : "Opening the connection…"}
             </p>
             <Button
               type="button"
@@ -369,7 +390,7 @@ export function ConnectionForm({
             type="button"
             variant="ghost"
             onClick={onCancel}
-            disabled={submitting}
+            disabled={busy}
             aria-keyshortcuts={editing ? undefined : "Escape"}
           >
             {editing ? (
@@ -381,9 +402,23 @@ export function ConnectionForm({
             )}
           </Button>
         ) : null}
+        {onTest ? (
+          <Button
+            type="button"
+            variant="outline"
+            disabled={!ready}
+            onClick={() => onTest(draftFrom(driver, values))}
+            aria-describedby={
+              missing.length > 0 ? "connection-form-missing" : undefined
+            }
+          >
+            {testing ? <Spinner data-icon="inline-start" /> : null}
+            Test
+          </Button>
+        ) : null}
         <Button
           type="submit"
-          disabled={submitting || missing.length > 0 || malformed}
+          disabled={!ready}
           aria-describedby={
             missing.length > 0 ? "connection-form-missing" : undefined
           }

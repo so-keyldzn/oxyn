@@ -204,6 +204,137 @@ async fn delete_connection_reports_existed_and_removes_it_from_the_store() {
     );
 }
 
+fn sqlite_executor(store: &Arc<Store>) -> Executor {
+    let workspace = store
+        .workspaces()
+        .create("connections")
+        .expect("workspace")
+        .id;
+    let mut drivers = DriverRegistry::new();
+    drivers
+        .register(Arc::new(SqliteDriver::new()))
+        .expect("SQLite registration");
+    Executor::builder(Arc::clone(store), Arc::new(DefaultPolicy::new()))
+        .with_drivers(Arc::new(drivers))
+        .with_workspace(workspace)
+        .build()
+}
+
+#[tokio::test]
+async fn a_tested_configuration_opens_closes_and_leaves_nothing_behind() {
+    let store = Arc::new(Store::open_in_memory().expect("in-memory store"));
+    let executor = sqlite_executor(&store);
+    // Unknown to the executor and to the policy, marked production by default:
+    // the human tries it all the same, since nothing is written.
+    let config = ConnectionConfig::new("draft", DriverId::sqlite())
+        .with_param(SqliteDriver::PATH, SqliteDriver::MEMORY);
+
+    let outcome = executor
+        .dispatch(
+            Actor::Human,
+            Command::TestConnection {
+                config: Box::new(config.clone()),
+            },
+            &CancelToken::new(),
+        )
+        .await
+        .expect("the configuration opens");
+    assert!(matches!(outcome, Outcome::ConnectionTested { connection } if connection == config.id));
+    assert!(
+        executor.sessions().is_empty(),
+        "no session outlives the test"
+    );
+    assert!(
+        store
+            .connections()
+            .get(config.id)
+            .expect("read back")
+            .is_none(),
+        "a test saves nothing"
+    );
+}
+
+/// Resolves a fixed password, standing in for a draft's keyring entry.
+struct CanaryCredentials;
+
+const CANARY: &str = "canary-password-8f2d";
+
+impl CredentialResolver for CanaryCredentials {
+    fn resolve(&self, _config: &ConnectionConfig) -> Result<oxyn_driver::Credentials> {
+        Ok(oxyn_driver::Credentials::new().with_password(CANARY))
+    }
+}
+
+#[tokio::test]
+async fn a_failed_test_is_classified_and_quotes_no_secret() {
+    let store = Arc::new(Store::open_in_memory().expect("in-memory store"));
+    let workspace = store
+        .workspaces()
+        .create("connections")
+        .expect("workspace")
+        .id;
+    let mut drivers = DriverRegistry::new();
+    drivers
+        .register(Arc::new(SqliteDriver::new()))
+        .expect("SQLite registration");
+    let executor = Executor::builder(Arc::clone(&store), Arc::new(DefaultPolicy::new()))
+        .with_drivers(Arc::new(drivers))
+        .with_credentials(Arc::new(CanaryCredentials))
+        .with_workspace(workspace)
+        .build();
+    let config = ConnectionConfig::new("draft", DriverId::sqlite())
+        .with_environment(Environment::Local)
+        .with_param(
+            SqliteDriver::PATH,
+            "/nonexistent-oxyn-test-dir/nested/db.sqlite",
+        )
+        .with_secret_ref("keychain://oxyn/draft");
+
+    let error = executor
+        .dispatch(
+            Actor::Human,
+            Command::TestConnection {
+                config: Box::new(config),
+            },
+            &CancelToken::new(),
+        )
+        .await
+        .expect_err("a file under a missing directory does not open");
+    // The class is the driver's, carried as data: SQLite reports a file it
+    // cannot open as a connection failure, and the front reads `retryable`
+    // from that class, never from the message.
+    assert!(matches!(error, OxynError::Connection(_)), "{error}");
+    assert_eq!(error.class(), oxyn_core::ErrorClass::Transient);
+    let shown = error.to_string();
+    assert!(!shown.contains(CANARY), "secret in the message: {shown}");
+    assert!(
+        !shown.contains("keychain://"),
+        "reference in the message: {shown}"
+    );
+    assert!(executor.sessions().is_empty());
+}
+
+#[tokio::test]
+async fn an_agent_may_not_test_a_configuration() {
+    let store = Arc::new(Store::open_in_memory().expect("in-memory store"));
+    let executor = sqlite_executor(&store);
+    let config = sqlite_config("agent-chosen host");
+    let agent = Actor::agent(oxyn_core::AgentId::new(), oxyn_core::AgentSessionId::new());
+
+    let outcome = executor
+        .dispatch(
+            agent,
+            Command::TestConnection {
+                config: Box::new(config),
+            },
+            &CancelToken::new(),
+        )
+        .await
+        .expect("a refusal is an outcome");
+    assert!(outcome.is_denied(), "{outcome:?}");
+    assert!(executor.sessions().is_empty(), "nothing was opened");
+}
+
 #[test]
 fn create_connection_without_a_runtime_fails_and_writes_nothing() {
     let store = Arc::new(Store::open_in_memory().expect("in-memory store"));

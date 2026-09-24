@@ -1,7 +1,9 @@
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
+  Alert02Icon,
   ArrowLeft01Icon,
+  CheckmarkCircle02Icon,
   FileClockIcon,
   LockIcon,
 } from "@hugeicons/core-free-icons"
@@ -12,6 +14,7 @@ import type { PendingApproval } from "@/components/oxyn/approval-dialog"
 import { BackendErrorAlert } from "@/components/oxyn/backend-error-alert"
 import type { BackendFailure } from "@/components/oxyn/backend-error-alert"
 import { ConnectionForm } from "@/components/oxyn/connection-form"
+import type { FormValues } from "@/components/oxyn/connection-form"
 import { DriverChoices } from "@/components/oxyn/driver-choices"
 import { DiscardChangesDialog } from "@/components/oxyn/discard-changes-dialog"
 import { SavedConnections } from "@/components/oxyn/saved-connections"
@@ -40,10 +43,12 @@ import {
 import type { ConnectionSummary } from "@/lib/ipc/settings"
 import type {
   ConnectionDraft,
+  ConnectionTest,
   DriverChoice,
   Environment,
   FormField,
 } from "@/lib/ipc/types"
+import { cn } from "@/lib/utils"
 
 export type PendingConnectionApproval = PendingApproval & {
   name: string
@@ -75,6 +80,16 @@ export interface ConnectionScreenViewProps {
   formError?: BackendFailure | null
   onSubmit: (draft: ConnectionDraft) => void
   onBrowse?: (field: FormField) => Promise<string | null>
+
+  /** The form's values are being opened and closed, without being saved. */
+  testing: boolean
+  /** The last test's answer, `null` until one describes the current values. */
+  testResult: ConnectionTest | null
+  /** The test call itself was rejected — a refusal, not a server's answer. */
+  testError?: BackendFailure | null
+  onTest: (draft: ConnectionDraft) => void
+  /** The values changed: a previous result no longer describes them. */
+  onDraftChange: () => void
 
   /** A cancellation was sent for what is opening. */
   cancelling: boolean
@@ -125,6 +140,11 @@ export function ConnectionScreenView(props: ConnectionScreenViewProps) {
     formError,
     onSubmit,
     onBrowse,
+    testing,
+    testResult,
+    testError,
+    onTest,
+    onDraftChange,
     cancelling,
     onCancelOpening,
     approval,
@@ -133,7 +153,7 @@ export function ConnectionScreenView(props: ConnectionScreenViewProps) {
     onReturnToWorkspace,
     onOpenLocalWork,
   } = props
-  const busy = opening !== null || submitting
+  const busy = opening !== null || submitting || testing
   const firstLaunch = connections?.length === 0 && !connectionsError
   const usedDrivers = React.useMemo(
     () =>
@@ -142,10 +162,26 @@ export function ConnectionScreenView(props: ConnectionScreenViewProps) {
   )
   const [formDirty, setFormDirty] = React.useState(false)
   const [confirmingLeave, setConfirmingLeave] = React.useState(false)
+  const [draftName, setDraftName] = React.useState("")
+  // By identity: the form's store hands out a new object only when a value
+  // changed, and the first one it reports is the form as it opened.
+  const seenValues = React.useRef<FormValues | null>(null)
+  const onValuesChange = React.useCallback(
+    (values: FormValues) => {
+      if (seenValues.current === values) return
+      const changed = seenValues.current !== null
+      seenValues.current = values
+      setDraftName(values.name.trim())
+      if (changed) onDraftChange()
+    },
+    [onDraftChange]
+  )
 
   const leaveDriver = React.useCallback(() => {
     setConfirmingLeave(false)
     setFormDirty(false)
+    seenValues.current = null
+    setDraftName("")
     onLeaveDriver()
   }, [onLeaveDriver])
 
@@ -304,18 +340,28 @@ export function ConnectionScreenView(props: ConnectionScreenViewProps) {
                   </CardTitle>
                   <CardDescription>{driver.family}</CardDescription>
                 </CardHeader>
-                <CardContent className="flex flex-col">
+                <CardContent className="flex flex-col gap-6">
+                  <DraftStatusBar
+                    name={draftName}
+                    saving={submitting}
+                    testing={testing}
+                    result={testResult}
+                    error={testError ?? null}
+                  />
                   <ConnectionForm
                     key={driver.id}
                     driver={driver}
                     submitting={submitting}
+                    testing={testing}
                     aborting={cancelling}
                     error={formError}
                     onSubmit={onSubmit}
+                    onTest={onTest}
                     onBrowse={onBrowse}
                     onCancel={goBack}
                     onAbort={onCancelOpening}
                     onDirtyChange={setFormDirty}
+                    onValuesChange={onValuesChange}
                     stickyActions
                   />
                 </CardContent>
@@ -419,6 +465,83 @@ export function ConnectionScreenView(props: ConnectionScreenViewProps) {
         deciding={deciding}
         onDecide={onDecide}
       />
+    </div>
+  )
+}
+
+/**
+ * The form's status bar (docs/UX-SPEC.md « Navigation du premier workspace »):
+ * the connection being prepared, then where it stands — `Not tested`, the
+ * test's own answer, or the save in flight. It never says `Connected`: nothing
+ * here is open, and a passed test is a fact about one moment, not a session.
+ * The server's message is shown whole, as the audience reads it.
+ */
+function DraftStatusBar({
+  name,
+  saving,
+  testing,
+  result,
+  error,
+}: {
+  name: string
+  saving: boolean
+  testing: boolean
+  result: ConnectionTest | null
+  error: BackendFailure | null
+}) {
+  const failure: string | null =
+    result?.type === "failed" ? result.message : (error?.message ?? null)
+  let state: React.ReactNode
+  if (saving) state = "Saving…"
+  else if (testing) state = "Testing…"
+  else if (result?.type === "succeeded")
+    state = (
+      <span className="flex items-center gap-1.5 text-success">
+        <HugeiconsIcon
+          icon={CheckmarkCircle02Icon}
+          strokeWidth={2}
+          className="size-3.5 shrink-0"
+        />
+        Test passed in {result.elapsedMs} ms
+      </span>
+    )
+  else if (failure !== null)
+    state = (
+      <span className="flex items-center gap-1.5 text-destructive">
+        <HugeiconsIcon
+          icon={Alert02Icon}
+          strokeWidth={2}
+          className="size-3.5 shrink-0"
+        />
+        Test failed
+      </span>
+    )
+  else state = "Not tested"
+
+  return (
+    <div
+      role="status"
+      aria-label="Connection status"
+      data-slot="connection-draft-status"
+      className="flex flex-col gap-1 rounded-md border bg-muted/40 px-3 py-2 text-xs"
+    >
+      <div className="flex min-w-0 items-center gap-3">
+        <span
+          className={cn(
+            "min-w-0 truncate font-medium",
+            name === "" && "font-normal text-muted-foreground italic"
+          )}
+          dir="auto"
+        >
+          {name === "" ? "Unnamed connection" : name}
+        </span>
+        <span className="ml-auto shrink-0 text-muted-foreground">{state}</span>
+      </div>
+      {failure !== null && !saving && !testing ? (
+        <p className="font-mono break-words whitespace-pre-wrap text-destructive">
+          {failure}
+        </p>
+      ) : null}
     </div>
   )
 }

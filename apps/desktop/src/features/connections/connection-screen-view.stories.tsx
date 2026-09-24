@@ -119,6 +119,10 @@ const meta = {
     onRetryOpen: fn(),
     submitting: false,
     onSubmit: fn(),
+    testing: false,
+    testResult: null,
+    onTest: fn(),
+    onDraftChange: fn(),
     cancelling: false,
     onCancelOpening: fn(),
     approval: null,
@@ -277,6 +281,90 @@ export const ManyFieldsShortWindow: Story = {
     // The page scrolls as a whole; nothing inside it clips the form.
     const main = canvasElement.querySelector("main")!
     await expect(main.scrollHeight).toBeGreaterThan(main.clientHeight)
+  },
+}
+
+/** The status bar never claims more than it knows (UX-SPEC). */
+async function expectNeverConnected(canvasElement: HTMLElement) {
+  await expect(canvasElement.textContent).not.toMatch(/\bConnected\b/)
+}
+
+export const NotTested: Story = {
+  args: { driver: sqliteDriver },
+  play: async ({ canvas, canvasElement, args }) => {
+    const status = canvas.getByRole("status", { name: "Connection status" })
+    await expect(status).toHaveTextContent("Unnamed connection")
+    await expect(status).toHaveTextContent("Not tested")
+    const testAction = canvas.getByRole("button", { name: "Test" })
+    await expect(testAction).toBeDisabled()
+
+    // The bar names the connection being prepared, as it is typed.
+    await userEvent.type(canvas.getByLabelText(/^Name/), "billing")
+    await expect(status).toHaveTextContent("billing")
+    await userEvent.type(
+      canvasElement.querySelector<HTMLInputElement>("#field-path")!,
+      "/tmp/billing.sqlite"
+    )
+    await expect(args.onDraftChange).toHaveBeenCalled()
+
+    // Testing sends the draft; it neither saves nor opens it.
+    await userEvent.click(testAction)
+    await expect(args.onTest).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "billing", driver: sqliteDriver.id })
+    )
+    await expect(args.onSubmit).not.toHaveBeenCalled()
+    await expect(status).toHaveTextContent("Not tested")
+    await expectNeverConnected(canvasElement)
+  },
+}
+
+export const Testing: Story = {
+  args: { driver: sqliteDriver, testing: true },
+  play: async ({ canvas, canvasElement, args }) => {
+    await expect(
+      canvas.getByRole("status", { name: "Connection status" })
+    ).toHaveTextContent("Testing…")
+    // A test is cancelled like an opening: Esc reaches the backend.
+    await userEvent.keyboard("{Escape}")
+    await expect(args.onCancelOpening).toHaveBeenCalledOnce()
+    await expect(args.onLeaveDriver).not.toHaveBeenCalled()
+    await expect(canvas.getByRole("button", { name: "Connect" })).toBeDisabled()
+    await expectNeverConnected(canvasElement)
+  },
+}
+
+export const TestPassed: Story = {
+  args: {
+    driver: sqliteDriver,
+    testResult: { type: "succeeded", elapsedMs: 42 },
+  },
+  play: async ({ canvas, canvasElement }) => {
+    const status = canvas.getByRole("status", { name: "Connection status" })
+    await expect(status).toHaveTextContent("Test passed in 42 ms")
+    await expect(status).not.toHaveTextContent("Not tested")
+    // A passed test is not a session: Connect is still what saves and opens.
+    await expect(canvas.getByRole("button", { name: "Connect" })).toBeVisible()
+    await expectNeverConnected(canvasElement)
+  },
+}
+
+export const TestFailed: Story = {
+  args: {
+    driver: postgresDriver,
+    testResult: {
+      type: "failed",
+      message:
+        'driver `postgres` (permanent error): FATAL:  password authentication failed for user "billing" (SQLSTATE 28P01)',
+      class: "permanent",
+      retryable: false,
+    },
+  },
+  play: async ({ canvas, canvasElement }) => {
+    const status = canvas.getByRole("status", { name: "Connection status" })
+    await expect(status).toHaveTextContent("Test failed")
+    // The server's words, code included: the audience reads them.
+    await expect(status).toHaveTextContent(/SQLSTATE 28P01/)
+    await expectNeverConnected(canvasElement)
   },
 }
 

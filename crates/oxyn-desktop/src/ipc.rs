@@ -273,6 +273,30 @@ pub enum ConnectResponse {
     },
 }
 
+/// The answer to a connection test.
+///
+/// A failed test is an answer, not an IPC error: the form shows it in its
+/// status bar next to the name, where `Not tested` stood. The message is the
+/// driver's, and like every `OxynError` it carries no secret (I-03).
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum ConnectionTest {
+    /// A session opened and was closed at once; nothing was saved.
+    #[serde(rename_all = "camelCase")]
+    Succeeded {
+        elapsed_ms: u64,
+    },
+    /// The server, the network or the configuration refused.
+    #[serde(rename_all = "camelCase")]
+    Failed {
+        message: String,
+        /// `ErrorClass::as_str`: `transient`, `permanent` or `ambiguous`.
+        class: &'static str,
+        retryable: bool,
+    },
+    Cancelled,
+}
+
 /// A column of a result, as the grid header shows it.
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]

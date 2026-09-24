@@ -15,7 +15,7 @@ use tauri::ipc::Channel;
 
 use crate::backend::Backend;
 use crate::ipc::{
-    CommandOutcome, ConnectResponse, ConnectionDraft, DriverChoice, ExecutionEvent,
+    CommandOutcome, ConnectResponse, ConnectionDraft, ConnectionTest, DriverChoice, ExecutionEvent,
     ExecutionEventKind, IpcError, OpenConnection,
 };
 
@@ -53,6 +53,16 @@ pub async fn connect(
 ) -> Result<ConnectResponse, IpcError> {
     let id = parse("command id", &command_id)?;
     backend.connect(id, draft).await
+}
+
+#[tauri::command]
+pub async fn test_connection(
+    backend: State<'_, Backend>,
+    command_id: String,
+    draft: ConnectionDraft,
+) -> Result<ConnectionTest, IpcError> {
+    let id = parse("command id", &command_id)?;
+    backend.test_connection(id, draft).await
 }
 
 #[tauri::command]
