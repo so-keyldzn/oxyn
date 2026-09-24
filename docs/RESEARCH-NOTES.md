@@ -117,6 +117,25 @@ Les versions sont écrites **exactes** dans `apps/desktop/package.json` et le
 | `esbuild` et `unrs-resolver` livrent leur binaire en dépendance optionnelle : leurs scripts d'installation sont refusés (`allowBuilds`) | `pnpm install`, pnpm 11.1.2 | 2026-09-15 |
 | `LexicalTypeaheadMenuPlugin` pose `role="listbox"` et `aria-label="Typeahead menu"` sur son ancre **à chaque rattachement** — l'ancre est retirée puis remise à chaque frappe —, et laisse `aria-activedescendant` sur `typeahead-item-0` quand la liste se vide : axe échoue en `aria-valid-attr-value` et, sur une liste sans option, en `aria-required-children` | sources de `@lexical/react@0.51.0` (`shared/LexicalMenu.tsx`) et constat, `vitest --project storybook` | 2026-09-24 |
 
+## CI et livraison GitHub
+
+Relevé le 2026-09-24 sur l'API GitHub (`/repos/<dépôt>/releases/latest`, puis
+`/repos/<dépôt>/commits/<tag>` pour le SHA). Les workflows épinglent le SHA,
+pas le tag : un tag se déplace, un SHA non.
+
+| Fait | Valeur | Source | Vérifié le |
+|---|---|---|---|
+| `actions/checkout` | `v7.0.1`, `3d3c42e5aac5ba805825da76410c181273ba90b1`, publiée le 2026-07-20 | API GitHub | 2026-09-24 |
+| `actions/setup-node` | `v7.0.0`, `820762786026740c76f36085b0efc47a31fe5020`, publiée le 2026-07-14 | API GitHub | 2026-09-24 |
+| `pnpm/action-setup` | `v6.1.0`, `ea17c68df8912ef543352723c149a84f56e3d413`, publiée le 2026-09-05 ; lit `packageManager` via `package_json_file` quand `version` est absent | API GitHub, `action.yml` à ce SHA | 2026-09-24 |
+| `Swatinem/rust-cache` | `v2.9.2`, `6323deb102c322ba6fcbdcafc7e3dddab59af2b6`, publiée le 2026-08-06 | API GitHub | 2026-09-24 |
+| Node exigé par le front | vite 8.3.0 : `^20.19.0 \|\| >=22.12.0` ; vitest 4.1.11 : `^20.0.0 \|\| ^22.0.0 \|\| >=24.0.0` ; la CI prend la ligne 22, celle de la machine de dev (22.23.2) | champ `engines` des paquets installés | 2026-09-24 |
+| Bibliothèques système de Tauri sous Debian/Ubuntu | `libwebkit2gtk-4.1-dev build-essential curl wget file libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev` | `tauri-apps/tauri-docs`, branche `v2`, `src/content/docs/start/prerequisites.mdx`, commit `2e513e3` du 2026-08-20 | 2026-09-24 |
+| `keyring` 4.2.0 sous Linux passe par `zbus-secret-service-keyring-store` et `secret-service` 5.2.0 : du Rust pur, sans `libdbus` | `cargo tree --target x86_64-unknown-linux-gnu` | 2026-09-24 |
+| `https://get.nexte.st/latest/linux` redirige vers `cargo-nextest-0.9.146-x86_64-unknown-linux-gnu.tar.gz` | en-tête `location` de la réponse | 2026-09-24 |
+| La CI échouait à chaque poussée depuis au moins le 2026-09-21, en une vingtaine de secondes : pnpm absent du runner, `make qualite` s'arrêtait avant le front | journal du run `36034960589` | 2026-09-24 |
+| La protection de branche est refusée sur ce dépôt : « Upgrade to GitHub Pro or make this repository public » (403). Rien n'empêche donc de fusionner une PR dont la CI échoue | `GET /repos/so-keyldzn/oxyn/branches/main/protection` | 2026-09-24 |
+
 ## GPUI
 
 | Fait | Valeur | Source | Vérifié le |
