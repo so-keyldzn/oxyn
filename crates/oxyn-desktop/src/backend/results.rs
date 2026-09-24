@@ -15,7 +15,7 @@ use oxyn_data::{BatchIndex, FindOutcome, FormatOptions, ResultBuffer, find_rows,
 use oxyn_exec::Outcome;
 use parking_lot::Mutex;
 
-use super::{Backend, Running};
+use super::Backend;
 use crate::ipc::results::{
     ExportFormatChoice, FindAnswer, ResultWindow, ValuePageView, export_formats, matches_in_window,
 };
@@ -308,8 +308,7 @@ impl Backend {
             .map(|field| (field.name().clone(), field.data_type().to_string()))
             .ok_or_else(|| IpcError::invalid("This column is not in the result"))?;
         drop(buffer);
-        let cancel = self.track(id);
-        let _running = Running { inner, id };
+        let cancel = self.track(id)?;
         let outcome = inner
             .executor
             .dispatch_as(

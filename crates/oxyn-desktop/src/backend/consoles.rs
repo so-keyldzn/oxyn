@@ -99,8 +99,7 @@ impl Backend {
         connection: ConnectionId,
     ) -> Result<ConsoleSession, IpcError> {
         let inner = &self.inner;
-        let cancel = self.track(id);
-        let _running = super::Running { inner, id };
+        let cancel = self.track(id)?;
         let config = self.read_config(connection).await?;
         inner.policy.register(&config);
         let outcome = inner
@@ -188,8 +187,7 @@ impl Backend {
         place: SessionPlace,
     ) -> Result<ContextOutcome, IpcError> {
         let inner = &self.inner;
-        let cancel = self.track(id);
-        let _running = super::Running { inner, id };
+        let cancel = self.track(id)?;
         match inner
             .executor
             .dispatch_as(

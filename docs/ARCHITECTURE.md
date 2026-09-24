@@ -106,7 +106,14 @@ jamais la requête ([I-06](../CLAUDE.md#i-06)).
 
 **L'annulation est adressée par l'identifiant que choisit le front.** Le front tire
 un UUID par commande ; `Backend` y associe le `CancelToken` du dispatch, et `cancel`
-l'atteint tant que la commande tourne.
+l'atteint tant que la commande tourne. Un identifiant déjà en cours est refusé : le
+second jeton rendrait le premier inatteignable. Seule la garde qui a enregistré
+l'entrée la retire. Une annulation arrivée **avant** l'enregistrement — la commande
+lit encore sa connexion sur le pool bloquant — est retenue 30 s, 64 au plus, et
+appliquée dès que l'identifiant est suivi. Une annulation adressée à une commande
+**déjà terminée** n'est pas retenue : une approbation garde l'identifiant de la
+commande qui l'a demandée, et un « Stop » cliqué au moment où celle-ci rendait la
+main ne doit pas annuler l'accord donné ensuite.
 
 **Ce qui ne traverse pas.** Une configuration de connexion en attente d'accord reste
 dans le backend : le front ne tient que l'identifiant de la commande à approuver.

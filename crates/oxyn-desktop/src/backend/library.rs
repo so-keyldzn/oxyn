@@ -23,11 +23,7 @@ pub const LIBRARY_PAGE: u16 = 100;
 
 impl Backend {
     async fn read_local(&self, id: CommandId, command: Command) -> Result<Outcome, IpcError> {
-        let cancel = self.track(id);
-        let _running = super::Running {
-            inner: &self.inner,
-            id,
-        };
+        let cancel = self.track(id)?;
         let outcome = self
             .inner
             .executor
