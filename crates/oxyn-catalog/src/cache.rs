@@ -46,6 +46,8 @@ use crate::model::{
 };
 use crate::path::{CatalogLevel, CatalogPath};
 
+mod listing;
+
 /// Clé de nœud d'un palier absent.
 ///
 /// La chaîne vide ne peut pas nommer un objet — `crate::path::validate_segment`

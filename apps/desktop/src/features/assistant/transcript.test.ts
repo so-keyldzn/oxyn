@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest"
 import {
   answerText,
   canContinue,
+  catalogLine,
   decisionSettled,
   decisionStarted,
   endingLine,
@@ -495,5 +496,62 @@ describe("an agent's request for a sample", () => {
     expect(ended.sampleAsk).toBeNull()
     // Replayed without its question event: not running, so not reopened.
     expect(reduce(emptyExchange("q"), asked).sampleAsk).toBeNull()
+  })
+})
+
+describe("a catalog reading (ADR-0036)", () => {
+  const read = (
+    overrides: Partial<Extract<AiEvent, { kind: "catalogRead" }>> = {}
+  ): AiEvent => ({
+    kind: "catalogRead",
+    listed: 2,
+    described: 11,
+    failed: 0,
+    notLoaded: 0,
+    unlisted: 0,
+    stopped: null,
+    ...overrides,
+  })
+
+  it("is one step, shown while it reads and then closed where it was drawn", () => {
+    const reading = exchangeOf("q", [{ kind: "catalogReading" }])
+    const [step] = reading.entries
+    expect(step?.kind === "catalog" && catalogLine(step)).toMatch(
+      /Reading the catalog/
+    )
+    const done = reduce(reading, read())
+    expect(done.entries).toHaveLength(1)
+    const [closed] = done.entries
+    expect(closed?.key).toBe(step?.key)
+    expect(closed?.kind === "catalog" && catalogLine(closed)).toBe(
+      "Read the structure from the server: 11 objects described, 2 lists read. No row was read."
+    )
+  })
+
+  it("says what is missing and why it stopped", () => {
+    const partial = exchangeOf("q", [
+      { kind: "catalogReading" },
+      read({ notLoaded: 3, unlisted: 1, failed: 1, stopped: "deadline" }),
+    ])
+    const [entry] = partial.entries
+    const line = entry?.kind === "catalog" ? catalogLine(entry) : ""
+    expect(line).toContain("Stopped at the time bound.")
+    expect(line).toContain("1 read failed.")
+    expect(line).toContain("3 objects, 1 schema not listed")
+  })
+
+  it("keeps a second reading apart from the first", () => {
+    const twice = exchangeOf("q", [
+      { kind: "catalogReading" },
+      read(),
+      call(0),
+      { kind: "catalogReading" },
+      read({ described: 1, listed: 0 }),
+    ])
+    expect(twice.entries.map((entry) => entry.kind)).toEqual([
+      "catalog",
+      "tool",
+      "catalog",
+    ])
   })
 })

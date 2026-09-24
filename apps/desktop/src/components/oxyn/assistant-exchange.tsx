@@ -1,5 +1,6 @@
 import {
   AssistantAgentTool,
+  AssistantCatalogRead,
   AssistantMemoryReset,
   AssistantPermissionRefused,
   AssistantWaiting,
@@ -140,6 +141,8 @@ function EntryView({
       )
     case "memoryReset":
       return <AssistantMemoryReset reason={entry.reason} />
+    case "catalog":
+      return <AssistantCatalogRead entry={entry} />
     case "notSaved":
       return (
         <Marker role="note" className="items-start text-xs">

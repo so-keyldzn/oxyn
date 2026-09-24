@@ -414,10 +414,13 @@ impl ToolRegistry {
                          its objects (tables, views, collections, indexes, key \
                          patterns, labels…), their fields and types as the server \
                          names them, keys and indexes, and the query language to \
-                         write in. Read from Oxyn's local catalog: it never \
-                         contacts the server and never returns row values. The \
-                         answer is bounded; when it says objects were left out, \
-                         call it again with search words. ",
+                         write in. Read from Oxyn's catalog of this connection; \
+                         what it has not loaded yet — the objects of a schema, the \
+                         fields of the objects that match — Oxyn first reads from \
+                         the server, as metadata only and within a few seconds. It \
+                         never returns row values. The answer is bounded and says \
+                         what is not loaded yet; when it says objects were left \
+                         out or not loaded, call it again with search words. ",
                         erd_hint!()
                     ),
                     command: "DescribeCatalog",
@@ -441,9 +444,12 @@ impl ToolRegistry {
                 },
                 ToolDefinition {
                     name: REFRESH_CATALOG,
-                    description: "Re-read the structure of the database from the server. \
-                                  Use it after a schema change, or when the schema shown to \
-                                  you looks out of date. It is slow on large schemas.",
+                    description: "Re-read the structure of the database from the server: \
+                                  its identity, then the objects of each schema, within a \
+                                  bound of schemas and seconds. Use it after a schema change, \
+                                  or when the schema shown to you looks out of date. It is \
+                                  slow on large schemas; describe_schema already reads what \
+                                  was never loaded.",
                     command: "RefreshCatalog",
                     schema: schema_of::<RefreshCatalogArgs>,
                     translate: translate_refresh_catalog,

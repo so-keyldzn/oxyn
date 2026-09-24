@@ -671,6 +671,18 @@ Le panneau suit les cinq états d'une vue. Ce qui les distingue ici :
 
 * **en cours** : la réponse s'écrit au fil du flux, et l'annulation reste offerte
   pendant tout ce temps — pas seulement entre deux tours ;
+* **lecture du catalogue** : quand Oxyn lit du serveur la structure dont la
+  question a besoin et que le cache n'a pas
+  ([AI-PROVIDERS](AI-PROVIDERS.md#ce-que-lia-voit-du-schéma-et-quand-cest-lu)),
+  l'échange montre l'étape, un indicateur tournant et « Reading the catalog…
+  metadata only, no row is read. » — avant la première lecture, jamais quand
+  rien ne manque. Elle se referme **à sa place** sur son bilan : objets décrits,
+  listes lues, et, quand il y a lieu, l'arrêt au délai ou avec la question, les
+  lectures en échec, et ce qui n'est pas encore chargé, avec « The assistant was
+  told. » Une étape, pas une région `status` : le panneau annonce son état une
+  fois, ailleurs. Cinq secondes au plus, et l'annulation l'arrête comme le reste
+  de la question. `describe_schema` et `refresh_catalog` montrent la même étape
+  sous leur appel ;
 * **appel d'outil** : chaque commande demandée par l'agent est montrée **avant**
   son résultat, avec son nom et la connexion visée. Un agent qui travaille en
   silence pendant huit tours est indistinguable d'un agent bloqué ;

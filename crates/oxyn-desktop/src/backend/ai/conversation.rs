@@ -39,6 +39,7 @@ use oxyn_llm::Reach;
 use oxyn_store::{EgressReach, EgressRecord};
 use tauri::ipc::Channel;
 
+use super::catalog_fill::{CatalogFill, Filled, Want};
 use super::persistence;
 use super::samples::{self, Grant, Offer, Presented, Recipient, RecipientKind, SampleRefused};
 use super::threads::{AgentLink, LinkedAgent, Memory, Scope, Thread, WithdrawOnRelease};
@@ -410,7 +411,45 @@ impl CommandSink for AgentSink {
         let (call, connection, environment) =
             announce_call(&self.thread, self.node, statement.clone());
         let mutating = command.is_mutating();
-        let report = self.sink.dispatch(actor, command, cancel).await;
+        // `describe_schema` reads the cache as it stands: what it would
+        // describe and the cache does not hold is read first, as the agent's
+        // own reads — its tool call is at their origin (ADR-0036).
+        if let Command::DescribeCatalog {
+            connection: target,
+            focus,
+        } = &command
+        {
+            self.complete_catalog(
+                actor,
+                *target,
+                Want::Search(focus.as_deref().unwrap_or_default()),
+                cancel,
+            )
+            .await;
+        }
+        let relist = match &command {
+            Command::RefreshCatalog { connection } => Some(*connection),
+            _ => None,
+        };
+        let mut report = self.sink.dispatch(actor, command, cancel).await;
+        // `refresh_catalog` reads the server level again, then the relations
+        // of each schema — within the same bounds — so that what it refreshes
+        // is what a question needs, not only the first level.
+        if let (Some(target), DispatchReport::Completed { summary, .. }) = (relist, &mut report) {
+            let filled = self
+                .complete_catalog(actor, target, Want::Relist, cancel)
+                .await;
+            summary.push_str(&format!(
+                "; {} lists of schemas and their objects were read again",
+                filled.listed
+            ));
+            if filled.unlisted > 0 || filled.stopped.is_some() || filled.failed > 0 {
+                summary.push_str(&format!(
+                    "; {} schemas are still not listed, and {} reads failed",
+                    filled.unlisted, filled.failed
+                ));
+            }
+        }
         // Held until the request is shown: `close` waits for it, or the request
         // sees the question closed and is withdrawn.
         let open = self.question.0.lock();
@@ -479,6 +518,31 @@ impl CommandSink for AgentSink {
         cancel: &CancelToken,
     ) -> DispatchOutcome {
         self.sample(actor, ask, cancel).await
+    }
+}
+
+impl AgentSink {
+    /// Reads what an agent's tool call needs and the catalog does not hold,
+    /// as that agent, showing the step on its question.
+    async fn complete_catalog(
+        &self,
+        actor: Actor,
+        connection: ConnectionId,
+        want: Want<'_>,
+        cancel: &CancelToken,
+    ) -> Filled {
+        let Some(catalog) = self.executor.catalog(connection) else {
+            return Filled::default();
+        };
+        // The agent-bound sink: any actor but this agent is refused there.
+        let fill = CatalogFill {
+            sink: &self.sink,
+            actor,
+            connection,
+            catalog,
+        };
+        let emit = |event| self.thread.emit(self.node, event);
+        fill.run(want, cancel, &emit).await
     }
 }
 
@@ -1313,6 +1377,64 @@ impl Run<'_> {
         self.thread.emit(self.node, event);
     }
 
+    /// Reads what the context of this question needs and the catalog does not
+    /// hold yet, within the bounds of [`super::catalog_fill`], showing the step.
+    ///
+    /// As [`Actor::Human`]: the question is the user's gesture, and what it
+    /// makes Oxyn read is decided by Oxyn — the question's words and its
+    /// mentions select, as they select for the context — never by a model.
+    /// The reads are the tree's expansions, through the same bus and gate
+    /// ([ADR-0036](../../../../../docs/adr/0036-l-assistant-complete-le-catalogue.md)).
+    async fn complete_catalog(&self, want: Want<'_>) {
+        let Some(catalog) = self.inner.executor.catalog(self.connection.id) else {
+            return;
+        };
+        let sink = ExecutorSink::new(Arc::clone(&self.inner.executor));
+        let fill = CatalogFill {
+            sink: &sink,
+            actor: Actor::Human,
+            connection: self.connection.id,
+            catalog,
+        };
+        let emit = |event| self.emit(event);
+        fill.run(want, self.cancel, &emit).await;
+    }
+
+    /// What the context of a question needs: the whole selection for a
+    /// session that starts, its mentions alone for one that follows.
+    fn want<'q>(&'q self, question: &'q str, follows: bool) -> Want<'q> {
+        if follows {
+            Want::Mentions(&self.mentions.mentions)
+        } else {
+            Want::Question {
+                focus: question,
+                mentions: &self.mentions.mentions,
+            }
+        }
+    }
+
+    /// Completes the catalog, then assembles the provider conversation from it.
+    ///
+    /// The completion follows [`Self::prepare_dialogue`]'s own choice: a
+    /// remembered session under the same tier receives its mentions only, so
+    /// only they are read.
+    async fn prepare(
+        &self,
+        agent: &oxyn_ai::AgentSpec,
+        session: SessionId,
+        question: &str,
+        sample: Option<oxyn_ai::context::RowSample>,
+        tier: PrivacyTier,
+    ) -> Result<(AgentSession, Option<oxyn_ai::AgentContext>), Failure> {
+        let follows = sample.is_none()
+            && self
+                .thread
+                .memory_from(self.parent)
+                .is_some_and(|memory| memory.tier == tier);
+        self.complete_catalog(self.want(question, follows)).await;
+        self.prepare_dialogue(agent, session, question, sample, tier)
+    }
+
     fn observer(&self) -> Observer {
         Observer {
             thread: Arc::clone(self.thread),
@@ -1618,13 +1740,15 @@ impl Run<'_> {
         let agent = sql_agent();
         // First, before anything can fail: a sampled exchange must be marked
         // as leaving no memory whatever happens next.
-        let (mut dialogue, context) = self.prepare_dialogue(
-            &agent,
-            session,
-            &question,
-            sample.map(|sample| sample.rows),
-            tier,
-        )?;
+        let (mut dialogue, context) = self
+            .prepare(
+                &agent,
+                session,
+                &question,
+                sample.map(|sample| sample.rows),
+                tier,
+            )
+            .await?;
 
         // Classified first, and refused before the keyring is read or a
         // transport exists (ADR-0023). Neither the reach nor the key is cached:
@@ -1831,6 +1955,11 @@ impl Run<'_> {
         // same gate, and precede the question.
         let language = QueryLanguage::Sql(oxyn_query::dialect_for(&self.connection.driver));
         let mentions = self.mentions.mentions.clone();
+        // Before the prompt is rendered, what it needs is read — by Oxyn,
+        // through the bus: the whole selection for a session that starts, the
+        // mentions alone for one that follows.
+        self.complete_catalog(self.want(question, linked.is_some()))
+            .await;
         // From the local catalog only: an agent that fetched what it needs
         // would bypass both the gate and the bus. No catalog yet is said to the
         // agent as « 0 of 0 known relations », and ignores every mention.

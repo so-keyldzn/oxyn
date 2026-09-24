@@ -3,10 +3,24 @@ import { expect, within } from "storybook/test"
 
 import {
   AssistantAgentTool,
+  AssistantCatalogRead,
   AssistantMemoryReset,
   AssistantPermissionRefused,
   AssistantWaiting,
 } from "./assistant-agent-activity"
+import type { CatalogEntry } from "@/features/assistant/transcript"
+
+const CATALOG: CatalogEntry = {
+  kind: "catalog",
+  key: "catalog-0",
+  reading: false,
+  listed: 2,
+  described: 11,
+  failed: 0,
+  notLoaded: 0,
+  unlisted: 0,
+  stopped: null,
+}
 
 const meta = {
   title: "Oxyn/Assistant/AgentActivity",
@@ -86,4 +100,47 @@ export const MemoryResetByARestartedAgent: Story = {
 
 export const Waiting: Story = {
   render: () => <AssistantWaiting label="Waiting for the model…" />,
+}
+
+export const CatalogReading: Story = {
+  render: () => <AssistantCatalogRead entry={{ ...CATALOG, reading: true }} />,
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    await expect(canvas.getByText(/Reading the catalog/)).toBeVisible()
+    await expect(canvas.getByText(/no row is read/)).toBeVisible()
+    // A step, not an announcement (StepsAreNotLiveRegions).
+    await expect(canvas.queryByRole("status")).toBeNull()
+  },
+}
+
+export const CatalogRead: Story = {
+  render: () => <AssistantCatalogRead entry={CATALOG} />,
+  play: async ({ canvasElement }) => {
+    await expect(
+      within(canvasElement).getByText(/11 objects described/)
+    ).toBeVisible()
+  },
+}
+
+export const CatalogPartlyRead: Story = {
+  render: () => (
+    <AssistantCatalogRead
+      entry={{
+        ...CATALOG,
+        described: 24,
+        listed: 32,
+        failed: 1,
+        notLoaded: 3,
+        unlisted: 40,
+        stopped: "deadline",
+      }}
+    />
+  ),
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    // What is missing is said, never left to look like the whole schema.
+    await expect(canvas.getByText(/time bound/)).toBeVisible()
+    await expect(canvas.getByText(/40 schemas not listed/)).toBeVisible()
+    await expect(canvas.getByText(/The assistant was told/)).toBeVisible()
+  },
 }

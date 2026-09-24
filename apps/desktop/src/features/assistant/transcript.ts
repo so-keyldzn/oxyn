@@ -15,6 +15,7 @@ import type {
   AgentProvenance,
   AgentToolStatus,
   AiEvent,
+  CatalogReadStop,
   ContextSummary,
   Destination,
   Ending,
@@ -130,8 +131,26 @@ export interface FailedEntry {
   retryable: boolean
 }
 
+/**
+ * Oxyn reading, from the server, the structure the assistant needs and the
+ * catalog did not hold (ADR-0036). Counts only; `reading` until its account
+ * arrives.
+ */
+export interface CatalogEntry {
+  kind: "catalog"
+  key: string
+  reading: boolean
+  listed: number
+  described: number
+  failed: number
+  notLoaded: number
+  unlisted: number
+  stopped: CatalogReadStop | null
+}
+
 export type Entry =
   | { kind: "turn"; key: string; turn: number; maxTurns: number }
+  | CatalogEntry
   | ThinkingEntry
   | { kind: "answer"; key: string; text: string }
   | ToolDraftEntry
@@ -324,6 +343,43 @@ export function reduce(current: Exchange, event: AiEvent): Exchange {
         key: `m-${at}`,
         reason: event.reason,
       })
+    case "catalogReading":
+      return push({
+        kind: "catalog",
+        key: `catalog-${at}`,
+        reading: true,
+        listed: 0,
+        described: 0,
+        failed: 0,
+        notLoaded: 0,
+        unlisted: 0,
+        stopped: null,
+      })
+    case "catalogRead": {
+      // The account replaces the step it closes, where it was drawn.
+      const index = lastIndexWhere(
+        entries,
+        (entry) => entry.kind === "catalog" && entry.reading
+      )
+      const done: CatalogEntry = {
+        kind: "catalog",
+        key: `catalog-${at}`,
+        reading: false,
+        listed: event.listed,
+        described: event.described,
+        failed: event.failed,
+        notLoaded: event.notLoaded,
+        unlisted: event.unlisted,
+        stopped: event.stopped,
+      }
+      if (index === -1) return push(done)
+      return {
+        ...current,
+        entries: entries.map((entry, position) =>
+          position === index ? { ...done, key: entry.key } : entry
+        ),
+      }
+    }
     case "notSaved":
       return push({ kind: "notSaved", key: `unsaved-${at}` })
     case "olderNotLoaded":
@@ -826,6 +882,38 @@ export function endingLine(ending: Ending): string {
     case "unknown":
       return "The conversation ended in a way this Oxyn build cannot report. Nothing was hidden; nothing more is known."
   }
+}
+
+function counted(count: number, noun: string) {
+  return `${count} ${noun}${count === 1 ? "" : "s"}`
+}
+
+/**
+ * What the panel says of a catalog reading: the step while it runs, then what
+ * it read and what the assistant was told is still missing — never a silent
+ * partial schema.
+ */
+export function catalogLine(entry: CatalogEntry): string {
+  if (entry.reading) {
+    return "Reading the catalog… metadata only, no row is read."
+  }
+  const parts = [
+    `Read the structure from the server: ${counted(entry.described, "object")} described, ${counted(entry.listed, "list")} read. No row was read.`,
+  ]
+  if (entry.stopped === "deadline") {
+    parts.push("Stopped at the time bound.")
+  } else if (entry.stopped === "cancelled") {
+    parts.push("Stopped with the question.")
+  }
+  if (entry.failed > 0) {
+    parts.push(`${counted(entry.failed, "read")} failed.`)
+  }
+  if (entry.notLoaded > 0 || entry.unlisted > 0) {
+    parts.push(
+      `Not loaded yet: ${counted(entry.notLoaded, "object")}, ${counted(entry.unlisted, "schema")} not listed. The assistant was told.`
+    )
+  }
+  return parts.join(" ")
 }
 
 export const MEMORY_RESET_LINES: Record<MemoryReset, string> = {

@@ -2964,4 +2964,8 @@ mod approved_samples {
     /// What the user names with `@` reaches both destinations, on this
     /// fixture's catalog — a session already open included.
     mod mentions;
+
+    /// ADR-0036: the structure a question needs is read by Oxyn, whatever
+    /// the tree shows — on a fixture whose explorer was never expanded.
+    mod catalog_reads;
 }

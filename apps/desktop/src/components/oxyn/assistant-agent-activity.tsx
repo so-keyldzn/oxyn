@@ -9,7 +9,11 @@ import {
 
 import { Marker, MarkerContent, MarkerIcon } from "@/components/ui/marker"
 import { Spinner } from "@/components/ui/spinner"
-import { MEMORY_RESET_LINES } from "@/features/assistant/transcript"
+import {
+  MEMORY_RESET_LINES,
+  catalogLine,
+} from "@/features/assistant/transcript"
+import type { CatalogEntry } from "@/features/assistant/transcript"
 import type { AgentToolStatus, MemoryReset } from "@/lib/ipc/ai"
 import { cn } from "@/lib/utils"
 
@@ -92,6 +96,38 @@ export function AssistantPermissionRefused({
         <p className="text-muted-foreground">{reason}</p>
       </div>
     </div>
+  )
+}
+
+/**
+ * Oxyn reading, from the server, the structure the assistant needs and its
+ * catalog did not hold — then what it read and what is still missing
+ * (ADR-0036). A step, like an agent's: not a live region.
+ */
+export function AssistantCatalogRead({ entry }: { entry: CatalogEntry }) {
+  const partial =
+    entry.failed > 0 ||
+    entry.notLoaded > 0 ||
+    entry.unlisted > 0 ||
+    entry.stopped !== null
+  return (
+    <Marker
+      data-slot="assistant-catalog-read"
+      data-state={entry.reading ? "reading" : partial ? "partial" : "read"}
+      className="items-start text-xs"
+    >
+      <MarkerIcon>
+        {entry.reading ? (
+          <Spinner />
+        ) : (
+          <HugeiconsIcon
+            icon={partial ? InformationCircleIcon : CheckmarkCircle02Icon}
+            strokeWidth={2}
+          />
+        )}
+      </MarkerIcon>
+      <MarkerContent>{catalogLine(entry)}</MarkerContent>
+    </Marker>
   )
 }
 

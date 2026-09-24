@@ -23,6 +23,7 @@
 //! ([ADR-0006](../../../../docs/adr/0006-ai-privacy-tiers.md)). The front hides
 //! every AI entry on it.
 
+mod catalog_fill;
 mod conversation;
 mod mentions;
 mod persistence;

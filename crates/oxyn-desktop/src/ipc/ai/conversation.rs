@@ -759,6 +759,28 @@ pub enum AiEvent {
     /// The earlier exchanges are not part of this run.
     #[serde(rename_all = "camelCase")]
     MemoryReset { reason: MemoryReset },
+    /// Oxyn reads from the server the structure the assistant needs and its
+    /// catalog does not hold yet — metadata only, through the bus
+    /// ([ADR-0036](../../../../../docs/adr/0036-l-assistant-complete-le-catalogue.md)).
+    /// Sent before the first read; not sent when nothing was missing.
+    CatalogReading,
+    /// That reading is over. Counts only: no object name reaches the panel
+    /// through it.
+    #[serde(rename_all = "camelCase")]
+    CatalogRead {
+        /// Levels listed: the server, a catalog's schemas, a schema's relations.
+        listed: usize,
+        /// Relations whose fields, indexes and keys were read.
+        described: usize,
+        /// Reads that failed or were refused: their level stays unread.
+        failed: usize,
+        /// Relations the assistant sees by name only.
+        not_loaded: usize,
+        /// Schemas whose relations were never listed.
+        unlisted: usize,
+        /// `deadline` or `cancelled` when the reading stopped before its end.
+        stopped: Option<&'static str>,
+    },
     /// This conversation is not being written to the workspace: the question
     /// still leaves, and the panel says so once.
     NotSaved,

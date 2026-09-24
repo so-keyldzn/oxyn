@@ -131,7 +131,9 @@ démarrer l'agent peut suffire à lui faire contacter son service.
 > **La structure au-delà de ce contexte** passe par l'outil `describe_schema`,
 > le même pour toute destination — boucle d'outils d'un fournisseur ou pont MCP
 > d'un agent externe. Il devient une `Command::DescribeCatalog` qui traverse le
-> `PolicyGate` ; l'exécuteur rend la poignée du catalogue local, et `oxyn-ai` la
+> `PolicyGate`, précédée des lectures de métadonnées qui manquent au cache
+> ([Ce que l'IA voit du schéma](#ce-que-lia-voit-du-schéma-et-quand-cest-lu)) ;
+> l'exécuteur rend la poignée du catalogue local, et `oxyn-ai` la
 > rend par `ContextBuilder::build`, sous le niveau relu à l'appel. Le rendu ne
 > connaît que le modèle commun du catalogue : une collection, un motif de clés ou
 > un label de graphe s'y décrivent comme une table, dans le langage de requête de
@@ -171,6 +173,54 @@ Ce que le panneau montre en retour du travail de l'agent — texte, raisonnement
 sorte et état de ses étapes, plan — et ce qu'il n'en montre jamais est décrit
 dans [UX-SPEC](UX-SPEC.md#ce-que-le-panneau-montre-dun-agent-externe) ; la
 règle précise l'ADR-0026, qui ne remontait que le texte.
+
+## Ce que l'IA voit du schéma, et quand c'est lu
+
+Le contexte se rend depuis le **cache** du catalogue, jamais d'un aller-retour
+serveur fait par `oxyn-ai`. Or l'arbre charge ce cache à la demande : la liste
+des tables d'un schéma quand l'utilisateur le déplie, les champs d'une table
+quand il l'ouvre. Sans complément, l'IA ne saurait que ce qui a été cliqué —
+« Describing 0 of 0 known relations » sur une base de onze tables. Oxyn complète
+donc le cache **lui-même**, sans modèle, avant de le rendre
+([ADR-0036](adr/0036-l-assistant-complete-le-catalogue.md)) :
+
+| Quand | Ce qui est lu | Acteur |
+|---|---|---|
+| une question ouvre une session — fournisseur, ou agent externe à sa première question | le serveur s'il n'a jamais été lu ; la liste des relations de chaque schéma jamais listé ; puis champs, index et clés étrangères des relations **que la porte retiendra** — mentions `@` d'abord, puis la recherche orientée par la question | `Actor::Human` |
+| une question qui suit une session déjà informée | les relations **mentionnées** seulement | `Actor::Human` |
+| l'outil `describe_schema` | comme une ouverture, orienté par ses mots de recherche | `Actor::Agent` |
+| l'outil `refresh_catalog` | le serveur, puis la liste des relations de chaque schéma, **même fraîche** | `Actor::Agent` |
+
+Ce qui encadre ces lectures :
+
+1. **Des métadonnées, par le bus.** Chaque lecture est une
+   `Command::RefreshCatalogScope` — celle d'un dépliage de l'arbre —, soumise
+   par `ExecutorSink` : le `PolicyGate` décide, le journal l'inscrit avec son
+   acteur ([I-01](../CLAUDE.md#i-01)). Aucune ligne n'est lue. La politique
+   la permet partout, `production` comprise, puisqu'elle n'écrit rien.
+2. **La sélection de la porte, et elle seule.** Ce qui est décrit est ce que
+   `ContextBuilder::build` retiendra, calculé par la même fonction
+   (`oxyn_ai::context::wanted_relations`). Un nom que le cache ne liste pas
+   n'est jamais envoyé au serveur : une mention se vérifie contre la liste
+   avant d'être lue.
+3. **Des bornes, sans échec.** Au plus 32 schémas listés, au plus 24 relations
+   décrites — le plafond de la porte —, en 5 secondes au total
+   (`crates/oxyn-desktop/src/backend/ai/catalog_fill.rs`). Un dépassement
+   n'échoue pas la question : le contexte part avec ce qui est chargé, et
+   l'encadré dit ce qui manque — « N relations not loaded yet », « N schemas not
+   listed yet », « the catalog of this connection has not been read yet ». Ces
+   lignes sont des comptes, sans nom : elles sont les mêmes sous tout niveau.
+4. **Rien n'est relu.** Un palier lu et non invalidé depuis ne se relit pas ; un
+   DDL émis par Oxyn invalide le catalogue, et la question suivante relit une
+   fois. Une lecture en échec n'est pas retentée dans la même complétion.
+5. **Annulable.** Arrêter la question annule le jeton de la lecture en cours,
+   que le driver honore comme pour un dépliage ; le délai la coupe de la même
+   façon, et la lecture est attendue deux secondes pour finir proprement plutôt
+   qu'abandonnée au milieu d'un échange.
+
+Le reste du produit en profite sans code de plus : l'arbre se met à jour par
+l'événement `CatalogUpdated`, et la liste des mentions `@` comme le diagramme
+`erd` lisent le même cache.
 
 ## Ce qu'on fait des réponses
 

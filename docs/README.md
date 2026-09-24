@@ -61,6 +61,7 @@ Pour localiser les planches et leurs états avant implémentation, consulter
 | [0032](adr/0032-agent-externe-confine-au-lancement.md) | Un agent externe connu est confiné au lancement, et n'a d'outils que ceux d'Oxyn | proposé |
 | [0033](adr/0033-couches-de-configuration-codex.md) | Oxyn coupe Codex dans toutes les couches de configuration qu'il peut lire, et laisse à l'organisation celles qu'il ne peut pas lire | proposé |
 | [0034](adr/0034-echantillon-pour-toute-destination.md) | Un échantillon approuvé atteint toute destination par la même porte, et un agent peut en demander un sans jamais l'approuver | proposé |
+| [0036](adr/0036-l-assistant-complete-le-catalogue.md) | L'assistant complète lui-même le catalogue, par le bus et sous des bornes | proposé |
 
 Les ADR restent `proposé` jusqu'au premier commit de code qui les met en œuvre.
 

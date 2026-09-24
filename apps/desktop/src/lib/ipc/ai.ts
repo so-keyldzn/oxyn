@@ -429,6 +429,9 @@ export const MemoryReset = z.enum([
 ])
 export type MemoryReset = z.infer<typeof MemoryReset>
 
+/** Why a catalog reading stopped before its end. A word, validated loosely. */
+export type CatalogReadStop = "deadline" | "cancelled"
+
 export const ErrorClass = freeWord<ErrorClass>()
 export type ErrorClass = "transient" | "permanent" | "ambiguous" | "unknown"
 
@@ -555,6 +558,23 @@ export const AiEvent = z.discriminatedUnion("kind", [
     provenance: AgentProvenance.nullable(),
   }),
   z.object({ kind: z.literal("memoryReset"), reason: MemoryReset }),
+  /**
+   * Oxyn reads from the server the structure the assistant needs and the
+   * catalog does not hold yet — metadata only (ADR-0036). Not sent when
+   * nothing was missing.
+   */
+  z.object({ kind: z.literal("catalogReading") }),
+  /** That reading is over. Counts only: no object name. */
+  z.object({
+    kind: z.literal("catalogRead"),
+    listed: z.number().int().nonnegative(),
+    described: z.number().int().nonnegative(),
+    failed: z.number().int().nonnegative(),
+    notLoaded: z.number().int().nonnegative(),
+    unlisted: z.number().int().nonnegative(),
+    /** Stopped before its end: at the time bound, or with the question. */
+    stopped: freeWord<CatalogReadStop>().nullable(),
+  }),
   /** This conversation is not written to the workspace; the question still left. */
   z.object({ kind: z.literal("notSaved") }),
   /** Reopened: older exchanges of this conversation were not loaded. */

@@ -55,10 +55,8 @@
 
 use std::fmt;
 
-use oxyn_catalog::model::{Field, LogicalType, Relation, RelationRef};
-use oxyn_catalog::{
-    CatalogCache, CatalogPath, QuoteStyle, SearchOptions, quote_identifier, search,
-};
+use oxyn_catalog::model::{Field, LogicalType, Relation};
+use oxyn_catalog::{CatalogCache, CatalogPath, QuoteStyle, quote_identifier};
 use oxyn_core::{QueryLanguage, ScalarValue};
 use serde::{Deserialize, Serialize};
 
@@ -66,9 +64,11 @@ use crate::privacy::PrivacyTier;
 use crate::untrusted;
 
 mod mentions;
+mod wanted;
 
 pub(crate) use mentions::QUESTION_HEADER;
 pub use mentions::{MAX_MENTIONS, Mention};
+pub use wanted::wanted_relations;
 
 /// Octets comptés pour un jeton dans l'estimation de budget.
 ///
@@ -214,9 +214,25 @@ pub struct AgentContext {
     dropped_samples: usize,
     ignored_mentions: usize,
     omitted_mentions: usize,
+    unloaded_relations: usize,
+    unlisted_schemas: usize,
 }
 
 impl AgentContext {
+    /// Relations described by name only: their fields were not read yet.
+    ///
+    /// Said to the model in the block itself; counted here for the panel.
+    #[must_use]
+    pub const fn unloaded_relations(&self) -> usize {
+        self.unloaded_relations
+    }
+
+    /// Schemas whose relations were never listed, hence not even counted.
+    #[must_use]
+    pub const fn unlisted_schemas(&self) -> usize {
+        self.unlisted_schemas
+    }
+
     /// Le bloc à insérer dans le message système, encadré et prêt à partir.
     #[must_use]
     pub fn prompt_block(&self) -> &str {
@@ -477,6 +493,31 @@ impl<'a> ContextBuilder<'a> {
             ));
         }
         block.push_str(".\n");
+        // What the cache does not hold yet, counted from the cache itself —
+        // whatever the reason: a bound of the host's loading, a failed read,
+        // no loading at all. Counts only, no name: this line is the same under
+        // every tier. Without it, a model reads a partial schema as the whole
+        // one, and invents the table it does not see.
+        let unloaded = kept
+            .iter()
+            .filter(|path| self.cache.relation(path).is_none())
+            .count();
+        let unlisted = self.cache.unlisted_count();
+        if self.cache.is_empty() {
+            block.push_str(
+                "The catalog of this connection has not been read yet: no relation is known.\n",
+            );
+        }
+        if unloaded > 0 {
+            block.push_str(&format!(
+                "{unloaded} relations not loaded yet: their fields are unknown, do not guess them.\n"
+            ));
+        }
+        if unlisted > 0 {
+            block.push_str(&format!(
+                "{unlisted} schemas not listed yet: their relations are not counted above.\n"
+            ));
+        }
         block.push_str(&untrusted::fence(&body));
 
         let estimated_tokens = estimate_tokens(&block);
@@ -489,60 +530,25 @@ impl<'a> ContextBuilder<'a> {
             dropped_samples,
             ignored_mentions: mentioned.ignored,
             omitted_mentions: left_out.len(),
+            unloaded_relations: unloaded,
+            unlisted_schemas: unlisted,
         }
     }
 
-    /// Choisit les relations à décrire.
+    /// Choisit les relations à décrire : les mentionnées en tête, dans l'ordre
+    /// de saisie, puis ce que la question fait trouver, sous le même plafond.
     ///
-    /// Avec une question, [`oxyn_catalog::search()`] classe par pertinence. Sans
-    /// question — ou sans résultat —, l'ordre des chemins tranche : un contexte
-    /// qui change d'une construction à l'autre rend les réponses du modèle
-    /// irreproductibles, donc indébogables.
-    ///
-    /// Les relations mentionnées viennent **en tête**, dans l'ordre de saisie,
-    /// et comptent dans le même plafond : l'utilisateur qui pointe un objet
-    /// l'a désigné plus sûrement qu'un classement lexical ne le devine.
+    /// La sélection vit dans [`wanted`], une seule fois : l'hôte qui complète
+    /// le catalogue avant une question charge ce que cette fonction retiendra
+    /// ([`wanted_relations`]), et deux sélections finiraient par diverger.
     fn select_relations(&self, mentioned: &[CatalogPath]) -> Vec<CatalogPath> {
-        let limit = self.policy.max_relations;
-        let mut chosen: Vec<CatalogPath> = mentioned.iter().take(limit).cloned().collect();
-        if !self.fill || chosen.len() >= limit {
-            return chosen;
-        }
-        for path in self.found_relations(limit) {
-            if chosen.len() >= limit {
-                break;
-            }
-            if !chosen.contains(&path) {
-                chosen.push(path);
-            }
-        }
-        chosen
-    }
-
-    /// Ce que la question fait trouver, ou à défaut l'ordre des chemins.
-    fn found_relations(&self, limit: usize) -> Vec<CatalogPath> {
-        let focus = self.focus.trim();
-        if !focus.is_empty() {
-            let hits = search(
-                self.cache,
-                focus,
-                &SearchOptions::default().with_limit(limit),
-            );
-            if !hits.is_empty() {
-                return hits.into_iter().map(|hit| hit.path).collect();
-            }
-        }
-
-        let mut refs: Vec<&RelationRef> = self.cache.iter_relations().map(|(r, _)| r).collect();
-        refs.sort_by(|a, b| {
-            a.parent()
-                .cmp(b.parent())
-                .then_with(|| a.name().cmp(b.name()))
-        });
-        refs.into_iter()
-            .take(limit)
-            .map(RelationRef::path)
-            .collect()
+        wanted::select(
+            self.cache,
+            self.policy.max_relations,
+            &self.focus,
+            mentioned,
+            self.fill,
+        )
     }
 
     /// Décrit le serveur et le langage dans lequel écrire.
