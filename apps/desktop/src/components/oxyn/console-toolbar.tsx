@@ -99,6 +99,8 @@ export function ConsoleToolbar({
   save,
   onSave,
   onSaveAsNew,
+  closing = false,
+  onCancelWrite,
   context,
 }: {
   running: boolean
@@ -123,6 +125,13 @@ export function ConsoleToolbar({
   save: SaveState
   onSave: () => void
   onSaveAsNew: () => void
+  /**
+   * The console is closing its document: the name stays readable but no
+   * longer editable (docs/UX-SPEC.md, « Sauvegarde d'une console »).
+   */
+  closing?: boolean
+  /** Cancels the named save or close under way. */
+  onCancelWrite?: () => void
   /** The session context picker, when the session declares it. */
   context?: React.ReactNode
 }) {
@@ -136,6 +145,7 @@ export function ConsoleToolbar({
     titleError !== null ||
     save.status === "conflict" ||
     save.status === "failed"
+  const writing = save.status === "saving" || closing
   return (
     <div
       data-slot="console-toolbar"
@@ -247,9 +257,10 @@ export function ConsoleToolbar({
           id={titleId}
           value={title}
           dir="auto"
+          readOnly={closing}
           onChange={(event) => onTitleChange(event.target.value)}
           onKeyDown={(event) => {
-            if (event.key === "Enter") onSave()
+            if (event.key === "Enter" && !closing) onSave()
           }}
           aria-invalid={titleError !== null}
           // The refusal is read with the field, not only beside it: a name too
@@ -271,7 +282,7 @@ export function ConsoleToolbar({
             <Button
               size="sm"
               variant="outline"
-              disabled={save.status === "saving"}
+              disabled={writing}
               onClick={onSave}
               aria-keyshortcuts="Meta+S"
             >
@@ -288,6 +299,11 @@ export function ConsoleToolbar({
             </Button>
           </Shortcut>
         )}
+        {writing && onCancelWrite ? (
+          <Button size="sm" variant="ghost" onClick={onCancelWrite}>
+            {closing ? "Cancel close" : "Cancel save"}
+          </Button>
+        ) : null}
         <span
           id={noticeId}
           role="status"

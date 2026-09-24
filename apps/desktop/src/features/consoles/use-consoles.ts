@@ -197,18 +197,29 @@ export function useConsoles({
     else void finishClose(key, false)
   }
 
+  // Bumped by every decision: an answer to a decision since cancelled neither
+  // closes the console nor reopens the dialog (UX-SPEC « Sauvegarde d'une
+  // console »).
+  const decision = React.useRef(0)
   const decideClose = async (choice: "cancel" | "save" | "discard") => {
     const current = closing
     if (!current) return
+    decision.current += 1
     if (choice === "cancel") {
       setClosing(null)
+      if (current.busy) handles.current.get(current.key)?.cancelWrite()
       return
     }
+    const token = decision.current
     setClosing({ ...current, busy: true })
     const handle = handles.current.get(current.key)
     const saved = choice === "discard" || (handle ? await handle.save() : false)
+    if (decision.current !== token) return
+    // A close the store committed despite a late cancellation still removes
+    // the tab: its document is gone, only the dialog stays shut.
     const closed =
       saved && (await finishClose(current.key, choice === "discard"))
+    if (decision.current !== token) return
     setClosing(closed ? null : { ...current, busy: false })
   }
 

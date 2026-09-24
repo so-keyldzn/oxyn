@@ -20,8 +20,10 @@ pub fn new_query_document() -> String {
 #[tauri::command]
 pub async fn save_query_document(
     backend: State<'_, Backend>,
+    command_id: String,
     change: DocumentChange,
 ) -> Result<DocumentWrite, IpcError> {
+    let id = parse("command id", &command_id)?;
     let document = parse("document", &change.document)?;
     let connection = change
         .connection
@@ -29,19 +31,25 @@ pub async fn save_query_document(
         .map(|connection| parse("connection", connection))
         .transpose()?;
     backend
-        .save_query_document(document, connection, change)
+        .save_query_document(id, document, connection, change)
         .await
 }
 
 #[tauri::command]
 pub async fn close_query_document(
     backend: State<'_, Backend>,
+    command_id: String,
     document: String,
     revision: u64,
     discard: bool,
 ) -> Result<DocumentWrite, IpcError> {
     backend
-        .close_query_document(parse("document", &document)?, revision, discard)
+        .close_query_document(
+            parse("command id", &command_id)?,
+            parse("document", &document)?,
+            revision,
+            discard,
+        )
         .await
 }
 

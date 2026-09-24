@@ -56,6 +56,8 @@ export interface ConsoleHandle {
   save: () => Promise<boolean>
   /** Closes the document and cancels what runs. Resolves `false` if it stayed. */
   close: (discard: boolean) => Promise<boolean>
+  /** Cancels the named save or close under way; its answer still resolves. */
+  cancelWrite: () => void
   /** Puts text at the cursor, replacing the selection. Never runs it. */
   insert: (sql: string, notice: string | null) => void
   focus: () => void
@@ -307,6 +309,7 @@ export function ConsolePanel({
         if (closed) latest.current.execution.reset()
         return closed
       },
+      cancelWrite: () => latest.current.doc.cancelWrite(),
       insert: (sql, why) => {
         const editor = view.current
         if (editor) {
@@ -491,9 +494,13 @@ export function ConsolePanel({
             parametersOpen={parametersOpen}
             onToggleParameters={() => setParametersOpen((value) => !value)}
             title={doc.title}
-            onTitleChange={(title) => doc.change({ title })}
+            onTitleChange={(title) => {
+              if (!doc.closing) doc.change({ title })
+            }}
             titleError={doc.titleError}
             save={doc.saveState}
+            closing={doc.closing}
+            onCancelWrite={doc.cancelWrite}
             onSave={() => void (doc.conflict ? undefined : doc.save())}
             onSaveAsNew={() => void doc.saveAsNew()}
             context={

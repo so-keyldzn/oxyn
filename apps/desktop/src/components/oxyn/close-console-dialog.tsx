@@ -32,7 +32,10 @@ export function CloseConsoleDialog({
 }: {
   /** `null` keeps the dialog closed. */
   reasons: CloseReasons | null
-  /** A save or close is under way: only Cancel stays available. */
+  /**
+   * A save or close is under way: only Cancel stays available, and it cancels
+   * that write — its late answer then closes nothing.
+   */
   busy?: boolean
   /** What the last save attempt said, shown under the message. */
   notice?: string | null

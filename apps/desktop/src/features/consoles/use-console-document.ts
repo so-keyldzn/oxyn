@@ -3,6 +3,7 @@ import { useDebouncer } from "@tanstack/react-pacer"
 
 import type { SaveState } from "@/components/oxyn/console-toolbar"
 import { saveNotice, titleTooLong } from "@/features/consoles/console-model"
+import { backend, newCommandId } from "@/lib/ipc/client"
 import type { ParameterInput } from "@/lib/ipc/consoles"
 import { library } from "@/lib/ipc/library"
 import type { DocumentWrite } from "@/lib/ipc/library"
@@ -74,6 +75,8 @@ export function useConsoleDocument({
   latest.current = { document, title, text, conflict, closing }
   const revision = React.useRef(seed.revision)
   const lastDraft = React.useRef({ title: seed.title, text: seed.text })
+  /** The named save or close under way, which the user may still cancel. */
+  const inFlight = React.useRef<{ id: string; cancelled: boolean } | null>(null)
 
   const onConflict = (write: DocumentWrite) => {
     if (write.type !== "conflict") return false
@@ -95,7 +98,7 @@ export function useConsoleDocument({
     lastDraft.current = { title: current.title, text: current.text }
     setDraftNotice("Saving recovery draft…")
     try {
-      const write = await library.saveDocument({
+      const write = await library.saveDocument(newCommandId(), {
         document: current.document,
         revision: revision.current,
         title: current.title,
@@ -151,12 +154,21 @@ export function useConsoleDocument({
     debouncer.cancel()
     revision.current += 1
     const sent = { title: current.title, text: current.text }
+    const before = lastDraft.current
     lastDraft.current = sent
+    // Nothing reached the store: the recovery draft still has to catch up,
+    // or a crash would offer the text from before the save.
+    const unsent = () => {
+      if (lastDraft.current === sent) lastDraft.current = before
+      debouncer.maybeExecute()
+    }
+    const request = { id: newCommandId(), cancelled: false }
+    inFlight.current = request
     setSaving(true)
     setProblem(false)
     setNotice(null)
     try {
-      const write = await library.saveDocument({
+      const write = await library.saveDocument(request.id, {
         document: target,
         revision: revision.current,
         title: sent.title,
@@ -166,8 +178,15 @@ export function useConsoleDocument({
       })
       if (onConflict(write)) return false
       if (write.type !== "saved") {
-        setProblem(true)
-        setNotice("The save was replaced by a newer one before it was written.")
+        unsent()
+        if (request.cancelled) {
+          setNotice("The save was cancelled before it was written.")
+        } else {
+          setProblem(true)
+          setNotice(
+            "The save was replaced by a newer one before it was written."
+          )
+        }
         return false
       }
       setConflict(false)
@@ -175,18 +194,34 @@ export function useConsoleDocument({
       setSavedTitle(sent.title)
       setHasSavedCopy(true)
       setNotice(
-        latest.current.text === sent.text && latest.current.title === sent.title
-          ? "Saved in query library."
-          : "Saved the requested version. Newer edits are not saved."
+        request.cancelled
+          ? "Saved before the cancellation reached it."
+          : latest.current.text === sent.text &&
+              latest.current.title === sent.title
+            ? "Saved in query library."
+            : "Saved the requested version. Newer edits are not saved."
       )
       return true
     } catch (error) {
+      unsent()
       setProblem(true)
       setNotice(message(error))
       return false
     } finally {
+      if (inFlight.current === request) inFlight.current = null
       setSaving(false)
     }
+  }
+
+  /**
+   * Cancels the named save or close under way. The answer still arrives: it
+   * says whether the store had already committed.
+   */
+  const cancelWrite = () => {
+    const request = inFlight.current
+    if (!request || request.cancelled) return
+    request.cancelled = true
+    void backend.cancel(request.id).catch(() => undefined)
   }
 
   const save = async () => {
@@ -215,10 +250,20 @@ export function useConsoleDocument({
    */
   const close = async (discard: boolean) => {
     if (saving || closing) return false
+    // Held from the start: a cancellation during the flush must stop the
+    // close before it is sent, not be lost.
+    const request = { id: newCommandId(), cancelled: false }
+    inFlight.current = request
     if (!discard) await flush()
     debouncer.cancel()
     const current = latest.current
+    if (request.cancelled) {
+      if (inFlight.current === request) inFlight.current = null
+      setNotice("Closing was cancelled. The console stays open.")
+      return false
+    }
     if (current.conflict) {
+      if (inFlight.current === request) inFlight.current = null
       void library.releaseDocument(current.document).catch(() => undefined)
       return true
     }
@@ -228,18 +273,27 @@ export function useConsoleDocument({
     setNotice("Closing the saved query…")
     try {
       const write = await library.closeDocument(
+        request.id,
         current.document,
         revision.current,
         discard || !hasSavedCopy
       )
+      // Committed before the cancellation reached it: the console goes.
       if (write.type === "closed") return true
-      if (!onConflict(write)) setProblem(true)
+      if (onConflict(write)) return false
+      if (request.cancelled && write.type === "superseded") {
+        setProblem(false)
+        setNotice("Closing was cancelled. The console stays open.")
+      } else {
+        setProblem(true)
+      }
       return false
     } catch (error) {
       setProblem(true)
       setNotice(message(error))
       return false
     } finally {
+      if (inFlight.current === request) inFlight.current = null
       setClosing(false)
       latest.current.closing = false
     }
@@ -281,5 +335,6 @@ export function useConsoleDocument({
     save,
     saveAsNew,
     close,
+    cancelWrite,
   }
 }

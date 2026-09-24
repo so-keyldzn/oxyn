@@ -332,11 +332,30 @@ impl Backend {
     }
 
     /// Submits a draft or a named save. Returns once the store answered.
+    ///
+    /// `id` reaches the write through [`Backend::cancel`]: a save cancelled
+    /// before the store committed it answers `Superseded` and writes nothing.
     pub async fn save_query_document(
+        &self,
+        id: CommandId,
+        document: DocumentId,
+        connection: Option<oxyn_core::ConnectionId>,
+        change: DocumentChange,
+    ) -> Result<DocumentWrite, IpcError> {
+        let cancel = self.track(id);
+        let _running = super::Running {
+            inner: &self.inner,
+            id,
+        };
+        self.save_under(document, connection, change, cancel).await
+    }
+
+    async fn save_under(
         &self,
         document: DocumentId,
         connection: Option<oxyn_core::ConnectionId>,
         change: DocumentChange,
+        cancel: CancelToken,
     ) -> Result<DocumentWrite, IpcError> {
         let language = match connection {
             Some(connection) => QueryLanguage::Sql(oxyn_query::dialect_for(
@@ -363,11 +382,7 @@ impl Backend {
             .save_named
             .then(|| (update.text.clone(), update.title.clone()));
         let writer = self.writer(document, 0);
-        let receiver = writer.enqueue(
-            &self.inner,
-            Operation::Save(Box::new(update)),
-            CancelToken::new(),
-        );
+        let receiver = writer.enqueue(&self.inner, Operation::Save(Box::new(update)), cancel);
         let result = receiver
             .await
             .unwrap_or_else(|_| Err(OxynError::Internal("the document writer stopped".into())));
@@ -401,18 +416,34 @@ impl Backend {
 
     /// Closes a working copy. `discard` drops it; otherwise the named copy stays
     /// in the library and the working copy is no longer offered for recovery.
+    ///
+    /// `id` reaches the close through [`Backend::cancel`]: cancelled before the
+    /// store committed it, the close answers `Superseded`, the document stays
+    /// writable and the draft it held back is written again.
     pub async fn close_query_document(
         &self,
+        id: CommandId,
         document: DocumentId,
         revision: u64,
         discard: bool,
     ) -> Result<DocumentWrite, IpcError> {
+        let cancel = self.track(id);
+        let _running = super::Running {
+            inner: &self.inner,
+            id,
+        };
+        self.close_under(document, revision, discard, cancel).await
+    }
+
+    async fn close_under(
+        &self,
+        document: DocumentId,
+        revision: u64,
+        discard: bool,
+        cancel: CancelToken,
+    ) -> Result<DocumentWrite, IpcError> {
         let writer = self.writer(document, 0);
-        let receiver = writer.enqueue(
-            &self.inner,
-            Operation::Close { revision, discard },
-            CancelToken::new(),
-        );
+        let receiver = writer.enqueue(&self.inner, Operation::Close { revision, discard }, cancel);
         let result = receiver
             .await
             .unwrap_or_else(|_| Err(OxynError::Internal("the document writer stopped".into())));
@@ -506,6 +537,7 @@ mod tests {
 
         let first = runtime
             .block_on(backend.save_query_document(
+                CommandId::new(),
                 document,
                 None,
                 change(document, 1, "SELECT 1", false),
@@ -540,6 +572,7 @@ mod tests {
 
         let conflicted = runtime
             .block_on(backend.save_query_document(
+                CommandId::new(),
                 document,
                 None,
                 change(document, 3, "SELECT 'mine'", true),
@@ -563,12 +596,137 @@ mod tests {
         let copy = DocumentId::new();
         let saved = runtime
             .block_on(backend.save_query_document(
+                CommandId::new(),
                 copy,
                 None,
                 change(copy, 1, "SELECT 'mine'", true),
             ))
             .expect("copy");
         assert!(matches!(saved, DocumentWrite::Saved { is_saved: true, .. }));
+    }
+
+    #[test]
+    fn a_cancelled_named_save_writes_nothing_and_leaves_the_queue_open() {
+        let runtime = runtime();
+        let _guard = runtime.enter();
+        let backend = Backend::open_temporary().expect("temporary backend");
+        let document = DocumentId::new();
+        runtime
+            .block_on(backend.save_query_document(
+                CommandId::new(),
+                document,
+                None,
+                change(document, 1, "SELECT 1", false),
+            ))
+            .expect("draft");
+
+        // The token the front reaches by its command id is the one the write
+        // runs under.
+        let id = CommandId::new();
+        let cancel = backend.track(id);
+        assert!(backend.cancel(id), "a tracked save is reachable");
+        let cancelled = runtime
+            .block_on(backend.save_under(
+                document,
+                None,
+                change(document, 2, "SELECT 'named'", true),
+                cancel,
+            ))
+            .expect("answered");
+        assert!(
+            matches!(cancelled, DocumentWrite::Superseded),
+            "got {cancelled:?}"
+        );
+        let stored = backend
+            .inner
+            .executor
+            .store()
+            .documents()
+            .get(document)
+            .expect("read")
+            .expect("present");
+        assert!(!stored.is_saved, "a cancelled save leaves no named copy");
+        assert_eq!(stored.content, "SELECT 1");
+
+        let next = runtime
+            .block_on(backend.save_query_document(
+                CommandId::new(),
+                document,
+                None,
+                change(document, 3, "SELECT 3", true),
+            ))
+            .expect("answered");
+        assert!(
+            matches!(next, DocumentWrite::Saved { is_saved: true, .. }),
+            "got {next:?}"
+        );
+    }
+
+    #[test]
+    fn a_cancelled_close_keeps_the_document_writable() {
+        let runtime = runtime();
+        let _guard = runtime.enter();
+        let backend = Backend::open_temporary().expect("temporary backend");
+        let document = DocumentId::new();
+        runtime
+            .block_on(backend.save_query_document(
+                CommandId::new(),
+                document,
+                None,
+                change(document, 1, "SELECT 1", true),
+            ))
+            .expect("named save");
+
+        let id = CommandId::new();
+        let cancel = backend.track(id);
+        assert!(backend.cancel(id), "a tracked close is reachable");
+        let cancelled = runtime
+            .block_on(backend.close_under(document, 2, false, cancel))
+            .expect("answered");
+        assert!(
+            matches!(cancelled, DocumentWrite::Superseded),
+            "got {cancelled:?}"
+        );
+        let stored = backend
+            .inner
+            .executor
+            .store()
+            .documents()
+            .get(document)
+            .expect("read")
+            .expect("present");
+        assert!(stored.is_open, "the working copy is still offered");
+
+        let draft = runtime
+            .block_on(backend.save_query_document(
+                CommandId::new(),
+                document,
+                None,
+                change(document, 3, "SELECT 3", false),
+            ))
+            .expect("answered");
+        assert!(
+            matches!(draft, DocumentWrite::Saved { revision: 3, .. }),
+            "got {draft:?}"
+        );
+    }
+
+    #[test]
+    fn a_finished_write_is_no_longer_cancellable() {
+        let runtime = runtime();
+        let _guard = runtime.enter();
+        let backend = Backend::open_temporary().expect("temporary backend");
+        let document = DocumentId::new();
+        let id = CommandId::new();
+        runtime
+            .block_on(backend.save_query_document(
+                id,
+                document,
+                None,
+                change(document, 1, "SELECT 1", true),
+            ))
+            .expect("named save");
+        assert!(!backend.cancel(id), "the token left with the write");
     }
 
     #[test]
@@ -579,6 +737,7 @@ mod tests {
         let document = DocumentId::new();
         runtime
             .block_on(backend.save_query_document(
+                CommandId::new(),
                 document,
                 None,
                 change(document, 2, "SELECT 2", false),
@@ -587,6 +746,7 @@ mod tests {
         assert!(
             runtime
                 .block_on(backend.save_query_document(
+                    CommandId::new(),
                     document,
                     None,
                     change(document, 2, "SELECT 2", false)
@@ -603,13 +763,14 @@ mod tests {
         let document = DocumentId::new();
         runtime
             .block_on(backend.save_query_document(
+                CommandId::new(),
                 document,
                 None,
                 change(document, 1, "SELECT 1", false),
             ))
             .expect("draft");
         let closed = runtime
-            .block_on(backend.close_query_document(document, 2, true))
+            .block_on(backend.close_query_document(CommandId::new(), document, 2, true))
             .expect("closed");
         assert!(matches!(closed, DocumentWrite::Closed));
         runtime.block_on(backend.wait_for_local_writes());
@@ -623,6 +784,7 @@ mod tests {
         // Discarded: no longer offered for recovery, and no named copy left.
         assert!(stored.is_none_or(|stored| !stored.is_open && !stored.is_saved));
         let late = runtime.block_on(backend.save_query_document(
+            CommandId::new(),
             document,
             None,
             change(document, 3, "SELECT 'late'", false),
