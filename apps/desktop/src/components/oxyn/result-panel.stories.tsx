@@ -1,6 +1,6 @@
 import * as React from "react"
 import type { Meta, StoryObj } from "@storybook/react-vite"
-import { expect, fn, userEvent, waitFor } from "storybook/test"
+import { expect, fn, userEvent, waitFor, within } from "storybook/test"
 
 import { invoiceColumns, syntheticPages } from "./fixtures"
 import { ResultPanel } from "./result-panel"
@@ -61,6 +61,56 @@ export const Populated: Story = {
       truncated: false,
       cancelled: false,
     },
+  },
+}
+
+/**
+ * Columns hides a column from the grid only: the other headers stay, the
+ * footer's export keeps it, and Show all brings it back.
+ */
+export const HideAColumn: Story = {
+  args: {
+    state: {
+      status: "populated",
+      result: "panel-hide-column",
+      columns: invoiceColumns,
+      rows: 250_000,
+      complete: true,
+      truncated: false,
+      cancelled: false,
+    },
+  },
+  play: async ({ canvas }) => {
+    const body = within(document.body)
+    const grid = canvas.getByRole("grid")
+    await expect(
+      within(grid).getByRole("columnheader", { name: /^customer/ })
+    ).toBeInTheDocument()
+    await expect(grid).toHaveAttribute("aria-colcount", "8")
+
+    await userEvent.click(canvas.getByRole("button", { name: "Columns" }))
+    await userEvent.click(
+      await body.findByRole("menuitemcheckbox", { name: /customer/ })
+    )
+    await expect(body.getByText("6 of 7 columns shown")).toBeInTheDocument()
+    await waitFor(() =>
+      expect(
+        within(grid).queryByRole("columnheader", { name: /^customer/ })
+      ).toBeNull()
+    )
+    await expect(grid).toHaveAttribute("aria-colcount", "7")
+    await expect(
+      within(grid).getByRole("columnheader", { name: /^amount/ })
+    ).toBeInTheDocument()
+
+    await userEvent.click(body.getByRole("menuitem", { name: "Show all" }))
+    await waitFor(() =>
+      expect(
+        within(grid).getByRole("columnheader", { name: /^customer/ })
+      ).toBeInTheDocument()
+    )
+    await userEvent.keyboard("{Escape}")
+    await waitFor(() => expect(body.queryByRole("menu")).toBeNull())
   },
 }
 
