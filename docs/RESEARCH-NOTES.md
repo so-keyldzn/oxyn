@@ -69,6 +69,14 @@ Les versions sont écrites **exactes** dans `apps/desktop/package.json` et le
 | `tauri` | `2.11.5` | `1.77.2` | 2026-09-15 |
 | `tauri-build` | `2.6.3` | `1.77.2` | 2026-09-15 |
 | `tauri-plugin-dialog` | `2.7.3` | `1.77.2` | 2026-09-15 |
+| `rfd` | `0.16.0` | — (non déclaré) | 2026-09-24 |
+
+`rfd` montre le dialogue d'échec de démarrage, avant que l'application Tauri
+n'existe. La version est celle que `tauri-plugin-dialog@2.7.3` résout déjà
+(`Cargo.lock`, exigence `0.16`) : la dernière publiée est `0.17.2` (crates.io,
+2026-09-24), mais la prendre mettrait deux `rfd` dans le graphe. Déclarée sans
+fonctionnalités par défaut : celles du plugin (`gtk3`, `common-controls-v6`)
+s'unifient sur la même crate.
 
 ### Paquets npm
 
@@ -114,6 +122,8 @@ Les versions sont écrites **exactes** dans `apps/desktop/package.json` et le
 | mermaid 12 : « built to target Safari 17.4+ and ES2024 » ; ELK devient la disposition par défaut | `https://github.com/mermaid-js/mermaid/releases/tag/mermaid%4012.0.0` | 2026-09-24 |
 | mermaid 11.17.2 refuse qu'une directive ou l'en-tête d'un diagramme change une clé listée dans `secure` (par défaut `secure`, `securityLevel`, `startOnLoad`, `maxTextSize`, `suppressErrorRendering`, `maxEdges`), et assainit toute directive (`sanitizeDirective`) | sources de `mermaid@11.17.2`, `dist/chunks/mermaid.core/chunk-DU6HZSFF.mjs` | 2026-09-24 |
 | Sous la CSP de `tauri.conf.json` servie en en-tête, un build de production (cible `safari13`) colore le code, dessine mermaid en `data:` URL, le diagramme des tables et le graphique **sans aucune violation**, dans Chromium et WebKit 26.6 (Playwright 1.63.0). Non reproduit : les hashes que Tauri ajoute lui-même à la CSP, et le WebKit de macOS 13 | constat, harnais `vite build` + Playwright | 2026-09-24 |
+| `PathResolver::app_log_dir` : `home_dir/Library/Logs/<identifier>` sous macOS, `data_local_dir/<identifier>/logs` ailleurs, par le crate `dirs`. `logging::directory` le recalcule par `directories` (même `dirs-sys`) parce que le backend s'ouvre avant que l'application existe : à revérifier à chaque montée de `tauri` | sources de `tauri@2.11.5`, `src/path/desktop.rs` | 2026-09-24 |
+| `sqlx` journalise le texte entier d'une requête sur la cible `sqlx::query` : en `debug` par défaut, en `warn` au-delà d'une seconde | sources de `sqlx-core@0.9.0`, `src/connection.rs` et `src/logger.rs` | 2026-09-24 |
 | `esbuild` et `unrs-resolver` livrent leur binaire en dépendance optionnelle : leurs scripts d'installation sont refusés (`allowBuilds`) | `pnpm install`, pnpm 11.1.2 | 2026-09-15 |
 | `LexicalTypeaheadMenuPlugin` pose `role="listbox"` et `aria-label="Typeahead menu"` sur son ancre **à chaque rattachement** — l'ancre est retirée puis remise à chaque frappe —, et laisse `aria-activedescendant` sur `typeahead-item-0` quand la liste se vide : axe échoue en `aria-valid-attr-value` et, sur une liste sans option, en `aria-required-children` | sources de `@lexical/react@0.51.0` (`shared/LexicalMenu.tsx`) et constat, `vitest --project storybook` | 2026-09-24 |
 

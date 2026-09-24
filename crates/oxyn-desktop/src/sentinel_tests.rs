@@ -586,7 +586,7 @@ fn install_journal_once() {
         use tracing_subscriber::Layer as _;
         use tracing_subscriber::layer::SubscriberExt as _;
         let subscriber = tracing_subscriber::registry().with(
-            crate::logging::layer(tracing_subscriber::EnvFilter::new("trace"), Recorder)
+            crate::logging::layer(tracing_subscriber::EnvFilter::new("trace"), Recorder, true)
                 .with_filter(Gate),
         );
         let _ = tracing::subscriber::set_global_default(subscriber);
