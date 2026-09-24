@@ -41,8 +41,8 @@ ni Dock, ni activation, ni focus clavier correct.
 make qualite
 ```
 
-C'est le **seul** point d'entrée : la CI l'appelle
-([.github/workflows/qualite.yml](.github/workflows/qualite.yml)), le hook `Stop`
+C'est le **seul** point d'entrée : la CI en appelle les cibles dans des jobs
+parallèles ([.github/workflows/qualite.yml](.github/workflows/qualite.yml)), le hook `Stop`
 le rappelle, la définition de « terminé » s'y adosse. Un contrôle ajouté
 ailleurs est un contrôle optionnel.
 
