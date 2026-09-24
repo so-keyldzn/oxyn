@@ -1,6 +1,6 @@
 # ADR-0031 — Toute réponse du backend est validée à l'entrée du front
 
-**Statut :** proposé · **Date :** 2026-09-16
+**Statut :** accepté · **Date :** 2026-09-16
 
 **Précise :** [ADR-0029](0029-interface-tauri-shadcn.md), qui pose l'interface
 Tauri et le pont IPC sans dire ce que le front tient pour acquis de ce qui en

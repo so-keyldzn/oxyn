@@ -1,6 +1,6 @@
 # ADR-0026 — Un agent externe parle ACP, ne confie aucune clé, et reste hors de portée d'une connexion `Local`
 
-**Statut :** proposé · **Date :** 2026-09-14
+**Statut :** accepté · **Date :** 2026-09-14
 
 **Précise :** [ADR-0023](0023-fournisseurs-declares-et-provenance.md), qui ne
 connaissait qu'un seul mode — un fournisseur d'API déclaré avec sa clé.

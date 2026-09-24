@@ -181,7 +181,12 @@ La liste qui restait alors à faire avant de supprimer `oxyn-ui` et `oxyn-app` :
 - ~~réglages d'affichage des cellules (`FormatOptions`) et thème clair commutable~~ — fait (`features/settings/`) ;
 - ~~restauration des brouillons après arrêt brutal~~ — fait (`features/recovery/`) ;
 - campagne de mesure des budgets de [PERFORMANCE](PERFORMANCE.md) **dans la webview**,
-  qui est la condition de reconsidération de l'ADR-0029 — **non faite** ;
+  qui est la condition de reconsidération de l'ADR-0029 — **non faite**. Elle
+  ouvre des fenêtres et prend la machine sous instrument (trame, démarrage à
+  froid, RSS, défilement d'un million de lignes), ce que la consigne « aucune
+  fenêtre ouverte sur mon écran » exclut sur le poste de travail : elle demande
+  **une session ou une machine dédiée, désignée par l'utilisateur** (décision du
+  2026-09-24). Tant qu'elle n'est pas désignée, la campagne ne peut pas démarrer ;
 - vérification du rendu sous WebView2 et WebKitGTK — **non faite**.
 
 **Porte de sortie — franchie le 2026-09-18** (commit `6ecb8ce`) : chaque parcours
@@ -200,10 +205,9 @@ ici :
   démarrage à froid et de mémoire au repos de
   [PERFORMANCE](PERFORMANCE.md#confrontation-aux-budgets) portent sur
   l'interface retirée ;
-- **le statut d'ADR-0009.** ADR-0029 le déclare remplacé « à la suppression des
-  crates GPUI » ; son fichier porte toujours `accepté`. Changer ce statut relève
-  de la [question ouverte n° 3](#3-vingt-adr-sur-vingt-six-sont-au-statut-proposé),
-  comme le passage d'ADR-0029 lui-même à `accepté` ;
+- ~~**le statut d'ADR-0009.**~~ — porte `remplacé` depuis le 2026-09-24 ; le
+  statut d'ADR-0029 lui-même relève de la
+  [question ouverte n° 3](#3-le-statut-des-adr--revue-du-2026-09-24) ;
 - **ce que l'interface GPUI faisait et qu'`apps/desktop` ne fait pas**, relevé en
   réalignant [ARCHITECTURE](ARCHITECTURE.md) : le titre de fenêtre qui signalait
   un `--temporary-workspace`, et le sélecteur de fichiers par `⌘O`, ou `⌘N` pour
@@ -1475,13 +1479,25 @@ confirme ou amende les budgets par un ADR.
 
 ## Phase 2 — Les protocoles qui comptent
 
-- `oxyn-driver-postgres`, `oxyn-driver-mysql` ;
+- `oxyn-driver-postgres`, `oxyn-driver-mysql` — **ce dernier reporté**, voir
+  ci-dessous ;
 - `oxyn-catalog` : introspection, cache, arborescence ;
 - marquage d'environnement des connexions et stockage au trousseau
   ([SECURITY](SECURITY.md)).
 
 **Porte de sortie** : la [liste de contrôle driver](../.claude/checklists/revue-driver.md)
 passe intégralement sur les trois drivers, annulation côté serveur comprise.
+
+**`oxyn-driver-mysql` est reporté après la porte de sortie de la phase 3** —
+décision du 2026-09-24. La phase 3 a un lot daté au plus tard au 2026-10-31
+(ci-dessous) ; le driver MySQL s'écrit juste après, par
+[`/driver`](../.claude/commands/driver.md) et sa liste de contrôle,
+`KILL QUERY` compris. **Raison :** la phase 3 est engagée et a une échéance
+datée ; ouvrir un troisième protocole en même temps disperserait le travail,
+alors que deux drivers livrés, PostgreSQL et SQLite, suffisent à éprouver les traits de
+[`oxyn-driver`](../crates/oxyn-driver/src/traits.rs). Tant que MySQL manque, la
+porte de sortie de la phase 2 n'est **pas franchie** : elle nomme trois drivers,
+et ce report ne la réduit pas à deux.
 
 ## Phase 3 — Le workspace IA
 
@@ -1697,11 +1713,45 @@ arbitrée** tant que le seuil et son point de départ ne sont pas uniques.
 **Ce qui n'est pas tranché.** Quelle valeur, comptée depuis quel instant. Une fois
 décidé, un seul document porte le chiffre et l'autre y renvoie.
 
-### 3. Vingt ADR sur vingt-six sont au statut « proposé »
+### 3. Le statut des ADR : revue du 2026-09-24
 
-Seuls six ADR sont au statut `accepté` (0008, 0010, 0014, 0015, 0016, 0017) ; les
-vingt autres restent `proposé`, alors que la décision de la plupart d'entre eux
-est implémentée et éprouvée par des tests.
+**Tranché le 2026-09-24.** Critère : un ADR passe `accepté` quand sa décision,
+**telle qu'écrite**, est implémentée et tenue par au moins un test. ADR-0009
+porte `remplacé` ([ADR-0029](adr/0029-interface-tauri-shadcn.md)).
+
+| ADR | Statut | Test qui la tient, ou raison du maintien |
+|---|---|---|
+| [0021](adr/0021-marqueur-d-arret.md) | accepté | `une_session_laissee_ouverte_et_muette_est_un_arret_anormal` (`oxyn-store/src/sessions.rs`), `an_abandoned_session_is_reported_as_abnormal` (`oxyn-desktop/src/backend/recovery.rs`) |
+| [0023](adr/0023-fournisseurs-declares-et-provenance.md) | accepté | `aucune_url_porteuse_d_identifiants_n_atteint_le_disque` (`oxyn-store/src/providers.rs`), `un_point_d_acces_non_resolu_ne_beneficie_pas_du_doute` (`oxyn-llm/src/reach.rs`) |
+| [0026](adr/0026-agents-externes-acp.md) | accepté | `un_agent_externe_ne_sert_jamais_une_connexion_locale` (`oxyn-ai/src/privacy.rs`), `la_table_na_aucune_colonne_de_secret` (`oxyn-store/src/agents/tests.rs`) |
+| [0027](adr/0027-porte-unique-pour-les-deux-destinations.md) | accepté | `sous_local_aucune_invite_ne_se_compose` (`oxyn-ai/src/external/prompt/tests.rs`), `le_niveau_local_refuse_avant_meme_de_lancer_le_processus` (`oxyn-ai/src/external/tests.rs`) |
+| [0028](adr/0028-pas-dordre-par-defaut-pas-de-page-sans-ordre-total.md) | accepté | `un_apercu_sans_demande_ne_compose_ni_where_ni_order_by` (les deux drivers), `no_page_is_offered_without_a_total_order` (`oxyn-desktop/src/ipc/metadata.rs`) |
+| [0029](adr/0029-interface-tauri-shadcn.md) | accepté | `controler_graphe_dependances` de `.claude/verifier_socle.py` (par `make socle`), `a_window_crosses_batches_and_stays_bounded` (`oxyn-desktop/src/backend/results.rs`). La campagne de mesure est sa condition de **reconsidération**, pas un préalable |
+| [0031](adr/0031-validation-des-reponses-ipc.md) | accepté | « rejects what the grid could not draw, rather than letting it through » (`apps/desktop/src/lib/ipc/types.test.ts`), « degrades an unknown ending instead of refusing the event » (`ai.test.ts`) |
+| [0032](adr/0032-agent-externe-confine-au-lancement.md) | accepté | `claude_agent_keeps_no_tool_of_its_own` (`oxyn-ai/src/external/confine.rs`), `a_confined_agent_is_put_in_its_mode_first_and_cut_off_as_soon_as_it_leaves` (`external/session/tests.rs`) |
+| [0033](adr/0033-couches-de-configuration-codex.md) | accepté | `every_readable_layer_is_switched_off_by_name_each_once` (`oxyn-ai/src/external/confine/codex_layers.rs`) |
+| [0034](adr/0034-echantillon-pour-toute-destination.md) | proposé | **écart code/ADR** : son § 2 dit que les colonnes « ne rejoignent aucune instruction », alors que depuis `d6cf80b` elles entrent dans le `PreviewRelation` par `PreviewShape::columns`, citées par le driver ([Phase 3](#phase-3--le-workspace-ia)). Le reste est tenu (`an_external_agent_receives_only_the_columns_the_user_ticked_and_only_after`) ; la phrase est à préciser avant d'accepter |
+| [0005](adr/0005-wasm-plugins.md) | proposé | WIT et instanciation des composants renvoient « phase 4 » (`oxyn-plugin/src/host.rs`) |
+| [0007](adr/0007-driver-sidecar.md) | proposé | aucun sidecar, reporté en phase 4 |
+| [0020](adr/0020-apercu-trie-filtre-parcouru.md) | proposé | son ordre par défaut sur la clé primaire est contredit par le code et par ADR-0028, qui le précise |
+| [0022](adr/0022-rafraichissement-automatique.md) | proposé | un DDL ne relit pas l'aperçu visible, alors que l'ADR le prévoit ; `RefreshSignal::of` n'a aucun test |
+| [0024](adr/0024-autosauvegarde-au-repos-de-frappe.md) | proposé | implémenté (`DRAFT_IDLE_MS`), mais ni le délai ni les trois écritures immédiates ne sont testés |
+| [0025](adr/0025-proposition-de-changement-de-schema.md) | proposé | le composeur Rust est testé, mais le geste n'est pas monté : `useSchemaProposal` n'a aucun appelant |
+| [0030](adr/0030-outils-oxyn-exposes-a-un-agent-externe.md) | proposé | **écart code/ADR** : le § 2 bis promet une écriture par question, `WriteGate` applique « une demande en attente à la fois » (`nothing_runs_while_a_request_waits_even_from_an_earlier_question`) — à arbitrer |
+
+ADR-0035 était déjà `accepté` ; ADR-0036, écrit le jour même, n'a pas été revu.
+
+**Ce qui reste signalé, sans être corrigé ici.** Plusieurs ADR acceptés citent
+encore `oxyn-app` ou GPUI comme lieu d'implémentation (0021, 0023, 0026, 0029) :
+leur décision tient, leur texte a vieilli, et un ADR accepté ne se réécrit pas.
+Les deux doctests `compile_fail` d'ADR-0027 (`prompt/tests.rs`) vivent dans un
+module `#[cfg(test)]` que rustdoc ne parcourt pas : ils ne s'exécutent jamais.
+
+Ce qui suit est l'état relevé le 2026-09-15, conservé.
+
+Seuls six ADR étaient alors au statut `accepté` (0008, 0010, 0014, 0015, 0016,
+0017) ; les vingt autres restaient `proposé`, alors que la décision de la plupart
+d'entre eux était implémentée et éprouvée par des tests.
 
 **Pourquoi ce n'est pas cosmétique.**
 [.claude/rules/documentation.md](../.claude/rules/documentation.md) fait reposer
@@ -1711,8 +1761,9 @@ théorique : c'est par réécriture successive qu'[ADR-0026](adr/0026-agents-ext
 s'est retrouvé à porter, sur une même page, une affirmation et son contraire au
 sujet de la dépendance `agent-client-protocol`.
 
-**Ce qui n'est pas tranché.** Quels ADR passent à `accepté`, et selon quel
-critère — la décision prise, ou la décision implémentée et mesurée. Le passage au
+**Ce qui n'était pas tranché** — et l'est depuis, voir le tableau ci-dessus.
+Quels ADR passent à `accepté`, et selon quel critère — la décision prise, ou la
+décision implémentée et mesurée. Le passage au
 statut `accepté` verrouille la réécriture : c'est une décision de gouvernance, pas
 un balayage de champs à faire en lot sans relecture.
 

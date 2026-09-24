@@ -1,6 +1,6 @@
 # ADR-0027 — La porte d'I-04 vaut pour les **deux** destinations, ou elle ne vaut pour aucune
 
-**Statut :** proposé · **Date :** 2026-09-15
+**Statut :** accepté · **Date :** 2026-09-15
 
 **Précise :** [ADR-0026](0026-agents-externes-acp.md), qui a ouvert une seconde
 destination sans lui donner la porte typée de la première.

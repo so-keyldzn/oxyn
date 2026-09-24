@@ -1,9 +1,13 @@
 # ADR-0009 — GPUI consommé depuis crates.io, non depuis le dépôt Zed
 
-**Statut :** accepté · **Date :** 2026-09-05
-**Précise :** [ADR-0001](0001-ui-toolkit.md), qui retenait GPUI « en épinglant un
-commit précis ». Ce point-là est remplacé ; le reste de l'ADR-0001 — le choix de
-GPUI et la règle d'isolation — reste en vigueur.
+**Statut :** remplacé · **Date :** 2026-09-05
+**Remplacé par :** [ADR-0029](0029-interface-tauri-shadcn.md), effectif au retrait
+des crates GPUI le 2026-09-18 : `gpui` n'est plus une dépendance du dépôt. Ce qui
+suit est conservé tel qu'il a été décidé.
+**Précisait :** [ADR-0001](0001-ui-toolkit.md), qui retenait GPUI « en épinglant un
+commit précis ». Ce point-là était remplacé ; le reste de l'ADR-0001 — le choix
+de GPUI et la règle d'isolation — restait alors en vigueur. Seule la règle
+d'isolation survit aujourd'hui, transposée par l'ADR-0029.
 
 ## Contexte
 

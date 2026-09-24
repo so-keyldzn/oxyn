@@ -1,6 +1,6 @@
 # ADR-0021 — Savoir si Oxyn s'est arrêté normalement, et le dire sans le deviner
 
-**Statut :** proposé · **Date :** 2026-09-10
+**Statut :** accepté · **Date :** 2026-09-10
 
 **Précise :** [ADR-0016](0016-autosauvegarde-bornee.md), sur ce que le workspace
 écrit en plus de ses brouillons.

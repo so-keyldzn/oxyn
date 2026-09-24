@@ -143,8 +143,13 @@ c'est la ligne qui sépare un outil d'une arme.
 ### 7. Il traite les fuseaux et les types temporels comme des données, pas comme du texte
 
 Aucune conversion implicite vers le fuseau local à la lecture. Un `timestamptz`
-se transporte en UTC et se rend selon la préférence d'affichage ; un `timestamp`
-sans fuseau se transporte **sans** en inventer un.
+se transporte en UTC et se rend dans le fuseau que déclare le schéma Arrow de la
+colonne ; un `timestamp` sans fuseau se transporte **sans** en inventer un.
+**Aucun driver ne convertit pour l'affichage** : il n'existe pas de préférence
+de fuseau d'affichage — le fuseau qu'Oxyn annonce pour un résultat est déduit
+du schéma (`oxyn_data::timestamp_display`), ce n'est pas un réglage. Si une telle
+préférence venait à exister, elle ne toucherait que le rendu (`oxyn-data`,
+`cell.rs`), jamais le driver.
 
 **Panne concrète :** Oxyn affiche une valeur convertie dans le fuseau du poste,
 l'utilisateur la recopie dans un `UPDATE`, et décale la donnée de deux heures en
