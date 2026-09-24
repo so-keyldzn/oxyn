@@ -342,12 +342,9 @@ impl Backend {
         connection: Option<oxyn_core::ConnectionId>,
         change: DocumentChange,
     ) -> Result<DocumentWrite, IpcError> {
-        let cancel = self.track(id);
-        let _running = super::Running {
-            inner: &self.inner,
-            id,
-        };
-        self.save_under(document, connection, change, cancel).await
+        let tracked = self.track(id)?;
+        self.save_under(document, connection, change, CancelToken::clone(&tracked))
+            .await
     }
 
     async fn save_under(
@@ -427,12 +424,9 @@ impl Backend {
         revision: u64,
         discard: bool,
     ) -> Result<DocumentWrite, IpcError> {
-        let cancel = self.track(id);
-        let _running = super::Running {
-            inner: &self.inner,
-            id,
-        };
-        self.close_under(document, revision, discard, cancel).await
+        let tracked = self.track(id)?;
+        self.close_under(document, revision, discard, CancelToken::clone(&tracked))
+            .await
     }
 
     async fn close_under(
@@ -623,14 +617,14 @@ mod tests {
         // The token the front reaches by its command id is the one the write
         // runs under.
         let id = CommandId::new();
-        let cancel = backend.track(id);
+        let tracked = backend.track(id).expect("a fresh id is tracked");
         assert!(backend.cancel(id), "a tracked save is reachable");
         let cancelled = runtime
             .block_on(backend.save_under(
                 document,
                 None,
                 change(document, 2, "SELECT 'named'", true),
-                cancel,
+                CancelToken::clone(&tracked),
             ))
             .expect("answered");
         assert!(
@@ -678,10 +672,10 @@ mod tests {
             .expect("named save");
 
         let id = CommandId::new();
-        let cancel = backend.track(id);
+        let tracked = backend.track(id).expect("a fresh id is tracked");
         assert!(backend.cancel(id), "a tracked close is reachable");
         let cancelled = runtime
-            .block_on(backend.close_under(document, 2, false, cancel))
+            .block_on(backend.close_under(document, 2, false, CancelToken::clone(&tracked)))
             .expect("answered");
         assert!(
             matches!(cancelled, DocumentWrite::Superseded),

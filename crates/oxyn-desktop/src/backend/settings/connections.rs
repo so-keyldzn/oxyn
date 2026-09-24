@@ -26,7 +26,7 @@ use oxyn_core::{Actor, Command, CommandId, ConnectionConfig, ConnectionId, OxynE
 use oxyn_exec::Outcome;
 use oxyn_secrets::SecretRef;
 
-use crate::backend::{Backend, Running};
+use crate::backend::Backend;
 use crate::ipc::settings::{ConnectionChange, ConnectionDetails, ConnectionEdit};
 use crate::ipc::{IpcError, SavedConnection};
 
@@ -76,8 +76,7 @@ impl Backend {
         let current = self.read_config(connection).await?;
         let config = self.edited(&current, &edit)?;
         let inner = &self.inner;
-        let cancel = self.track(id);
-        let _running = Running { inner, id };
+        let cancel = self.track(id)?;
         let outcome = inner
             .executor
             .dispatch_as(
@@ -122,8 +121,7 @@ impl Backend {
     ) -> Result<ConnectionChange, IpcError> {
         let config = self.read_config(connection).await?;
         let inner = &self.inner;
-        let cancel = self.track(id);
-        let _running = Running { inner, id };
+        let cancel = self.track(id)?;
         let outcome = inner
             .executor
             .dispatch_as(
@@ -178,8 +176,18 @@ impl Backend {
             inner.executor.reject(command);
             return Ok(None);
         }
-        let cancel = self.track(command);
-        let _running = Running { inner, id: command };
+        // Refused, the change stays pending rather than losing what it holds.
+        let cancel = match self.track(command) {
+            Ok(cancel) => cancel,
+            Err(error) => {
+                inner
+                    .settings
+                    .pending_changes
+                    .lock()
+                    .insert(command, pending);
+                return Err(error);
+            }
+        };
         let outcome = inner.executor.approve("human", command, &cancel).await?;
         match (outcome, pending) {
             (Outcome::ConnectionSaved { .. }, PendingChange::Update { config, secrets }) => {

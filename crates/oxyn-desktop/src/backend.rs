@@ -62,7 +62,7 @@ pub(crate) struct Inner {
     /// Cancellation tokens of the commands still running, by the id the front
     /// chose. Cancelling reaches the server through the executor; dropping a
     /// future would not ([I-13](../../../CLAUDE.md#i-13)).
-    pub(crate) running: Mutex<HashMap<CommandId, CancelToken>>,
+    pub(crate) running: Mutex<tracking::Tracker>,
     /// Connection configurations awaiting a decision. Kept here rather than
     /// sent to the front: a configuration carries parameters the webview has
     /// no reason to hold ([I-03](../../../CLAUDE.md#i-03)).
@@ -85,18 +85,6 @@ pub(crate) struct Inner {
 impl std::fmt::Debug for Backend {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Backend").finish_non_exhaustive()
-    }
-}
-
-/// Removes a running command's token when the dispatch ends, however it ends.
-pub(crate) struct Running<'a> {
-    pub(crate) inner: &'a Inner,
-    pub(crate) id: CommandId,
-}
-
-impl Drop for Running<'_> {
-    fn drop(&mut self) {
-        self.inner.running.lock().remove(&self.id);
     }
 }
 
@@ -187,7 +175,7 @@ impl Backend {
                 drivers,
                 policy,
                 credentials,
-                running: Mutex::new(HashMap::new()),
+                running: Mutex::default(),
                 pending_connections: Mutex::new(HashMap::new()),
                 workbench: consoles::Workbench::new(local),
                 settings: settings::SettingsState::default(),
@@ -304,8 +292,7 @@ impl Backend {
         draft: ConnectionDraft,
     ) -> Result<ConnectResponse, IpcError> {
         let inner = &self.inner;
-        let cancel = self.track(id);
-        let _running = Running { inner, id };
+        let cancel = self.track(id)?;
 
         let mut config = config_from(&draft)?;
         if !draft.secrets.is_empty() {
@@ -370,8 +357,7 @@ impl Backend {
         draft: ConnectionDraft,
     ) -> Result<ConnectionTest, IpcError> {
         let inner = &self.inner;
-        let cancel = self.track(id);
-        let _running = Running { inner, id };
+        let cancel = self.track(id)?;
 
         let mut config = config_from(&draft)?;
         // Read only whatever the form says: opening SQLite read-write creates a
@@ -458,9 +444,15 @@ impl Backend {
             return Ok(None);
         }
         // Registered under the pending command's id: `cancel(command)` must
-        // reach the approval and the session opening that follows.
-        let cancel = self.track(command);
-        let _running = Running { inner, id: command };
+        // reach the approval and the session opening that follows. Refused,
+        // the decision stays pending rather than losing its configuration.
+        let cancel = match self.track(command) {
+            Ok(cancel) => cancel,
+            Err(error) => {
+                inner.pending_connections.lock().insert(command, config);
+                return Err(error);
+            }
+        };
         match inner.executor.approve("human", command, &cancel).await? {
             Outcome::ConnectionSaved { .. } => {}
             Outcome::Denied { reason, .. } => return Err(IpcError::invalid(reason)),
@@ -479,8 +471,7 @@ impl Backend {
         connection: ConnectionId,
     ) -> Result<OpenConnection, IpcError> {
         let inner = &self.inner;
-        let cancel = self.track(id);
-        let _running = Running { inner, id };
+        let cancel = self.track(id)?;
         let config = inner
             .executor
             .store()
@@ -597,8 +588,8 @@ impl Backend {
         approved: bool,
     ) -> Result<CommandOutcome, IpcError> {
         let inner = &self.inner;
-        let answer = inner.ai.decisions.answer(command);
         if !approved {
+            let answer = inner.ai.decisions.answer(command);
             inner.executor.reject(command);
             answer.report(DispatchReport::Denied {
                 command,
@@ -608,25 +599,15 @@ impl Backend {
                 reason: "Operation rejected".into(),
             });
         }
-        let cancel = self.track(command);
-        let _running = Running { inner, id: command };
+        // Tracked before the waiting agent's answer is taken: refused, the
+        // decision stays pending and the agent still waits on it.
+        let cancel = self.track(command)?;
+        let answer = inner.ai.decisions.answer(command);
         let decided = inner.executor.approve("human", command, &cancel).await;
         answer.report(DispatchReport::decided(command, &decided));
         let outcome = decided?;
         self.hold_shown(&outcome);
         Ok(describe(outcome))
-    }
-
-    /// Cancels a running command. Returns whether it was still running.
-    #[must_use]
-    pub fn cancel(&self, id: CommandId) -> bool {
-        match self.inner.running.lock().get(&id) {
-            Some(token) => {
-                token.cancel();
-                true
-            }
-            None => false,
-        }
     }
 
     /// A receiver on the execution event stream.
@@ -642,8 +623,7 @@ impl Backend {
         command: Command,
     ) -> Result<CommandOutcome, IpcError> {
         let inner = &self.inner;
-        let cancel = self.track(id);
-        let _running = Running { inner, id };
+        let cancel = self.track(id)?;
         // Held until the write ends: the shutdown waits for it (ADR-0021).
         let _local = self.local_write(&command);
         match inner
@@ -659,12 +639,6 @@ impl Backend {
             Err(OxynError::Cancelled) => Ok(CommandOutcome::Cancelled),
             Err(error) => Err(error.into()),
         }
-    }
-
-    pub(crate) fn track(&self, id: CommandId) -> CancelToken {
-        let token = CancelToken::new();
-        self.inner.running.lock().insert(id, token.clone());
-        token
     }
 
     /// Reads the store: only from the blocking pool, or through
@@ -1134,3 +1108,4 @@ mod proposal;
 mod recovery;
 mod results;
 mod settings;
+mod tracking;
