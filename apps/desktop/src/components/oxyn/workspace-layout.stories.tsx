@@ -222,6 +222,7 @@ export const CompactWithTheAssistantEntry: Story = {
       <AssistantEntryButton
         entry={enabledEntry}
         tier="metadata"
+        reach="remote"
         pressed={false}
         onPressedChange={fn()}
       />
@@ -230,7 +231,7 @@ export const CompactWithTheAssistantEntry: Story = {
   decorators: Compact.decorators,
   play: async ({ canvasElement }) => {
     const bar = within(barOf(canvasElement))
-    await expect(bar.getByText("AI · Metadata")).toBeVisible()
+    await expect(bar.getByText("Metadata · Cloud")).toBeVisible()
     await expect(bar.getByRole("button", { name: "Ask AI" })).toBeVisible()
   },
 }

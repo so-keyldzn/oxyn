@@ -55,3 +55,44 @@ export const Badges: Story = {
     </div>
   ),
 }
+
+/** The top bar's form, from where the answering provider resolved. */
+export const CloudProvider: Story = {
+  render: () => <PrivacyTierBadge tier="metadata" reach="remote" />,
+  play: async ({ canvas }) => {
+    await expect(canvas.getByText("Metadata · Cloud")).toBeVisible()
+    await expect(canvas.queryByText(/^AI · /)).toBeNull()
+  },
+}
+
+export const LocalProvider: Story = {
+  render: () => (
+    <div className="flex gap-2">
+      <PrivacyTierBadge tier="metadata" reach="local" />
+      <PrivacyTierBadge tier="local" reach="local" />
+    </div>
+  ),
+  play: async ({ canvas }) => {
+    await expect(canvas.getByText("Metadata · Local")).toBeVisible()
+    // The tier already says it: never « Local · Local ».
+    await expect(canvas.getByText("Local")).toBeVisible()
+  },
+}
+
+/**
+ * No provider known, or one whose destination could not be resolved: no
+ * suffix, never a « Cloud » that nothing measured (IMPLEMENTATION-PLAN).
+ */
+export const NoKnownProvider: Story = {
+  render: () => (
+    <div className="flex gap-2">
+      <PrivacyTierBadge tier="metadata" reach={null} />
+      <PrivacyTierBadge tier="sampled" reach="unresolved" />
+    </div>
+  ),
+  play: async ({ canvas }) => {
+    await expect(canvas.getByText("Metadata")).toBeVisible()
+    await expect(canvas.getByText("Sampled")).toBeVisible()
+    await expect(canvas.queryByText(/Cloud|Local/)).toBeNull()
+  },
+}

@@ -219,7 +219,17 @@ Le nom de connexion reste visible à côté de ce repère et dans toute revue
 d'écriture ; la couleur seule ne porte jamais cette information.
 
 Le niveau IA utilise une forme commune dans les barres supérieures :
-`Metadata · Cloud` pour un fournisseur distant au niveau Metadata. Le nom du
+`Metadata · Cloud` pour un fournisseur distant au niveau Metadata,
+`Metadata · Local` pour un fournisseur résolu sur la machine. Le suffixe suit
+la **localisation mesurée** de la destination qui recevrait la question — celle
+choisie dans le panneau, sinon celle par défaut —, jamais une supposition.
+Sans destination utilisable, pour un fournisseur dont l'adresse n'a pas pu
+être résolue ou pour un agent externe, dont Oxyn ne voit pas où il envoie,
+l'étiquette n'a **pas de suffixe** : `Metadata`. Au niveau `Local`, qui
+n'admet qu'un fournisseur local, l'étiquette reste `Local` : le suffixe
+répéterait le niveau. Hors des barres supérieures,
+dans une liste où rien d'autre ne dit « IA », le badge garde la forme
+`AI · Metadata`. Le nom du
 fournisseur figure dans les détails de contexte et de confidentialité, pas
 dans cette étiquette. Les autres niveaux et les états bloqués restent
 explicitement distingués ; cette présentation ne modifie pas les règles de

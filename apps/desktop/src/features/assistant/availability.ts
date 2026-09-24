@@ -153,6 +153,20 @@ export function selectedDestination(
   )
 }
 
+/**
+ * Where the destination a question would go to resolved, for the tier label;
+ * `null` when nothing can be sent. Read from the declared providers, never
+ * assumed: without one, the label says no « Cloud » (docs/UX-SPEC.md).
+ */
+export function answeringReach(
+  entry: AssistantEntry,
+  chosenKey: string | null
+): ProviderReach | null {
+  if (entry.status !== "enabled") return null
+  const selected = selectedDestination(entry.destinations, chosenKey)
+  return selected?.usable ? selected.reach : null
+}
+
 export function destinationChoice(
   option: DestinationOption,
   model: string | null,
