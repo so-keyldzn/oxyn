@@ -128,6 +128,15 @@ s'unifient sur la même crate.
 | `esbuild` et `unrs-resolver` livrent leur binaire en dépendance optionnelle : leurs scripts d'installation sont refusés (`allowBuilds`) | `pnpm install`, pnpm 11.1.2 | 2026-09-15 |
 | `LexicalTypeaheadMenuPlugin` pose `role="listbox"` et `aria-label="Typeahead menu"` sur son ancre **à chaque rattachement** — l'ancre est retirée puis remise à chaque frappe —, et laisse `aria-activedescendant` sur `typeahead-item-0` quand la liste se vide : axe échoue en `aria-valid-attr-value` et, sur une liste sans option, en `aria-required-children` | sources de `@lexical/react@0.51.0` (`shared/LexicalMenu.tsx`) et constat, `vitest --project storybook` | 2026-09-24 |
 
+### Suivis amont
+
+Ce qu'Oxyn attend d'une bibliothèque plutôt que de le contourner. Chaque ligne
+porte la décision qui fait attendre ; elle se re-vérifie avec `/versions`.
+
+| Attendu | État amont | Source | Vérifié le |
+|---|---|---|---|
+| `sqlx` expose les notices PostgreSQL (`NoticeResponse`) à l'appelant, par connexion — ce qui débloque l'onglet `Messages`. Décision du 2026-09-24 (audit, D13) : on attend, le driver ne passe pas à `tokio-postgres` | **Rien de livré.** Dernière version `0.9.0` (crates.io), celle de `Cargo.lock`. Sur `main` (`b54008a`, 2026-09-14), `sqlx-postgres/src/connection/stream.rs` décode toujours la notice pour la journaliser sur `sqlx::postgres::notice` et la jeter. `PgSeverity` est réexporté, `Notice` non. Le ticket [#3621](https://github.com/transact-rs/sqlx/issues/3621) « Expose a stream of `NoticeResponse`s from Postgres », ouvert le 2024-12-01, n'a ni commentaire ni PR liée. Le dépôt a quitté `launchbadge/sqlx` pour `transact-rs/sqlx` après la 0.9.0 | crates.io `/api/v1/crates/sqlx` ; API GitHub (ticket, recherche `NoticeResponse`, contenu de `main`) ; `CHANGELOG.md` de `main`, aucune entrée postérieure à 0.9.0 | 2026-09-25 |
+
 ## CI et livraison GitHub
 
 Relevé le 2026-09-24 sur l'API GitHub (`/repos/<dépôt>/releases/latest`, puis
