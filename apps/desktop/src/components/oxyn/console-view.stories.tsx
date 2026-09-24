@@ -294,7 +294,11 @@ export const ParameterError: Story = {
       <ParameterEditor
         rows={[{ id: "p1", type: "int64", text: "twelve" }]}
         onChange={fn()}
-        error="Parameter $1 is not a valid int64."
+        refusal={{
+          position: 1,
+          expectedType: "int64",
+          message: "parameter 1 is not a valid Int64 value",
+        }}
       />
     ),
   }),
@@ -304,6 +308,10 @@ export const ParameterError: Story = {
     ).toBeVisible()
     // The rejected value appears in its field only, never in a notice.
     await expect(canvas.queryAllByText(/twelve/)).toHaveLength(0)
+    await expect(canvas.getByLabelText("Parameter 1 value")).toHaveAttribute(
+      "aria-invalid",
+      "true"
+    )
   },
 }
 

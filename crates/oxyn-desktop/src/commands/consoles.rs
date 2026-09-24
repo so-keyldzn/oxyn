@@ -8,7 +8,8 @@ use tauri::State;
 use super::parse;
 use crate::backend::Backend;
 use crate::ipc::consoles::{
-    ConsoleRun, ConsoleSession, ContextOutcome, ParameterInput, SessionPlace, bind,
+    ConsoleRun, ConsoleSession, ContextOutcome, ParameterInput, ParameterRefusal, SessionPlace,
+    bind,
 };
 use crate::ipc::{CommandOutcome, IpcError};
 
@@ -85,9 +86,10 @@ pub fn session_context_choices(
 }
 
 /// Whether every value converts, before a run is submitted: the console opens
-/// its parameters on the refused one. The message names a position and a type,
-/// never a value (I-03). Pure computation on what was sent, no I/O.
+/// its parameters on the refused one. The refusal names a position and a
+/// type, never a value (I-03); no row is named when it is the count of
+/// parameters that is refused. Pure computation on what was sent, no I/O.
 #[tauri::command]
-pub fn validate_parameters(parameters: Vec<ParameterInput>) -> Option<String> {
-    bind(&parameters).err().map(|error| error.to_string())
+pub fn validate_parameters(parameters: Vec<ParameterInput>) -> Option<ParameterRefusal> {
+    bind(&parameters).err().map(ParameterRefusal::from)
 }

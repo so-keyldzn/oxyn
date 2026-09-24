@@ -143,6 +143,39 @@ pub enum ParameterError {
     TooMany { position: usize },
 }
 
+/// What comes back to the webview when a value is refused: a position and a
+/// type, never the text ([I-03](../../../../CLAUDE.md#i-03)).
+///
+/// `Debug` is derived because, unlike [`ParameterInput`], this type never
+/// carries the value the user typed.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ParameterRefusal {
+    /// The offending row, or `None` when no single row is at fault — that is
+    /// the case for [`ParameterError::TooMany`], where it is the *count* of
+    /// rows that is refused, not the value at any one of them.
+    pub position: Option<usize>,
+    /// The type expected at `position`.
+    pub expected_type: Option<ParameterKind>,
+    pub message: String,
+}
+
+impl From<ParameterError> for ParameterRefusal {
+    fn from(error: ParameterError) -> Self {
+        let message = error.to_string();
+        let (position, expected_type) = match error {
+            ParameterError::Invalid { position, kind }
+            | ParameterError::TooManyBytes { position, kind } => (Some(position), Some(kind)),
+            ParameterError::TooMany { .. } => (None, None),
+        };
+        Self {
+            position,
+            expected_type,
+            message,
+        }
+    }
+}
+
 /// Converts every value, in order, or names the first that cannot be bound.
 pub fn bind(inputs: &[ParameterInput]) -> Result<Vec<ScalarValue>, ParameterError> {
     if inputs.len() > MAX_PARAMETERS {
@@ -240,6 +273,50 @@ mod tests {
             bind(&[input(ParameterKind::Text, &big)]),
             Err(ParameterError::TooManyBytes { position: 1, .. })
         ));
+    }
+
+    #[test]
+    fn a_refusal_carries_position_and_type_never_the_value() {
+        let secret = "hunter2-not-a-number";
+        let error = bind(&[
+            input(ParameterKind::Text, "fine"),
+            input(ParameterKind::Int64, secret),
+        ])
+        .expect_err("not an integer");
+        let refusal = ParameterRefusal::from(error);
+        assert_eq!(refusal.position, Some(2));
+        assert_eq!(refusal.expected_type, Some(ParameterKind::Int64));
+        let json = serde_json::to_string(&refusal).expect("serializes");
+        assert!(json.contains(r#""position":2"#), "{json}");
+        assert!(json.contains(r#""expectedType":"int64""#), "{json}");
+        assert!(!json.contains(secret), "{json}");
+        let rendered = format!("{refusal:?}");
+        assert!(!rendered.contains(secret), "{rendered}");
+    }
+
+    #[test]
+    fn a_count_refusal_names_no_row() {
+        let many = vec![input(ParameterKind::Null, ""); MAX_PARAMETERS + 1];
+        let error = bind(&many).expect_err("too many parameters");
+        let refusal = ParameterRefusal::from(error);
+        assert_eq!(refusal.position, None);
+        assert_eq!(refusal.expected_type, None);
+        let json = serde_json::to_string(&refusal).expect("serializes");
+        assert!(json.contains(r#""position":null"#), "{json}");
+        assert!(
+            refusal.message.contains(&MAX_PARAMETERS.to_string()),
+            "{}",
+            refusal.message
+        );
+    }
+
+    #[test]
+    fn a_bytes_refusal_carries_position_and_type() {
+        let big = "x".repeat(MAX_PARAMETER_BYTES + 1);
+        let error = bind(&[input(ParameterKind::Text, &big)]).expect_err("too many bytes");
+        let refusal = ParameterRefusal::from(error);
+        assert_eq!(refusal.position, Some(1));
+        assert_eq!(refusal.expected_type, Some(ParameterKind::Text));
     }
 
     #[test]

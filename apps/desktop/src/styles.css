@@ -312,6 +312,22 @@
   color: var(--muted-foreground);
 }
 
+/*
+ * A bound parameter's value field refuses selection (I-03; UX-SPEC §
+ * Valeurs liées d'une console) — the clipboard, drag and the context menu
+ * on this field are already refused in `parameter-editor.tsx`, and
+ * `user-select: none` backs that up on the engines where it keeps a
+ * selection from starting at all. Unlayered, like the rules above: it beats
+ * the `input { user-select: text }` rule of `@layer base` outright instead
+ * of leaning on `@layer utilities` also landing after `@layer base` in
+ * Tailwind's own build, and `[data-select="none"]` names only this field —
+ * every other input keeps `user-select: text`.
+ */
+[data-select="none"] {
+  user-select: none;
+  -webkit-user-select: none;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

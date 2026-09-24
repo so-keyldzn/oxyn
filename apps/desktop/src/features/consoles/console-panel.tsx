@@ -37,6 +37,7 @@ import { BackendError, backend, newCommandId } from "@/lib/ipc/client"
 import { consoles } from "@/lib/ipc/consoles"
 import type {
   ConsoleSession,
+  ParameterRefusal,
   RunTarget,
   SessionPlace,
 } from "@/lib/ipc/consoles"
@@ -121,9 +122,8 @@ export function ConsolePanel({
   const [parametersOpen, setParametersOpen] = React.useState(
     seed.parameters.length > 0 || seed.needsValues
   )
-  const [parameterError, setParameterError] = React.useState<string | null>(
-    null
-  )
+  const [parameterError, setParameterError] =
+    React.useState<ParameterRefusal | null>(null)
   const [target, setTarget] = React.useState<EditorTarget["kind"]>("statement")
   const [notice, setNotice] = React.useState(
     seed.needsValues
@@ -135,6 +135,9 @@ export function ConsolePanel({
     status: "serverDefault",
   })
   const contextRun = React.useRef<string | null>(null)
+  // Bumped on every `setRows`, so `submit` can tell a stale
+  // `validateParameters` answer from a current one.
+  const rowsGeneration = React.useRef(0)
   const view = React.useRef<EditorView | null>(null)
 
   const canRun = capabilities.includes("SQL") && !doc.closing
@@ -163,9 +166,29 @@ export function ConsolePanel({
     void doc.flush()
     const parameters = rows.map((row) => ({ type: row.type, text: row.text }))
     if (parameters.length > 0) {
-      const refused = await consoles
-        .validateParameters(parameters)
-        .catch((error: unknown) => String(error))
+      // `validateParameters` is a pure, synchronous-on-the-Rust-side command
+      // with no command id (nothing for `backend.cancel` to target): the
+      // only way to tell a stale answer from a current one is to compare the
+      // rows generation captured before the call to the one now current.
+      const generation = rowsGeneration.current
+      let refused: ParameterRefusal | null
+      try {
+        refused = await consoles.validateParameters(parameters)
+      } catch (error: unknown) {
+        // The failure is on the IPC channel, not on the values: it must
+        // surface even if the rows changed meanwhile, and it must not leave
+        // a previous refusal displayed for values that changed since.
+        setParameterError(null)
+        setNotice(String(error))
+        return
+      }
+      if (rowsGeneration.current !== generation) {
+        // The answer is about values no longer shown (UX-SPEC « Consoles
+        // indépendantes » : a stale answer does not act). Starting the run
+        // with the old snapshot would execute something other than what the
+        // person sees.
+        return
+      }
       setParameterError(refused)
       if (refused !== null) {
         setParametersOpen(true)
@@ -502,10 +525,11 @@ export function ConsolePanel({
             <ParameterEditor
               rows={rows}
               onChange={(next) => {
+                rowsGeneration.current += 1
                 setRows(next)
                 setParameterError(null)
               }}
-              error={parameterError}
+              refusal={parameterError}
             />
           ) : null
         }

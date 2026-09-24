@@ -59,6 +59,19 @@ export const ParameterKind = z.enum([
 ])
 export type ParameterKind = z.infer<typeof ParameterKind>
 
+/**
+ * Why a bound value was refused: a position and a type, never the text
+ * (I-03). `position` is `null` when no single row is at fault — that is the
+ * case when the *count* of parameters is refused, not the value at any one
+ * of them.
+ */
+export const ParameterRefusal = z.object({
+  position: z.number().int().positive().nullable(),
+  expectedType: ParameterKind.nullable(),
+  message: z.string(),
+})
+export type ParameterRefusal = z.infer<typeof ParameterRefusal>
+
 /** In picker order, with the labels `oxyn_core::ParameterType::label` uses. */
 export const PARAMETER_KINDS: ReadonlyArray<{
   kind: ParameterKind
@@ -135,9 +148,9 @@ export const consoles = {
       place,
     }),
 
-  /** `null` when every value converts; otherwise a position and a type. */
+  /** `null` when every value converts; otherwise a refusal naming a position and a type. */
   validateParameters: (parameters: Array<ParameterInput>) =>
-    call("validate_parameters", z.string().nullable(), { parameters }),
+    call("validate_parameters", ParameterRefusal.nullable(), { parameters }),
 
   contextChoices: (connection: string) =>
     call("session_context_choices", z.array(SessionPlace), { connection }),
