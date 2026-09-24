@@ -4,6 +4,14 @@ import { expect, fn, userEvent, waitFor } from "storybook/test"
 
 import { SqlEditor } from "./sql-editor"
 
+// The editor's shortcuts are CodeMirror `Mod-` bindings: ⌘ on macOS, Ctrl
+// elsewhere, decided by `/Mac/.test(navigator.platform)` in
+// @codemirror/view 6.43.11. Pressing ⌘ unconditionally ran nothing under
+// Linux — failing the stories that expect a run, and passing for the wrong
+// reason those that expect none.
+const MOD = /Mac/.test(navigator.platform) ? "Meta" : "Control"
+const mod = (keys: string) => `{${MOD}>}${keys}{/${MOD}}`
+
 const meta = {
   title: "Oxyn/SqlEditor",
   component: SqlEditor,
@@ -41,7 +49,7 @@ export const PostgreSQL: Story = {
   play: async ({ canvas, args }) => {
     const editor = canvas.getByRole("textbox")
     await userEvent.click(editor)
-    await userEvent.keyboard("{Meta>}{Enter}{/Meta}")
+    await userEvent.keyboard(mod("{Enter}"))
     await waitFor(() => expect(args.onRun).toHaveBeenCalledTimes(1))
     // No selection: the statement under the cursor is the target.
     await expect(args.onRun).toHaveBeenCalledWith(
@@ -57,7 +65,7 @@ export const RunningEscapeCancels: Story = {
     await userEvent.keyboard("{Escape}")
     await waitFor(() => expect(args.onCancel).toHaveBeenCalled())
     // While running, ⌘↵ does not start a second statement.
-    await userEvent.keyboard("{Meta>}{Enter}{/Meta}")
+    await userEvent.keyboard(mod("{Enter}"))
     await expect(args.onRun).not.toHaveBeenCalled()
   },
 }
@@ -65,16 +73,16 @@ export const RunningEscapeCancels: Story = {
 export const SelectionAndShortcuts: Story = {
   play: async ({ canvas, args }) => {
     await userEvent.click(canvas.getByRole("textbox"))
-    await userEvent.keyboard("{Meta>}a{/Meta}")
-    await userEvent.keyboard("{Meta>}{Enter}{/Meta}")
+    await userEvent.keyboard(mod("a"))
+    await userEvent.keyboard(mod("{Enter}"))
     await waitFor(() =>
       expect(args.onRun).toHaveBeenCalledWith(
         expect.objectContaining({ kind: "selection", start: 0 })
       )
     )
-    await userEvent.keyboard("{Meta>}{Shift>}{Enter}{/Shift}{/Meta}")
+    await userEvent.keyboard(mod("{Shift>}{Enter}{/Shift}"))
     await waitFor(() => expect(args.onRunAll).toHaveBeenCalledTimes(1))
-    await userEvent.keyboard("{Meta>}s{/Meta}")
+    await userEvent.keyboard(mod("s"))
     await waitFor(() => expect(args.onSave).toHaveBeenCalledTimes(1))
   },
 }
@@ -89,10 +97,10 @@ export const ReadOnlyRunsNothing: Story = {
   play: async ({ canvas, args }) => {
     const editor = canvas.getByRole("textbox")
     await userEvent.click(editor)
-    await userEvent.keyboard("{Meta>}a{/Meta}")
-    await userEvent.keyboard("{Meta>}{Enter}{/Meta}")
-    await userEvent.keyboard("{Meta>}{Shift>}{Enter}{/Shift}{/Meta}")
-    await userEvent.keyboard("{Meta>}s{/Meta}")
+    await userEvent.keyboard(mod("a"))
+    await userEvent.keyboard(mod("{Enter}"))
+    await userEvent.keyboard(mod("{Shift>}{Enter}{/Shift}"))
+    await userEvent.keyboard(mod("s"))
     await expect(args.onRun).not.toHaveBeenCalled()
     await expect(args.onRunAll).not.toHaveBeenCalled()
     await expect(args.onSave).not.toHaveBeenCalled()

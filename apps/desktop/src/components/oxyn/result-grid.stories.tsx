@@ -140,9 +140,15 @@ export const JumpToTheEnd: Story = {
     grid.focus()
     await userEvent.keyboard("{Meta>}{End}{/Meta}")
     // The last page is fetched directly, without loading what lies before.
-    await waitFor(() => expect(canvas.getByText("1000000")).toBeVisible(), {
-      timeout: 3000,
-    })
+    // By its row header: the text alone also matches that row's `id` cell,
+    // which holds the same number, and the query then fails as ambiguous.
+    await waitFor(
+      () =>
+        expect(
+          canvas.getByRole("rowheader", { name: "Row 1000000" })
+        ).toBeVisible(),
+      { timeout: 3000 }
+    )
   },
 }
 
