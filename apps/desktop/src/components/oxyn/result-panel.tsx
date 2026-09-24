@@ -4,6 +4,7 @@ import {
   Alert02Icon,
   CancelCircleIcon,
   DatabaseIcon,
+  FlowchartIcon,
   MoreHorizontalIcon,
   PencilEdit02Icon,
   PlayIcon,
@@ -19,6 +20,7 @@ import type { FetchPage } from "@/components/oxyn/result-grid"
 import type { GridPosition } from "@/components/oxyn/grid-selection"
 import { rowCount } from "@/components/oxyn/status-bar"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import {
   DropdownMenu,
@@ -123,6 +125,38 @@ interface ResultPanelProps {
   reveal?: { row: number; key: number } | null
   onActiveChange?: (active: GridPosition | null, cell: Cell | undefined) => void
   onInspect?: (position: GridPosition) => void
+  /**
+   * The rows are the plan `Explain` asked for, not the statement's data: the
+   * mention stays above them for as long as they are shown.
+   */
+  plan?: boolean
+}
+
+/**
+ * Said in the result area itself: someone who ran `Explain`, looked away and
+ * came back reads the grid, not the button they pressed (docs/UX-SPEC.md,
+ * « Explain »).
+ */
+function PlanNote() {
+  return (
+    <p
+      data-slot="result-plan-note"
+      className="flex shrink-0 items-center gap-2 border-b px-3 py-1.5 text-xs text-muted-foreground"
+    >
+      <Badge variant="outline" className="shrink-0">
+        <HugeiconsIcon
+          icon={FlowchartIcon}
+          strokeWidth={2}
+          data-icon="inline-start"
+        />
+        Execution plan
+      </Badge>
+      <span className="min-w-0">
+        How the server would run the statement, not its rows. The statement
+        itself was not run.
+      </span>
+    </p>
+  )
 }
 
 export const ResultPanel = React.memo(function ResultPanel({
@@ -142,7 +176,9 @@ export const ResultPanel = React.memo(function ResultPanel({
   reveal,
   onActiveChange,
   onInspect,
+  plan = false,
 }: ResultPanelProps) {
+  const planNote = plan ? <PlanNote /> : null
   // Hidden columns belong to one result: a new statement brings other
   // columns under the same Arrow indexes.
   const resultKey =
@@ -217,6 +253,7 @@ export const ResultPanel = React.memo(function ResultPanel({
       if (state.result && state.columns) {
         return (
           <div className="flex h-full min-h-0 flex-col">
+            {planNote}
             {toolbar}
             <ResultGrid
               resultKey={state.result}
@@ -306,6 +343,7 @@ export const ResultPanel = React.memo(function ResultPanel({
       if (state.rows === 0) {
         return (
           <div className="flex h-full min-h-0 flex-col">
+            {planNote}
             <Empty className="flex-1 border-0">
               <EmptyHeader>
                 <EmptyMedia variant="icon">
@@ -327,6 +365,7 @@ export const ResultPanel = React.memo(function ResultPanel({
       }
       return (
         <div className="flex h-full min-h-0 flex-col">
+          {planNote}
           {toolbar}
           <ResultGrid
             resultKey={state.result}

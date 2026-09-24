@@ -156,6 +156,8 @@ export function ConsolePanel({
     placeholderData: keepPreviousData,
   })
 
+  // Whether the run whose result is shown was an `Explain`.
+  const [explained, setExplained] = React.useState(false)
   const submitting = React.useRef(false)
   const run = async (runTarget: RunTarget, explain = false) => {
     // A double click submits once: the parameter check awaits before start.
@@ -203,6 +205,8 @@ export function ConsolePanel({
       }
     }
     setNotice(null)
+    // Known here and nowhere else: the rows of a plan look like any others.
+    setExplained(explain)
     execution.start((id) =>
       consoles.run(id, open.connection, session.session, {
         sql: doc.text,
@@ -457,9 +461,11 @@ export function ConsolePanel({
         reveal={find.reveal}
         onInspect={inspection.onInspect}
         onActiveChange={onActiveChange}
+        plan={explained}
       />
     ),
     [
+      explained,
       state,
       fetchPage,
       cancel,
