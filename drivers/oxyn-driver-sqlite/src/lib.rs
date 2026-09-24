@@ -1481,10 +1481,11 @@ mod tests {
             "une colonne inconnue ne se projette pas",
         );
         assert!(
-            matches!(&err, OxynError::CatalogUnavailable(message)
+            matches!(&err, OxynError::Query(message)
                 if message.contains("colonne_absente")),
             "{err}"
         );
+        assert!(!err.is_retryable(), "{err}");
         session.close().await.expect("fermeture");
     }
 
@@ -1509,10 +1510,11 @@ mod tests {
             "une colonne inconnue ne se trie pas",
         );
         assert!(
-            matches!(&err, OxynError::CatalogUnavailable(message)
+            matches!(&err, OxynError::Query(message)
                 if message.contains("colonne_absente")),
             "{err}"
         );
+        assert!(!err.is_retryable(), "{err}");
 
         // Une page sur une relation sans clé unique : refusée, parce qu'un
         // OFFSET sans ordre total rend des lignes en double et en omet.

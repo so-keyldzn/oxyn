@@ -1956,23 +1956,31 @@ async fn les_pages_d_un_apercu_trie_ne_se_recouvrent_ni_n_omettent_une_ligne() {
         "l'union des pages est exactement la table"
     );
 
-    // Une colonne de tri que la relation ne déclare pas : refusée ici, jamais
-    // transmise au serveur.
+    // Une colonne de tri ou de projection que la relation ne déclare pas :
+    // refusée ici, jamais transmise au serveur, et permanente — retenter ne la
+    // fera pas apparaître.
     let chemin =
         CatalogPath::for_relation(None, Some("public"), "oxyn_preview_page").expect("chemin");
-    let inconnue = PreviewShape {
+    let triee = PreviewShape {
         sort: vec![PreviewSort::ascending("colonne_absente")],
         ..PreviewShape::default()
     };
-    let erreur = session
-        .preview_request(&chemin, 10, &inconnue, &CancelToken::new())
-        .await
-        .expect_err("une colonne inconnue ne se trie pas");
-    assert!(
-        matches!(&erreur, OxynError::CatalogUnavailable(message)
-            if message.contains("colonne_absente")),
-        "{erreur}"
-    );
+    let projetee = PreviewShape {
+        columns: Some(vec!["colonne_absente".into()]),
+        ..PreviewShape::default()
+    };
+    for inconnue in [triee, projetee] {
+        let erreur = session
+            .preview_request(&chemin, 10, &inconnue, &CancelToken::new())
+            .await
+            .expect_err("une colonne inconnue ne se lit ni ne se trie");
+        assert!(
+            matches!(&erreur, OxynError::Query(message)
+                if message.contains("colonne_absente")),
+            "{erreur}"
+        );
+        assert!(!erreur.is_retryable(), "{erreur}");
+    }
 
     // Une page sur une relation sans clé unique : refusée, en disant pourquoi.
     appliquer(&*session, "CREATE TABLE oxyn_preview_sans_cle (x text)").await;

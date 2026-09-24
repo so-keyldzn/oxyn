@@ -119,9 +119,12 @@ pub enum OxynError {
         source: Box<dyn std::error::Error + Send + Sync>,
     },
 
-    /// Le serveur a rejeté l'instruction : syntaxe, objet absent, contrainte
-    /// violée, droits insuffisants. Famille permanente : on affiche, on ne
-    /// retente pas.
+    /// L'instruction est rejetée : syntaxe, objet absent, contrainte violée,
+    /// droits insuffisants. Famille permanente : on affiche, on ne retente pas.
+    ///
+    /// Le rejet vient du serveur, ou du driver quand il refuse avant l'envoi ce
+    /// que le serveur refuserait — une colonne d'aperçu que la relation ne
+    /// déclare pas. Retenter ne fera pas apparaître la colonne.
     #[error("query rejected: {0}")]
     Query(String),
 
@@ -189,6 +192,10 @@ pub enum OxynError {
 
     /// Le catalogue n'est pas disponible : introspection en cours, cache vide,
     /// droits insuffisants pour lire les métadonnées.
+    ///
+    /// Famille transitoire : le catalogue peut revenir. Un nom que le
+    /// catalogue, lu, ne déclare pas n'en relève donc pas — c'est
+    /// [`Query`](Self::Query).
     #[error("catalog unavailable: {0}")]
     CatalogUnavailable(String),
 
@@ -373,6 +380,24 @@ mod tests {
         assert_eq!(
             OxynError::Query("syntaxe".into()).class(),
             ErrorClass::Permanent
+        );
+    }
+
+    #[test]
+    fn classement_d_une_colonne_inconnue() {
+        // DRIVER-CONTRACT §4 et §6 : une colonne que la relation ne déclare pas
+        // ne réapparaîtra pas au prochain essai. Elle se rend en `Query`,
+        // permanente ; `CatalogUnavailable` garde le sens d'un catalogue
+        // réellement indisponible, qui peut revenir.
+        let inconnue = OxynError::Query(
+            "cannot sort a preview on `absente`: the relation does not declare that column".into(),
+        );
+        assert_eq!(inconnue.class(), ErrorClass::Permanent);
+        assert!(!inconnue.is_retryable());
+        assert!(inconnue.is_user_error());
+        assert_eq!(
+            OxynError::CatalogUnavailable("introspection en cours".into()).class(),
+            ErrorClass::Transient
         );
     }
 

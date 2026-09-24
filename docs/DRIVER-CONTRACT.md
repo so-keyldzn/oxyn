@@ -71,7 +71,7 @@ Deux conséquences que les drivers ratent le plus souvent :
 | Famille | Exemples | Ce que fait l'appelant |
 |---|---|---|
 | Transitoire | coupure réseau, `too many connections`, verrou expiré | peut retenter, avec recul exponentiel |
-| Permanente | erreur de syntaxe, table absente, droits insuffisants | ne retente **jamais**, affiche |
+| Permanente | erreur de syntaxe, table ou colonne absente, droits insuffisants | ne retente **jamais**, affiche |
 | Ambiguë | expiration côté client pendant une écriture | ne retente **jamais**, signale l'incertitude |
 
 **Panne concrète :** un `INSERT` expire côté client alors que le serveur l'a
@@ -79,6 +79,15 @@ appliqué. Classé « transitoire » et rejoué, il crée un doublon dans les do
 de l'utilisateur, sans aucun message d'erreur nulle part. C'est le cas qui coûte
 le plus cher et le plus tentant à traiter par une simple boucle de retry :
 l'ambiguïté ne se retente pas.
+
+**Une colonne inconnue est un refus permanent, même prononcé avant l'envoi.**
+Une colonne d'aperçu que la relation ne déclare pas — en projection comme en
+tri, voir [§6](#6-il-échappe-tout-identifiant-quil-compose) — se rend en
+`OxynError::Query`, comme le serveur l'aurait classée : retenter ne fera pas
+apparaître la colonne. `OxynError::CatalogUnavailable`, transitoire, dit un catalogue qui
+peut revenir — introspection en cours, cache vide. Confondre les deux ferait
+proposer « réessayer » à l'utilisateur pour une demande qui échouera toujours
+de la même façon.
 
 ### 5. Il déclare ses capacités par session, et ne simule rien
 
@@ -114,8 +123,9 @@ nomme les seules colonnes à lire : le driver prend la liste par
 `PreviewShape::projection`, qui la déduplique et la borne à
 `MAX_PROJECTED_COLUMNS` noms, vérifie chaque nom contre la description de la
 relation, puis le cite comme la relation elle-même. Un nom que la relation ne
-déclare pas est refusé par `OxynError::CatalogUnavailable` avant d'atteindre le
-serveur, comme une colonne de tri inconnue ; une liste vide est refusée par
+déclare pas est refusé par `OxynError::Query`, erreur permanente
+([§4](#4-il-distingue-trois-familles-derreurs-et-il-les-classe)), avant
+d'atteindre le serveur, comme une colonne de tri inconnue ; une liste vide est refusée par
 `OxynError::Config` et ne vaut jamais `SELECT *`, qui lirait justement ce que
 personne n'a approuvé. Une projection ignorée n'est pas une dégradation
 acceptable : c'est elle qui borne un échantillon aux colonnes cochées
