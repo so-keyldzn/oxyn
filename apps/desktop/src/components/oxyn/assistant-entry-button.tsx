@@ -10,6 +10,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import type { AssistantEntry } from "@/features/assistant/availability"
+import type { ProviderReach } from "@/lib/ipc/ai"
 import type { PrivacyTier } from "@/lib/ipc/types"
 
 /**
@@ -28,12 +29,18 @@ import type { PrivacyTier } from "@/lib/ipc/types"
 export function AssistantEntryButton({
   entry,
   tier = null,
+  reach = null,
   pressed,
   onPressedChange,
 }: {
   entry: AssistantEntry
   /** The current connection's tier; `null` draws the button alone. */
   tier?: PrivacyTier | null
+  /**
+   * Where the destination a question would go to resolved; `null` when none
+   * is known, and the label then claims neither « Cloud » nor « Local ».
+   */
+  reach?: ProviderReach | null
   pressed: boolean
   onPressedChange: (pressed: boolean) => void
 }) {
@@ -95,7 +102,7 @@ export function AssistantEntryButton({
       data-slot="assistant-entry"
       className="flex shrink-0 items-center gap-2"
     >
-      {tier ? <PrivacyTierBadge tier={tier} /> : null}
+      {tier ? <PrivacyTierBadge tier={tier} reach={reach} /> : null}
       {button}
     </div>
   )

@@ -13,6 +13,7 @@ import {
   FieldTitle,
 } from "@/components/ui/field"
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group"
+import type { ProviderReach } from "@/lib/ipc/ai"
 import type { PrivacyTier } from "@/lib/ipc/types"
 import { cn } from "@/lib/utils"
 
@@ -60,22 +61,55 @@ export const PRIVACY_TIERS: Record<PrivacyTier, TierDescription> = {
 
 const ORDER: ReadonlyArray<PrivacyTier> = ["local", "metadata", "sampled"]
 
-/** The tier of a connection, written out: never a colour or an icon alone. */
+/**
+ * Where the provider that would answer resolved, as the top bar says it.
+ *
+ * `unresolved` and an external agent get no suffix: Oxyn cannot see where they
+ * send data, and « Cloud » is a claim, not a default (docs/UX-SPEC.md,
+ * « Repères permanents »).
+ */
+const REACH_SUFFIX: Record<ProviderReach, string | null> = {
+  local: "Local",
+  remote: "Cloud",
+  unresolved: null,
+}
+
+/** `Metadata · Cloud`, `Metadata · Local`, or `Metadata` when nobody known answers. */
+export function tierLabel(tier: PrivacyTier, reach: ProviderReach | null) {
+  // Under `Local`, only a local provider answers: the suffix would repeat it.
+  const suffix = reach && tier !== "local" ? REACH_SUFFIX[reach] : null
+  const label = PRIVACY_TIERS[tier].label
+  return suffix ? `${label} · ${suffix}` : label
+}
+
+/**
+ * The tier of a connection, written out: never a colour or an icon alone.
+ *
+ * With `reach` — `null` when no provider is known — it takes the top bar's
+ * form, beside `Ask AI`. Without it, in a list where nothing else says « AI »,
+ * it keeps that prefix.
+ */
 export function PrivacyTierBadge({
   tier,
+  reach,
   className,
 }: {
   tier: PrivacyTier
+  reach?: ProviderReach | null
   className?: string
 }) {
+  const text =
+    reach === undefined
+      ? `AI · ${PRIVACY_TIERS[tier].label}`
+      : tierLabel(tier, reach)
   return (
     <Badge
       variant="outline"
       data-privacy-tier={tier}
       className={className}
-      aria-label={`AI privacy: ${PRIVACY_TIERS[tier].label}`}
+      aria-label={`AI privacy: ${reach === undefined ? PRIVACY_TIERS[tier].label : text}`}
     >
-      AI · {PRIVACY_TIERS[tier].label}
+      {text}
     </Badge>
   )
 }

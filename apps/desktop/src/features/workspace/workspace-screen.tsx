@@ -25,6 +25,8 @@ import {
 } from "@/components/ui/empty"
 import { Kbd, KbdGroup } from "@/components/ui/kbd"
 import { TabsContent } from "@/components/ui/tabs"
+import { answeringReach } from "@/features/assistant/availability"
+import { usePinState } from "@/features/assistant/object-pin"
 import { useAssistantAvailable } from "@/features/assistant/use-assistant-available"
 import { ConsolePanel } from "@/features/consoles/console-panel"
 import { flushAllDrafts } from "@/features/consoles/draft-registry"
@@ -156,6 +158,10 @@ export function WorkspaceScreen({
   // itself from what is declared (docs/UX-SPEC.md).
   const hasAssistant = aside.some((item) => item.id === "assistant")
   const assistantEntry = useAssistantAvailable(open)
+  // The destination the panel would send to: the tier label says where it
+  // resolved, never where a provider is supposed to be.
+  const { chosenKey } = usePinState(open.connection)
+  const reach = answeringReach(assistantEntry, chosenKey)
   // Bumped by `Ask AI`: once the column is drawn, the question field takes
   // the focus. An effect, because the field is hidden until the render that
   // opens the column has been committed.
@@ -477,6 +483,7 @@ export function WorkspaceScreen({
             <AssistantEntryButton
               entry={assistantEntry}
               tier={open.privacyTier}
+              reach={reach}
               pressed={asideOpen && asideActive === "assistant"}
               onPressedChange={(pressed) => {
                 setAsideActive("assistant")

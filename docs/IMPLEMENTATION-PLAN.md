@@ -82,8 +82,10 @@ et ces actions passent dans Actions. La largeur initiale de l'inspecteur est
 celle de Figma (`190:1872`, 280 px). La poignée de 8 px redimensionne le panneau
 à la souris et au clavier, avec sauvegarde en fin de geste. Replier la sidebar
 conserve désormais la table active au lieu de renvoyer à la console.
-Les repères de confidentialité doivent refléter le fournisseur
-réel lorsqu'il sera configuré. Aucun niveau Cloud fictif n'est affiché.
+Les repères de confidentialité reflètent le fournisseur réel : l'étiquette de
+la barre supérieure lit `Metadata · Cloud` ou `Metadata · Local` d'après la
+localisation mesurée de la destination qui répondrait, et n'a pas de suffixe
+sans fournisseur connu. Aucun niveau Cloud fictif n'est affiché.
 
 Les corrections de maquette relevées dans [FIGMA-HANDOFF](FIGMA-HANDOFF.md)
 précisent aussi la sélection de reprise par cases, maintenant raccordée aux brouillons SQL persistés.

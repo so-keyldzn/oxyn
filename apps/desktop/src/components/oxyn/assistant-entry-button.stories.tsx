@@ -52,11 +52,11 @@ export const Unavailable: Story = {
 }
 
 export const WithTheTierBeside: Story = {
-  args: { tier: "sampled" },
+  args: { tier: "sampled", reach: "remote" },
   play: async ({ canvasElement }) => {
     const canvas = within(canvasElement)
     // Read before speaking: the tier sits next to the entry.
-    await expect(canvas.getByText("AI · Sampled")).toBeVisible()
+    await expect(canvas.getByText("Sampled · Cloud")).toBeVisible()
     await expect(canvas.getByRole("button", { name: "Ask AI" })).toBeVisible()
   },
 }
@@ -66,6 +66,6 @@ export const NoProviderDeclared: Story = {
   play: async ({ canvasElement }) => {
     // No button, no badge, no invitation (docs/UX-SPEC.md).
     await expect(within(canvasElement).queryByRole("button")).toBeNull()
-    await expect(canvasElement.textContent).not.toMatch(/AI · /)
+    await expect(canvasElement.querySelector("[data-privacy-tier]")).toBeNull()
   },
 }
