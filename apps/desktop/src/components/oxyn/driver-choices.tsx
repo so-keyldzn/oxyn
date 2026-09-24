@@ -21,6 +21,13 @@ import {
   EmptyHeader,
   EmptyTitle,
 } from "@/components/ui/empty"
+import {
+  Item,
+  ItemContent,
+  ItemDescription,
+  ItemMedia,
+  ItemTitle,
+} from "@/components/ui/item"
 import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "cn"
 import type { DriverChoice } from "@/lib/ipc/types"
@@ -137,28 +144,6 @@ function DriverSearch({
   )
 }
 
-const tileClass =
-  "group/tile flex w-full min-w-0 items-center gap-3 rounded-lg border bg-card text-left transition-colors outline-none hover:border-foreground/20 hover:bg-muted/50 focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 disabled:pointer-events-none disabled:opacity-50"
-
-function TileMedia({
-  prominent,
-  children,
-}: {
-  prominent: boolean
-  children: React.ReactNode
-}) {
-  return (
-    <span
-      className={cn(
-        "flex shrink-0 items-center justify-center rounded-md border bg-muted text-muted-foreground",
-        prominent ? "size-10" : "size-8"
-      )}
-    >
-      {children}
-    </span>
-  )
-}
-
 /**
  * The database types this build registers. Choosing one only shows its form:
  * nothing is created or opened by the click.
@@ -249,60 +234,65 @@ export function DriverChoices({
       <div role="list" className={grid}>
         {tiles.map((driver) => (
           <div role="listitem" key={driver.id} className="flex">
-            <button
-              type="button"
-              disabled={disabled}
-              onClick={() => onChoose(driver)}
+            <Item
+              variant="outline"
+              render={
+                <button
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => onChoose(driver)}
+                />
+              }
               className={cn(
-                tileClass,
-                prominent ? "flex-col items-start p-4" : "p-3"
+                "min-w-0 text-left hover:bg-muted/50 disabled:pointer-events-none disabled:opacity-50",
+                prominent && "flex-col flex-nowrap items-start p-4"
               )}
             >
-              <TileMedia prominent={prominent}>
+              <ItemMedia variant="icon">
                 <DriverLogo
                   driver={driver.id}
                   className={prominent ? "size-6" : "size-5"}
                 />
-              </TileMedia>
-              <span className="flex min-w-0 flex-col gap-0.5">
-                <span
-                  className="truncate text-sm font-medium"
-                  title={driver.displayName}
-                >
-                  {driver.displayName}
-                </span>
-                <span className="truncate text-xs text-muted-foreground tabular-nums">
+              </ItemMedia>
+              <ItemContent className="w-full min-w-0 gap-0.5">
+                <ItemTitle className="w-full min-w-0">
+                  <span className="truncate" title={driver.displayName}>
+                    {driver.displayName}
+                  </span>
+                </ItemTitle>
+                <ItemDescription className="truncate text-xs tabular-nums">
                   {driver.family} · {reach(driver)}
-                </span>
-              </span>
-            </button>
+                </ItemDescription>
+              </ItemContent>
+            </Item>
           </div>
         ))}
         {many ? (
           <div role="listitem" className="flex">
-            <button
-              type="button"
-              disabled={disabled}
-              onClick={() => setBrowsing(true)}
-              aria-haspopup="dialog"
-              className={cn(tileClass, "p-3")}
-            >
-              <TileMedia prominent={false}>
-                <HugeiconsIcon
-                  icon={GridViewIcon}
-                  strokeWidth={2}
-                  className="size-4"
+            <Item
+              variant="outline"
+              render={
+                <button
+                  type="button"
+                  disabled={disabled}
+                  onClick={() => setBrowsing(true)}
+                  aria-haspopup="dialog"
                 />
-              </TileMedia>
-              <span className="flex min-w-0 flex-col gap-0.5">
-                <span className="truncate text-sm font-medium">
-                  All database types
-                </span>
-                <span className="truncate text-xs text-muted-foreground tabular-nums">
+              }
+              className="min-w-0 text-left hover:bg-muted/50 disabled:pointer-events-none disabled:opacity-50"
+            >
+              <ItemMedia variant="icon">
+                <HugeiconsIcon icon={GridViewIcon} strokeWidth={2} />
+              </ItemMedia>
+              <ItemContent className="min-w-0 gap-0.5">
+                <ItemTitle className="w-full min-w-0">
+                  <span className="truncate">All database types</span>
+                </ItemTitle>
+                <ItemDescription className="truncate text-xs tabular-nums">
                   {drivers.length} types · search
-                </span>
-              </span>
-            </button>
+                </ItemDescription>
+              </ItemContent>
+            </Item>
           </div>
         ) : null}
       </div>

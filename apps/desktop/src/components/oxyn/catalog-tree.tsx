@@ -24,12 +24,18 @@ import {
   ContextMenuTrigger,
 } from "@/components/ui/context-menu"
 import {
+  Empty,
+  EmptyDescription,
+  EmptyHeader,
+  EmptyTitle,
+} from "@/components/ui/empty"
+import {
   InputGroup,
   InputGroupAddon,
-  InputGroupButton,
   InputGroupInput,
 } from "@/components/ui/input-group"
 import { Spinner } from "@/components/ui/spinner"
+import { Toggle } from "@/components/ui/toggle"
 import type { CatalogSearchHit } from "@/lib/ipc/metadata"
 import type { CatalogAddress, CatalogNode, PrivacyTier } from "@/lib/ipc/types"
 import { cn } from "@/lib/utils"
@@ -465,21 +471,19 @@ export function CatalogTree({
         />
         {hasSystem ? (
           <InputGroupAddon align="inline-end">
-            <InputGroupButton
-              size="icon-xs"
-              aria-pressed={hideSystem}
-              aria-label={
-                hideSystem ? "Show system objects" : "Hide system objects"
-              }
-              title={hideSystem ? "Show system objects" : "Hide system objects"}
-              onClick={() => setHideSystem((hidden) => !hidden)}
-              className={cn(hideSystem && "bg-accent")}
+            {/* A fixed name and a pressed state: a name that flips as well
+                is announced « Show system objects, pressed » — the opposite
+                of what the tree shows. */}
+            <Toggle
+              size="sm"
+              pressed={hideSystem}
+              onPressedChange={setHideSystem}
+              aria-label="Hide system objects"
+              title="Hide system objects"
+              className="size-6 min-w-6 rounded-[calc(var(--radius)-3px)] px-0"
             >
-              <HugeiconsIcon
-                icon={hideSystem ? ViewOffIcon : EyeIcon}
-                strokeWidth={2}
-              />
-            </InputGroupButton>
+              <HugeiconsIcon icon={ViewOffIcon} strokeWidth={2} />
+            </Toggle>
           </InputGroupAddon>
         ) : null}
       </InputGroup>
@@ -504,11 +508,17 @@ export function CatalogTree({
           }
         />
       ) : rows.length === 0 ? (
-        <p className="px-2 py-4 text-xs text-muted-foreground">
-          {debouncedFilter
-            ? "No loaded object matches."
-            : "No object loaded yet."}
-        </p>
+        debouncedFilter ? (
+          <Empty className="flex-none p-4">
+            <EmptyHeader>
+              <EmptyTitle>No loaded object matches</EmptyTitle>
+            </EmptyHeader>
+          </Empty>
+        ) : (
+          <p className="px-2 py-4 text-xs text-muted-foreground">
+            No object loaded yet.
+          </p>
+        )
       ) : (
         <ContextMenu>
           <ContextMenuTrigger
@@ -713,10 +723,14 @@ function SearchHits({
   }
   if (hits.length === 0) {
     return (
-      <p className="px-2 py-4 text-xs text-muted-foreground">
-        No loaded object matches. The search only covers what has already been
-        read.
-      </p>
+      <Empty className="flex-none p-4">
+        <EmptyHeader>
+          <EmptyTitle>No loaded object matches</EmptyTitle>
+          <EmptyDescription className="text-xs">
+            The search only covers what has already been read.
+          </EmptyDescription>
+        </EmptyHeader>
+      </Empty>
     )
   }
   return (

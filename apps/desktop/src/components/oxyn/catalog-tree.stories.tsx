@@ -74,17 +74,22 @@ export const NothingLoaded: Story = {
   args: { nodes: [] },
 }
 
-/** System schemas are hidden from view, never removed from the catalog. */
+/**
+ * System schemas are hidden from view, never removed from the catalog. The
+ * toggle keeps one name and says its state by being pressed: a name that
+ * flipped too would be read « Show system objects, pressed ».
+ */
 export const HideSystemObjects: Story = {
   play: async ({ canvas }) => {
+    const toggle = canvas.getByRole("button", { name: "Hide system objects" })
     await expect(canvas.getByText("pg_catalog")).toBeVisible()
-    await userEvent.click(
-      canvas.getByRole("button", { name: "Hide system objects" })
-    )
+    await expect(toggle).toHaveAttribute("aria-pressed", "false")
+    await userEvent.click(toggle)
+    await expect(toggle).toHaveAttribute("aria-pressed", "true")
+    await expect(toggle).toHaveAccessibleName("Hide system objects")
     await expect(canvas.queryByText("pg_catalog")).toBeNull()
-    await userEvent.click(
-      canvas.getByRole("button", { name: "Show system objects" })
-    )
+    await userEvent.click(toggle)
+    await expect(toggle).toHaveAttribute("aria-pressed", "false")
     await expect(canvas.getByText("pg_catalog")).toBeVisible()
   },
 }

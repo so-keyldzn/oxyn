@@ -14,6 +14,7 @@ import { EnvironmentBadge } from "@/components/oxyn/environment-badge"
 import { Button } from "@/components/ui/button"
 import {
   Empty,
+  EmptyContent,
   EmptyDescription,
   EmptyHeader,
   EmptyMedia,
@@ -282,14 +283,18 @@ export function SavedConnections({
         </InputGroupAddon>
       </InputGroup>
       {filtered.length === 0 ? (
-        <div className="flex items-center justify-between gap-3 rounded-lg border border-dashed px-3 py-2.5 text-sm text-muted-foreground">
-          <span className="min-w-0 truncate">
-            No connection matches <bdi>“{query.trim()}”</bdi>.
-          </span>
-          <Button variant="ghost" size="sm" onClick={() => setQuery("")}>
-            Clear filter
-          </Button>
-        </div>
+        <Empty className="gap-3 border p-4">
+          <EmptyHeader>
+            <EmptyTitle className="w-full min-w-0 truncate">
+              No connection matches <bdi>“{query.trim()}”</bdi>
+            </EmptyTitle>
+          </EmptyHeader>
+          <EmptyContent>
+            <Button variant="outline" size="sm" onClick={() => setQuery("")}>
+              Clear filter
+            </Button>
+          </EmptyContent>
+        </Empty>
       ) : (
         list
       )}

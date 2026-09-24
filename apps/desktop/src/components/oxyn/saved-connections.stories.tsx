@@ -141,6 +141,10 @@ export const ManyConnections: Story = {
     await userEvent.keyboard("{Escape}")
     await expect(filter).toHaveValue("")
 
+    await userEvent.type(filter, "nothing like this")
+    await userEvent.click(canvas.getByRole("button", { name: "Clear filter" }))
+    await expect(filter).toHaveValue("")
+
     await userEvent.click(
       canvas.getByRole("button", { name: "Show all 23 connections" })
     )
