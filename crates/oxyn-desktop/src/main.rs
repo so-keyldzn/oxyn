@@ -116,6 +116,7 @@ fn main() -> Result<()> {
             commands::library::list_query_documents,
             commands::library::read_history,
             commands::library::read_history_entry,
+            commands::library::reconcile_history_entry,
             commands::library::list_history_connections,
             commands::library::open_retained_result,
             // Recovery and shutdown

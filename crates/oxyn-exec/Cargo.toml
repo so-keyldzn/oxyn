@@ -18,6 +18,9 @@ oxyn-driver.workspace = true
 oxyn-query.workspace = true
 oxyn-store.workspace = true
 async-trait.workspace = true
+# Already in the graph through oxyn-store: the launch start bounds which
+# history rows are still running here.
+chrono.workspace = true
 futures.workspace = true
 parking_lot.workspace = true
 thiserror.workspace = true

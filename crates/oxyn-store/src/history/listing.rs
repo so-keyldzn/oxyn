@@ -32,6 +32,8 @@ pub struct HistorySummary {
     pub result: Option<ResultId>,
     /// True for an ambiguous or otherwise unresolved mutating outcome.
     pub requires_reconciliation: bool,
+    /// When the user confirmed having inspected the server state, if they did.
+    pub reconciled_at: Option<DateTime<Utc>>,
 }
 impl std::fmt::Debug for HistorySummary {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -93,7 +95,7 @@ impl History<'_> {
         });
         self.store.with_connection_cancellable(cancel, |connection| {
             let mut query = connection.prepare("SELECT id,ts,connection_id,substr(connection_name,1,256) AS connection_name,actor_kind,actor_id,language,
-                substr(statement,1,256) AS statement,intent,duration_ms,row_count,status,substr(error,1,512) AS error,error_class,result_id
+                substr(statement,1,256) AS statement,intent,duration_ms,row_count,status,substr(error,1,512) AS error,error_class,result_id,reconciled_at
                 FROM query_history WHERE (?1 IS NULL OR connection_id=?1) AND statement LIKE ?2 ESCAPE '\\'
                 AND (?3 IS NULL OR ts>=?3) AND (?4='' OR status=?4 OR (?4='ambiguous' AND error_class='ambiguous'))
                 AND (?5 IS NULL OR id<?5) AND (?7=0 OR result_id IS NOT NULL) ORDER BY id DESC LIMIT ?6")?;
@@ -103,7 +105,8 @@ impl History<'_> {
                 let record = entry.record;
                 Ok(HistorySummary { id: entry.id, ts: record.ts, connection: record.connection, connection_name: record.connection_name,
                     statement_preview: record.statement, status: record.status, error_class: record.error_class, duration: record.duration,
-                    rows: record.rows, result: record.result, requires_reconciliation: reconcile })
+                    rows: record.rows, result: record.result, requires_reconciliation: reconcile,
+                    reconciled_at: record.reconciled_at })
             })?.collect::<Result<Vec<_>>>()?;
             let more = entries.len() > usize::from(filter.limit);
             if more { entries.pop(); }
@@ -202,9 +205,10 @@ impl History<'_> {
     /// Whether any recorded execution still needs its server state inspected —
     /// the rows the library marks `needs_inspection`.
     ///
-    /// Reads three columns, stopping at the first match. A clean success is
-    /// excluded in SQL, since it never qualifies; everything else is decided by
-    /// the same rule as [`HistoryRecord::requires_reconciliation`].
+    /// Reads three columns, stopping at the first match. A clean success and a
+    /// row the user reconciled are excluded in SQL, since neither qualifies;
+    /// everything else is decided by the same rule as
+    /// [`HistoryRecord::requires_reconciliation`].
     ///
     /// # Errors
     /// [`crate::StoreError::Sqlite`] if the read fails.
@@ -212,7 +216,8 @@ impl History<'_> {
         self.store.with_connection(|connection| {
             let mut query = connection.prepare(
                 "SELECT intent, status, error_class FROM query_history
-                 WHERE status <> 'succeeded' OR error_class IS NOT NULL",
+                 WHERE (status <> 'succeeded' OR error_class IS NOT NULL)
+                   AND reconciled_at IS NULL",
             )?;
             let mut rows = query.query([])?;
             while let Some(row) = rows.next()? {

@@ -119,6 +119,14 @@ pub async fn read_history_entry(
 }
 
 #[tauri::command]
+pub async fn reconcile_history_entry(
+    backend: State<'_, Backend>,
+    entry: i64,
+) -> Result<(), IpcError> {
+    backend.reconcile_history_entry(entry).await
+}
+
+#[tauri::command]
 pub async fn list_history_connections(
     backend: State<'_, Backend>,
     before: Option<i64>,

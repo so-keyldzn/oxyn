@@ -215,6 +215,8 @@ pub struct HistoryRow {
     /// An ambiguous or unresolved write: inspect the server, never replay
     /// ([I-13](../../../../CLAUDE.md#i-13)).
     pub needs_inspection: bool,
+    /// The user declared this write inspected on the server; it no longer warns.
+    pub reconciled: bool,
     /// The connection it ran on, to address a retained result. Never rendered.
     pub connection: Option<String>,
     /// A result that may still be retained; its buffer can have expired.
@@ -232,6 +234,7 @@ impl From<HistorySummary> for HistoryRow {
             duration_ms: summary.duration.map(crate::ipc::millis),
             rows: summary.rows,
             needs_inspection: summary.requires_reconciliation,
+            reconciled: summary.reconciled_at.is_some(),
             connection: summary.connection.map(|id| id.to_string()),
             result: summary.result.map(|id| id.to_string()),
         }

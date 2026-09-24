@@ -131,8 +131,9 @@ export function RecoveryList({
           <AlertTitle>A write may have an unknown outcome</AlertTitle>
           <AlertDescription>
             History holds an interrupted write marked for inspection. Inspect
-            the server state before deciding what to do. Recovery never retries
-            it.
+            the server state before deciding what to do, then mark it reconciled
+            in the library&apos;s History to stop this warning. Recovery never
+            retries it.
           </AlertDescription>
         </Alert>
       ) : null}

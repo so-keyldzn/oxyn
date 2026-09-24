@@ -110,6 +110,8 @@ export const HistoryRow = z.object({
   durationMs: z.number().nonnegative().nullable(),
   rows: z.number().int().nonnegative().nullable(),
   needsInspection: z.boolean(),
+  /** The user declared this write inspected on the server; it no longer warns. */
+  reconciled: z.boolean(),
   /** The connection it ran on, to address a retained result. Never rendered. */
   connection: z.string().nullable(),
   /** A result that may still be retained; its buffer can have expired. */
@@ -200,6 +202,10 @@ export const library = {
 
   readHistoryEntry: (entry: number) =>
     call("read_history_entry", HistoryDetail, { entry }),
+
+  /** Declares an unresolved write inspected on the server. Retries nothing. */
+  reconcileHistoryEntry: (entry: number) =>
+    call("reconcile_history_entry", Nothing, { entry }),
 
   /** Reopens a retained buffer: no query, no session. */
   openRetainedResult: (connection: string, result: string) =>

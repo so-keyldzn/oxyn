@@ -75,6 +75,7 @@ use oxyn_data::{
     ResultBuffer, SinkOutcome, export,
 };
 use oxyn_driver::{Cursor, DriverRegistry};
+use oxyn_store::history::Reconciliation;
 use oxyn_store::{Document, HistoryRecord, JournalRecord, Store};
 use parking_lot::{Mutex, RwLock};
 
@@ -188,6 +189,8 @@ pub enum Outcome {
     HistoryEntryRead {
         entry: Box<oxyn_store::HistoryEntry>,
     },
+    /// The user declared an unresolved write inspected; it no longer warns.
+    HistoryEntryReconciled { entry: i64 },
     /// A bounded page of the connections history recorded, removed ones included.
     HistoryConnectionsListed {
         page: oxyn_store::history::HistoryConnectionPage,
@@ -391,6 +394,9 @@ pub struct Executor {
     workspace: WorkspaceId,
     memory_budget: usize,
     abandoned: AbandonedOutcomes,
+    /// History rows still `running` since then belong to this launch: their
+    /// outcome is not known yet, so they cannot be declared reconciled.
+    started_at: chrono::DateTime<chrono::Utc>,
 }
 
 impl Executor {
@@ -1150,6 +1156,28 @@ impl Executor {
                 Ok(Outcome::HistoryEntryRead {
                     entry: Box::new(entry),
                 })
+            }
+            Command::ReconcileHistoryEntry { entry } => {
+                let store = self.store.clone();
+                let target = *entry;
+                let live_since = self.started_at;
+                let reconciliation = self
+                    .local_worker(cancel, move |cancel| {
+                        store.history().reconcile(target, live_since, &cancel)
+                    })
+                    .await?;
+                match reconciliation {
+                    Reconciliation::Recorded => {
+                        Ok(Outcome::HistoryEntryReconciled { entry: target })
+                    }
+                    Reconciliation::StillRunning => Err(OxynError::Config(
+                        "this write is still running; wait for its outcome before reconciling it"
+                            .into(),
+                    )),
+                    _ => Err(OxynError::Config(
+                        "history entry is gone or has no unresolved outcome".into(),
+                    )),
+                }
             }
             Command::ListHistoryConnections { workspace, filter } => {
                 self.check_workspace(*workspace)?;
@@ -2453,6 +2481,7 @@ impl ExecutorBuilder {
             workspace: self.workspace,
             memory_budget: self.memory_budget,
             abandoned: AbandonedOutcomes::default(),
+            started_at: chrono::Utc::now(),
         }
     }
 }

@@ -115,6 +115,70 @@ async fn documents_and_history_are_local_and_workspace_scoped() {
     );
 }
 
+/// Declaring a write reconciled is a statement about the server only the user
+/// can make: an agent is refused, and the refusal is journaled (I-13, I-02).
+#[tokio::test]
+async fn only_the_human_reconciles_an_unresolved_write_through_the_bus() {
+    let store = Arc::new(Store::open_in_memory().expect("store"));
+    let workspace = store
+        .workspaces()
+        .create("reconcile")
+        .expect("workspace")
+        .id;
+    let executor = Executor::builder(store.clone(), Arc::new(DefaultPolicy::new()))
+        .with_workspace(workspace)
+        .build();
+    let cancel = CancelToken::new();
+    let entry = store
+        .history()
+        .record(
+            &oxyn_store::history::HistoryRecord::new(
+                &Actor::Human,
+                QueryLanguage::SQL,
+                "INSERT INTO t VALUES (1)",
+            )
+            .with_intent(oxyn_core::StatementIntent::Write)
+            .failed(&OxynError::Timeout {
+                after: std::time::Duration::from_secs(30),
+            }),
+        )
+        .expect("expired write");
+
+    let agent = Actor::agent(oxyn_core::AgentId::new(), oxyn_core::AgentSessionId::new());
+    let refused = executor
+        .dispatch(agent, Command::ReconcileHistoryEntry { entry }, &cancel)
+        .await
+        .expect("policy answer");
+    assert!(matches!(refused, Outcome::Denied { .. }), "{refused:?}");
+    assert!(store.history().any_requires_reconciliation().expect("scan"));
+    let trace = store.journal().recent(1).expect("audit").remove(0);
+    assert_eq!(trace.record.command_kind, "ReconcileHistoryEntry");
+    assert!(trace.record.actor_kind.is_agent());
+    assert_eq!(trace.record.decision, oxyn_store::PolicyOutcome::Denied);
+
+    let done = executor
+        .dispatch(
+            Actor::Human,
+            Command::ReconcileHistoryEntry { entry },
+            &cancel,
+        )
+        .await
+        .expect("reconciled");
+    assert!(matches!(done, Outcome::HistoryEntryReconciled { entry: id } if id == entry));
+    assert!(!store.history().any_requires_reconciliation().expect("scan"));
+    assert!(
+        executor
+            .dispatch(
+                Actor::Human,
+                Command::ReconcileHistoryEntry { entry: entry + 1 },
+                &cancel,
+            )
+            .await
+            .is_err(),
+        "an absent entry is not silently acknowledged"
+    );
+}
+
 #[tokio::test]
 async fn retained_result_is_never_reexecuted_and_checks_the_original_connection() {
     let store = Arc::new(Store::open_in_memory().expect("store"));

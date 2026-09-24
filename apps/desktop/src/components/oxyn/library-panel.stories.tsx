@@ -17,6 +17,7 @@ const history: Array<HistoryRow> = [
     durationMs: 84,
     rows: 112,
     needsInspection: false,
+    reconciled: false,
     connection: CURRENT,
     result: "018f0000-0000-7000-8000-00000000aaaa",
   },
@@ -29,6 +30,7 @@ const history: Array<HistoryRow> = [
     durationMs: 30000,
     rows: null,
     needsInspection: true,
+    reconciled: false,
     connection: "018f0000-0000-7000-8000-000000000002",
     result: "018f0000-0000-7000-8000-00000000bbbb",
   },
@@ -89,6 +91,7 @@ const meta = {
     currentConnection: CURRENT,
     onOpenHistory: fn(),
     onOpenResult: fn(),
+    onReconcile: fn(),
     onOpenSaved: fn(),
     onResumeSaved: fn(),
     onDeleteSaved: fn(),
@@ -107,6 +110,53 @@ export const History: Story = {
     await expect(args.onOpenHistory).toHaveBeenCalledWith(history[0])
     await expect(canvas.getByText("Needs inspection")).toBeVisible()
     await expect(canvas.queryByText(new RegExp(CURRENT))).toBeNull()
+  },
+}
+
+/**
+ * Marking a write reconciled names its connection and quotes the statement
+ * first; the default button keeps the warning, so Enter acknowledges nothing.
+ */
+export const MarkReconciled: Story = {
+  play: async ({ canvas, args }) => {
+    const marks = canvas.getAllByRole("button", { name: /Mark reconciled/ })
+    await expect(marks).toHaveLength(1)
+    await userEvent.click(marks[0]!)
+    const dialog = await screen.findByRole("alertdialog")
+    await expect(dialog).toHaveTextContent("billing primary")
+    await expect(dialog).toHaveTextContent(
+      "UPDATE invoices SET paid_at = now() WHERE id = $1"
+    )
+    await expect(dialog).not.toHaveTextContent(/018f0000/)
+    const keep = await screen.findByRole("button", { name: "Keep warning" })
+    await waitFor(() => expect(keep).toHaveFocus())
+    await userEvent.keyboard("{Enter}")
+    await expect(args.onReconcile).not.toHaveBeenCalled()
+
+    await userEvent.click(
+      canvas.getByRole("button", { name: /Mark reconciled/ })
+    )
+    await userEvent.click(
+      await screen.findByRole("button", { name: "Mark reconciled" })
+    )
+    await expect(args.onReconcile).toHaveBeenCalledWith(history[1])
+  },
+}
+
+/** A reconciled write says so, and no longer asks for inspection. */
+export const Reconciled: Story = {
+  args: {
+    state: {
+      status: "history",
+      entries: [{ ...history[1]!, needsInspection: false, reconciled: true }],
+    },
+  },
+  play: async ({ canvas }) => {
+    await expect(canvas.getByText("Reconciled")).toBeVisible()
+    await expect(canvas.queryByText("Needs inspection")).toBeNull()
+    await expect(
+      canvas.queryByRole("button", { name: /Mark reconciled/ })
+    ).toBeNull()
   },
 }
 

@@ -185,6 +185,12 @@ export function LibrarySidebarSection({
           onOpenHistory(await library.readHistoryEntry(row.id))
         )
       }
+      onReconcile={(row) =>
+        void guard(async () => {
+          await library.reconcileHistoryEntry(row.id)
+          await queryClient.invalidateQueries({ queryKey: LIBRARY_QUERY_KEY })
+        })
+      }
       onOpenSaved={(entry) =>
         void guard(async () =>
           onOpenCopy(await library.openDocument(entry.id), entry)

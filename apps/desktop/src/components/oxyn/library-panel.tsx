@@ -4,6 +4,7 @@ import {
   Alert02Icon,
   ArrowLeft01Icon,
   ArrowRight01Icon,
+  CheckmarkCircle02Icon,
   Clock01Icon,
   Copy01Icon,
   Delete02Icon,
@@ -92,8 +93,10 @@ function when(iso: string) {
  *
  * Opening an entry always copies its text into a new console; nothing runs.
  * An ambiguous write is marked for inspection and offers no copy: it is never
- * replayed (I-13). Deleting a saved query removes a local file, never a
- * database object, and asks first.
+ * replayed (I-13). Once the user has inspected the server, they may mark it
+ * reconciled, after a confirmation that names the connection and quotes the
+ * statement. Deleting a saved query removes a local file, never a database
+ * object, and asks first.
  */
 /** A result is addressed through the session that produced it: this connection only. */
 function retainsResult(row: HistoryRow, connection: string) {
@@ -117,6 +120,7 @@ export function LibraryPanel({
   currentConnection,
   onOpenHistory,
   onOpenResult,
+  onReconcile,
   onOpenSaved,
   onResumeSaved,
   onDeleteSaved,
@@ -142,12 +146,19 @@ export function LibraryPanel({
    * nothing is rerun, even when they have expired.
    */
   onOpenResult?: (row: HistoryRow) => void
+  /**
+   * Declares a write inspected on the server, so launches stop warning about
+   * it. Records a local fact only: nothing is sent and nothing is retried.
+   */
+  onReconcile: (row: HistoryRow) => void
   onOpenSaved: (entry: DocumentEntry) => void
   onResumeSaved: (entry: DocumentEntry) => void
   onDeleteSaved: (entry: DocumentEntry) => void
 }) {
   const [deleting, setDeleting] = React.useState<DocumentEntry | null>(null)
+  const [reconciling, setReconciling] = React.useState<HistoryRow | null>(null)
   const cancelRef = React.useRef<HTMLButtonElement>(null)
+  const keepRef = React.useRef<HTMLButtonElement>(null)
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2 p-2">
@@ -301,6 +312,9 @@ export function LibraryPanel({
                   ) : (
                     <Badge variant="outline">{row.status}</Badge>
                   )}
+                  {row.reconciled ? (
+                    <Badge variant="secondary">Reconciled</Badge>
+                  ) : null}
                   {row.durationMs !== null ? (
                     <span className="text-muted-foreground">
                       {row.durationMs.toLocaleString("en-US")} ms
@@ -321,7 +335,25 @@ export function LibraryPanel({
                       Open result
                     </Button>
                   ) : null}
-                  {row.needsInspection ? null : (
+                  {row.needsInspection ? (
+                    <Button
+                      size="xs"
+                      variant="ghost"
+                      className={cn(
+                        !(
+                          onOpenResult && retainsResult(row, currentConnection)
+                        ) && "ml-auto"
+                      )}
+                      onClick={() => setReconciling(row)}
+                    >
+                      <HugeiconsIcon
+                        icon={CheckmarkCircle02Icon}
+                        strokeWidth={2}
+                        data-icon="inline-start"
+                      />
+                      Mark reconciled
+                    </Button>
+                  ) : (
                     <Button
                       size="xs"
                       variant="ghost"
@@ -445,7 +477,7 @@ export function LibraryPanel({
           <AlertTitle>Ambiguous writes are never replayed</AlertTitle>
           <AlertDescription>
             An expired write may have reached the server. History offers
-            inspection, never a retry action.
+            inspection and reconciliation, never a retry action.
           </AlertDescription>
         </Alert>
       ) : null}
@@ -480,6 +512,44 @@ export function LibraryPanel({
               }}
             >
               Delete query
+            </Button>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={reconciling !== null}
+        onOpenChange={(open) => {
+          if (!open) setReconciling(null)
+        }}
+      >
+        <AlertDialogContent initialFocus={keepRef}>
+          <AlertDialogHeader>
+            <AlertDialogTitle className="wrap-anywhere">
+              Mark this write on{" "}
+              <bdi>
+                {reconciling?.connectionName ?? "an unavailable connection"}
+              </bdi>{" "}
+              reconciled?
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              Confirm only after inspecting the server state. Launches will stop
+              warning about this write. Nothing is sent to the server and the
+              write is never retried.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <code className="line-clamp-4 rounded-md border bg-muted p-2 font-mono text-xs break-all">
+            {reconciling?.preview}
+          </code>
+          <AlertDialogFooter className="flex-col sm:flex-row">
+            <AlertDialogCancel ref={keepRef}>Keep warning</AlertDialogCancel>
+            <Button
+              onClick={() => {
+                if (reconciling) onReconcile(reconciling)
+                setReconciling(null)
+              }}
+            >
+              Mark reconciled
             </Button>
           </AlertDialogFooter>
         </AlertDialogContent>
