@@ -33,7 +33,11 @@ oxyn-store.workspace = true
 anyhow.workspace = true
 arrow.workspace = true
 async-trait.workspace = true
+# The log directory, resolved before the Tauri application exists.
+directories.workspace = true
 parking_lot.workspace = true
+# The startup-failure dialog. Its backend features come from `tauri-plugin-dialog`.
+rfd.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tauri.workspace = true

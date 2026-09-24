@@ -119,6 +119,10 @@ toml          = "0.9.8"
 tauri               = "2.11.5"
 tauri-build         = "2.6.3"
 tauri-plugin-dialog = "2.7.3"
+# Le dialogue d'échec de démarrage, affiché avant que l'application Tauri n'existe.
+# Même version que celle que tire `tauri-plugin-dialog` (Cargo.lock) : une seule
+# `rfd` dans le graphe. Voir RESEARCH-NOTES.
+rfd                 = { version = "0.16.0", default-features = false }
 
 # --- observabilité & binaire -------------------------------------------------
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }

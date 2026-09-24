@@ -921,8 +921,28 @@ l'exécuteur tournent sur le même. Deux runtimes, c'était un résultat produit
 l'un et attendu depuis l'autre, et une panique à l'arrêt quand l'un est libéré
 dans le contexte de l'autre. L'assemblage du backend (`Backend::open`) est
 bloquant et tourne sur le thread principal, mais **avant** que la fenêtre
-n'existe : un échec y atteint l'utilisateur sur la sortie d'erreur, plutôt que
-par une fenêtre ouverte sur un backend cassé.
+n'existe : un échec y est écrit au journal, puis montré dans un **dialogue
+natif** qui donne toute la chaîne d'erreur et le répertoire du journal, et
+l'application quitte — plutôt qu'une fenêtre ouverte sur un backend cassé. Le
+dialogue, et non la seule sortie d'erreur : lancé depuis le Finder, personne ne
+la lit. La chaîne ne porte aucun secret ([I-03](../CLAUDE.md#i-03)) : ouvrir le
+backend ne lit aucune donnée d'identification, le trousseau n'y est que sondé.
+
+**Le journal va sur la sortie d'erreur et dans un fichier**, `oxyn.log`, dans le
+répertoire de logs de l'application — celui de `app_log_dir` de Tauri,
+`~/Library/Logs/dev.oxyn.desktop` sous macOS —, calculé avant que l'application
+Tauri n'existe, puisque l'échec d'ouverture du backend est la ligne pour
+laquelle il existe. Les deux sorties passent par le même `logging::layer` : le
+fichier ne contient rien de plus que la sortie d'erreur, et aucune valeur
+d'`OXYN_LOG` n'y fait entrer les messages du protocole ACP ni le texte des
+requêtes que `sqlx` journalise. Une fois le journal ouvert, chaque ligne est
+écrite par un fil dédié (`oxyn-log`), jamais par le thread appelant, qui peut
+être le thread principal ; si ce fil prend du retard, les lignes sont
+abandonnées et comptées, pas attendues. Seule l'ouverture — création du
+répertoire, rotation du fichier précédent — se fait sur le thread principal,
+avant la fenêtre, comme `Backend::open`. Chaque lancement commence un fichier ;
+le répertoire en garde cinq de 10 Mio au plus, et le lancement précédent est
+dans `oxyn.1.log` jusqu'à la première rotation du lancement courant.
 
 **Une commande Tauri synchrone tourne sur le thread principal.** Elle n'y lit
 donc que de l'état déjà en mémoire ; toute autre est `async`, et ce qui lit le

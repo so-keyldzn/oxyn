@@ -16,12 +16,19 @@ mod logging;
 #[cfg(test)]
 mod sentinel_tests;
 
+use std::time::Duration;
+
 use anyhow::{Context as _, Result};
 
 use crate::backend::Backend;
+use crate::logging::FileJournal;
+
+/// How long a failed start waits for its journal to reach the disk.
+const FLUSH_BEFORE_EXIT: Duration = Duration::from_secs(2);
 
 fn main() -> Result<()> {
-    logging::start();
+    let context = tauri::generate_context!();
+    let journal = logging::start(&context.config().identifier);
 
     // One runtime for Tauri and the executor. Two would mean a result produced
     // on one and awaited from the other, and a runtime dropped inside the
@@ -34,17 +41,24 @@ fn main() -> Result<()> {
     tauri::async_runtime::set(runtime.handle().clone());
     let _context = runtime.enter();
 
-    // Before the window, deliberately: a failure here reaches the user on
-    // stderr. A window that opens onto a broken backend is worse.
+    // Before the window, deliberately: a window that opens onto a broken
+    // backend is worse than a dialog that says why it did not open.
     let temporary = std::env::args()
         .skip(1)
         .any(|arg| arg == "--temporary-workspace");
-    let backend = if temporary {
+    let opened = if temporary {
         Backend::open_temporary()
     } else {
         Backend::open()
     }
-    .context("starting Oxyn")?;
+    .context("starting Oxyn");
+    let backend = match opened {
+        Ok(backend) => backend,
+        Err(error) => {
+            report_startup_failure(&error, journal.as_ref());
+            return Err(error);
+        }
+    };
 
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
@@ -143,11 +157,39 @@ fn main() -> Result<()> {
             commands::ai::ai_list_mentionable,
             commands::ai::ai_propose_schema_change,
         ])
-        .build(tauri::generate_context!())
+        .build(context)
         .context("building the Tauri application")?
         // Closing waits for drafts and local writes before recording the
         // session close (ADR-0021).
         .run(|app, event| commands::recovery::on_run_event(app, &event));
 
     Ok(())
+}
+
+/// Says why Oxyn did not start, in the journal and in a native dialog.
+///
+/// Launched from the Finder, stderr is read by no one: without the dialog, the
+/// user sees a Dock icon bounce and vanish. The dialog blocks the main thread,
+/// which has no window to keep responsive yet.
+///
+/// The whole chain is shown (`{:#}`): paths, the store's and the keyring's own
+/// messages. Opening the backend reads no credential — the keyring is only
+/// probed — so the chain carries no secret ([I-03](../../../CLAUDE.md#i-03)).
+fn report_startup_failure(error: &anyhow::Error, journal: Option<&FileJournal>) {
+    let cause = format!("{error:#}");
+    tracing::error!(error = %cause, "Oxyn could not start");
+    let mut description = cause;
+    if let Some(journal) = journal {
+        journal.flush(FLUSH_BEFORE_EXIT);
+        description.push_str(&format!(
+            "\n\nThe journal is in {}",
+            journal.directory().display()
+        ));
+    }
+    rfd::MessageDialog::new()
+        .set_level(rfd::MessageLevel::Error)
+        .set_title("Oxyn could not start")
+        .set_description(description)
+        .set_buttons(rfd::MessageButtons::Ok)
+        .show();
 }
