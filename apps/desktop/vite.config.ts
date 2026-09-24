@@ -76,6 +76,10 @@ export default defineConfig({
             headless: true,
             provider: playwright({}),
             instances: [{ browser: "chromium" }],
+            // The browser server inherits `server.strictPort` from above, so a
+            // second worktree running its stories died on port 63315 instead
+            // of taking the next free one. Tauri's port stays strict.
+            api: { strictPort: false },
           },
         },
       },
