@@ -1,7 +1,7 @@
 //! Le cache d'introspection : un arbre en mémoire, alimentable par morceaux.
 //!
-//! C'est ce qui rend l'exploration hors ligne possible, et ce qui rend le
-//! workspace IA viable : le contexte d'un agent se construit à partir du
+//! C'est ce qui rend l'exploration possible sans aller-retour serveur, et ce
+//! qui rend le workspace IA viable : le contexte d'un agent se construit à partir du
 //! catalogue local, pas d'un aller-retour serveur à chaque question
 //! (ARCHITECTURE §6).
 //!
@@ -14,13 +14,13 @@
 //! [`CatalogProvider`](crate::provider::CatalogProvider) évite.
 //!
 //! **Invalider n'est pas oublier.** [`CatalogCache::invalidate`] marque un
-//! sous-arbre à relire mais **garde ses données** : l'exploration hors ligne est
-//! une fonctionnalité, et vider l'arborescence au premier `ALTER TABLE` la
+//! sous-arbre à relire mais **garde ses données** : l'arbre reste consultable
+//! pendant le rafraîchissement ou après sa panne, et vider l'arborescence au premier `ALTER TABLE` la
 //! ferait clignoter. [`CatalogCache::forget`] existe pour ce qui a réellement
 //! disparu.
 //!
-//! **L'horloge est celle du mur.** Le cache est persisté par `oxyn-store` et
-//! survit au redémarrage ; un `Instant` monotone ne se sérialise pas. Un recul
+//! **L'horloge est celle du mur.** Le cache est sérialisable, et un `Instant`
+//! monotone ne se sérialise pas. Un recul
 //! de l'horloge rend donc un nœud « pas encore périmé » plutôt que périmé — le
 //! sens prudent, puisque l'autre inviterait à réintrospecter en boucle.
 //!
@@ -417,8 +417,9 @@ impl std::fmt::Display for CatalogScope {
 /// passage, avec une fraîcheur [`Freshness::Never`] — ils sont là pour porter
 /// leur enfant, ils ne prétendent pas avoir été lus.
 ///
-/// Sérialisable de bout en bout : c'est `oxyn-store` qui le persiste, et le
-/// format reste lisible sans Oxyn (I-11).
+/// Sérialisable de bout en bout, en un format lisible sans Oxyn (I-11). Il
+/// n'est pas persisté : une persistance future passera par un ADR
+/// (ARCHITECTURE §6).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct CatalogCache {
     server: Cached<Option<ServerInfo>>,
@@ -1600,7 +1601,7 @@ mod tests {
 
     #[test]
     fn une_invalidation_ne_perd_pas_les_donnees() {
-        // L'exploration hors ligne est une fonctionnalité : vider l'arbre au
+        // L'arbre reste consultable pendant la relecture : le vider au
         // premier ALTER TABLE la ferait clignoter.
         let mut cache = cache_postgres();
         let table = chemin(Some("caisse"), Some("public"), "clients");

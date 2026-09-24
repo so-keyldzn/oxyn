@@ -191,7 +191,7 @@ impl<'a> Connections<'a> {
         })
     }
 
-    /// Supprime une connexion, et en cascade son cache de catalogue.
+    /// Supprime une connexion.
     ///
     /// Les documents qui la visaient restent, leur connexion passant à `NULL` ;
     /// l'historique et le journal d'audit ne sont **pas** touchés.

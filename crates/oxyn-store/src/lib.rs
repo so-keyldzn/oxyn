@@ -1,5 +1,5 @@
 //! L'état local persistant d'Oxyn : workspaces, connexions, historique,
-//! **journal d'audit**, cache de catalogue, documents.
+//! **journal d'audit**, documents.
 //!
 //! Tout tient dans un fichier SQLite unique sous le répertoire de données de
 //! l'utilisateur. Un fichier, un format ouvert, lisible sans Oxyn (I-11) : ce
@@ -16,7 +16,6 @@
 //! | [`connections`] | `connections` | SECURITY — jamais de secret |
 //! | [`history`] | `query_history` | — |
 //! | [`journal`] | `audit_journal` | ARCHITECTURE §8 — **append-only** |
-//! | [`catalog`] | `catalog_cache` | ARCHITECTURE §6 |
 //! | [`documents`] | `documents` | — |
 //! | [`providers`] | `ai_providers` | ADR-0023 — par machine, jamais de clé |
 //! | [`egress`] | `ai_egress` | SECURITY — **append-only**, des noms de colonnes, jamais de valeur |
@@ -98,7 +97,6 @@
 //! # Ok::<(), oxyn_store::StoreError>(())
 //! ```
 
-pub mod catalog;
 pub mod connections;
 pub mod conversations;
 pub mod documents;
@@ -119,7 +117,6 @@ mod sentinel_tests;
 pub mod sessions;
 
 pub use agents::ExternalAgents;
-pub use catalog::{CatalogCache, CatalogSnapshot};
 pub use connections::Connections;
 pub use conversations::{
     Conversation, ConversationSummary, Conversations, Destination, DestinationKind, PruneReport,
@@ -239,7 +236,6 @@ mod tests {
                 "ai_providers",
                 "app_sessions",
                 "audit_journal",
-                "catalog_cache",
                 "connections",
                 "documents",
                 "external_agents",

@@ -34,7 +34,6 @@ use std::time::Duration;
 use parking_lot::Mutex;
 use rusqlite::Connection;
 
-use crate::catalog::CatalogCache;
 use crate::connections::Connections;
 use crate::documents::Documents;
 use crate::error::{Result, StoreError};
@@ -57,7 +56,7 @@ const APP_ORGANIZATION: &str = "keyldzn";
 const APP_NAME: &str = "oxyn";
 
 /// L'état local persistant : workspaces, connexions, historique, journal
-/// d'audit, cache de catalogue, documents.
+/// d'audit, documents.
 ///
 /// Le type est `Send + Sync` : il se partage par `Arc` entre le bus
 /// d'exécution et les tâches de fond.
@@ -220,12 +219,6 @@ impl Store {
     #[must_use]
     pub fn external_agents(&self) -> crate::agents::ExternalAgents<'_> {
         crate::agents::ExternalAgents::new(self)
-    }
-
-    /// Le cache d'introspection, par connexion.
-    #[must_use]
-    pub fn catalog_cache(&self) -> CatalogCache<'_> {
-        CatalogCache::new(self)
     }
 
     /// Configure puis migre une connexion fraîche.

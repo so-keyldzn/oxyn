@@ -482,8 +482,11 @@ Server → Catalog/Database → Namespace/Schema → Relation → Field
 | BigQuery | project | dataset | table |
 
 L'introspection est coûteuse (des minutes sur un schéma à 20 000 objets). Elle est donc
-mise en cache dans `oxyn-store`, paresseuse et hiérarchique, rafraîchie en tâche de fond
-avec invalidation immédiate après tout DDL émis depuis Oxyn, et consultable hors ligne.
+mise en cache **en mémoire**, par connexion, paresseuse et hiérarchique, rafraîchie en
+tâche de fond avec invalidation immédiate après tout DDL émis depuis Oxyn. Ce cache n'est
+pas persisté et le catalogue n'est pas consultable hors ligne : il se relit du serveur à
+chaque connexion. Une persistance future passera d'abord par un ADR ; la table
+`catalog_cache` qu'`oxyn-store` créait sans appelant a été retirée par sa migration 15.
 
 Le bus expose `RefreshCatalog { connection }` pour la racine et
 `RefreshCatalogScope { connection, scope }` pour un seul palier explicite :
