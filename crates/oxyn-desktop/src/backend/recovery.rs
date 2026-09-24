@@ -44,6 +44,7 @@ const SESSIONS_GRACE: Duration = Duration::from_secs(5);
 pub(crate) struct LocalWork {
     session: AppSessionId,
     previous: PreviousShutdown,
+    unresolved_write: bool,
     pending: Arc<PendingWrites>,
     shutdown: Mutex<Option<Channel<ShutdownSignal>>>,
     flushed: Notify,
@@ -76,9 +77,19 @@ impl LocalWork {
             .sessions()
             .begin(workspace)
             .context("recording the application session")?;
+        // Unreadable counts as unresolved: the warning only asks to inspect,
+        // while its absence would vouch for writes nobody could read (I-13).
+        let unresolved_write = store
+            .history()
+            .any_requires_reconciliation()
+            .unwrap_or_else(|error| {
+                tracing::warn!(%error, "history unreadable; assuming a write needs inspection");
+                true
+            });
         Ok(Self {
             session,
             previous,
+            unresolved_write,
             pending: Arc::new(PendingWrites::default()),
             shutdown: Mutex::new(None),
             flushed: Notify::new(),
@@ -152,8 +163,10 @@ impl Backend {
     /// What the recovery screen may assert: observed at startup, never re-read.
     #[must_use]
     pub fn recovery_status(&self) -> RecoveryStatus {
+        let local = &self.inner.workbench.local;
         RecoveryStatus {
-            abnormal: self.inner.workbench.local.previous.needs_recovery(),
+            abnormal: local.previous.needs_recovery(),
+            unresolved_write: local.unresolved_write,
         }
     }
 
@@ -267,6 +280,10 @@ mod tests {
             !backend.recovery_status().abnormal,
             "a first launch speaks of no crash"
         );
+        assert!(
+            !backend.recovery_status().unresolved_write,
+            "nor of a write it never saw"
+        );
 
         let write = backend
             .local_write(&Command::WriteDocument {
@@ -311,6 +328,38 @@ mod tests {
         let backend = Backend::assemble(store, Arc::new(oxyn_secrets::MemorySecretStore::new()))
             .expect("backend");
         assert!(backend.recovery_status().abnormal);
+        assert!(
+            !backend.recovery_status().unresolved_write,
+            "a crash alone is not a write with an unknown outcome"
+        );
+    }
+
+    #[test]
+    fn an_expired_write_in_history_is_reported_as_unresolved() {
+        use oxyn_core::{Actor, OxynError, QueryLanguage, StatementIntent};
+        use oxyn_store::history::HistoryRecord;
+
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("a test runtime starts");
+        let _guard = runtime.enter();
+        let store = Arc::new(Store::open_in_memory().expect("in-memory store"));
+        let expired = HistoryRecord::new(
+            &Actor::Human,
+            QueryLanguage::SQL,
+            "INSERT INTO t VALUES (1)",
+        )
+        .with_intent(StatementIntent::Write)
+        .failed(&OxynError::Timeout {
+            after: Duration::from_secs(30),
+        });
+        store.history().record(&expired).expect("recorded");
+        let backend = Backend::assemble(store, Arc::new(oxyn_secrets::MemorySecretStore::new()))
+            .expect("backend");
+        let status = backend.recovery_status();
+        assert!(status.unresolved_write);
+        assert!(!status.abnormal, "and says nothing of a crash");
     }
 
     #[test]

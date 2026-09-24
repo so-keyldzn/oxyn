@@ -1,9 +1,10 @@
 import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
 import { useHotkeys } from "@tanstack/react-hotkeys"
-import { useNavigate } from "@tanstack/react-router"
+import { useNavigate, useSearch } from "@tanstack/react-router"
 import { useStore } from "@tanstack/react-store"
 
+import type { BackendFailure } from "@/components/oxyn/backend-error-alert"
 import { RecoveryList } from "@/components/oxyn/recovery-list"
 import type { RecoveryState } from "@/components/oxyn/recovery-list"
 import {
@@ -16,6 +17,12 @@ import { library } from "@/lib/ipc/library"
 import type { DocumentEntry } from "@/lib/ipc/library"
 import { recovery } from "@/lib/ipc/recovery"
 
+function failureOf(error: unknown): BackendFailure {
+  return error instanceof BackendError
+    ? { message: error.message, retryable: error.retryable }
+    : { message: String(error), retryable: false }
+}
+
 /**
  * The working copies a previous launch left open (ADR-0021).
  *
@@ -24,6 +31,7 @@ import { recovery } from "@/lib/ipc/recovery"
  */
 export function RecoveryScreen() {
   const navigate = useNavigate()
+  const { startup = false } = useSearch({ from: "/recovery" })
   const [cursors, setCursors] = React.useState<Array<string | null>>([null])
   const cursor = cursors[cursors.length - 1] ?? null
   const [selected, setSelected] = React.useState(
@@ -58,13 +66,7 @@ export function RecoveryScreen() {
   const state: RecoveryState = page.isPending
     ? { status: "loading" }
     : page.isError
-      ? {
-          status: "error",
-          message:
-            page.error instanceof BackendError
-              ? page.error.message
-              : String(page.error),
-        }
+      ? { status: "error", error: failureOf(page.error) }
       : { status: "ready", entries: page.data.entries }
 
   const leave = () => {
@@ -96,7 +98,10 @@ export function RecoveryScreen() {
       />
       <div className="min-h-0 flex-1 overflow-y-auto">
         <RecoveryList
-          abnormal={status.data?.abnormal ?? false}
+          // The backend's `abnormal` holds for the whole process: only the
+          // opening that followed the launch may repeat it.
+          abnormal={startup && (status.data?.abnormal ?? false)}
+          unresolvedWrite={status.data?.unresolvedWrite ?? false}
           state={state}
           selected={new Set(selected.keys())}
           onToggle={(entry) =>

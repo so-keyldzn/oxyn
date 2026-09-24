@@ -191,3 +191,42 @@ fn unresolved_writes_require_reconciliation_independently_of_error_wording() {
     record.error_class = Some(ErrorClass::Ambiguous);
     assert!(record.requires_reconciliation());
 }
+
+#[test]
+fn the_startup_scan_finds_the_rows_the_library_marks_for_inspection() {
+    let store = Store::open_in_memory().expect("store");
+    let history = store.history();
+    assert!(
+        !history.any_requires_reconciliation().expect("empty"),
+        "an empty history has nothing to inspect"
+    );
+
+    let mut read = HistoryRecord::new(&Actor::Human, QueryLanguage::SQL, "SELECT 1")
+        .with_intent(StatementIntent::Read);
+    read.status = HistoryStatus::Cancelled;
+    history.record(&read).expect("cancelled read");
+    let refused = HistoryRecord::new(&Actor::Human, QueryLanguage::SQL, "DELETE FROM t")
+        .with_intent(StatementIntent::Write)
+        .denied("read-only connection");
+    history.record(&refused).expect("denied write");
+    let done = HistoryRecord::new(&Actor::Human, QueryLanguage::SQL, "DELETE FROM t")
+        .with_intent(StatementIntent::Write)
+        .succeeded(std::time::Duration::from_millis(1), Some(1));
+    history.record(&done).expect("finished write");
+    assert!(
+        !history.any_requires_reconciliation().expect("settled"),
+        "a cancelled read, a refusal and a finished write leave no doubt"
+    );
+
+    let expired = HistoryRecord::new(
+        &Actor::Human,
+        QueryLanguage::SQL,
+        "INSERT INTO t VALUES (1)",
+    )
+    .with_intent(StatementIntent::Write)
+    .failed(&oxyn_core::OxynError::Timeout {
+        after: std::time::Duration::from_secs(30),
+    });
+    history.record(&expired).expect("expired write");
+    assert!(history.any_requires_reconciliation().expect("ambiguous"));
+}

@@ -11,6 +11,8 @@ import { call, guarded, Nothing } from "./client"
 export const RecoveryStatus = z.object({
   /** Observed at startup: only then may the screen say Oxyn did not close normally. */
   abnormal: z.boolean(),
+  /** History holds an execution the library marks `needsInspection`. */
+  unresolvedWrite: z.boolean(),
 })
 export type RecoveryStatus = z.infer<typeof RecoveryStatus>
 

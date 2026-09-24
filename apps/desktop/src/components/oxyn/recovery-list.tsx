@@ -7,6 +7,8 @@ import {
   RefreshIcon,
 } from "@hugeicons/core-free-icons"
 
+import { BackendErrorAlert } from "@/components/oxyn/backend-error-alert"
+import type { BackendFailure } from "@/components/oxyn/backend-error-alert"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import {
   Breadcrumb,
@@ -17,13 +19,20 @@ import {
 } from "@/components/ui/breadcrumb"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
+import {
+  Field,
+  FieldGroup,
+  FieldLabel,
+  FieldLegend,
+  FieldSet,
+} from "@/components/ui/field"
 import { Kbd } from "@/components/ui/kbd"
 import { Skeleton } from "@/components/ui/skeleton"
 import type { DocumentEntry } from "@/lib/ipc/library"
 
 export type RecoveryState =
   | { status: "loading" }
-  | { status: "error"; message: string }
+  | { status: "error"; error: BackendFailure }
   | { status: "ready"; entries: Array<DocumentEntry> }
 
 /** What the screen may assert: only a crash it observed (ADR-0021). */
@@ -40,10 +49,11 @@ function openingNotice(abnormal: boolean, empty: boolean) {
  * The working copies a previous launch left open.
  *
  * Restoring puts text back in consoles and nothing else: no connection opens,
- * no statement runs. The restore action is absent without a selection.
+ * no statement runs. The restore action is disabled without a selection.
  */
 export function RecoveryList({
   abnormal,
+  unresolvedWrite,
   state,
   selected,
   onToggle,
@@ -57,7 +67,10 @@ export function RecoveryList({
   backLabel,
   onBack,
 }: {
+  /** Only when this launch followed an abnormal shutdown, never on demand. */
   abnormal: boolean
+  /** History holds a write whose outcome is unknown: warn to inspect it. */
+  unresolvedWrite: boolean
   state: RecoveryState
   selected: ReadonlySet<string>
   onToggle: (entry: DocumentEntry) => void
@@ -74,6 +87,7 @@ export function RecoveryList({
 }) {
   const count = selected.size
   const keptId = React.useId()
+  const entryId = React.useId()
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 p-6">
       <header className="flex flex-col gap-1">
@@ -106,19 +120,22 @@ export function RecoveryList({
           {state.status === "loading"
             ? "Looking for saved working copies…"
             : state.status === "error"
-              ? state.message
+              ? "The working copies could not be listed."
               : openingNotice(abnormal, state.entries.length === 0)}
         </p>
       </header>
 
-      <Alert>
-        <HugeiconsIcon icon={Alert02Icon} strokeWidth={2} />
-        <AlertTitle>A write may have an unknown outcome</AlertTitle>
-        <AlertDescription>
-          If a write was interrupted, inspect the server state before deciding
-          what to do. Recovery never retries it.
-        </AlertDescription>
-      </Alert>
+      {unresolvedWrite ? (
+        <Alert>
+          <HugeiconsIcon icon={Alert02Icon} strokeWidth={2} />
+          <AlertTitle>A write may have an unknown outcome</AlertTitle>
+          <AlertDescription>
+            History holds an interrupted write marked for inspection. Inspect
+            the server state before deciding what to do. Recovery never retries
+            it.
+          </AlertDescription>
+        </Alert>
+      ) : null}
 
       {state.status === "loading" ? (
         <div className="flex flex-col gap-2" aria-busy="true">
@@ -126,30 +143,51 @@ export function RecoveryList({
           <Skeleton className="h-10" />
         </div>
       ) : state.status === "error" ? (
-        <Alert variant="destructive">
-          <AlertDescription>{state.message}</AlertDescription>
-        </Alert>
+        <BackendErrorAlert
+          title="Working copies unavailable"
+          error={state.error}
+          onRetry={onRefresh}
+        />
       ) : state.entries.length === 0 ? null : (
-        <ul className="flex flex-col divide-y rounded-md border">
-          {state.entries.map((entry) => {
-            const title = entry.title === "" ? "Untitled query" : entry.title
-            return (
-              <li key={entry.id}>
-                <label className="flex cursor-pointer items-center gap-3 px-3 py-2 text-sm">
+        <FieldSet>
+          <FieldLegend className="sr-only">
+            Working copies to restore
+          </FieldLegend>
+          <FieldGroup className="gap-0 divide-y rounded-md border">
+            {state.entries.map((entry) => {
+              const title = entry.title === "" ? "Untitled query" : entry.title
+              const id = `${entryId}-${entry.id}`
+              return (
+                <Field
+                  key={entry.id}
+                  orientation="horizontal"
+                  className="gap-3 px-3 py-2"
+                >
                   <Checkbox
+                    id={id}
                     checked={selected.has(entry.id)}
                     onCheckedChange={() => onToggle(entry)}
-                    aria-label={`Restore ${title}`}
+                    // Two untitled copies share a label: the connection
+                    // tells them apart.
+                    aria-describedby={`${id}-connection`}
                   />
-                  <span className="min-w-0 flex-1 truncate">{title}</span>
-                  <span className="truncate text-xs text-muted-foreground">
+                  <FieldLabel
+                    htmlFor={id}
+                    className="min-w-0 cursor-pointer font-normal"
+                  >
+                    <span className="truncate">{title}</span>
+                  </FieldLabel>
+                  <span
+                    id={`${id}-connection`}
+                    className="truncate text-xs text-muted-foreground"
+                  >
                     {entry.connectionName ?? "No connection"}
                   </span>
-                </label>
-              </li>
-            )
-          })}
-        </ul>
+                </Field>
+              )
+            })}
+          </FieldGroup>
+        </FieldSet>
       )}
 
       {/* Wraps: at 420 px the two decisions do not fit beside the pager, and
@@ -189,11 +227,13 @@ export function RecoveryList({
           >
             Skip for now
           </Button>
-          {count > 0 ? (
-            <Button onClick={onRestore}>
-              Restore {count} selected {count === 1 ? "item" : "items"}
-            </Button>
-          ) : null}
+          {/* Disabled, not removed: the screen's one action stays where the
+              user looks for it (UX-SPEC « Restauration sélective »). */}
+          <Button onClick={onRestore} disabled={count === 0}>
+            {count === 0
+              ? "Restore selected items"
+              : `Restore ${count} selected ${count === 1 ? "item" : "items"}`}
+          </Button>
         </div>
       </div>
 
