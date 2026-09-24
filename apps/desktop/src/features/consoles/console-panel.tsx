@@ -1,5 +1,5 @@
 import * as React from "react"
-import { useQuery } from "@tanstack/react-query"
+import { keepPreviousData, useQuery } from "@tanstack/react-query"
 import { useStore } from "@tanstack/react-store"
 import type { EditorView } from "@codemirror/view"
 
@@ -147,6 +147,10 @@ export function ConsolePanel({
     queryKey: ["session-context-choices", open.connection, version],
     queryFn: () => consoles.contextChoices(open.connection),
     enabled: withContext,
+    // A catalog refresh bumps `version`, replacing this key: without this,
+    // `choices.data` drops to `undefined` mid-review and the picker briefly
+    // reports "no schema" for a connection it already knows about.
+    placeholderData: keepPreviousData,
   })
 
   const submitting = React.useRef(false)
