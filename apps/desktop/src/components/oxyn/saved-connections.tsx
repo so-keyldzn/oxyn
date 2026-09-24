@@ -9,6 +9,13 @@ import {
 
 import { BackendErrorAlert } from "@/components/oxyn/backend-error-alert"
 import type { BackendFailure } from "@/components/oxyn/backend-error-alert"
+import {
+  ButtonItemActions,
+  ButtonItemContent,
+  ButtonItemDescription,
+  ButtonItemMedia,
+  ButtonItemTitle,
+} from "@/components/oxyn/button-item"
 import { DriverLogo } from "@/components/oxyn/driver-logo"
 import { EnvironmentBadge } from "@/components/oxyn/environment-badge"
 import { Button } from "@/components/ui/button"
@@ -20,15 +27,7 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty"
-import {
-  Item,
-  ItemActions,
-  ItemContent,
-  ItemDescription,
-  ItemGroup,
-  ItemMedia,
-  ItemTitle,
-} from "@/components/ui/item"
+import { Item, ItemGroup } from "@/components/ui/item"
 import {
   InputGroup,
   InputGroupAddon,
@@ -189,11 +188,11 @@ export function SavedConnections({
               }
               className="min-w-0 flex-1 text-left"
             >
-              <ItemMedia variant="icon">
+              <ButtonItemMedia>
                 <DriverLogo driver={connection.driver} className="size-4" />
-              </ItemMedia>
-              <ItemContent className="min-w-0">
-                <ItemTitle className="w-full min-w-0">
+              </ButtonItemMedia>
+              <ButtonItemContent className="min-w-0">
+                <ButtonItemTitle className="w-full min-w-0">
                   <bdi className="truncate" title={connection.name}>
                     {connection.name}
                   </bdi>
@@ -205,10 +204,10 @@ export function SavedConnections({
                       aria-label="Read only"
                     />
                   ) : null}
-                </ItemTitle>
+                </ButtonItemTitle>
                 {/* The title sits on the line that is cut, so hovering any
                     part of it — driver included — reads the whole line. */}
-                <ItemDescription
+                <ButtonItemDescription
                   className="truncate"
                   title={
                     connection.location
@@ -223,9 +222,9 @@ export function SavedConnections({
                       <bdi>{connection.location}</bdi>
                     </>
                   ) : null}
-                </ItemDescription>
-              </ItemContent>
-              <ItemActions>
+                </ButtonItemDescription>
+              </ButtonItemContent>
+              <ButtonItemActions>
                 <EnvironmentBadge environment={connection.environment} />
                 {isOpening ? (
                   <Spinner />
@@ -236,7 +235,7 @@ export function SavedConnections({
                     className="size-4 text-muted-foreground"
                   />
                 )}
-              </ItemActions>
+              </ButtonItemActions>
             </Item>
             {isOpening && onCancelOpening ? (
               <Button
