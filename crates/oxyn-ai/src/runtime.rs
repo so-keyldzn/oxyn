@@ -94,8 +94,8 @@ pub enum DispatchOutcome {
     },
     /// L'utilisateur a approuvé un échantillon demandé par l'agent, et il a
     /// été lu. `sample` ne porte **que** les colonnes cochées : la lecture
-    /// (`PreviewRelation`) rapatrie toutes les colonnes de la relation, et le
-    /// puits ne recopie que les cochées avant de rendre ce variant.
+    /// (`PreviewRelation`) les projette, le serveur ne rend qu'elles, et le
+    /// puits les recopie avant de rendre ce variant.
     ///
     /// Des valeurs de lignes réelles. Ce que le modèle en reçoit est rendu par
     /// `ContextBuilder::build`, sous le niveau de la connexion, dans

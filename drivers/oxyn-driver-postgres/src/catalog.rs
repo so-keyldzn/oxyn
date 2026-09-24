@@ -302,8 +302,9 @@ impl PostgresCatalog {
     ///
     /// # Erreurs
     /// [`OxynError::Cancelled`] si le jeton se déclenche, celles de
-    /// [`crate::preview::request_with_columns`] — colonne de tri inconnue, page
-    /// sans clé unique —, et toute erreur du serveur pendant l'introspection.
+    /// [`crate::preview::request_with_columns`] — colonne de tri ou de
+    /// projection inconnue, page sans clé unique —, et toute erreur du serveur
+    /// pendant l'introspection.
     pub(crate) async fn preview_request(
         &self,
         path: &CatalogPath,
@@ -315,16 +316,21 @@ impl PostgresCatalog {
             return Err(OxynError::Cancelled);
         }
         let dialect = self.variant.flavor.dialect();
-        // La clé unique et la liste des colonnes ne servent qu'à composer un
-        // `ORDER BY` : sans tri ni page, rien ne les lit. Le prédicat, lui, part
-        // tel quel et ne demande aucune métadonnée.
-        let facts = if shape.needs_total_order() {
+        // La clé unique et la liste des colonnes servent à composer un
+        // `ORDER BY`, et sur Redshift à vérifier une projection : sans tri, page
+        // ni projection à vérifier, rien ne les lit. Le prédicat, lui, part tel
+        // quel et ne demande aucune métadonnée.
+        let redshift = dialect == oxyn_core::SqlDialect::Redshift;
+        // Redshift has no typed column list below, so a projection is checked
+        // against this description instead; PostgreSQL checks it against that
+        // list, and pays no extra round trip for it.
+        let facts = if shape.needs_total_order() || (redshift && shape.columns.is_some()) {
             crate::preview::RelationFacts::of(&self.describe_relation(path, cancel).await?)
         } else {
             crate::preview::RelationFacts::default()
         };
         // Redshift does not expose PostgreSQL's complete type catalog.
-        if dialect == oxyn_core::SqlDialect::Redshift {
+        if redshift {
             return crate::preview::request(&self.database, dialect, path, limit, shape, &facts);
         }
         let (Some(namespace), Some(relation)) = (path.namespace(), path.relation()) else {

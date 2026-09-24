@@ -25,7 +25,10 @@ use std::fmt;
 use std::time::{Duration, Instant};
 
 use oxyn_catalog::CatalogPath;
-use oxyn_core::{CancelToken, ConnectionId, PrivacyTier, ProviderId, ScalarValue};
+use oxyn_core::{
+    CancelToken, Command, ConnectionId, PreviewShape, PrivacyTier, ProviderId, ScalarValue,
+    SessionId,
+};
 use oxyn_data::{CellValue, FormatOptions, ResultBuffer};
 use oxyn_llm::Reach;
 use parking_lot::Mutex;
@@ -492,6 +495,30 @@ fn consume_at(
     let columns = grant.admit(presented)?;
     grant.addressed_to(presented.recipient)?;
     Ok((grant.source, columns))
+}
+
+/// The read of an approved sample, pinned or asked by an agent: a
+/// `PreviewRelation` projected on the ticked columns, so that the server
+/// returns nothing the user did not approve. `None` when `path` names no
+/// relation.
+pub(crate) fn sample_read(
+    (connection, session): (ConnectionId, SessionId),
+    path: &CatalogPath,
+    columns: &[String],
+    limit: u32,
+) -> Option<Command> {
+    Some(Command::PreviewRelation {
+        connection,
+        session,
+        catalog: path.catalog().map(str::to_owned),
+        namespace: path.namespace().map(str::to_owned),
+        relation: path.relation()?.to_owned(),
+        limit,
+        shape: PreviewShape {
+            columns: Some(columns.to_vec()),
+            ..PreviewShape::unordered()
+        },
+    })
 }
 
 /// Copies the admitted columns of the first rows read, as the grid would

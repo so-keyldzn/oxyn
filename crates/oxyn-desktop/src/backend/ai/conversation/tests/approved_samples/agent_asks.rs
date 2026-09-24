@@ -372,8 +372,8 @@ fn under_metadata_no_screen_opens_and_nothing_is_read() {
 }
 
 /// I-10: a relation and a column named to break out of their quotes are
-/// read as names. The driver quotes the relation, the column is never in the
-/// statement, and `customers` survives the click.
+/// read as names. The driver quotes both — the relation and the ticked column
+/// it projects — and `customers` survives the click.
 #[test]
 fn a_hostile_name_is_quoted_by_the_driver_never_concatenated() {
     let fixture = fixture();
@@ -474,7 +474,7 @@ fn a_hostile_name_is_quoted_by_the_driver_never_concatenated() {
 
     // The read went to the bus as a command carrying the name as a field,
     // under the agent: Oxyn composed no statement text for it — the driver
-    // did, quoting the relation, and the column never enters it.
+    // did, quoting the relation and the projected column.
     let previews: Vec<_> = fixture
         .backend
         .inner

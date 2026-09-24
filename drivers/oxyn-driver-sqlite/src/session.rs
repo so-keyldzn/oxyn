@@ -184,14 +184,16 @@ impl Session for SqliteSession {
     /// Compose l'aperçu d'une relation, et lit ce que sa forme exige.
     ///
     /// La description de la relation — ses colonnes et sa clé primaire — n'est
-    /// lue que si un tri ou une page demande un ordre : un aperçu sans demande
+    /// lue que si un tri ou une page demande un ordre, ou qu'une projection
+    /// nomme des colonnes à vérifier : un aperçu sans demande
     /// ne paie pas un `PRAGMA table_info` pour une clause qu'il ne compose pas.
     /// Cette lecture passe par le thread porteur et s'interrompt comme les
     /// autres.
     ///
     /// # Erreurs
     /// [`OxynError::Cancelled`] si le jeton se déclenche, celles de la
-    /// composition — colonne de tri inconnue, page sans clé unique —, et celles
+    /// composition — colonne de tri ou de projection inconnue, projection vide
+    /// ou démesurée, page sans clé unique —, et celles
     /// du moteur pendant l'introspection.
     async fn preview_request(
         &self,
@@ -203,7 +205,9 @@ impl Session for SqliteSession {
         if cancel.is_cancelled() {
             return Err(OxynError::Cancelled);
         }
-        let facts = if shape.needs_total_order() {
+        // A projection is checked against the same description: a name the
+        // relation does not declare is refused here, not by the engine.
+        let facts = if shape.needs_total_order() || shape.columns.is_some() {
             crate::preview::RelationFacts::of(&self.catalog.describe_relation(path, cancel).await?)
         } else {
             crate::preview::RelationFacts::default()
