@@ -658,7 +658,10 @@ refuse — un second endroit où penser à publier
 Le badge de confidentialité et `Ask AI` sont voisins dans la barre de connexion
 et se lisent ensemble. Le badge annonce le niveau de **la connexion courante** —
 jamais un réglage d'application — et il change quand on change de connexion,
-même conversation ouverte.
+même conversation ouverte. Ce niveau se règle dans le formulaire de la
+connexion, champ `AI privacy`, qui montre ce qui sortirait avant tout
+enregistrement ; ses garde-fous sont écrits dans
+[AI-PROVIDERS](AI-PROVIDERS.md#régler-le-niveau).
 
 Sur une connexion en `Local` dont aucun fournisseur déclaré n'est local,
 `Ask AI` reste **visible et désactivé**, avec la raison : ce niveau n'admet

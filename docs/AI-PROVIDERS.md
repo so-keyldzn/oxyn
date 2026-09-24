@@ -456,8 +456,37 @@ Deux replis, et leur asymétrie est la décision :
   doute, exactement comme une connexion sans environnement renseigné vaut
   `production`.
 
-Aucun écran ne permet encore de **régler** ce niveau : il se persiste, il ne
-s'édite pas.
+### Régler le niveau
+
+Le niveau se règle **dans le formulaire de connexion**, à la création comme à
+la modification, par le champ `AI privacy` : trois choix, `Local`, `Metadata`,
+`Sampled`, et sous eux la liste de ce qui sortirait et de ce qui resterait
+sur la machine, qui suit la sélection **avant** tout enregistrement. Une
+connexion neuve part de `Metadata`, le défaut
+d'[ADR-0006](adr/0006-ai-privacy-tiers.md).
+
+Le choix n'est appliqué que par l'enregistrement de la connexion : la
+modification passe par `UpdateConnection`, la création par
+`CreateConnection`, deux commandes du command bus classées comme du DDL sur la
+connexion visée ([I-01](../CLAUDE.md#i-01)). Aucun autre chemin n'écrit
+`connections.privacy_tier`. Les garde-fous :
+
+* **sur une connexion `production`**, l'enregistrement exige la confirmation
+  qui nomme la connexion ([I-02](../CLAUDE.md#i-02),
+  [SECURITY](SECURITY.md#marquage-des-connexions)), comme toute écriture sur
+  elle ; pour un `Actor::Agent`, c'est un refus ;
+* **abaisser le niveau d'une connexion `production`** — vers `Sampled`, ou de
+  `Local` vers `Metadata` — est une décision critique : elle ouvre la sortie de
+  la structure ou de lignes d'une base client. Elle est destinée au **dialogue
+  natif de l'hôte**, hors de la webview, décidé le 2026-09-24 pour les
+  confirmations critiques. L'ADR qui l'écrit n'existe pas encore : d'ici là,
+  c'est la confirmation de la webview décrite par
+  [SECURITY](SECURITY.md#marquage-des-connexions) qui s'applique, et elle
+  seule ;
+* **le changement vaut dès la question suivante.** Le niveau est relu par le
+  backend à chaque question, jamais pris à la session ; un agent externe
+  gardé en vie, lancé sous l'ancien niveau, est relâché à l'enregistrement et
+  relancé sous le nouveau ([I-04](../CLAUDE.md#i-04)).
 
 ## Absence de fournisseur
 
