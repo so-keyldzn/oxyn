@@ -41,6 +41,31 @@ describe("catalog tree", () => {
     )
   })
 
+  it("says what an open level without children holds", () => {
+    const open = new Set([addressKey(schema.address)])
+    const evicted = { ...schema, loaded: false, children: [] }
+    const rows = visibleRows([evicted], open, "")
+    expect(rows.map((row) => row.placeholder)).toEqual([undefined, "unloaded"])
+    expect(rows[1]).toMatchObject({
+      node: evicted,
+      depth: 1,
+      parentKey: addressKey(schema.address),
+      expandable: false,
+    })
+    const empty = visibleRows([{ ...schema, children: [] }], open, "")
+    expect(empty[1]?.placeholder).toBe("empty")
+    const onlySystem = {
+      ...schema,
+      children: [{ ...relation("pg_stat"), system: true }],
+    }
+    expect(visibleRows([onlySystem], open, "", 0, true)[1]?.placeholder).toBe(
+      "hidden"
+    )
+    // Closed, or under a filter, nothing stands in for the contents.
+    expect(visibleRows([evicted], new Set(), "")).toHaveLength(1)
+    expect(visibleRows([evicted], open, "pub")).toHaveLength(1)
+  })
+
   it("filters loaded objects and keeps their ancestors", () => {
     const rows = visibleRows([schema], new Set(), "ORD")
     expect(rows.map((row) => row.node.name)).toEqual(["public", "orders"])
@@ -92,5 +117,11 @@ describe("catalog tree", () => {
     expect(typeaheadMatch(rows, "us", 0)).toBe(2)
     expect(typeaheadMatch(rows, "ol", 2)).toBe(3)
     expect(typeaheadMatch(rows, "zz", 0)).toBe(-1)
+    // A contents row carries its level's name: typing never lands on it.
+    const withContents = [
+      { node: schema },
+      { node: schema, placeholder: "unloaded" as const },
+    ]
+    expect(typeaheadMatch(withContents, "p", 0)).toBe(0)
   })
 })
