@@ -21,6 +21,9 @@ on:
     branches: [main]
   pull_request:
     branches: ["**"]
+  # La matrice complète, macOS compris, à la demande sur n'importe quelle
+  # branche : pour une PR qui touche au rendu propre à WKWebView.
+  workflow_dispatch:
 
 # Une deuxième poussée sur la même branche rend la première sans objet : la
 # laisser finir consomme un runner pour un résultat que personne ne lira.
@@ -40,12 +43,18 @@ env:
 # la webview n'est pas la même (WKWebView, WebKitGTK), et un rendu vérifié sur
 # l'une ne l'est pas sur l'autre. Windows n'y est pas : la porte suppose un
 # shell POSIX (Makefile, scripts du socle).
+#
+# Sur une pull request, Linux seul ; macOS s'ajoute sur `main` et à la demande
+# (`workflow_dispatch`). Une minute de runner macOS en compte dix sur un dépôt
+# privé : la matrice complète sur chaque PR a épuisé le quota du compte le
+# 2026-09-24, et plus aucun job ne démarrait. Tout ce qui est fusionné passe
+# encore par macOS, sur `main`.
 jobs:
   controles:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-24.04]
+        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-24.04"]' || '["macos-latest", "ubuntu-24.04"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
 
@@ -84,7 +93,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-24.04]
+        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-24.04"]' || '["macos-latest", "ubuntu-24.04"]') }}
         tranche: [1, 2]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
@@ -137,7 +146,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-latest, ubuntu-24.04]
+        os: ${{ fromJSON(github.event_name == 'pull_request' && '["ubuntu-24.04"]' || '["macos-latest", "ubuntu-24.04"]') }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 75
     env:

@@ -138,6 +138,7 @@ pas le tag : un tag se déplace, un SHA non.
 | La CI échouait à chaque poussée depuis au moins le 2026-09-21, en une vingtaine de secondes : pnpm absent du runner, `make qualite` s'arrêtait avant le front | journal du run `36034960589` | 2026-09-24 |
 | Aucune des exécutions de la porte n'avait enregistré de cache Cargo : toutes échouaient, et l'étape « Post Restaurer le cache Cargo » était `skipped`. Seuls les caches pnpm existaient. Sous Linux, les stories prenaient 275 s (1045 tests) avant l'échec | runs `36037137682` et `36036585873`, `GET /actions/caches` | 2026-09-24 |
 | La protection de branche est refusée sur ce dépôt : « Upgrade to GitHub Pro or make this repository public » (403). Rien n'empêche donc de fusionner une PR dont la CI échoue | `GET /repos/so-keyldzn/oxyn/branches/main/protection` | 2026-09-24 |
+| Plus aucun job ne démarrait sur les PR #31, #32 et #33 : « The job was not started because recent account payments have failed or your spending limit needs to be increased » (0 étape, aucun runner). La matrice macOS + Linux sur chaque PR, avec 4 jobs macOS par PR, avait épuisé le quota. D'où Linux seul sur les PR (`qualite.yml`) | annotations des jobs du run `36046972599` | 2026-09-24 |
 
 ## GPUI
 
