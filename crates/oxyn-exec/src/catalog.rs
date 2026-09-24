@@ -1,6 +1,7 @@
 //! Lazy catalog reads and atomic cache publication, confined to the bus.
 
-use std::collections::HashMap;
+mod budget;
+
 use std::sync::Arc;
 
 use oxyn_catalog::RelationDefinition;
@@ -11,6 +12,8 @@ use oxyn_catalog::{
 use oxyn_core::{CancelToken, Capabilities, CatalogRefreshScope, OxynError, Result};
 use parking_lot::RwLock;
 use tokio::sync::Mutex;
+
+pub(crate) use budget::CatalogBudget;
 
 pub(crate) struct ConnectionCatalog {
     pub cache: SharedCatalog,
@@ -28,40 +31,6 @@ impl ConnectionCatalog {
             closed: CancelToken::new(),
             session: RwLock::new(None),
         }
-    }
-}
-
-// Product limits, applied before publication; provider vectors remain temporary.
-const MAX_CATALOG_SCOPES: usize = 1_024;
-const MAX_CATALOG_OBJECTS: usize = 50_000;
-
-#[derive(Default)]
-pub(crate) struct CatalogBudget {
-    scopes: HashMap<CatalogRefreshScope, usize>,
-}
-
-impl CatalogBudget {
-    pub fn reserve(&mut self, scope: &CatalogRefreshScope, patch: &CatalogPatch) -> Result<()> {
-        let count = patch.object_count();
-        let others: usize = self
-            .scopes
-            .iter()
-            .filter(|(key, _)| *key != scope)
-            .map(|(_, count)| count)
-            .sum();
-        if (!self.scopes.contains_key(scope) && self.scopes.len() >= MAX_CATALOG_SCOPES)
-            || count.saturating_add(others) > MAX_CATALOG_OBJECTS
-        {
-            return Err(OxynError::Config(
-                "catalog cache limit exceeded (1024 scopes, 50000 metadata objects)".to_owned(),
-            ));
-        }
-        // Keep the high-water mark: list refreshes may retain child details.
-        self.scopes
-            .entry(scope.clone())
-            .and_modify(|old| *old = (*old).max(count))
-            .or_insert(count);
-        Ok(())
     }
 }
 
@@ -642,53 +611,5 @@ mod tests {
                 .len(),
             1
         );
-    }
-
-    #[test]
-    fn budget_refuses_oversized_patch_without_losing_previous_reservations() {
-        let mut budget = CatalogBudget::default();
-        let patch = CatalogPatch {
-            server: Some(ServerInfo::new("fixture", "", Capabilities::empty())),
-            ..CatalogPatch::default()
-        };
-        budget
-            .reserve(&CatalogRefreshScope::Root, &patch)
-            .expect("initial reservation");
-        let oversized = CatalogPatch {
-            catalogs: Some(vec![
-                CatalogRef::new("db").expect("valid name");
-                MAX_CATALOG_OBJECTS + 1
-            ]),
-            ..CatalogPatch::default()
-        };
-        assert!(matches!(
-            budget.reserve(&CatalogRefreshScope::Root, &oversized),
-            Err(OxynError::Config(_))
-        ));
-        assert_eq!(budget.scopes.get(&CatalogRefreshScope::Root), Some(&1));
-        budget
-            .reserve(&CatalogRefreshScope::Root, &patch)
-            .expect("repeat refresh is not charged twice");
-    }
-
-    #[test]
-    fn budget_bounds_distinct_scopes_even_when_their_lists_are_empty() {
-        let mut budget = CatalogBudget::default();
-        for i in 0..MAX_CATALOG_SCOPES {
-            budget
-                .reserve(
-                    &CatalogRefreshScope::Namespaces {
-                        catalog: Some(i.to_string()),
-                    },
-                    &CatalogPatch::default(),
-                )
-                .expect("within scope budget");
-        }
-        assert!(
-            budget
-                .reserve(&CatalogRefreshScope::Root, &CatalogPatch::default())
-                .is_err()
-        );
-        assert_eq!(budget.scopes.len(), MAX_CATALOG_SCOPES);
     }
 }

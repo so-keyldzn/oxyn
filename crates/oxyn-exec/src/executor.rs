@@ -1474,8 +1474,14 @@ impl Executor {
         {
             return Err(OxynError::Cancelled);
         }
-        budget.reserve(scope, &patch)?;
-        patch.apply(&mut state.cache.write())?;
+        let evicted = budget.reserve(scope, &patch)?;
+        {
+            let mut cache = state.cache.write();
+            for scope in &evicted {
+                cache.evict(scope);
+            }
+            patch.apply(&mut cache)?;
+        }
         self.events
             .publish(id, Some(connection), Event::CatalogUpdated);
         Ok(Outcome::CatalogRefreshed {
