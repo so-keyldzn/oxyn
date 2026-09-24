@@ -115,6 +115,7 @@ pub(crate) const fn is_local_write(command: &Command) -> bool {
             | Command::SaveQueryDocument { .. }
             | Command::CloseQueryDocument { .. }
             | Command::DeleteQueryDocument { .. }
+            | Command::ReconcileHistoryEntry { .. }
             | Command::WriteDocument { .. }
             | Command::SaveAiProvider { .. }
             | Command::RemoveAiProvider { .. }
@@ -360,6 +361,47 @@ mod tests {
         let status = backend.recovery_status();
         assert!(status.unresolved_write);
         assert!(!status.abnormal, "and says nothing of a crash");
+    }
+
+    #[test]
+    fn a_reconciled_write_no_longer_warns_at_the_next_launch() {
+        use oxyn_core::{Actor, OxynError, QueryLanguage, StatementIntent};
+        use oxyn_store::history::HistoryRecord;
+
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("a test runtime starts");
+        let _guard = runtime.enter();
+        let store = Arc::new(Store::open_in_memory().expect("in-memory store"));
+        let entry = store
+            .history()
+            .record(
+                &HistoryRecord::new(
+                    &Actor::Human,
+                    QueryLanguage::SQL,
+                    "INSERT INTO t VALUES (1)",
+                )
+                .with_intent(StatementIntent::Write)
+                .failed(&OxynError::Timeout {
+                    after: Duration::from_secs(30),
+                }),
+            )
+            .expect("recorded");
+        let secrets = Arc::new(oxyn_secrets::MemorySecretStore::new());
+        let first = Backend::assemble(Arc::clone(&store), secrets.clone()).expect("backend");
+        assert!(first.recovery_status().unresolved_write);
+
+        runtime
+            .block_on(first.reconcile_history_entry(entry))
+            .expect("the user inspected the server");
+        assert!(
+            first.recovery_status().unresolved_write,
+            "this launch keeps what it observed at startup"
+        );
+
+        let next = Backend::assemble(store, secrets).expect("next launch");
+        assert!(!next.recovery_status().unresolved_write);
     }
 
     #[test]

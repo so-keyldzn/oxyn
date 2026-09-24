@@ -152,6 +152,16 @@ sans charger ses données avant une reconnexion explicite.
 Une écriture interrompue peut avoir un résultat inconnu. La reprise conserve cet
 avertissement et demande d'inspecter l'état du serveur après reconnexion ; elle
 ne retente jamais l'écriture ([I-13](../CLAUDE.md#i-13)).
+L'avertissement cesse quand l'utilisateur marque l'écriture réconciliée, dans
+l'onglet Historique de la bibliothèque, sur la ligne « Needs inspection » : une
+confirmation nomme la connexion et cite la requête, et son bouton par défaut
+conserve l'avertissement. Une écriture encore en cours dans ce lancement ne
+s'acquitte pas : son issue n'est pas connue. L'écran de reprise, qui précède
+toute connexion, indique en texte où se fait l'acquittement, sans rien acquitter
+lui-même. Seul l'humain acquitte — un agent n'a rien inspecté, et le
+`PolicyGate` le refuse. L'acquittement est daté dans l'état local, ne touche
+aucune base et ne rejoue rien ; l'écriture reste consultable, marquée
+« Reconciled ».
 
 ## Écran d'accueil
 

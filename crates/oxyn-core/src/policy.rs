@@ -303,6 +303,15 @@ impl PolicyGate for DefaultPolicy {
         if actor.is_agent() && matches!(cmd, Command::TestConnection { .. }) {
             return Decision::deny("only the human may test a connection configuration");
         }
+        // Réconcilier, c'est déclarer avoir inspecté le serveur. Un agent n'a
+        // rien inspecté : l'accepter ferait taire l'avertissement d'une écriture
+        // au résultat inconnu que personne n'a regardée (I-13). Un refus, pas
+        // une confirmation : une confirmation finit par être cliquée (I-02).
+        if actor.is_agent() && matches!(cmd, Command::ReconcileHistoryEntry { .. }) {
+            return Decision::Deny {
+                reason: "only the human may declare an interrupted write reconciled".into(),
+            };
+        }
         let intent = cmd.intent();
         let mutating = cmd.is_mutating();
         let facts = cmd.target_connection().and_then(|id| self.facts(id));
@@ -971,6 +980,24 @@ mod tests {
                     "un agent ne le fait jamais : env={env} lecture_seule={read_only}"
                 );
             }
+        }
+    }
+
+    #[test]
+    fn seul_l_humain_declare_une_ecriture_reconciliee() {
+        // Local, sans connexion visée : l'humain n'a rien à confirmer. L'agent
+        // est refusé partout — pas soumis à approbation — parce qu'il affirmerait
+        // une vérification du serveur que personne n'a faite.
+        let politique = DefaultPolicy::new();
+        let cmd = Command::ReconcileHistoryEntry { entry: 1 };
+        for env in ENVS {
+            let humaine = politique.authorize(&humain(), &cmd, env);
+            assert!(humaine.is_allowed(), "env={env} → {humaine:?}");
+            let agentive = politique.authorize(&agent(), &cmd, env);
+            assert!(
+                matches!(agentive, Decision::Deny { .. }),
+                "env={env} → {agentive:?}"
+            );
         }
     }
 }

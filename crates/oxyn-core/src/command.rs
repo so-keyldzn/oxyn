@@ -413,6 +413,10 @@ pub enum Command {
     ReadHistory { filter: Box<crate::HistoryFilter> },
     /// Load a full selected historical statement separately from its list row.
     ReadHistoryEntry { entry: i64 },
+    /// Record that the user inspected the server state of a write whose outcome
+    /// was unknown, so it stops warning at each launch. Local only: nothing is
+    /// sent to the server and nothing is retried (I-13).
+    ReconcileHistoryEntry { entry: i64 },
     /// List the connections history recorded, including ones since removed.
     ///
     /// Separate from [`Command::ReadHistory`] on purpose: that one answers
@@ -555,6 +559,12 @@ impl Command {
     ///   passent donc par une approbation.
     /// * [`Cancel`](Self::Cancel) répond `Read` : annuler ne modifie rien, et
     ///   une annulation qu'il faut faire approuver n'est pas une annulation.
+    /// * [`ReconcileHistoryEntry`](Self::ReconcileHistoryEntry) répond `Read`
+    ///   pour la même raison que `WriteDocument` : elle n'écrit que l'état
+    ///   local. Ce qui la protège est un **refus** à tout
+    ///   [`Actor::Agent`] : elle affirme que l'utilisateur a vérifié le
+    ///   serveur, et un agent qui pourrait l'affirmer ferait taire
+    ///   l'avertissement d'une écriture que personne n'a regardée (I-13).
     /// * les commandes de déclaration de fournisseur d'IA répondent `Read`,
     ///   comme [`WriteDocument`](Self::WriteDocument) et pour la même raison :
     ///   elles n'atteignent aucune base, et une confirmation « base de
@@ -589,6 +599,7 @@ impl Command {
             | Self::DeleteQueryDocument { .. }
             | Self::ReadHistory { .. }
             | Self::ReadHistoryEntry { .. }
+            | Self::ReconcileHistoryEntry { .. }
             | Self::ListHistoryConnections { .. }
             | Self::OpenRetainedResult { .. }
             | Self::OpenDocument { .. }
@@ -639,6 +650,7 @@ impl Command {
             | Self::CloseQueryDocument { .. }
             | Self::DeleteQueryDocument { .. }
             | Self::ReadHistoryEntry { .. }
+            | Self::ReconcileHistoryEntry { .. }
             | Self::ListHistoryConnections { .. }
             | Self::OpenDocument { .. }
             | Self::WriteDocument { .. }
@@ -722,6 +734,7 @@ impl Command {
             Self::DeleteQueryDocument { .. } => "DeleteQueryDocument",
             Self::ReadHistory { .. } => "ReadHistory",
             Self::ReadHistoryEntry { .. } => "ReadHistoryEntry",
+            Self::ReconcileHistoryEntry { .. } => "ReconcileHistoryEntry",
             Self::ListHistoryConnections { .. } => "ListHistoryConnections",
             Self::OpenRetainedResult { .. } => "OpenRetainedResult",
             Self::ReadWorkspacePreferences { .. } => "ReadWorkspacePreferences",

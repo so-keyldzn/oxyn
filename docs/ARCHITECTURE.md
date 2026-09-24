@@ -871,6 +871,15 @@ sur une ligne écrite avant la colonne, et ce sont ces lignes-là qui portent le
 écritures expirées. Un refus de politique est classé
 `denied` d'où qu'il vienne — du `PolicyGate` ou de la dernière barrière avant le driver
 — parce qu'il n'est pas une panne. L'historique est purgeable, le journal ne l'est pas.
+Une seule colonne y est écrite par l'utilisateur : `reconciled_at`, par
+`ReconcileHistoryEntry`, quand il déclare avoir inspecté le serveur après une
+écriture à l'issue inconnue. Le `PolicyGate` la refuse à un agent. Elle n'est
+acceptée que sur une ligne qui demande une réconciliation, et pas sur une ligne
+encore `running` depuis le démarrage de l'ordonnanceur : son issue n'est pas
+connue, et un acquittement pris avant un plantage ferait taire l'avertissement
+de reprise sur l'écriture même qu'il existe pour signaler. `finish` l'efface, par
+prudence, si une issue arrive après. Une ligne réconciliée ne compte plus dans
+l'avertissement de démarrage ; purger l'historique le fait taire de la même façon.
 
 **Bibliothèque locale.** Les commandes `ReadHistory` et `ListQueryDocuments`
 retournent des pages de résumés ; `ReadHistoryEntry` et `OpenDocument` ouvrent

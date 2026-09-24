@@ -30,7 +30,7 @@ use chrono::{DateTime, Utc};
 use oxyn_core::{
     Actor, AgentId, Command, ConnectionId, ErrorClass, OxynError, QueryLanguage, StatementIntent,
 };
-use rusqlite::{Row, params};
+use rusqlite::{OptionalExtension, Row, params};
 use std::time::Duration;
 
 use crate::encoding::{
@@ -153,12 +153,17 @@ pub struct HistoryRecord {
     pub error_class: Option<ErrorClass>,
     /// A result identity from this application run; it may have expired.
     pub result: Option<oxyn_core::ResultId>,
+    /// When the user confirmed having inspected the server state of an
+    /// unresolved write. Never set by Oxyn on its own: it is a statement about
+    /// the server that only the user can make.
+    pub reconciled_at: Option<DateTime<Utc>>,
 }
 
 impl HistoryRecord {
     /// Whether replay controls must be withheld until the server state is reconciled.
     pub fn requires_reconciliation(&self) -> bool {
-        requires_reconciliation(self.intent, self.status, self.error_class)
+        self.reconciled_at.is_none()
+            && requires_reconciliation(self.intent, self.status, self.error_class)
     }
 
     /// Construit une entrée d'historique pour une exécution qui démarre.
@@ -182,6 +187,7 @@ impl HistoryRecord {
             error: None,
             error_class: None,
             result: None,
+            reconciled_at: None,
         }
     }
 
@@ -297,6 +303,18 @@ impl HistoryRecord {
     }
 }
 
+/// What [`History::reconcile`] did with an entry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum Reconciliation {
+    /// The acknowledgement is recorded, now or earlier.
+    Recorded,
+    /// Gone, or never in doubt: acknowledging it would vouch for nothing.
+    NotNeeded,
+    /// Still running in this launch: its outcome is not known yet.
+    StillRunning,
+}
+
 /// Une entrée relue de l'historique.
 #[derive(Debug, Clone)]
 pub struct HistoryEntry {
@@ -329,8 +347,9 @@ impl<'a> History<'a> {
             conn.execute(
                 "INSERT INTO query_history
                      (ts, connection_id, connection_name, actor_kind, actor_id, language,
-                      statement, intent, duration_ms, row_count, status, error, error_class, result_id)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)",
+                      statement, intent, duration_ms, row_count, status, error, error_class, result_id,
+                      reconciled_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
                 params![
                     record.ts,
                     record.connection.map(|id| id.to_string()),
@@ -346,6 +365,7 @@ impl<'a> History<'a> {
                     record.error,
                     record.error_class.map(|class| class.as_str()),
                     record.result.map(|result| result.to_string()),
+                    record.reconciled_at,
                 ],
             )?;
             Ok(conn.last_insert_rowid())
@@ -364,6 +384,10 @@ impl<'a> History<'a> {
     /// avec le journal d'audit, où cette méthode n'existe pas et où le fichier
     /// lui-même la refuserait ([`crate::journal`]).
     ///
+    /// Une réconciliation déclarée pendant que l'exécution tournait est
+    /// effacée : elle portait sur un état du serveur que l'issue vient de
+    /// changer, et une nouvelle issue ambiguë doit de nouveau alerter.
+    ///
     /// # Erreurs
     /// [`crate::StoreError::Sqlite`] si l'écriture échoue.
     pub fn finish(&self, id: i64, record: &HistoryRecord) -> Result<bool> {
@@ -371,7 +395,7 @@ impl<'a> History<'a> {
             let touchees = conn.execute(
                 "UPDATE query_history
                     SET status = ?2, duration_ms = ?3, row_count = ?4, error = ?5,
-                        error_class = ?6, result_id = ?7
+                        error_class = ?6, result_id = ?7, reconciled_at = NULL
                   WHERE id = ?1",
                 params![
                     id,
@@ -384,6 +408,69 @@ impl<'a> History<'a> {
                 ],
             )?;
             Ok(touchees > 0)
+        })
+    }
+
+    /// Records that the user inspected the server state of an unresolved write.
+    ///
+    /// A row still `running` since `live_since` — the start of the launch that
+    /// asks — is refused: its outcome is not known yet, and an acknowledgement
+    /// taken now would survive a crash before `finish`, silencing the very
+    /// warning recovery exists for. A `running` row older than that was left by
+    /// an earlier launch that never finished it.
+    ///
+    /// An entry already reconciled keeps its first date. Only this column
+    /// changes: what was submitted and how it ended stay as recorded, and
+    /// nothing is retried ([I-13](../../../CLAUDE.md#i-13)).
+    ///
+    /// # Errors
+    /// [`crate::StoreError::Sqlite`] if the read or the write fails.
+    pub fn reconcile(
+        &self,
+        id: i64,
+        live_since: DateTime<Utc>,
+        cancel: &oxyn_core::CancelToken,
+    ) -> Result<Reconciliation> {
+        self.store.with_connection_cancellable(cancel, |connection| {
+            let transaction = connection.unchecked_transaction()?;
+            let row = transaction
+                .query_row(
+                    "SELECT ts, intent, status, error_class, reconciled_at FROM query_history WHERE id=?1",
+                    [id],
+                    |row| {
+                        Ok((
+                            row.get::<_, DateTime<Utc>>("ts")?,
+                            row.get::<_, String>("intent")?,
+                            row.get::<_, String>("status")?,
+                            row.get::<_, Option<String>>("error_class")?,
+                            row.get::<_, Option<String>>("reconciled_at")?,
+                        ))
+                    },
+                )
+                .optional()?;
+            let Some((ts, intent, status, error_class, reconciled_at)) = row else {
+                return Ok(Reconciliation::NotNeeded);
+            };
+            if reconciled_at.is_some() {
+                return Ok(Reconciliation::Recorded);
+            }
+            let status = HistoryStatus::from_text(&status);
+            if !requires_reconciliation(
+                intent_from_text(&intent),
+                status,
+                error_class.as_deref().map(error_class_from_text),
+            ) {
+                return Ok(Reconciliation::NotNeeded);
+            }
+            if status == HistoryStatus::Running && ts >= live_since {
+                return Ok(Reconciliation::StillRunning);
+            }
+            transaction.execute(
+                "UPDATE query_history SET reconciled_at=?2 WHERE id=?1",
+                params![id, Utc::now()],
+            )?;
+            transaction.commit()?;
+            Ok(Reconciliation::Recorded)
         })
     }
 
@@ -499,8 +586,8 @@ fn requires_reconciliation(
 
 /// La liste de colonnes, partagée par toutes les lectures.
 const SELECT_COLONNES: &str = "SELECT id, ts, connection_id, connection_name, actor_kind, \
-     actor_id, language, statement, intent, duration_ms, row_count, status, error, error_class, result_id \
-     FROM query_history";
+     actor_id, language, statement, intent, duration_ms, row_count, status, error, error_class, result_id, \
+     reconciled_at FROM query_history";
 
 /// Reconstruit une [`HistoryEntry`] à partir d'une ligne.
 fn depuis_ligne(row: &Row<'_>) -> Result<HistoryEntry> {
@@ -529,6 +616,7 @@ fn depuis_ligne(row: &Row<'_>) -> Result<HistoryEntry> {
             error: row.get("error")?,
             error_class: error_class.as_deref().map(error_class_from_text),
             result: parse_id_opt(row.get("result_id")?, "query_history.result_id")?,
+            reconciled_at: row.get("reconciled_at")?,
         },
     })
 }

@@ -1,6 +1,7 @@
 //! History summaries cannot become truncated execution sources.
 
 use super::*;
+use crate::history::Reconciliation;
 use oxyn_core::{
     CancelToken, ConnectionConfig, DriverId, HistoryConnectionFilter, HistoryFilter,
     HistoryStatusFilter, MAX_QUERY_DOCUMENT_BYTES, ResultId,
@@ -229,4 +230,144 @@ fn the_startup_scan_finds_the_rows_the_library_marks_for_inspection() {
     });
     history.record(&expired).expect("expired write");
     assert!(history.any_requires_reconciliation().expect("ambiguous"));
+}
+
+fn expired_write() -> HistoryRecord {
+    HistoryRecord::new(
+        &Actor::Human,
+        QueryLanguage::SQL,
+        "INSERT INTO t VALUES (1)",
+    )
+    .with_intent(StatementIntent::Write)
+    .failed(&oxyn_core::OxynError::Timeout {
+        after: std::time::Duration::from_secs(30),
+    })
+}
+
+#[test]
+fn a_reconciled_write_no_longer_warns_and_keeps_what_was_recorded() {
+    let store = Store::open_in_memory().expect("store");
+    let cancel = CancelToken::new();
+    let history = store.history();
+    let first = history
+        .record(&expired_write())
+        .expect("first expired write");
+    let second = history
+        .record(&expired_write())
+        .expect("second expired write");
+
+    let launch = Utc::now();
+    assert_eq!(
+        history
+            .reconcile(first, launch, &cancel)
+            .expect("reconciled"),
+        Reconciliation::Recorded
+    );
+    assert!(
+        history.any_requires_reconciliation().expect("one left"),
+        "acknowledging one write says nothing of another"
+    );
+    assert_eq!(
+        history
+            .reconcile(second, launch, &cancel)
+            .expect("reconciled"),
+        Reconciliation::Recorded
+    );
+    assert!(!history.any_requires_reconciliation().expect("none left"));
+
+    let entry = history.get(first, &cancel).expect("read").expect("present");
+    assert!(!entry.record.requires_reconciliation());
+    assert!(entry.record.reconciled_at.is_some());
+    assert_eq!(entry.record.status, HistoryStatus::Failed);
+    assert_eq!(entry.record.error_class, Some(ErrorClass::Ambiguous));
+    let page = history
+        .page(&HistoryFilter::default(), &cancel)
+        .expect("summaries");
+    assert!(page.entries.iter().all(|row| !row.requires_reconciliation));
+    assert!(page.entries.iter().all(|row| row.reconciled_at.is_some()));
+
+    let date = entry.record.reconciled_at;
+    assert_eq!(
+        history.reconcile(first, launch, &cancel).expect("again"),
+        Reconciliation::Recorded
+    );
+    let again = history.get(first, &cancel).expect("read").expect("present");
+    assert_eq!(again.record.reconciled_at, date, "the first date is kept");
+}
+
+#[test]
+fn only_an_unresolved_write_can_be_reconciled() {
+    let store = Store::open_in_memory().expect("store");
+    let cancel = CancelToken::new();
+    let history = store.history();
+    let done = history
+        .record(
+            &HistoryRecord::new(&Actor::Human, QueryLanguage::SQL, "DELETE FROM t")
+                .with_intent(StatementIntent::Write)
+                .succeeded(std::time::Duration::from_millis(1), Some(1)),
+        )
+        .expect("finished write");
+    let launch = Utc::now();
+    for id in [done, done + 1] {
+        assert_eq!(
+            history
+                .reconcile(id, launch, &cancel)
+                .expect("settled or absent"),
+            Reconciliation::NotNeeded
+        );
+    }
+    let entry = history.get(done, &cancel).expect("read").expect("present");
+    assert!(entry.record.reconciled_at.is_none());
+}
+
+/// Acknowledged while it still runs, a write would stay silenced if the
+/// process died before its outcome: the crash recovery warns about.
+#[test]
+fn a_write_still_running_in_this_launch_cannot_be_reconciled() {
+    let store = Store::open_in_memory().expect("store");
+    let cancel = CancelToken::new();
+    let history = store.history();
+    let launch = Utc::now() - chrono::TimeDelta::minutes(5);
+    let running = HistoryRecord::new(&Actor::Human, QueryLanguage::SQL, "UPDATE t SET n=1")
+        .with_intent(StatementIntent::Write);
+    let id = history.record(&running).expect("running write");
+    assert_eq!(
+        history.reconcile(id, launch, &cancel).expect("refused"),
+        Reconciliation::StillRunning
+    );
+    assert!(history.any_requires_reconciliation().expect("still warns"));
+}
+
+#[test]
+fn a_new_outcome_clears_a_reconciliation_of_a_row_left_running() {
+    let store = Store::open_in_memory().expect("store");
+    let cancel = CancelToken::new();
+    let history = store.history();
+    let mut left = HistoryRecord::new(&Actor::Human, QueryLanguage::SQL, "UPDATE t SET n=1")
+        .with_intent(StatementIntent::Write);
+    left.ts = Utc::now() - chrono::TimeDelta::hours(1);
+    let id = history.record(&left).expect("left running by a crash");
+    assert_eq!(
+        history
+            .reconcile(id, Utc::now(), &cancel)
+            .expect("reconciled"),
+        Reconciliation::Recorded,
+        "a row an earlier launch never finished is what the gesture is for"
+    );
+    assert!(!history.any_requires_reconciliation().expect("acknowledged"));
+
+    history
+        .finish(
+            id,
+            &left.failed(&oxyn_core::OxynError::Timeout {
+                after: std::time::Duration::from_secs(30),
+            }),
+        )
+        .expect("finished");
+    assert!(
+        history
+            .any_requires_reconciliation()
+            .expect("ambiguous again"),
+        "the acknowledgement covered a state the outcome has since changed"
+    );
 }

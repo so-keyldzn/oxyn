@@ -127,6 +127,19 @@ impl Backend {
         }
     }
 
+    /// Records that the user inspected the server state of an unresolved write,
+    /// so the next launch stops warning about it. Retries nothing (I-13).
+    pub async fn reconcile_history_entry(&self, entry: i64) -> Result<(), IpcError> {
+        let command = Command::ReconcileHistoryEntry { entry };
+        let _local = self.local_write(&command);
+        match self.read_local(CommandId::new(), command).await? {
+            Outcome::HistoryEntryReconciled { .. } => Ok(()),
+            _ => Err(IpcError::invalid(
+                "Unexpected response to reconciling a history entry",
+            )),
+        }
+    }
+
     /// Reopens a result still retained, through the bus; runs no query and
     /// opens no session. A released buffer answers `Expired`.
     pub async fn open_retained_result(

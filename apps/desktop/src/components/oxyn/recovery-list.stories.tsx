@@ -125,6 +125,12 @@ export const UnresolvedWrite: Story = {
       canvas.getByText("A write may have an unknown outcome")
     ).toBeVisible()
     await expect(canvas.getByText(/never retries it/)).toBeVisible()
+    // Acknowledging happens in History, where the write itself is shown: this
+    // screen only points there.
+    await expect(canvas.getByText(/mark it reconciled/)).toBeVisible()
+    await expect(
+      canvas.queryByRole("button", { name: /reconciled/i })
+    ).toBeNull()
   },
 }
 

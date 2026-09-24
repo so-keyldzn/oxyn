@@ -696,6 +696,17 @@ const M0014_AI_EXCHANGE_MENTIONS: &str =
 /// s'ouvrir, pas échouer à la migration.
 const M0015_DROP_CATALOG_CACHE: &str = "DROP TABLE IF EXISTS catalog_cache;";
 
+/// Migration 16 — quand l'utilisateur a vérifié sur le serveur une écriture à l'issue inconnue.
+///
+/// Sans elle, une seule écriture expirée rappelait l'avertissement de reprise
+/// à chaque lancement, pour toujours — et un avertissement qu'on ne peut pas
+/// faire taire cesse d'être lu, y compris le jour où une autre écriture a
+/// réellement été interrompue. Un horodatage en texte ISO 8601 plutôt qu'un
+/// drapeau : lisible par `sqlite3` sans Oxyn ([I-11](../../../CLAUDE.md#i-11)),
+/// et il dit *quand* la vérification a été faite. `NULL` sur toute ligne
+/// antérieure : rien n'a été vérifié.
+const M0016_HISTORY_RECONCILED: &str = "ALTER TABLE query_history ADD COLUMN reconciled_at TEXT;";
+
 /// Toutes les migrations, dans l'ordre d'application.
 pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -772,6 +783,11 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 15,
         name: "drop_catalog_cache",
         sql: M0015_DROP_CATALOG_CACHE,
+    },
+    Migration {
+        version: 16,
+        name: "history_reconciled",
+        sql: M0016_HISTORY_RECONCILED,
     },
 ];
 
