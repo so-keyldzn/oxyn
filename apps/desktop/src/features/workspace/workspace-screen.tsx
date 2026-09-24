@@ -304,7 +304,6 @@ export function WorkspaceScreen({
           if (aside.length > 0) setAsideOpen((value) => !value)
         },
       },
-      { hotkey: "Mod+,", callback: () => onOpenSettings?.() },
     ],
     // Dialogs own the keyboard while open: a shortcut behind them is a click
     // the user did not see. A hidden workspace owns no shortcut.
