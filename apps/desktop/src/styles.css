@@ -474,6 +474,12 @@
   cursor: pointer;
 }
 
+/* Upstream gives the sidebar rail a resize arrow, but it cannot be dragged: a
+   click folds or unfolds the sidebar. */
+[data-slot="sidebar-rail"] {
+  cursor: pointer;
+}
+
 /* Upstream, a disabled control drops the pointer entirely
    (`disabled:pointer-events-none`), which hides any cursor it could show.
    It takes it back: the element is inert anyway, and the `hover` and
