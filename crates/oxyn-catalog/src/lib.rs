@@ -3,7 +3,7 @@
 //! L'introspection d'une base est **coûteuse** : des minutes sur un schéma à
 //! 20 000 objets (ARCHITECTURE §6). Cette crate est ce qui permet de ne la payer
 //! qu'une fois — et ce qui rend possibles les deux choses qui en découlent :
-//! l'**exploration hors ligne**, et le **contexte d'un agent** construit à
+//! l'**exploration sans aller-retour serveur**, et le **contexte d'un agent** construit à
 //! partir du catalogue local plutôt que d'un aller-retour serveur à chaque
 //! question.
 //!
@@ -134,7 +134,7 @@ mod tests {
         assert_eq!(noms, [Some("clients"), Some("commandes")]);
 
         // Un ALTER TABLE émis depuis Oxyn : le sous-arbre est à relire, mais il
-        // reste consultable hors ligne.
+        // reste consultable en attendant.
         cache.invalidate(&CatalogScope::Relation(commandes.clone()));
         assert!(cache.relation(&commandes).is_some());
         assert_eq!(

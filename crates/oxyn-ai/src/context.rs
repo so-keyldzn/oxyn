@@ -18,8 +18,7 @@
 //! Le contexte se construit à partir du [`CatalogCache`] local, jamais d'un
 //! aller-retour serveur (ARCHITECTURE §6 et §7.4). Un agent qui irait chercher
 //! lui-même ce dont il a besoin contournerait à la fois ce point de passage et
-//! le command bus. Le cache est aussi ce qui rend le workspace IA utilisable
-//! hors ligne.
+//! le command bus.
 //!
 //! # La compaction est un composant, pas un détail
 //!

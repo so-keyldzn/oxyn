@@ -18,7 +18,6 @@
 //! | `connections` | métadonnées de connexion — **jamais un secret** | oui |
 //! | `query_history` | ce que l'utilisateur a exécuté | oui, purge explicite |
 //! | `audit_journal` | la piste d'audit — **append-only** | **non** |
-//! | `catalog_cache` | l'introspection mise en cache, par connexion | oui |
 //! | `documents` | onglets et requêtes sauvegardés | oui |
 //! | `workspace_preferences` | versioned display preferences | yes |
 //! | `app_sessions` | ce qui distingue un arrêt propre d'un plantage | oui |
@@ -679,6 +678,24 @@ const M0014_AI_EXCHANGE_MENTIONS: &str =
               AND length(CAST(mentions AS BLOB)) <= 32768));
 ";
 
+/// Migration 15 — le cache de catalogue persisté quitte le fichier.
+///
+/// La table `catalog_cache` de la migration 1 n'a jamais eu d'appelant : le
+/// catalogue vit en mémoire dans `oxyn-exec`, se relit du serveur à chaque
+/// connexion, et Oxyn n'offre pas de consultation hors ligne
+/// ([ARCHITECTURE §6](../../../docs/ARCHITECTURE.md#6-le-catalogue)). Une
+/// table sans écrivain laisse croire à un lecteur du fichier qu'elle compte.
+///
+/// Rien de l'utilisateur ne se perd : ce qu'elle aurait pu contenir est une
+/// copie de ce que le serveur rend, jamais un travail saisi dans Oxyn
+/// ([I-11](../../../CLAUDE.md#i-11)). Revenir en arrière, c'est une migration
+/// qui recrée la table avec le DDL de la migration 1, restée lisible ci-dessus ;
+/// une persistance future passera d'abord par un ADR.
+///
+/// `IF EXISTS` : un fichier dont la table a déjà été retirée au `sqlite3` doit
+/// s'ouvrir, pas échouer à la migration.
+const M0015_DROP_CATALOG_CACHE: &str = "DROP TABLE IF EXISTS catalog_cache;";
+
 /// Toutes les migrations, dans l'ordre d'application.
 pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -750,6 +767,11 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 14,
         name: "ai_exchange_mentions",
         sql: M0014_AI_EXCHANGE_MENTIONS,
+    },
+    Migration {
+        version: 15,
+        name: "drop_catalog_cache",
+        sql: M0015_DROP_CATALOG_CACHE,
     },
 ];
 
@@ -1136,6 +1158,51 @@ mod tests {
         .expect("le fil s'écrit dans le schéma migré");
     }
 
+    /// Un fichier en v14 dont le cache de catalogue est rempli perd la table,
+    /// et rien d'autre : la connexion qu'elle référençait reste.
+    #[test]
+    fn la_migration_15_retire_le_cache_de_catalogue_sans_toucher_aux_connexions() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let mut conn = file_at_version(&dir.path().join("v14.sqlite3"), 14);
+        conn.execute_batch(
+            "INSERT INTO workspaces VALUES('workspace','Atelier','2026-09-10','2026-09-10');
+             INSERT INTO connections (id,workspace_id,name,driver,environment,params,read_only,
+                                      created_at,updated_at)
+             VALUES('connexion','workspace','base client','postgres','production','{}',0,
+                    '2026-09-10','2026-09-10');
+             INSERT INTO catalog_cache (connection_id,payload,refreshed_at)
+             VALUES('connexion','{}','2026-09-10');",
+        )
+        .expect("a v14 file with a cached catalog");
+
+        migrate(&mut conn).expect("montée jusqu'à la version courante");
+
+        let table: i64 = conn
+            .query_row(
+                "SELECT COUNT(*) FROM sqlite_schema WHERE name = 'catalog_cache'",
+                [],
+                |row| row.get(0),
+            )
+            .expect("interrogation du schéma");
+        assert_eq!(table, 0, "la table sans appelant a quitté le fichier");
+        let connexions: i64 = conn
+            .query_row("SELECT COUNT(*) FROM connections", [], |row| row.get(0))
+            .expect("comptage");
+        assert_eq!(connexions, 1);
+    }
+
+    /// `IF EXISTS` : une table déjà retirée à la main n'empêche pas l'ouverture.
+    #[test]
+    fn la_migration_15_tolere_une_table_deja_retiree() {
+        let dir = tempfile::tempdir().expect("temporary directory");
+        let mut conn = file_at_version(&dir.path().join("v14.sqlite3"), 14);
+        conn.execute_batch("DROP TABLE catalog_cache;")
+            .expect("removed by hand");
+
+        migrate(&mut conn).expect("la migration s'applique quand même");
+        assert_eq!(current_version(&conn).expect("version"), latest_version());
+    }
+
     #[test]
     fn un_schema_venu_du_futur_est_refuse() {
         let mut conn = base_migree();
@@ -1160,7 +1227,6 @@ mod tests {
             "connections",
             "query_history",
             "audit_journal",
-            "catalog_cache",
             "documents",
             "workspace_preferences",
             "app_sessions",
@@ -1191,7 +1257,6 @@ mod tests {
             "connections",
             "query_history",
             "audit_journal",
-            "catalog_cache",
             "documents",
             "ai_providers",
             "ai_conversations",
