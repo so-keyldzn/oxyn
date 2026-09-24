@@ -10,6 +10,7 @@ import {
   TableIcon,
 } from "@hugeicons/core-free-icons"
 
+import { ColumnsMenu } from "@/components/oxyn/columns-menu"
 import { ResultFooter } from "@/components/oxyn/result-footer"
 import { ResultGrid } from "@/components/oxyn/result-grid"
 import type { FetchPage } from "@/components/oxyn/result-grid"
@@ -68,6 +69,7 @@ export interface ErrorContext {
 }
 
 const STATEMENT_PREVIEW = 80
+const NO_HIDDEN_COLUMNS: ReadonlySet<number> = new Set()
 
 /** The first line of a statement, on one line and bounded. Pure, so it is tested. */
 export function statementPreview(statement: string) {
@@ -119,6 +121,26 @@ export const ResultPanel = React.memo(function ResultPanel({
   onActiveChange,
   onInspect,
 }: ResultPanelProps) {
+  // Hidden columns belong to one result: a new statement brings other
+  // columns under the same Arrow indexes.
+  const resultKey =
+    state.status === "populated" || state.status === "running"
+      ? (state.result ?? null)
+      : null
+  const [hidden, setHidden] = React.useState<{
+    result: string | null
+    columns: ReadonlySet<number>
+  }>({ result: resultKey, columns: new Set() })
+  const hiddenColumns =
+    hidden.result === resultKey ? hidden.columns : NO_HIDDEN_COLUMNS
+  const columnsMenu = (columns: Array<ResultColumn>) => (
+    <ColumnsMenu
+      columns={columns}
+      hidden={hiddenColumns}
+      onHiddenChange={(next) => setHidden({ result: resultKey, columns: next })}
+    />
+  )
+
   switch (state.status) {
     case "initial":
       return (
@@ -150,6 +172,7 @@ export const ResultPanel = React.memo(function ResultPanel({
               rowCount={state.rows}
               fetchPage={fetchPage}
               className="flex-1"
+              hiddenColumns={hiddenColumns}
               matches={matches}
               reveal={reveal}
               onActiveChange={onActiveChange}
@@ -164,6 +187,7 @@ export const ResultPanel = React.memo(function ResultPanel({
               note={
                 state.rows === 0 ? "Waiting for the server's first rows." : null
               }
+              actions={columnsMenu(state.columns)}
               onCancel={onCancel}
             />
           </div>
@@ -204,7 +228,7 @@ export const ResultPanel = React.memo(function ResultPanel({
       )
 
     case "populated": {
-      const footer = (
+      const footer = (actions: React.ReactNode) => (
         <ResultFooter
           state={{
             status: "done",
@@ -214,7 +238,7 @@ export const ResultPanel = React.memo(function ResultPanel({
             cancelled: state.cancelled,
           }}
           note={footerNote}
-          actions={footerActions}
+          actions={actions}
         />
       )
       if (state.rows === 0) {
@@ -235,7 +259,7 @@ export const ResultPanel = React.memo(function ResultPanel({
                 </EmptyDescription>
               </EmptyHeader>
             </Empty>
-            {footer}
+            {footer(footerActions)}
           </div>
         )
       }
@@ -248,12 +272,18 @@ export const ResultPanel = React.memo(function ResultPanel({
             rowCount={state.rows}
             fetchPage={fetchPage}
             className="flex-1"
+            hiddenColumns={hiddenColumns}
             matches={matches}
             reveal={reveal}
             onActiveChange={onActiveChange}
             onInspect={onInspect}
           />
-          {footer}
+          {footer(
+            <>
+              {columnsMenu(state.columns)}
+              {footerActions}
+            </>
+          )}
         </div>
       )
     }

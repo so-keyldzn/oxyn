@@ -70,8 +70,11 @@ les proportions 280/220/200/140 et Geist 13 px ; l'onglet Constraints a une
 largeur minimale de 113 px. La recette visuelle native reste à réaliser.
 L'inspecteur de ligne est raccordé aux grilles de console et d'aperçu, avec
 choix du champ au clavier et lecture complète paginée par `InspectResultValue`.
-Le menu Columns masque/réaffiche les colonnes localement et conserve toutes
-les données pour l'export. En mode compact, l'inspecteur s'ouvre en superposition
+Le menu Columns, au pied des grilles de console et d'aperçu, masque et réaffiche
+les colonnes localement par indice Arrow, annonce le nombre de colonnes
+visibles et propose `Show all` ; la grille ne virtualise que les colonnes
+visibles, la copie les ignore, et l'export conserve toutes les colonnes, ce que
+le menu indique. En mode compact, l'inspecteur s'ouvre en superposition
 et ces actions passent dans Actions. La largeur initiale de l'inspecteur est
 celle de Figma (`190:1872`, 280 px). La poignée de 8 px redimensionne le panneau
 à la souris et au clavier, avec sauvegarde en fin de geste. Replier la sidebar

@@ -10,10 +10,36 @@ import {
   isNumericType,
   pageSizeFor,
   pagesFor,
+  shownColumns,
+  stepColumn,
 } from "./result-grid"
 import type { PageAnswer } from "./result-grid"
 import { statementPreview } from "./result-panel"
 import type { Cell } from "@/lib/ipc/types"
+
+describe("hidden columns", () => {
+  it("draws the other columns under their own Arrow index", () => {
+    expect(shownColumns(4)).toEqual([0, 1, 2, 3])
+    expect(shownColumns(4, new Set([1, 3]))).toEqual([0, 2])
+  })
+
+  it("steps over a hidden column and stops at the ends", () => {
+    const shown = [0, 2, 3]
+    expect(stepColumn(shown, 0, 1)).toBe(2)
+    expect(stepColumn(shown, 2, -1)).toBe(0)
+    expect(stepColumn(shown, 3, 1)).toBe(3)
+    expect(stepColumn(shown, 0, -1)).toBe(0)
+  })
+
+  it("moves off a column just hidden to the nearest shown one", () => {
+    const shown = [0, 2, 3]
+    expect(stepColumn(shown, 1, 0)).toBe(2)
+    expect(stepColumn(shown, 1, 1)).toBe(2)
+    expect(stepColumn(shown, 1, -1)).toBe(0)
+    expect(stepColumn([0, 1], 5, 0)).toBe(1)
+    expect(stepColumn([0, 1], 5, -1)).toBe(1)
+  })
+})
 
 describe("pagesFor", () => {
   it("asks only for the pages the viewport touches", () => {

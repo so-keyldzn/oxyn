@@ -99,6 +99,38 @@ export function pagesFor(first: number, last: number, pageSize = PAGE_SIZE) {
   return pages
 }
 
+/**
+ * The Arrow indexes the grid draws, in order: every column the user has not
+ * hidden. Hiding never renumbers a column — the inspector, the copy and the
+ * export all speak of the same index. Pure, so it is tested.
+ */
+export function shownColumns(count: number, hidden?: ReadonlySet<number>) {
+  const shown: Array<number> = []
+  for (let column = 0; column < count; column++) {
+    if (!hidden?.has(column)) shown.push(column)
+  }
+  return shown
+}
+
+/**
+ * The shown column `step` places away from `column`, clamped to the ends. A
+ * hidden `column` counts from the first shown column after it. Pure, so it is
+ * tested.
+ */
+export function stepColumn(
+  shown: ReadonlyArray<number>,
+  column: number,
+  step: number
+) {
+  let position = shown.findIndex((index) => index >= column)
+  let moves = step
+  if (position === -1) position = shown.length
+  // Standing on a hidden column, the next shown one is already a step right.
+  else if (shown[position] !== column && moves > 0) moves--
+  const next = Math.max(0, Math.min(shown.length - 1, position + moves))
+  return shown[next] ?? column
+}
+
 /** Integer, float and decimal columns read right-aligned. */
 export function isNumericType(dataType: string) {
   return /^(U?Int\d+|Float\d+|Decimal(32|64|128|256)?\b)/.test(dataType)
@@ -167,6 +199,8 @@ interface ResultGridProps {
   rowCount: number
   fetchPage: FetchPage
   className?: string
+  /** Arrow indexes of the columns not drawn; the rows received keep them. */
+  hiddenColumns?: ReadonlySet<number>
   /** Rows a search matched, marked in the gutter; never hidden or reordered. */
   matches?: ReadonlySet<number>
   /** Moves the active cell to a row; `key` changes to reveal the same row again. */
@@ -243,6 +277,7 @@ export const ResultGrid = React.memo(function ResultGrid({
   rowCount,
   fetchPage,
   className,
+  hiddenColumns,
   matches,
   reveal,
   onActiveChange,
@@ -258,7 +293,24 @@ export const ResultGrid = React.memo(function ResultGrid({
     failed: boolean
   } | null>(null)
   const range = rangeOf(anchor, active)
+  // Pages are sized on the result's width, not on what is shown: hiding a
+  // column must not ask the backend again for pages already held.
   const pageSize = pageSizeFor(columns.length)
+  const shown = React.useMemo(
+    () => shownColumns(columns.length, hiddenColumns),
+    [columns.length, hiddenColumns]
+  )
+  const firstShown = shown[0] ?? 0
+  const lastShown = shown[shown.length - 1] ?? 0
+  // The active cell never stays on a column the user just hid.
+  if (active && shown.length > 0 && !shown.includes(active.column)) {
+    const next = {
+      row: active.row,
+      column: stepColumn(shown, active.column, 0),
+    }
+    setActive(next)
+    setAnchor(next)
+  }
 
   // Widths: the user's resize, else the estimate from the first page, else
   // the header alone. Reset when the result changes.
@@ -299,15 +351,16 @@ export const ResultGrid = React.memo(function ResultGrid({
   }, [rowHeight])
   const cols = useVirtualizer({
     horizontal: true,
-    count: columns.length,
+    count: shown.length,
     getScrollElement: () => scrollRef.current,
-    estimateSize: widthOf,
+    // The virtualizer counts drawn columns; widths belong to Arrow indexes.
+    estimateSize: (position) => widthOf(shown[position] ?? position),
     overscan: 3,
     paddingStart: GUTTER_WIDTH,
   })
   React.useEffect(() => {
     cols.measure()
-  }, [resized, estimated, cols])
+  }, [resized, estimated, shown, cols])
 
   const items = rows.getVirtualItems()
   const visibleColumns = cols.getVirtualItems()
@@ -368,7 +421,7 @@ export const ResultGrid = React.memo(function ResultGrid({
 
   React.useEffect(() => {
     if (!reveal || reveal.row >= rowCount) return
-    const next = { row: reveal.row, column: active?.column ?? 0 }
+    const next = { row: reveal.row, column: active?.column ?? firstShown }
     setAnchor(next)
     setActive(next)
     rows.scrollToIndex(reveal.row, { align: "center" })
@@ -380,13 +433,13 @@ export const ResultGrid = React.memo(function ResultGrid({
   const activeRendered =
     active !== null &&
     items.some((item) => item.index === active.row) &&
-    visibleColumns.some((column) => column.index === active.column)
+    visibleColumns.some((column) => shown[column.index] === active.column)
 
   const copy = async (withHeaders: boolean) => {
     if (!range) return
     const count = rangeRows(range)
     if (count > MAX_COPY_ROWS) {
-      const refused = copyText([], columns, range, withHeaders)
+      const refused = copyText([], columns, range, withHeaders, hiddenColumns)
       if (!refused.ok) setStatus({ text: refused.reason, failed: true })
       return
     }
@@ -401,7 +454,13 @@ export const ResultGrid = React.memo(function ResultGrid({
         })
         return
       }
-      const copied = copyText(page.rows, columns, range, withHeaders)
+      const copied = copyText(
+        page.rows,
+        columns,
+        range,
+        withHeaders,
+        hiddenColumns
+      )
       if (!copied.ok) {
         setStatus({ text: copied.reason, failed: true })
         return
@@ -424,11 +483,12 @@ export const ResultGrid = React.memo(function ResultGrid({
     if (!extend) setAnchor(next)
     else if (!anchor) setAnchor(active ?? next)
     rows.scrollToIndex(next.row, { align: "auto" })
-    cols.scrollToIndex(next.column, { align: "auto" })
+    const position = shown.indexOf(next.column)
+    if (position !== -1) cols.scrollToIndex(position, { align: "auto" })
   }
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
-    if (rowCount === 0 || columns.length === 0) return
+    if (rowCount === 0 || shown.length === 0) return
     const mod = event.metaKey || event.ctrlKey
     if (mod && event.key.toLowerCase() === "c") {
       event.preventDefault()
@@ -445,9 +505,8 @@ export const ResultGrid = React.memo(function ResultGrid({
       setAnchor(active)
       return
     }
-    const current = active ?? { row: 0, column: 0 }
+    const current = active ?? { row: 0, column: firstShown }
     const lastRow = rowCount - 1
-    const lastColumn = columns.length - 1
     let next = current
     switch (event.key) {
       case "ArrowDown":
@@ -457,10 +516,10 @@ export const ResultGrid = React.memo(function ResultGrid({
         next = { ...current, row: Math.max(0, current.row - 1) }
         break
       case "ArrowRight":
-        next = { ...current, column: Math.min(lastColumn, current.column + 1) }
+        next = { ...current, column: stepColumn(shown, current.column, 1) }
         break
       case "ArrowLeft":
-        next = { ...current, column: Math.max(0, current.column - 1) }
+        next = { ...current, column: stepColumn(shown, current.column, -1) }
         break
       case "PageDown":
         next = { ...current, row: Math.min(lastRow, current.row + 20) }
@@ -469,12 +528,14 @@ export const ResultGrid = React.memo(function ResultGrid({
         next = { ...current, row: Math.max(0, current.row - 20) }
         break
       case "Home":
-        next = mod ? { row: 0, column: 0 } : { ...current, column: 0 }
+        next = mod
+          ? { row: 0, column: firstShown }
+          : { ...current, column: firstShown }
         break
       case "End":
         next = mod
-          ? { row: lastRow, column: lastColumn }
-          : { ...current, column: lastColumn }
+          ? { row: lastRow, column: lastShown }
+          : { ...current, column: lastShown }
         break
       default:
         return
@@ -513,7 +574,7 @@ export const ResultGrid = React.memo(function ResultGrid({
 
   // One resize handle takes Tab: the active column's, so the header does not
   // add a stop per column.
-  const tabbableHandle = active?.column ?? 0
+  const tabbableHandle = active?.column ?? firstShown
 
   return (
     <div className={cn("flex h-full min-h-0 flex-col", className)}>
@@ -522,7 +583,7 @@ export const ResultGrid = React.memo(function ResultGrid({
         role="grid"
         aria-label={ariaLabel}
         aria-rowcount={rowCount + 1}
-        aria-colcount={columns.length + 1}
+        aria-colcount={shown.length + 1}
         aria-multiselectable
         aria-activedescendant={
           active && activeRendered
@@ -558,7 +619,8 @@ export const ResultGrid = React.memo(function ResultGrid({
               <span className="sr-only">Row number</span>
             </div>
             {visibleColumns.map((virtual) => {
-              const column = columns[virtual.index]
+              const index = shown[virtual.index] ?? virtual.index
+              const column = columns[index]
               if (!column) return null
               const numeric = isNumericType(column.dataType)
               return (
@@ -581,10 +643,10 @@ export const ResultGrid = React.memo(function ResultGrid({
                   </span>
                   <ResizeHandle
                     name={column.name}
-                    width={widthOf(virtual.index)}
-                    tabbable={virtual.index === tabbableHandle}
-                    onResize={(width) => resize(virtual.index, width)}
-                    onReset={() => resize(virtual.index, null)}
+                    width={widthOf(index)}
+                    tabbable={index === tabbableHandle}
+                    onResize={(width) => resize(index, width)}
+                    onReset={() => resize(index, null)}
                   />
                 </div>
               )
@@ -624,13 +686,13 @@ export const ResultGrid = React.memo(function ResultGrid({
                   aria-colindex={1}
                   aria-label={`Row ${item.index + 1}${matched ? ", matches the search" : ""}`}
                   onMouseDown={(event) => {
-                    if (columns.length === 0) return
+                    if (shown.length === 0) return
                     event.preventDefault()
                     scrollRef.current?.focus()
                     const start =
                       event.shiftKey && anchor ? anchor.row : item.index
-                    setAnchor({ row: start, column: 0 })
-                    setActive({ row: item.index, column: columns.length - 1 })
+                    setAnchor({ row: start, column: firstShown })
+                    setActive({ row: item.index, column: lastShown })
                   }}
                   className={cn(
                     // Opaque, so cells scrolled under it stay hidden; the
@@ -646,7 +708,7 @@ export const ResultGrid = React.memo(function ResultGrid({
                   {item.index + 1}
                 </div>
                 {visibleColumns.map((virtual) => {
-                  const column = virtual.index
+                  const column = shown[virtual.index] ?? virtual.index
                   const described = columns[column]
                   const isActive = isActiveRow && active.column === column
                   const selected = inRange(range, item.index, column)
@@ -660,7 +722,7 @@ export const ResultGrid = React.memo(function ResultGrid({
                       key={virtual.key}
                       id={cellId(item.index, column)}
                       role="gridcell"
-                      aria-colindex={column + 2}
+                      aria-colindex={virtual.index + 2}
                       aria-selected={selected}
                       onMouseDown={(event) =>
                         select({ row: item.index, column }, event.shiftKey)

@@ -64,13 +64,15 @@ function field(text: string) {
  * cannot be rendered: pasting « Long note Long no… » into a ticket is a wrong
  * value that looks right. The full value is one `Inspect full value` away, and
  * the export writes every value whole. `NULL` copies as an empty field, the
- * spreadsheet convention.
+ * spreadsheet convention. A column hidden from the grid is left out of the
+ * copy, since it is not shown.
  */
 export function copyText(
   rows: ReadonlyArray<ReadonlyArray<Cell>>,
   columns: ReadonlyArray<ResultColumn>,
   range: GridRange,
-  withHeaders: boolean
+  withHeaders: boolean,
+  hidden: ReadonlySet<number> = new Set()
 ): CopyText {
   if (rangeRows(range) > MAX_COPY_ROWS) {
     return {
@@ -84,19 +86,21 @@ export function copyText(
       reason: "Not copied: some selected rows are not loaded.",
     }
   }
+  const copied: Array<number> = []
+  for (let column = range.left; column <= range.right; column++) {
+    if (!hidden.has(column)) copied.push(column)
+  }
   let truncated = 0
   let unrenderable = 0
   const lines: Array<string> = []
   if (withHeaders) {
-    const names: Array<string> = []
-    for (let column = range.left; column <= range.right; column++) {
-      names.push(field(columns[column]?.name ?? ""))
-    }
-    lines.push(names.join("\t"))
+    lines.push(
+      copied.map((column) => field(columns[column]?.name ?? "")).join("\t")
+    )
   }
   for (const row of rows) {
     const values: Array<string> = []
-    for (let column = range.left; column <= range.right; column++) {
+    for (const column of copied) {
       const cell = row[column] ?? null
       if (cell !== null && typeof cell === "object") {
         if ("text" in cell) truncated++
@@ -118,11 +122,10 @@ export function copyText(
       reason: `Not copied: ${unrenderable} selected ${unrenderable === 1 ? "value" : "values"} cannot be rendered as text.`,
     }
   }
-  const width = range.right - range.left + 1
   return {
     ok: true,
     text: lines.join("\n"),
     rows: rows.length,
-    cells: rows.length * width,
+    cells: rows.length * copied.length,
   }
 }

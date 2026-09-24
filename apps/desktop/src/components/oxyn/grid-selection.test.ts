@@ -36,6 +36,19 @@ describe("grid selection", () => {
     })
   })
 
+  it("leaves a hidden column out of the copy", () => {
+    const rows: Array<Array<Cell>> = [["1", { text: "Long no", fullBytes: 9 }]]
+    const copied = copyText(
+      rows,
+      columns,
+      { top: 0, bottom: 0, left: 0, right: 1 },
+      true,
+      new Set([1])
+    )
+    // The hidden value is truncated: it is not even looked at.
+    expect(copied).toEqual({ ok: true, text: "id\n1", rows: 1, cells: 1 })
+  })
+
   it("refuses a truncated value rather than pasting half of it", () => {
     const rows: Array<Array<Cell>> = [
       ["1", { text: "Long note", fullBytes: 48_213 }],
