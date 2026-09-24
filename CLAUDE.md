@@ -1,7 +1,7 @@
 # Oxyn
 
-Workspace natif et haute performance pour explorer, interroger et gérer tout
-type de base de données — relationnelle, analytique, NoSQL, vectorielle, graphe.
+Workspace de bureau, au backend natif et haute performance, pour explorer,
+interroger et gérer tout type de base de données — relationnelle, analytique, NoSQL, vectorielle, graphe.
 Des agents IA y aident à comprendre les schémas et les requêtes, **aux côtés**
 de l'utilisateur, jamais à sa place. Public : professionnels des données, qui
 lisent les messages d'erreur de PostgreSQL.

@@ -35,7 +35,7 @@ Pour localiser les planches et leurs états avant implémentation, consulter
 | [0006](adr/0006-ai-privacy-tiers.md) | Niveaux de confidentialité IA, par connexion | accepté |
 | [0007](adr/0007-driver-sidecar.md) | Processus sidecar pour les drivers à dépendances natives | proposé |
 | [0008](adr/0008-chaine-outils-rust.md) | Chaîne d'outils Rust épinglée dans le dépôt | accepté |
-| [0009](adr/0009-source-dependance-gpui.md) | GPUI consommé depuis crates.io, non depuis le dépôt Zed | accepté |
+| [0009](adr/0009-source-dependance-gpui.md) | GPUI consommé depuis crates.io, non depuis le dépôt Zed | remplacé |
 | [0010](adr/0010-contraintes-natives-sqlite.md) | Une seule version de libsqlite3-sys dans le graphe | accepté |
 | [0011](adr/0011-structure-commune-workspace.md) | Workbench dense comme structure commune du workspace | accepté |
 | [0012](adr/0012-lecture-pages-resultats.md) | Lecture de pages hors rendu et cache borné en octets | accepté |
@@ -47,19 +47,19 @@ Pour localiser les planches et leurs états avant implémentation, consulter
 | [0018](adr/0018-apercu-ddl.md) | DDL inspecté comme métadonnée, préparé sans exécution | accepté |
 | [0019](adr/0019-contexte-de-session.md) | Contexte de session déclaré, jamais posé en silence | accepté |
 | [0020](adr/0020-apercu-trie-filtre-parcouru.md) | Aperçu : tri composé, prédicat écrit, page déterministe | proposé |
-| [0021](adr/0021-marqueur-d-arret.md) | Arrêt propre ou anormal constaté, jamais deviné | proposé |
+| [0021](adr/0021-marqueur-d-arret.md) | Arrêt propre ou anormal constaté, jamais deviné | accepté |
 | [0022](adr/0022-rafraichissement-automatique.md) | Ce qui se rafraîchit tout seul, et ce qui ne le fera jamais | proposé |
-| [0023](adr/0023-fournisseurs-declares-et-provenance.md) | Fournisseurs déclarés par machine, reclassés à chaque ouverture, provenance persistée | proposé |
+| [0023](adr/0023-fournisseurs-declares-et-provenance.md) | Fournisseurs déclarés par machine, reclassés à chaque ouverture, provenance persistée | accepté |
 | [0024](adr/0024-autosauvegarde-au-repos-de-frappe.md) | Le brouillon s'écrit quand la frappe s'arrête, pas à chaque touche | proposé |
 | [0025](adr/0025-proposition-de-changement-de-schema.md) | Une proposition de changement de schéma est du SQL à relire, jamais une écriture | proposé |
-| [0026](adr/0026-agents-externes-acp.md) | Un agent externe parle ACP, ne confie aucune clé, et reste hors de portée d'une connexion `Local` | proposé |
-| [0027](adr/0027-porte-unique-pour-les-deux-destinations.md) | La porte d'I-04 vaut pour les **deux** destinations, ou elle ne vaut pour aucune | proposé |
-| [0028](adr/0028-pas-dordre-par-defaut-pas-de-page-sans-ordre-total.md) | Un aperçu n'impose aucun ordre, et n'offre aucune page tant que l'ordre n'est pas total | proposé |
-| [0029](adr/0029-interface-tauri-shadcn.md) | Interface web dans Tauri : TanStack Start, shadcn/ui sur Base UI | proposé |
+| [0026](adr/0026-agents-externes-acp.md) | Un agent externe parle ACP, ne confie aucune clé, et reste hors de portée d'une connexion `Local` | accepté |
+| [0027](adr/0027-porte-unique-pour-les-deux-destinations.md) | La porte d'I-04 vaut pour les **deux** destinations, ou elle ne vaut pour aucune | accepté |
+| [0028](adr/0028-pas-dordre-par-defaut-pas-de-page-sans-ordre-total.md) | Un aperçu n'impose aucun ordre, et n'offre aucune page tant que l'ordre n'est pas total | accepté |
+| [0029](adr/0029-interface-tauri-shadcn.md) | Interface web dans Tauri : TanStack Start, shadcn/ui sur Base UI | accepté |
 | [0030](adr/0030-outils-oxyn-exposes-a-un-agent-externe.md) | Un agent externe atteint la base par les outils d'Oxyn, servis en MCP, et par rien d'autre | proposé |
-| [0031](adr/0031-validation-des-reponses-ipc.md) | Toute réponse du backend est validée à l'entrée du front | proposé |
-| [0032](adr/0032-agent-externe-confine-au-lancement.md) | Un agent externe connu est confiné au lancement, et n'a d'outils que ceux d'Oxyn | proposé |
-| [0033](adr/0033-couches-de-configuration-codex.md) | Oxyn coupe Codex dans toutes les couches de configuration qu'il peut lire, et laisse à l'organisation celles qu'il ne peut pas lire | proposé |
+| [0031](adr/0031-validation-des-reponses-ipc.md) | Toute réponse du backend est validée à l'entrée du front | accepté |
+| [0032](adr/0032-agent-externe-confine-au-lancement.md) | Un agent externe connu est confiné au lancement, et n'a d'outils que ceux d'Oxyn | accepté |
+| [0033](adr/0033-couches-de-configuration-codex.md) | Oxyn coupe Codex dans toutes les couches de configuration qu'il peut lire, et laisse à l'organisation celles qu'il ne peut pas lire | accepté |
 | [0034](adr/0034-echantillon-pour-toute-destination.md) | Un échantillon approuvé atteint toute destination par la même porte, et un agent peut en demander un sans jamais l'approuver | proposé |
 | [0035](adr/0035-ecritures-locales-de-l-ordonnanceur-sur-le-pool-bloquant.md) | Les écritures locales de l'ordonnanceur passent par le pool bloquant, en opérations possédées | accepté |
 | [0036](adr/0036-l-assistant-complete-le-catalogue.md) | L'assistant complète lui-même le catalogue, par le bus et sous des bornes | proposé |
@@ -80,6 +80,12 @@ Les ADR restent `proposé` jusqu'au premier commit de code qui les met en œuvre
 > commit. Ceux qui ne sont pas implémentés du tout — 0005 et 0007, reportés en
 > phase 4 — aussi.
 >
+> **Revue du 2026-09-24.** Le critère a été resserré : un ADR passe `accepté`
+> quand sa décision, telle qu'écrite, est implémentée **et tenue par un test**.
+> Neuf y répondent — 0021, 0023, 0026 à 0029, 0031 à 0033 ; huit restent
+> `proposé`, et ADR-0036, écrit le jour même, n'a pas été revu. Le détail, test cité par ADR, est dans
+> [IMPLEMENTATION-PLAN](IMPLEMENTATION-PLAN.md#3-le-statut-des-adr--revue-du-2026-09-24).
+>
 > L'index ci-dessus est **déduit** des fichiers, jamais saisi : la revue a
 > d'ailleurs trouvé deux lignes qui avaient divergé de l'ADR qu'elles
 > annonçaient.
@@ -89,12 +95,12 @@ Les ADR restent `proposé` jusqu'au premier commit de code qui les met en œuvre
 > application web servie par Tauri. La règle d'isolation reste, transposée.
 > L'ADR-0009 a cessé de s'appliquer le 2026-09-18, avec la suppression
 > d'`oxyn-ui`, d'`oxyn-app` et de la dépendance `gpui` ; son fichier porte
-> encore `accepté` ([question ouverte](IMPLEMENTATION-PLAN.md#migration-vers-linterface-tauri)).
+> `remplacé` depuis le 2026-09-24.
 
-> [ADR-0009](adr/0009-source-dependance-gpui.md) **précise**
+> [ADR-0009](adr/0009-source-dependance-gpui.md) **précisait**
 > [ADR-0001](adr/0001-ui-toolkit.md) sur un point : l'ADR-0001 mentionnait un
-> « commit précis » de GPUI ; la source retenue est crates.io. Le reste de
-> l'ADR-0001 est inchangé.
+> « commit précis » de GPUI ; la source retenue était crates.io. Les deux sont
+> désormais remplacés par l'ADR-0029.
 >
 > [ADR-0028](adr/0028-pas-dordre-par-defaut-pas-de-page-sans-ordre-total.md)
 > **précise** [ADR-0020](adr/0020-apercu-trie-filtre-parcouru.md) : son argument

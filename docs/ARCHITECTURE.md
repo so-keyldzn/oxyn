@@ -307,8 +307,14 @@ pub trait Session: Send + Sync {
     async fn ping(&self) -> Result<Duration>;
     async fn close(self: Box<Self>) -> Result<()>;
 
-    // Fournies par défaut : refusent en nommant la capacité absente, plutôt que
-    // de faire semblant. Un driver sans transactions ne les redéfinit pas.
+    // Fournies par défaut : refusent en nommant la capacité absente, ou rendent
+    // None, plutôt que de faire semblant. Un driver sans aperçu, sans contexte de session ou
+    // sans transactions ne les redéfinit pas.
+    async fn preview_request(&self, path: &CatalogPath, limit: u32,
+        shape: &PreviewShape, cancel: &CancelToken) -> Result<ExecRequest>;
+    async fn set_context(&self, context: &SessionContext, cancel: &CancelToken)
+        -> Result<()>;                               // SESSION_CONTEXT ; le driver cite
+    fn context(&self) -> Option<SessionContext>;     // confirmé par le serveur ; None par défaut
     async fn begin(&self, cancel: &CancelToken) -> Result<()>;
     async fn commit(&self, cancel: &CancelToken) -> Result<()>;
     async fn rollback(&self, cancel: &CancelToken) -> Result<()>;
@@ -807,8 +813,15 @@ Les pièges sont testés explicitement : `EXPLAIN ANALYZE DELETE` n'est pas une 
 systématiquement le texte avant de soumettre au Policy gate — un agent ne peut pas
 s'auto-déclarer en lecture seule.
 
-**Connexions marquées production** — badge visuel permanent, lecture seule par défaut,
-confirmation à chaque écriture, agents en refus strict.
+**Connexions marquées production** — la règle vit dans
+[SECURITY § Marquage des connexions](SECURITY.md#marquage-des-connexions), reprise ici
+mot pour mot : « Sur une connexion `production` : toute écriture, tout DDL, toute
+opération destructrice exige une confirmation explicite qui **nomme la connexion**, et
+l'interface porte un marqueur permanent. […] Pour un `Actor::Agent`, une connexion
+`production` est en **lecture seule stricte** — ce n'est pas une confirmation renforcée,
+c'est un refus […]. » Une connexion `production` n'est donc **pas** en lecture seule par
+défaut pour l'utilisateur : `ConnectionConfig::read_only` reste un choix explicite, et
+son défaut `false` est voulu — l'utilisateur écrit, après confirmation.
 
 **Injection de prompt.** Le contenu d'une base de données est une donnée, jamais une
 instruction. Les valeurs de cellules, noms de tables et commentaires de colonnes transmis
@@ -1037,6 +1050,13 @@ vraiment.*
 **Phase 1 — Le client se suffit à lui-même.** MySQL/MariaDB, DuckDB, ClickHouse. Export.
 Historique. Édition de données avec prévisualisation du DML. *À ce stade Oxyn est un bon
 client SQL, sans une ligne d'IA.*
+
+> **MySQL/MariaDB est reporté** après la porte de sortie de la phase IA, dont un lot
+> est daté au plus tard au 2026-10-31 : le workspace IA est engagé, et PostgreSQL et
+> SQLite suffisent à éprouver les traits de la couche driver. Le calendrier et la
+> raison font foi dans
+> [IMPLEMENTATION-PLAN § Phase 2](IMPLEMENTATION-PLAN.md#phase-2--les-protocoles-qui-comptent),
+> dont la numérotation des phases diffère de celle-ci.
 
 **Phase 2 — Le workspace IA.** `oxyn-llm` (Ollama + un fournisseur cloud), `oxyn-ai`,
 compaction de contexte, deux agents : SQL et Schema. Le socle d'approbation et de

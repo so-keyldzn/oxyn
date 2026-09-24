@@ -1,6 +1,6 @@
 # ADR-0029 — Interface web dans Tauri : TanStack Start, shadcn/ui sur Base UI
 
-**Statut :** proposé · **Date :** 2026-09-15
+**Statut :** accepté · **Date :** 2026-09-15
 **Remplace :** [ADR-0001](0001-ui-toolkit.md) sur le choix du toolkit, et
 [ADR-0009](0009-source-dependance-gpui.md) à la suppression des crates GPUI. La
 règle d'isolation de l'ADR-0001 reste en vigueur, transposée à Tauri.

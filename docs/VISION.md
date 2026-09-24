@@ -2,9 +2,9 @@
 
 > The modern database workspace.
 
-Oxyn est un workspace natif et haute performance pour explorer, comprendre, interroger
-et gérer tout type de base de données. Un point d'accès unique aux bases SQL, NoSQL,
-vectorielles, cloud et locales.
+Oxyn est un workspace de bureau, au backend natif et haute performance, pour explorer,
+comprendre, interroger et gérer tout type de base de données. Un point d'accès unique aux
+bases SQL, NoSQL, vectorielles, cloud et locales.
 
 Au-delà d'un client de base de données traditionnel, Oxyn embarque des assistants IA
 qui aident à comprendre les schémas, optimiser les requêtes, documenter les bases,
@@ -14,7 +14,11 @@ Qu'ils soient servis par des modèles locaux ou des APIs cloud, les agents trava
 
 ## Principes fondateurs
 
-* **Native first** — pas de webview, pas de runtime JS.
+* **Native first** — un backend natif en Rust, aucun serveur, et une interface
+  soumise à des budgets de trame chiffrés, qui se mesurent
+  ([PERFORMANCE](PERFORMANCE.md)). La webview de Tauri affiche et
+  saisit ; ce qui exécute une requête, parle à une base ou conserve un secret
+  vit dans le processus Rust ([ADR-0029](adr/0029-interface-tauri-shadcn.md)).
 * **Blazing fast** — la latence perçue est une fonctionnalité.
 * **Open by default** — formats ouverts, pas de verrouillage.
 * **AI when it adds value** — jamais imposée, jamais dans le chemin critique.

@@ -1,6 +1,6 @@
 # ADR-0033 — Oxyn coupe Codex dans toutes les couches de configuration qu'il peut lire, et laisse à l'organisation celles qu'il ne peut pas lire
 
-**Statut :** proposé · **Date :** 2026-09-23
+**Statut :** accepté · **Date :** 2026-09-23
 
 **Précise :** [ADR-0032](0032-agent-externe-confine-au-lancement.md) sur un
 point. L'ADR-0032 coupe par leur nom les serveurs MCP et les plugins déclarés

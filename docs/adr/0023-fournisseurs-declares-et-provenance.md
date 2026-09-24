@@ -1,6 +1,6 @@
 # ADR-0023 — Un fournisseur se déclare par machine, se reclasse à chaque ouverture, et signe ce qu'il propose
 
-**Statut :** proposé · **Date :** 2026-09-10
+**Statut :** accepté · **Date :** 2026-09-10
 
 **Précise :** [ADR-0006](0006-ai-privacy-tiers.md), sur deux points que celui-ci
 laissait ouverts : où vit la configuration d'un fournisseur, et ce qui reste

@@ -15,9 +15,11 @@ résultats.
 > l'analyse des requêtes. Une seconde campagne, le **2026-09-11**, a mesuré le
 > démarrage à froid, le nœud de catalogue en cache et la mémoire au repos — ses
 > chiffres sont dans [IMPLEMENTATION-PLAN](IMPLEMENTATION-PLAN.md) et reportés
-> dans le tableau ci-dessous. **Le budget de trame a été mesuré le 2026-09-11,
-> puis la saisie l'a été depuis : des trois cas qu'il nomme, seul le défilement
-> d'une grille peuplée reste à couvrir.** Une troisième mesure, le
+> dans le tableau ci-dessous. **Le budget de trame, le démarrage à froid et
+> l'application au repos ont été mesurés sur l'interface GPUI, retirée le
+> 2026-09-18 ([ADR-0029](adr/0029-interface-tauri-shadcn.md)) : ils ne disent
+> rien de la webview Tauri, qui n'a pas encore été mesurée** — voir
+> [Confrontation aux budgets](#confrontation-aux-budgets). Une troisième mesure, le
 > **2026-09-15**, a confronté le budget de mémoire à la mémoire du **processus**
 > et non plus à la seule comptabilité du tampon ; elle est consignée
 > [plus bas](#mesure-de-mémoire-du-2026-09-15). Un budget

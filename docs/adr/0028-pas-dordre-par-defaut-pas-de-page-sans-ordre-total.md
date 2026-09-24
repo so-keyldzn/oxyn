@@ -1,6 +1,6 @@
 # ADR-0028 — Un aperçu n'impose aucun ordre, et n'offre aucune page tant que l'ordre n'est pas total
 
-**Statut :** proposé · **Date :** 2026-09-15
+**Statut :** accepté · **Date :** 2026-09-15
 
 **Précise :** [ADR-0020](0020-apercu-trie-filtre-parcouru.md), dont la décision
 « sans tri demandé, le driver ordonne par la clé primaire seule » n'a pas été

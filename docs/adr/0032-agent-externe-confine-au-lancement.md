@@ -1,6 +1,6 @@
 # ADR-0032 — Un agent externe connu est confiné au lancement, et n'a d'outils que ceux d'Oxyn
 
-**Statut :** proposé · **Date :** 2026-09-23
+**Statut :** accepté · **Date :** 2026-09-23
 
 **Précise :** [ADR-0026](0026-agents-externes-acp.md), sur un point :
 l'ADR supposait que refuser les demandes d'autorisation d'un agent suffisait à
