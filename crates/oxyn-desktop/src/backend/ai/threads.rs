@@ -40,7 +40,9 @@ use parking_lot::Mutex;
 use tauri::ipc::Channel;
 
 use crate::ipc::IpcError;
-use crate::ipc::ai::{AiEvent, AiUpdate, NodeView, Selection, ThreadSummary, ThreadView};
+use crate::ipc::ai::{
+    AiEvent, AiUpdate, MentionView, NodeView, Selection, ThreadSummary, ThreadView,
+};
 
 /// Conversations kept per connection. Past it, the oldest idle one goes.
 const MAX_THREADS: usize = 64;
@@ -222,6 +224,7 @@ impl AiState {
             state.nodes.push(Node {
                 parent,
                 question: node.question.clone(),
+                mentions: node.mentions.clone(),
                 log: node.events.clone(),
                 memory: None,
                 loaded: true,
@@ -385,6 +388,8 @@ pub(crate) struct RestoredNode {
     pub(crate) stored: u32,
     pub(crate) parent: Option<u32>,
     pub(crate) question: String,
+    /// The chips, checked against the catalog when the thread was read back.
+    pub(crate) mentions: Vec<MentionView>,
     pub(crate) withheld: bool,
     pub(crate) events: Vec<AiEvent>,
 }
@@ -447,6 +452,8 @@ struct Running {
 struct Node {
     parent: Option<u32>,
     question: String,
+    /// The chips the question shows, in the order typed.
+    mentions: Vec<MentionView>,
     log: Vec<AiEvent>,
     memory: Option<Memory>,
     /// Read back from the workspace: it has no provider session, and the
@@ -682,6 +689,7 @@ impl Thread {
         state.nodes.push(Node {
             parent,
             question: question.to_owned(),
+            mentions: Vec::new(),
             log: Vec::new(),
             memory: None,
             loaded: false,
@@ -703,6 +711,24 @@ impl Thread {
         };
         state.updated_at_ms = now_ms();
         Ok((node, token))
+    }
+
+    /// Gives a node the chips its question shows. Called once, right after
+    /// [`Thread::begin`], before its question is announced.
+    pub(crate) fn name_mentions(&self, node: u32, mentions: Vec<MentionView>) {
+        if let Some(found) = self.state.lock().nodes.get_mut(node as usize) {
+            found.mentions = mentions;
+        }
+    }
+
+    /// The chips a node's question shows, as [`Thread::name_mentions`] gave them.
+    pub(crate) fn mentions_of(&self, node: u32) -> Vec<MentionView> {
+        self.state
+            .lock()
+            .nodes
+            .get(node as usize)
+            .map(|found| found.mentions.clone())
+            .unwrap_or_default()
     }
 
     /// Ends the run: whatever happened, the conversation takes questions again.
@@ -758,6 +784,7 @@ impl Thread {
                     id: u32::try_from(id).unwrap_or(u32::MAX),
                     parent: node.parent,
                     question: node.question.clone(),
+                    mentions: node.mentions.clone(),
                     events: node.log.clone(),
                 })
                 .collect(),

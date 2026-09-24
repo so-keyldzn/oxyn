@@ -428,6 +428,7 @@ fn the_agent_receives_the_structure_of_the_database_and_no_value() {
         &cache,
         oxyn_core::QueryLanguage::Sql(oxyn_core::SqlDialect::Sqlite),
         Vec::new(),
+        Vec::new(),
     )
     .expect("an external agent is allowed under sampled");
 

@@ -26,7 +26,7 @@
 //! | `external_agents` | les agents externes déclarés — **par machine**, sans secret | oui |
 //! | `ai_conversations` | les fils de l'assistant, par connexion | oui, élagage et suppression |
 //! | `ai_conversation_turns` | leur transcription, **jamais** une valeur de la base | oui, avec leur fil |
-//! | `ai_conversation_nodes` | l'arbre des échanges ; un échange retenu ne garde que sa question | oui, avec leur fil |
+//! | `ai_conversation_nodes` | l'arbre des échanges ; un échange retenu ne garde que sa question, et ses mentions en JSON — noms et adresses, jamais une valeur | oui, avec leur fil |
 //! | `ai_egress` | ce qui est parti vers un destinataire IA — noms, jamais valeurs — **append-only** | **non** |
 //!
 //! # Pourquoi `STRICT`
@@ -665,6 +665,20 @@ BEGIN
 END;
 ";
 
+/// Migration 14 — ce qu'une question a nommé d'un `@`.
+///
+/// Une conversation relue montre ses questions comme elles ont été posées,
+/// puces comprises. La liste est un tableau **JSON** — lisible sans Oxyn
+/// ([I-11](../../../CLAUDE.md#i-11)) — que le fichier vérifie et borne ; `NULL`
+/// pour une question sans mention, et pour toute ligne antérieure : elle se
+/// relit sans puce. Jamais une valeur de ligne : une sorte, un nom, une adresse.
+const M0014_AI_EXCHANGE_MENTIONS: &str =
+    "ALTER TABLE ai_conversation_nodes ADD COLUMN mentions TEXT
+    CHECK(mentions IS NULL
+          OR (json_valid(mentions) AND json_type(mentions) = 'array'
+              AND length(CAST(mentions AS BLOB)) <= 32768));
+";
+
 /// Toutes les migrations, dans l'ordre d'application.
 pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -731,6 +745,11 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 13,
         name: "ai_conversation_tree",
         sql: M0013_AI_CONVERSATION_TREE,
+    },
+    Migration {
+        version: 14,
+        name: "ai_exchange_mentions",
+        sql: M0014_AI_EXCHANGE_MENTIONS,
     },
 ];
 

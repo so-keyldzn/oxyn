@@ -754,6 +754,39 @@ impl AgentSession {
     pub fn ask(&mut self, question: impl Into<String>) {
         self.messages.push(ChatMessage::user(question));
     }
+
+    /// Ajoute une question qui nomme des objets, dans une conversation déjà
+    /// ouverte.
+    ///
+    /// Le message système ne se réécrit pas : les objets mentionnés précèdent
+    /// la question dans le message utilisateur, rendus par
+    /// [`ContextBuilder::build`] — le seul chemin qui fabrique un
+    /// [`AgentContext`], donc sous un niveau appliqué. Le texte est celui que
+    /// reçoit un agent externe dans le même cas
+    /// ([`AgentPrompt::following`](crate::external::prompt::AgentPrompt::following)).
+    ///
+    /// # Erreurs
+    ///
+    /// [`oxyn_core::OxynError::Config`], porté par
+    /// [`AiError::Core`], si `context` a été rendu sous un autre niveau que
+    /// celui de la conversation : rien n'est ajouté, pas même la question.
+    pub fn ask_about(
+        &mut self,
+        context: &AgentContext,
+        question: impl AsRef<str>,
+    ) -> Result<(), AiError> {
+        if context.tier() != self.tier {
+            return Err(AiError::Core(oxyn_core::OxynError::Config(format!(
+                "the mentioned objects were rendered under the `{}` tier, and this \
+                 conversation runs under `{}`",
+                context.tier(),
+                self.tier
+            ))));
+        }
+        self.messages
+            .push(ChatMessage::user(context.follow_up(question.as_ref())));
+        Ok(())
+    }
 }
 
 /// Ce qu'un tour a produit.

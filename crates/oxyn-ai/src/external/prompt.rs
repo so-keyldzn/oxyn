@@ -65,7 +65,7 @@ use std::fmt;
 use oxyn_catalog::CatalogCache;
 use oxyn_core::{OxynError, QueryLanguage};
 
-use crate::context::{AgentContext, ContextBuilder, RowSample};
+use crate::context::{AgentContext, ContextBuilder, Mention, QUESTION_HEADER, RowSample};
 use crate::privacy::PrivacyTier;
 use crate::untrusted;
 
@@ -84,15 +84,13 @@ fn schema_intro() -> String {
          `{describe}` tool of the `{server}` MCP server with search words rather than guessing \
          a name. Run a statement with its `{execute}` tool: the rows appear in the user's \
          result grid, and the tool returns you the shape of the result — row and batch \
-         counts — never the values.",
+         counts — never the values. {erd}",
         describe = crate::tools::DESCRIBE_SCHEMA,
+        erd = crate::tools::ERD_HINT,
         execute = crate::tools::EXECUTE_QUERY,
         server = super::mcp::SERVER_NAME,
     )
 }
-
-/// Ce qui annonce la question, pour qu'elle ne se confonde pas avec le schéma.
-const QUESTION_HEADER: &str = "The user's question:";
 
 /// Ce qui part vers un agent externe, une fois le niveau appliqué.
 ///
@@ -179,6 +177,9 @@ impl AgentPrompt {
     /// joint ouvre une session neuve et la relâche après l'échange (voir
     /// l'en-tête du module).
     ///
+    /// `mentions` sont les objets que l'utilisateur a nommés d'un `@` : décrits
+    /// en tête par [`ContextBuilder::with_mentions`], sous le même budget.
+    ///
     /// # Erreurs
     ///
     /// Celles de [`AgentPrompt::from_user`], vérifiées **avant** que le moindre
@@ -189,11 +190,13 @@ impl AgentPrompt {
         cache: &CatalogCache,
         language: QueryLanguage,
         samples: Vec<RowSample>,
+        mentions: Vec<Mention>,
     ) -> Result<Self, OxynError> {
         let asked = Self::from_user(tier, question)?;
         let context = ContextBuilder::new(cache, tier)
             .with_language(language)
             .focused_on(asked.text.clone())
+            .with_mentions(mentions)
             .with_samples(samples)
             .build();
         let text = format!(
@@ -205,6 +208,42 @@ impl AgentPrompt {
         );
         Ok(Self {
             text,
+            context: Some(context),
+        })
+    }
+
+    /// Compose l'invite d'une question qui **suit** une session déjà ouverte.
+    ///
+    /// Sans mention, c'est [`AgentPrompt::from_user`] : la session connaît le
+    /// schéma depuis son ouverture. Avec des mentions, les objets nommés
+    /// précèdent la question, rendus par [`ContextBuilder::build`] en mode
+    /// [`ContextBuilder::mentioned_only`] — la même porte, le même niveau, le
+    /// même budget qu'à l'ouverture ; seule la recherche n'y ajoute rien,
+    /// puisque le reste a déjà été dit. Aucun échantillon : une invite qui
+    /// continue parle à un processus qui se souvient (voir l'en-tête du
+    /// module).
+    ///
+    /// # Erreurs
+    ///
+    /// Celles de [`AgentPrompt::from_user`], vérifiées avant tout rendu.
+    pub fn following(
+        tier: PrivacyTier,
+        question: &str,
+        cache: &CatalogCache,
+        language: QueryLanguage,
+        mentions: Vec<Mention>,
+    ) -> Result<Self, OxynError> {
+        let asked = Self::from_user(tier, question)?;
+        if mentions.is_empty() {
+            return Ok(asked);
+        }
+        let context = ContextBuilder::new(cache, tier)
+            .with_language(language)
+            .with_mentions(mentions)
+            .mentioned_only()
+            .build();
+        Ok(Self {
+            text: context.follow_up(&asked.text),
             context: Some(context),
         })
     }

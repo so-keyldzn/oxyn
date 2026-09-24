@@ -46,6 +46,67 @@ pub struct AskRequest {
     /// A row sample the user approved for **this** question, if any.
     #[serde(default)]
     pub sample: Option<SampleApproval>,
+    /// The objects the user named with `@`, in the order they were typed.
+    /// Imposed on the context; they carry no row value.
+    #[serde(default)]
+    pub mentions: Vec<Mention>,
+}
+
+/// An object the user named with `@` in a question.
+///
+/// An address, never text to reparse: the label in the question is for the
+/// reader, this is what the backend checks against the catalog. Naming is not
+/// sending values — a row sample is a separate approval.
+#[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "camelCase", deny_unknown_fields)]
+pub enum Mention {
+    /// A table, view or collection — and one of its fields for `table.field`.
+    Relation {
+        address: crate::ipc::CatalogAddress,
+        field: Option<String>,
+    },
+    /// A query saved in the workspace library, by its document id.
+    SavedQuery { document: String },
+}
+
+/// A mention as the thread shows it: a chip, named from the catalog.
+///
+/// `label` is the object's name as the catalog — or the library, for a saved
+/// query — gave it: a server-controlled string, rendered as text. `missing`
+/// says the object is gone, which is claimed only on evidence: a listing that
+/// was read and no longer holds it. An object whose schema was never read here
+/// is not called missing.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MentionView {
+    /// `table`, `view`, `collection`, `column`, `savedQuery` or `other`.
+    pub kind: &'static str,
+    pub label: String,
+    pub mention: Mention,
+    pub missing: bool,
+}
+
+// Object names: counted, like everything a conversation quotes.
+impl fmt::Debug for MentionView {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("MentionView")
+            .field("kind", &self.kind)
+            .field("missing", &self.missing)
+            .finish_non_exhaustive()
+    }
+}
+
+// A field name and a document id: nothing a log needs.
+impl fmt::Debug for Mention {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Relation { field, .. } => f
+                .debug_struct("Relation")
+                .field("field", &field.is_some())
+                .finish_non_exhaustive(),
+            Self::SavedQuery { .. } => f.debug_struct("SavedQuery").finish_non_exhaustive(),
+        }
+    }
 }
 
 /// What the user ticked on the sample screen, and the grant it answers.
@@ -114,6 +175,7 @@ impl fmt::Debug for AskRequest {
             .field("question_bytes", &self.question.len())
             .field("destination", &self.destination)
             .field("sample", &self.sample.is_some())
+            .field("mentions", &self.mentions.len())
             .finish_non_exhaustive()
     }
 }
@@ -154,6 +216,8 @@ pub struct NodeView {
     pub id: u32,
     pub parent: Option<u32>,
     pub question: String,
+    /// What the question named with `@`, in the order typed.
+    pub mentions: Vec<MentionView>,
     pub events: Vec<AiEvent>,
 }
 
@@ -199,15 +263,24 @@ pub struct ContextSummary {
     pub omitted_relations: usize,
     pub dropped_samples: usize,
     pub estimated_tokens: usize,
+    /// Mentions nothing was sent for: unknown to the local catalog, a saved
+    /// query that is gone or belongs to another connection, or past the cap.
+    pub ignored_mentions: usize,
+    /// Mentions named in the prompt but not described: over the budget.
+    pub omitted_mentions: usize,
 }
 
 impl ContextSummary {
-    pub fn of(context: &AgentContext) -> Self {
+    /// `ignored_before` counts the mentions the host dropped before the gate —
+    /// a saved query it could not read —, added to those the gate ignored.
+    pub fn of(context: &AgentContext, ignored_before: usize) -> Self {
         Self {
             relations: context.relations().len(),
             omitted_relations: context.omitted_relations(),
             dropped_samples: context.dropped_samples(),
             estimated_tokens: context.estimated_tokens(),
+            ignored_mentions: context.ignored_mentions().saturating_add(ignored_before),
+            omitted_mentions: context.omitted_mentions(),
         }
     }
 }
@@ -665,7 +738,11 @@ impl AgentSettingAnswer {
 pub enum AiEvent {
     /// The question that starts this run.
     #[serde(rename_all = "camelCase")]
-    Question { text: String },
+    Question {
+        text: String,
+        /// What the question named with `@`: the thread draws them as chips.
+        mentions: Vec<MentionView>,
+    },
     /// The conversation is assembled. Sent before the first turn.
     #[serde(rename_all = "camelCase")]
     Started {

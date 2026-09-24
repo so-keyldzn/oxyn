@@ -788,3 +788,93 @@ fn les_lignes_de_la_migration_10_se_relisent_sans_perte() {
         "une conversation sans nœud n'a pas de branche"
     );
 }
+
+// --- Mentions ---------------------------------------------------------------
+
+fn mention_table(nom: &str) -> ExchangeMention {
+    ExchangeMention {
+        kind: "table".to_owned(),
+        label: nom.to_owned(),
+        catalog: None,
+        namespace: Some("public".to_owned()),
+        relation: Some(nom.to_owned()),
+        field: None,
+        document: None,
+    }
+}
+
+/// Ce qu'une question a nommé se relit avec elle, dans l'ordre, et le fichier
+/// le garde en JSON lisible sans Oxyn (I-11).
+#[test]
+fn les_mentions_d_une_question_se_relisent_en_json_ouvert() {
+    let (store, workspace, connexion) = decor();
+    let id = fil(&store, workspace, connexion);
+    // Un nom hostile reste une donnée : échappé par le JSON, jamais du SQL.
+    let hostile = mention_table("\"users\"; DROP TABLE audit; --");
+    let record = ExchangeRecord::new(None, PrivacyTier::Metadata, "@orders", fournisseur())
+        .with_mentions(vec![mention_table("orders"), hostile.clone()]);
+    let noeud = store
+        .conversations()
+        .append_exchange(id, &record)
+        .expect("écriture")
+        .expect("le fil existe");
+
+    let relu = store
+        .conversations()
+        .branch_page(id, noeud, 0, MAX_EXCHANGE_PAGE)
+        .expect("branche");
+    let mentions = &relu.exchanges[0].mentions;
+    assert_eq!(mentions, &vec![mention_table("orders"), hostile]);
+
+    let brut: String = store
+        .with_connection(|conn| {
+            Ok(conn.query_row(
+                "SELECT mentions FROM ai_conversation_nodes WHERE node = ?1",
+                [i64::from(noeud)],
+                |row| row.get(0),
+            )?)
+        })
+        .expect("colonne");
+    let json: serde_json::Value = serde_json::from_str(&brut).expect("du JSON");
+    assert_eq!(json[0]["relation"], "orders");
+    assert_eq!(json[0]["namespace"], "public");
+}
+
+/// Une question sans mention, ou écrite avant la migration 14, se relit sans
+/// puce ; le fichier refuse ce qui n'est pas un tableau JSON, et ce qui dépasse
+/// la borne.
+#[test]
+fn sans_mention_rien_et_le_fichier_refuse_le_reste() {
+    let (store, workspace, connexion) = decor();
+    let id = fil(&store, workspace, connexion);
+    let noeud = echange(&store, id, None, "sans mention");
+    let relu = store
+        .conversations()
+        .branch_page(id, noeud, 0, MAX_EXCHANGE_PAGE)
+        .expect("branche");
+    assert!(relu.exchanges[0].mentions.is_empty());
+
+    for invalide in ["'pas du json'", "'{\"kind\":\"table\"}'"] {
+        assert!(
+            sql(
+                &store,
+                &format!("UPDATE ai_conversation_nodes SET mentions = {invalide}")
+            )
+            .is_err(),
+            "{invalide} ne s'écrit pas"
+        );
+    }
+
+    let trop: Vec<ExchangeMention> = (0..=crate::conversations::MAX_EXCHANGE_MENTIONS)
+        .map(|i| mention_table(&format!("t{i}")))
+        .collect();
+    let refus = store.conversations().append_exchange(
+        id,
+        &ExchangeRecord::new(None, PrivacyTier::Metadata, "trop", fournisseur())
+            .with_mentions(trop),
+    );
+    assert!(
+        matches!(refus, Err(StoreError::TooLarge { .. })),
+        "{refus:?}"
+    );
+}

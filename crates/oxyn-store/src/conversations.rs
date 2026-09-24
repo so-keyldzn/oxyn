@@ -39,11 +39,15 @@
 //! Every method here can block and takes the store lock: never call them from
 //! the interface thread ([I-05](../../../CLAUDE.md#i-05)).
 
+mod mentions;
 mod retention;
 #[cfg(test)]
 mod tests;
 mod tree;
 
+pub use mentions::{
+    ExchangeMention, MAX_EXCHANGE_MENTIONS, MAX_MENTION_NAME_BYTES, MAX_MENTIONS_BYTES,
+};
 pub use retention::{PruneReport, RetentionPolicy};
 pub use tree::{
     AnswerEnding, BranchPage, EXCHANGE_LAYOUT_BYTES, Exchange, ExchangeOutcome, ExchangeRecord,

@@ -127,6 +127,7 @@ mod schema {
                 &cache,
                 SQLITE,
                 Vec::new(),
+                Vec::new(),
             )
             .expect("ce niveau admet un agent externe");
             let texte = invite.as_str();
@@ -164,6 +165,7 @@ mod schema {
             &nbc(),
             SQLITE,
             Vec::new(),
+            Vec::new(),
         )
         .expect("invite valide");
         let texte = invite.as_str();
@@ -199,6 +201,7 @@ mod schema {
             "les 10 dernières lignes",
             &cache,
             SQLITE,
+            Vec::new(),
             Vec::new(),
         )
         .expect("invite valide");
@@ -244,6 +247,7 @@ mod schema {
             &cache,
             SQLITE,
             vec![echantillon()],
+            Vec::new(),
         )
         .expect("invite valide");
         let texte = invite.as_str();
@@ -278,6 +282,7 @@ mod schema {
             &nbc(),
             SQLITE,
             vec![echantillon()],
+            Vec::new(),
         )
         .expect("invite valide");
         assert!(!invite.as_str().contains("dupont@example.com"));
@@ -324,6 +329,7 @@ mod schema {
             &cache,
             SQLITE,
             Vec::new(),
+            Vec::new(),
         )
         .expect("invite valide");
         let contexte = invite.context().expect("un schéma est joint");
@@ -349,9 +355,15 @@ mod schema {
     /// Sous `Local`, le refus tombe avant que le moindre schéma ne soit rendu.
     #[test]
     fn sous_local_aucun_schema_n_est_rendu() {
-        let erreur =
-            AgentPrompt::with_schema(PrivacyTier::Local, "tables ?", &nbc(), SQLITE, Vec::new())
-                .expect_err("une connexion locale ne parle pas à un agent externe");
+        let erreur = AgentPrompt::with_schema(
+            PrivacyTier::Local,
+            "tables ?",
+            &nbc(),
+            SQLITE,
+            Vec::new(),
+            Vec::new(),
+        )
+        .expect_err("une connexion locale ne parle pas à un agent externe");
         let message = erreur.to_string();
         assert!(message.contains("local-only"), "{message}");
         assert!(!message.contains("orders"), "{message}");
@@ -366,6 +378,7 @@ mod schema {
             "le total des commandes",
             &nbc(),
             SQLITE,
+            Vec::new(),
             Vec::new(),
         )
         .expect("invite valide");

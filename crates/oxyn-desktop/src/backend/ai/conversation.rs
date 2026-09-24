@@ -661,6 +661,9 @@ impl Backend {
                 MAX_QUESTION_BYTES / 1024
             )));
         }
+        // Their shape only: what they name is checked against the catalog by
+        // the gate, when the context is built.
+        let mentioned = super::mentions::parse(&request.mentions)?;
 
         // Read now, not when the panel opened: a tier changed since then must
         // govern this question (I-04).
@@ -697,6 +700,11 @@ impl Backend {
         // none, whatever id the conversation gets now.
         let asked_in = request.thread.clone();
         let approval = request.sample.clone();
+        // Read before the node opens: the question is shown and written with
+        // its chips, named from the catalog and the library. Local reads only
+        // — the cache, one store read per saved query.
+        let named =
+            super::mentions::read(&self.inner, connection, mentioned, &CancelToken::new()).await;
         let (node, cancel) = thread.begin(
             request.parent,
             &question,
@@ -707,10 +715,12 @@ impl Backend {
                 environment: config.environment,
             },
         )?;
+        thread.name_mentions(node, named.views.clone());
         thread.emit(
             node,
             AiEvent::Question {
                 text: question.clone(),
+                mentions: named.views.clone(),
             },
         );
         let started = AskStarted {
@@ -738,6 +748,7 @@ impl Backend {
                 parent: request.parent,
                 connection: &config,
                 cancel: &cancel,
+                mentions: &named,
             };
             let result = async {
                 // Checked before anything else, whatever the destination: a
@@ -833,7 +844,8 @@ impl Backend {
             config.privacy_tier,
             question,
             destination.clone(),
-        );
+        )
+        .with_mentions(super::mentions::stored(&thread.mentions_of(node)));
         let executor = Arc::clone(&self.inner.executor);
         let id = thread.id;
         let header = thread.conversation().is_none().then(|| {
@@ -1292,6 +1304,8 @@ struct Run<'a> {
     parent: Option<u32>,
     connection: &'a ConnectionConfig,
     cancel: &'a CancelToken,
+    /// What the user named with `@`, for whichever destination answers.
+    mentions: &'a super::mentions::Named,
 }
 
 impl Run<'_> {
@@ -1470,6 +1484,12 @@ impl Run<'_> {
     /// sample enters a prompt through the `ContextBuilder` only, a remembered
     /// session would skip it, and a session remembered after it would carry it
     /// into the next question. What the conversation keeps of it is its size.
+    ///
+    /// The question is added here, with the objects the user mentioned: in a
+    /// fresh session they lead its context; in a remembered one — whose system
+    /// message is not rewritten — they precede the question, rendered by the
+    /// same `ContextBuilder` under the same tier. The context returned is the
+    /// one that joins the prompt this time, if any.
     fn prepare_dialogue(
         &self,
         agent: &oxyn_ai::AgentSpec,
@@ -1491,8 +1511,33 @@ impl Run<'_> {
         } else {
             self.thread.memory_from(self.parent)
         };
+        let mentions = &self.mentions.mentions;
         Ok(match remembered {
-            Some(memory) if memory.tier == tier => (memory.session, None),
+            Some(memory) if memory.tier == tier => {
+                let mut dialogue = memory.session;
+                if mentions.is_empty() {
+                    dialogue.ask(question);
+                    (dialogue, None)
+                } else {
+                    let catalog = self.inner.executor.catalog(connection.id).ok_or_else(|| {
+                        setup(
+                            "This connection has no catalog to work from yet: open its explorer first.",
+                        )
+                    })?;
+                    let context = {
+                        let cache = catalog.read();
+                        ContextBuilder::new(&cache, tier)
+                            .with_language(QueryLanguage::Sql(dialect))
+                            .with_mentions(mentions.clone())
+                            .mentioned_only()
+                            .build()
+                    };
+                    dialogue
+                        .ask_about(&context, question)
+                        .map_err(|error| setup(error.to_string()))?;
+                    (dialogue, Some(context))
+                }
+            }
             other => {
                 if other.is_some() {
                     self.emit(AiEvent::MemoryReset {
@@ -1535,11 +1580,14 @@ impl Run<'_> {
                     ContextBuilder::new(&cache, tier)
                         .with_language(QueryLanguage::Sql(dialect))
                         .focused_on(question.to_owned())
+                        .with_mentions(mentions.clone())
                         .with_samples(sample.into_iter().collect())
                         .build()
                 };
                 let scope = ToolScope::new(connection.id, session, QueryLanguage::Sql(dialect));
-                (AgentSession::new(agent, &context, scope), Some(context))
+                let mut dialogue = AgentSession::new(agent, &context, scope);
+                dialogue.ask(question);
+                (dialogue, Some(context))
             }
         })
     }
@@ -1644,8 +1692,6 @@ impl Run<'_> {
             self.record_egress(record).await?;
         }
 
-        dialogue.ask(question);
-
         // Named as the approval screen names them, and recorded as the grant
         // path records them: the same provider, model and reach.
         let sampling = Sampling::new(
@@ -1663,7 +1709,9 @@ impl Run<'_> {
                 agent_version: None,
             },
             tier,
-            context: context.as_ref().map(ContextSummary::of),
+            context: context
+                .as_ref()
+                .map(|context| ContextSummary::of(context, self.mentions.ignored)),
             provenance: Some(Provenance::new(
                 agent.id,
                 dialogue.id(),
@@ -1775,29 +1823,28 @@ impl Run<'_> {
         };
         // The prompt is born through the only gate that builds one, under the
         // tier (ADR-0027), before anything is launched. An agent session that
-        // starts here is told the structure of the database — and the sample
-        // approved for this question —, rendered by the `ContextBuilder` as the
-        // internal assistant's is; one that follows an answer already has the
-        // structure, as a remembered provider session does.
-        let prompt = match &linked {
-            Some(_) => AgentPrompt::from_user(tier, question),
-            None => {
-                let language = QueryLanguage::Sql(oxyn_query::dialect_for(&self.connection.driver));
-                let samples: Vec<_> = sample.map(|sample| sample.rows).into_iter().collect();
-                // From the local catalog only: an agent that fetched what it
-                // needs would bypass both the gate and the bus. No catalog yet
-                // is said to the agent as « 0 of 0 known relations ».
-                match self.inner.executor.catalog(self.connection.id) {
-                    Some(catalog) => {
-                        AgentPrompt::with_schema(tier, question, &catalog.read(), language, samples)
-                    }
-                    None => AgentPrompt::with_schema(
-                        tier,
-                        question,
-                        &oxyn_catalog::CatalogCache::new(),
-                        language,
-                        samples,
-                    ),
+        // starts here is told the structure of the database — the objects the
+        // user mentioned first, and the sample approved for this question —,
+        // rendered by the `ContextBuilder` as the internal assistant's is. One
+        // that follows an answer already has the structure, as a remembered
+        // provider session does: only the mentioned objects are rendered, by the
+        // same gate, and precede the question.
+        let language = QueryLanguage::Sql(oxyn_query::dialect_for(&self.connection.driver));
+        let mentions = self.mentions.mentions.clone();
+        // From the local catalog only: an agent that fetched what it needs
+        // would bypass both the gate and the bus. No catalog yet is said to the
+        // agent as « 0 of 0 known relations », and ignores every mention.
+        let catalog = self.inner.executor.catalog(self.connection.id);
+        let empty = oxyn_catalog::CatalogCache::new();
+        // The read lock is released before anything awaits.
+        let prompt = {
+            let guard = catalog.as_ref().map(|catalog| catalog.read());
+            let cache = guard.as_deref().unwrap_or(&empty);
+            match &linked {
+                Some(_) => AgentPrompt::following(tier, question, cache, language, mentions),
+                None => {
+                    let samples: Vec<_> = sample.map(|sample| sample.rows).into_iter().collect();
+                    AgentPrompt::with_schema(tier, question, cache, language, samples, mentions)
                 }
             }
         }
@@ -1875,7 +1922,9 @@ impl Run<'_> {
             },
             tier,
             // What left with the question, shown as the provider path shows it.
-            context: prompt.context().map(ContextSummary::of),
+            context: prompt
+                .context()
+                .map(|context| ContextSummary::of(context, self.mentions.ignored)),
             provenance: None,
         });
 

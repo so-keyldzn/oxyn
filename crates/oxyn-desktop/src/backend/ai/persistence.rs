@@ -511,6 +511,7 @@ pub(crate) fn load(
         }
     }
 
+    let catalog = executor.catalog(connection);
     let nodes = branch
         .into_iter()
         .enumerate()
@@ -522,10 +523,21 @@ pub(crate) fn load(
             if older && index == 0 {
                 events.insert(0, AiEvent::OlderNotLoaded);
             }
+            // Checked against the catalog as it is now: an object dropped
+            // since is shown as such, never silently as present.
+            let mentions = {
+                let guard = catalog.as_ref().map(|catalog| catalog.read());
+                exchange
+                    .mentions
+                    .iter()
+                    .filter_map(|kept| super::mentions::restored_view(guard.as_deref(), kept))
+                    .collect()
+            };
             RestoredNode {
                 stored: exchange.node,
                 parent: exchange.parent,
                 question: exchange.question,
+                mentions,
                 withheld: exchange.sample.is_some(),
                 events,
             }
@@ -669,6 +681,7 @@ mod tests {
                 oxyn_core::ProviderId::for_new_agent(),
                 "agent",
             ),
+            mentions: Vec::new(),
             sample: None,
             outcome: None,
         };

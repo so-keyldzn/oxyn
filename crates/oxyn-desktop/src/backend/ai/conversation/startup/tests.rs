@@ -379,6 +379,7 @@ fn the_first_question_takes_the_started_agent_rather_than_launching_one() {
     let asked = runtime
         .block_on(backend.ai_ask(
             AskRequest {
+                mentions: Vec::new(),
                 connection: open.connection.clone(),
                 session: open.session.clone(),
                 thread: None,

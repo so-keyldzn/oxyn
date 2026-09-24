@@ -24,6 +24,7 @@
 //! every AI entry on it.
 
 mod conversation;
+mod mentions;
 mod persistence;
 mod samples;
 mod threads;

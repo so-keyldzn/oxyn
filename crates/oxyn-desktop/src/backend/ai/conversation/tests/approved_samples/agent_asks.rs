@@ -600,6 +600,7 @@ fn after_a_sample_the_assistant_answers_the_next_question_without_memory() {
     let next = fixture.begin(&thread, Some(node), channel);
     let cancel = CancelToken::new();
     let run = Run {
+        mentions: &crate::backend::ai::mentions::NO_MENTIONS,
         inner: &fixture.backend.inner,
         thread: &thread,
         node: next,
@@ -628,7 +629,7 @@ fn after_a_sample_the_assistant_answers_the_next_question_without_memory() {
 }
 
 /// An ACP agent that records every prompt it is sent, as text.
-fn scripted_agent(fixture: &Fixture) -> (ExternalSession, Arc<Mutex<Vec<String>>>) {
+pub(super) fn scripted_agent(fixture: &Fixture) -> (ExternalSession, Arc<Mutex<Vec<String>>>) {
     use agent_client_protocol::schema::v1::{
         ContentBlock, InitializeRequest, InitializeResponse, NewSessionRequest, NewSessionResponse,
         PromptRequest, PromptResponse, SessionId as AcpSession, StopReason,
@@ -679,7 +680,7 @@ fn scripted_agent(fixture: &Fixture) -> (ExternalSession, Arc<Mutex<Vec<String>>
 
 /// Keeps `session` for the connection's next question, as the panel's start
 /// leaves it.
-fn waiting(fixture: &Fixture, declared: &ExternalAgentConfig, session: ExternalSession) {
+pub(super) fn waiting(fixture: &Fixture, declared: &ExternalAgentConfig, session: ExternalSession) {
     fixture.backend.inner.ai.wait(
         fixture.connection,
         Waiting {
@@ -744,6 +745,7 @@ fn an_approved_sample_reaches_an_external_agent_once_then_the_agent_starts_over(
     let first = fixture.begin(&thread, None, channel);
     let cancel = CancelToken::new();
     let run = Run {
+        mentions: &crate::backend::ai::mentions::NO_MENTIONS,
         inner: &fixture.backend.inner,
         thread: &thread,
         node: first,
@@ -808,6 +810,7 @@ fn an_approved_sample_reaches_an_external_agent_once_then_the_agent_starts_over(
     let (channel, second_events) = recording();
     let second = fixture.begin(&thread, Some(first), channel);
     let run = Run {
+        mentions: &crate::backend::ai::mentions::NO_MENTIONS,
         inner: &fixture.backend.inner,
         thread: &thread,
         node: second,

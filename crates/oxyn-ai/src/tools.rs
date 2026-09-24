@@ -74,6 +74,27 @@ pub const REFRESH_CATALOG: &str = "refresh_catalog";
 /// Nom de l'outil qui décrit la structure de la base, depuis le catalogue local.
 pub const DESCRIBE_SCHEMA: &str = "describe_schema";
 
+/// La consigne qui dit au modèle comment faire dessiner un schéma
+/// entité-relation par Oxyn.
+///
+/// Une macro et non une constante : `concat!` ne prend que des littéraux, et
+/// les descriptions d'outils comme les invites des agents intégrés sont des
+/// littéraux. C'est ce qui garde **une** phrase pour les invites système, la
+/// description de [`DESCRIBE_SCHEMA`] et l'invite d'un agent externe ; deux
+/// copies finiraient par dire deux formats, et le panneau n'en dessine qu'un.
+macro_rules! erd_hint {
+    () => {
+        "To show an entity-relationship diagram, write a fenced code block whose language \
+         is `erd` and that lists one table name per line, nothing else: Oxyn draws the \
+         diagram from its catalog. Do not draw one in ASCII or in another diagram language."
+    };
+}
+pub(crate) use erd_hint;
+
+/// La consigne de `erd_hint!`, pour qui compose une invite à l'exécution : la
+/// même phrase que celle des invites système et de [`DESCRIBE_SCHEMA`].
+pub const ERD_HINT: &str = erd_hint!();
+
 /// Nom de l'outil par lequel un agent **demande** un échantillon de lignes.
 ///
 /// Demander n'est pas lire : rien n'est lu ni envoyé avant que l'utilisateur
@@ -388,14 +409,17 @@ impl ToolRegistry {
                 },
                 ToolDefinition {
                     name: DESCRIBE_SCHEMA,
-                    description: "Describe the structure of the database the user opened: \
-                                  its objects (tables, views, collections, indexes, key \
-                                  patterns, labels…), their fields and types as the server \
-                                  names them, keys and indexes, and the query language to \
-                                  write in. Read from Oxyn's local catalog: it never \
-                                  contacts the server and never returns row values. The \
-                                  answer is bounded; when it says objects were left out, \
-                                  call it again with search words.",
+                    description: concat!(
+                        "Describe the structure of the database the user opened: \
+                         its objects (tables, views, collections, indexes, key \
+                         patterns, labels…), their fields and types as the server \
+                         names them, keys and indexes, and the query language to \
+                         write in. Read from Oxyn's local catalog: it never \
+                         contacts the server and never returns row values. The \
+                         answer is bounded; when it says objects were left out, \
+                         call it again with search words. ",
+                        erd_hint!()
+                    ),
                     command: "DescribeCatalog",
                     schema: schema_of::<DescribeSchemaArgs>,
                     translate: translate_describe_schema,

@@ -65,6 +65,11 @@ use serde::{Deserialize, Serialize};
 use crate::privacy::PrivacyTier;
 use crate::untrusted;
 
+mod mentions;
+
+pub(crate) use mentions::QUESTION_HEADER;
+pub use mentions::{MAX_MENTIONS, Mention};
+
 /// Octets comptés pour un jeton dans l'estimation de budget.
 ///
 /// Voir la réserve du module : c'est une approximation, pas une mesure.
@@ -207,6 +212,8 @@ pub struct AgentContext {
     estimated_tokens: usize,
     omitted_relations: usize,
     dropped_samples: usize,
+    ignored_mentions: usize,
+    omitted_mentions: usize,
 }
 
 impl AgentContext {
@@ -297,6 +304,10 @@ pub struct ContextBuilder<'a> {
     language: QueryLanguage,
     focus: String,
     samples: Vec<RowSample>,
+    mentions: Vec<Mention>,
+    /// Compléter les mentions par la recherche ; faux pour une question qui
+    /// suit une session déjà informée ([`ContextBuilder::mentioned_only`]).
+    fill: bool,
 }
 
 impl<'a> ContextBuilder<'a> {
@@ -313,6 +324,8 @@ impl<'a> ContextBuilder<'a> {
             language: QueryLanguage::SQL,
             focus: String::new(),
             samples: Vec::new(),
+            mentions: Vec::new(),
+            fill: true,
         }
     }
 
@@ -360,13 +373,25 @@ impl<'a> ContextBuilder<'a> {
 
         let mut body = String::new();
         self.render_header(&mut body);
+        let mentioned = self.resolve_mentions(naming);
+        // Les annonces sont comptées dans l'en-tête : bornées par
+        // `MAX_MENTIONS`, elles disent au modèle ce que l'utilisateur désigne
+        // même quand la description n'a pas tenu.
+        for line in &mentioned.lines {
+            body.push_str(line);
+        }
+        if !mentioned.lines.is_empty() {
+            body.push('\n');
+        }
 
         let header_cost = estimate_tokens(&body);
         let mut used = header_cost;
         let mut kept: Vec<CatalogPath> = Vec::new();
         let mut omitted = 0usize;
+        let mut left_out: Vec<String> = Vec::new();
 
-        for path in self.select_relations() {
+        let selected = self.select_relations(&mentioned.relations);
+        for path in selected.iter().cloned() {
             let mut chunk = self.render_relation(&path, naming);
             let mut cost = estimate_tokens(&chunk);
             if header_cost + cost > self.policy.max_context_tokens {
@@ -387,6 +412,34 @@ impl<'a> ContextBuilder<'a> {
             used += cost;
             body.push_str(&chunk);
             kept.push(path);
+        }
+        // Une mention non décrite — budget épuisé, ou plafond de relations
+        // atteint par d'autres mentions — est nommée, jamais perdue en silence.
+        for path in &mentioned.relations {
+            if kept.contains(path) {
+                continue;
+            }
+            if !selected.contains(path) {
+                omitted += 1;
+            }
+            left_out.push(mentions::render_omitted_relation(path, naming));
+        }
+
+        // Après les relations : une requête sauvegardée se lit contre elles.
+        for (title, text) in &mentioned.queries {
+            let chunk = mentions::render_saved_query(title, text);
+            let cost = estimate_tokens(&chunk);
+            if used + cost > self.policy.max_context_tokens {
+                left_out.push(mentions::render_omitted_query(title));
+                continue;
+            }
+            used += cost;
+            body.push_str(&chunk);
+        }
+        // Hors budget, comme l'en-tête : une ligne par mention au plus, et ne
+        // pas l'écrire laisserait croire que l'objet désigné a été ignoré.
+        for line in &left_out {
+            body.push_str(line);
         }
 
         // Les valeurs de lignes : le seul endroit du code où le niveau décide
@@ -434,6 +487,8 @@ impl<'a> ContextBuilder<'a> {
             estimated_tokens,
             omitted_relations: omitted,
             dropped_samples,
+            ignored_mentions: mentioned.ignored,
+            omitted_mentions: left_out.len(),
         }
     }
 
@@ -443,12 +498,29 @@ impl<'a> ContextBuilder<'a> {
     /// question — ou sans résultat —, l'ordre des chemins tranche : un contexte
     /// qui change d'une construction à l'autre rend les réponses du modèle
     /// irreproductibles, donc indébogables.
-    fn select_relations(&self) -> Vec<CatalogPath> {
+    ///
+    /// Les relations mentionnées viennent **en tête**, dans l'ordre de saisie,
+    /// et comptent dans le même plafond : l'utilisateur qui pointe un objet
+    /// l'a désigné plus sûrement qu'un classement lexical ne le devine.
+    fn select_relations(&self, mentioned: &[CatalogPath]) -> Vec<CatalogPath> {
         let limit = self.policy.max_relations;
-        if limit == 0 {
-            return Vec::new();
+        let mut chosen: Vec<CatalogPath> = mentioned.iter().take(limit).cloned().collect();
+        if !self.fill || chosen.len() >= limit {
+            return chosen;
         }
+        for path in self.found_relations(limit) {
+            if chosen.len() >= limit {
+                break;
+            }
+            if !chosen.contains(&path) {
+                chosen.push(path);
+            }
+        }
+        chosen
+    }
 
+    /// Ce que la question fait trouver, ou à défaut l'ordre des chemins.
+    fn found_relations(&self, limit: usize) -> Vec<CatalogPath> {
         let focus = self.focus.trim();
         if !focus.is_empty() {
             let hits = search(
@@ -1157,3 +1229,6 @@ mod tests {
 
 #[cfg(test)]
 mod generic_tests;
+
+#[cfg(test)]
+mod mention_tests;

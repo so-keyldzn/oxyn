@@ -825,6 +825,7 @@ fn a_refused_question_releases_the_agents_kept_for_the_connection() {
     let (channel, _received) = recording();
     let refused = runtime.block_on(backend.ai_ask(
         AskRequest {
+            mentions: Vec::new(),
             connection: open.connection.clone(),
             session: open.session.clone(),
             thread: None,
@@ -1709,6 +1710,7 @@ mod approved_samples {
         let node = fixture.begin(&thread, None, channel);
         let cancel = CancelToken::new();
         let run = Run {
+            mentions: &crate::backend::ai::mentions::NO_MENTIONS,
             inner: &fixture.backend.inner,
             thread: &thread,
             node,
@@ -1749,6 +1751,7 @@ mod approved_samples {
         let node = fixture.begin(&thread, None, channel);
         let cancel = CancelToken::new();
         let run = Run {
+            mentions: &crate::backend::ai::mentions::NO_MENTIONS,
             inner: &fixture.backend.inner,
             thread: &thread,
             node,
@@ -1791,6 +1794,7 @@ mod approved_samples {
         let agent = sql_agent();
         let cancel = CancelToken::new();
         let run_at = |node, parent| Run {
+            mentions: &crate::backend::ai::mentions::NO_MENTIONS,
             inner: &fixture.backend.inner,
             thread: &thread,
             node,
@@ -1904,6 +1908,7 @@ mod approved_samples {
         question: &str,
     ) -> AskRequest {
         AskRequest {
+            mentions: Vec::new(),
             connection: fixture.open.connection.clone(),
             session: fixture.open.session.clone(),
             thread: None,
@@ -2029,6 +2034,7 @@ mod approved_samples {
         let node = fixture.begin(&thread, None, channel);
         let cancel = CancelToken::new();
         let run = Run {
+            mentions: &crate::backend::ai::mentions::NO_MENTIONS,
             inner: &fixture.backend.inner,
             thread: &thread,
             node,
@@ -2095,6 +2101,7 @@ mod approved_samples {
 
     fn question_with(fixture: &Fixture, provider: &str, sample: SampleApproval) -> AskRequest {
         AskRequest {
+            mentions: Vec::new(),
             connection: fixture.open.connection.clone(),
             session: fixture.open.session.clone(),
             thread: None,
@@ -2232,6 +2239,7 @@ mod approved_samples {
         let node = fixture.begin(&thread, None, channel);
         let cancel = CancelToken::new();
         let run = Run {
+            mentions: &crate::backend::ai::mentions::NO_MENTIONS,
             inner: &fixture.backend.inner,
             thread: &thread,
             node,
@@ -2497,6 +2505,7 @@ mod approved_samples {
             .expect("adopted");
         let next = fixture.begin(&reopened, Some(0), channel);
         let run = Run {
+            mentions: &crate::backend::ai::mentions::NO_MENTIONS,
             inner: &fixture.backend.inner,
             thread: &reopened,
             node: next,
@@ -2662,6 +2671,7 @@ mod approved_samples {
                 .begin(parent, question, channel, scope())
                 .expect("begins");
             let run = Run {
+                mentions: &crate::backend::ai::mentions::NO_MENTIONS,
                 inner: &fixture.backend.inner,
                 thread: &thread,
                 node,
@@ -2950,4 +2960,8 @@ mod approved_samples {
     /// What bounds an agent's asking: one screen per answer, none over a
     /// pending write, and nothing recorded that did not leave.
     mod asks_bounded;
+
+    /// What the user names with `@` reaches both destinations, on this
+    /// fixture's catalog — a session already open included.
+    mod mentions;
 }

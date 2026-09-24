@@ -103,7 +103,9 @@ pub mod untrusted;
 pub use oxyn_core::CancelToken;
 
 pub use builtin::{REMAINING_AGENTS, builtin_agents, schema_agent, sql_agent};
-pub use context::{AgentContext, ContextBuilder, ContextPolicy, RowSample, estimate_tokens};
+pub use context::{
+    AgentContext, ContextBuilder, ContextPolicy, MAX_MENTIONS, Mention, RowSample, estimate_tokens,
+};
 pub use error::AiError;
 pub use failure::FailureReport;
 pub use observer::{

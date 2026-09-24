@@ -42,6 +42,7 @@ use chrono::{DateTime, Utc};
 use oxyn_core::{ConversationId, PrivacyTier, ProviderId};
 use rusqlite::{OptionalExtension, Row, params};
 
+use super::mentions::{self, ExchangeMention};
 use super::{Conversations, Destination, DestinationKind, MAX_TURN_TEXT_BYTES};
 use crate::encoding::privacy_tier_from_column;
 use crate::error::{Result, StoreError};
@@ -77,10 +78,11 @@ pub const MAX_SAMPLE_COLUMNS: u32 = 256;
 /// | question | 1 048 576 | 1 048 576 |
 /// | destination id, label, model | 64 + 128 + 128 | 320 |
 /// | tier, kind, outcome words, counters | ≤ 90 | ≤ 90 |
-/// | the `Exchange` value itself | — | 136 |
-/// | **total** | **1 048 986** | **1 049 122** |
+/// | mentions: the JSON, then 16 values of 168 bytes | 32 768 | 32 768 + 2 688 |
+/// | the `Exchange` value itself | — | 160 |
+/// | **total** | **1 081 754** | **1 084 602** |
 ///
-/// So a page of 16 reads at most **16.0 MiB** and holds at most **16.0 MiB**
+/// So a page of 16 reads at most **16.5 MiB** and holds at most **16.6 MiB**
 /// once decoded, whatever the conversation contains. The ancestor chain it is
 /// cut from is at most 256 small integers. An exchange's turns are read
 /// separately, by [`Conversations::transcript_page`]'s bound.
@@ -89,7 +91,7 @@ pub const MAX_EXCHANGE_PAGE: u16 = 16;
 /// The measured size of one [`Exchange`] value, on aarch64-apple-darwin
 /// (2026-09-17). A test fails if the layout grows past it, which is the day
 /// [`MAX_EXCHANGE_PAGE`]'s worst case must be computed again.
-pub const EXCHANGE_LAYOUT_BYTES: usize = 136;
+pub const EXCHANGE_LAYOUT_BYTES: usize = 160;
 
 /// How an answered exchange ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -263,6 +265,8 @@ pub struct ExchangeRecord {
     pub question: String,
     /// Who was asked. A thread can change recipient between exchanges.
     pub destination: Destination,
+    /// What the question named with `@`, in the order typed. Empty for most.
+    pub mentions: Vec<ExchangeMention>,
 }
 
 impl ExchangeRecord {
@@ -280,7 +284,15 @@ impl ExchangeRecord {
             tier,
             question: question.into(),
             destination,
+            mentions: Vec::new(),
         }
+    }
+
+    /// The same question, with what it named.
+    #[must_use]
+    pub fn with_mentions(mut self, mentions: Vec<ExchangeMention>) -> Self {
+        self.mentions = mentions;
+        self
     }
 }
 
@@ -312,6 +324,9 @@ pub struct Exchange {
     pub question: String,
     /// Who was asked.
     pub destination: Destination,
+    /// What the question named with `@`; empty for an exchange written
+    /// before migration 14.
+    pub mentions: Vec<ExchangeMention>,
     /// Set when the exchange received a sample: then it holds no answer.
     pub sample: Option<WithheldSample>,
     /// What became of it; `None` while it has not finished.
@@ -379,6 +394,7 @@ impl Conversations<'_> {
         )?;
         validate_destination(&exchange.destination)?;
         let destination = &exchange.destination;
+        let mentions = mentions::encode(&exchange.mentions)?;
 
         self.store.with_connection(|connection| {
             let transaction = connection.unchecked_transaction()?;
@@ -423,8 +439,8 @@ impl Conversations<'_> {
             transaction.execute(
                 "INSERT INTO ai_conversation_nodes
                      (conversation_id, node, parent, created_at, privacy_tier, question,
-                      destination_kind, destination_id, destination_label, model)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                      destination_kind, destination_id, destination_label, model, mentions)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
                 params![
                     id.to_string(),
                     i64::from(node),
@@ -436,6 +452,7 @@ impl Conversations<'_> {
                     destination.id.as_ref().map(ProviderId::as_str),
                     destination.label,
                     destination.model,
+                    mentions,
                 ],
             )?;
             transaction.commit()?;
@@ -680,7 +697,7 @@ fn node_exists(connection: &rusqlite::Connection, id: ConversationId, node: u32)
 /// The exchange columns, shared by every exchange read.
 const EXCHANGE_COLUMNS: &str = "SELECT node, parent, created_at, privacy_tier, question, \
      destination_kind, destination_id, destination_label, model, sample_withheld, sample_rows, \
-     sample_columns, outcome, outcome_detail, retryable FROM ai_conversation_nodes";
+     sample_columns, outcome, outcome_detail, retryable, mentions FROM ai_conversation_nodes";
 
 /// Refuses a length past its bound.
 fn within(field: &'static str, len: usize, limit: usize) -> Result<()> {
@@ -789,6 +806,7 @@ fn exchange_from_row(row: &Row<'_>) -> Result<Exchange> {
             label: row.get("destination_label")?,
             model: row.get("model")?,
         },
+        mentions: mentions::decode(row.get("mentions")?),
         // A withheld exchange whose counts are unreadable still reads as
         // withheld: the marker is the fact that matters, the counts are detail.
         sample: withheld.then(|| WithheldSample {
