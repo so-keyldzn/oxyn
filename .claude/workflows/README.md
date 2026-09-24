@@ -21,6 +21,19 @@ Un workflow n'est pas une procédure à suivre mécaniquement. C'est l'ordre qui
 **L'ordre 3 avant 5 n'est pas négociable** : une vue écrite avant sa commande
 appelle un driver « en attendant », et ce second chemin ne disparaît jamais.
 
+### En version orchestrée
+
+[`implementer-senior.js`](implementer-senior.js) enchaîne ces étapes avec
+plusieurs agents : cadrage en parallèle (code, skills TanStack/Tauri/shadcn du
+dépôt **et** ceux embarqués dans `node_modules`, invariants), plan Opus critiqué
+puis révisé, implémentation par les agents du domaine, `make qualite` avec
+réparation bornée, relecture par les relecteurs du dépôt, chaque constat soumis
+à deux sceptiques de modèles différents. Il **s'arrête sans rien écrire** si le
+plan contient une décision non tranchée, et ne commite jamais.
+
+Il se lance en demandant à Claude d'exécuter le workflow `implementer-senior`
+avec la tâche en argument.
+
 ## Nouveau driver
 
 1. [`/driver`](../commands/driver.md) — la première question est *nouveau
