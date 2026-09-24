@@ -68,7 +68,9 @@ sans `WHERE` part sans confirmation sur la base client.
 
 Sur une connexion `production` : toute écriture, tout DDL, toute opération
 destructrice exige une confirmation explicite qui **nomme la connexion**, et
-l'interface porte un marqueur permanent. Voir [I-02](../CLAUDE.md#i-02).
+l'interface porte un marqueur permanent. Voir [I-02](../CLAUDE.md#i-02). Cette
+confirmation est un dialogue natif et non un bouton de la webview
+([Surface d'entrée](#surface-dentrée), point 5).
 
 Pour un `Actor::Agent`, une connexion `production` est en **lecture seule
 stricte** — ce n'est pas une confirmation renforcée, c'est un refus
@@ -100,6 +102,14 @@ Ce qui entre dans Oxyn et n'est pas fiable, par ordre de sous-estimation :
    donnée reçue —, CSP stricte dans `crates/oxyn-desktop/tauri.conf.json`,
    *capabilities* minimales dans `capabilities/main.json`, et une surface IPC
    dont chaque commande est relue comme un changement de sécurité.
+
+   **Une confirmation dessinée dans la webview ne résiste pas à un script qui
+   s'y exécute** : il appelle la commande que le bouton aurait appelée. Les
+   décisions critiques se confirment donc dans un **dialogue natif de l'hôte**,
+   composé par le backend, dont la fermeture vaut refus. Ce qui est critique,
+   ce que le dialogue dit et comment il se teste vivent dans
+   [ADR-0037](adr/0037-dialogue-natif-pour-les-confirmations-critiques.md), et
+   nulle part ailleurs ; le reste garde sa confirmation dans la webview.
 
    `style-src` y garde `'self' 'unsafe-inline'` : des composants posent un
    `<style>` à l'exécution, dans le DOM de la webview, alors que Tauri ne pose

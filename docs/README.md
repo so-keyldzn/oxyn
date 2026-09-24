@@ -63,6 +63,7 @@ Pour localiser les planches et leurs états avant implémentation, consulter
 | [0034](adr/0034-echantillon-pour-toute-destination.md) | Un échantillon approuvé atteint toute destination par la même porte, et un agent peut en demander un sans jamais l'approuver | proposé |
 | [0035](adr/0035-ecritures-locales-de-l-ordonnanceur-sur-le-pool-bloquant.md) | Les écritures locales de l'ordonnanceur passent par le pool bloquant, en opérations possédées | accepté |
 | [0036](adr/0036-l-assistant-complete-le-catalogue.md) | L'assistant complète lui-même le catalogue, par le bus et sous des bornes | proposé |
+| [0037](adr/0037-dialogue-natif-pour-les-confirmations-critiques.md) | Une décision critique se confirme dans un dialogue natif de l'hôte, jamais dans la webview | proposé |
 
 Les ADR restent `proposé` jusqu'au premier commit de code qui les met en œuvre.
 
