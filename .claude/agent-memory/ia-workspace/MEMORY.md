@@ -1,4 +1,5 @@
 - [Piège rustdoc : liens explicites redondants](piege-rustdoc-liens-explicites-redondants.md) — seul l'étage doc de `make qualite` le voit ; `cargo test` et `clippy` se taisent
+- [Piège rustdoc : lien vers un item privé](piege-rustdoc-lien-vers-item-prive.md) — un item `pub` qui lie un helper privé casse `cargo doc -D warnings` seul ; vu sur `oxyn-core/src/ai.rs:482`
 - [Piège hook : `derive(Debug)` refusé sur un nom de type](piege-hook-derive-debug-nom-de-type.md) — le critère est le *nom* ; `TokenDetails` est un faux positif classique
 - [Piège cargo : oxyn-desktop sans cible lib](piege-cargo-oxyn-desktop-sans-lib.md) — tests ciblés avec `--bins`, pas `--lib`
 - [Piège vitest : port 63315 occupé](piege-vitest-port-occupe.md) — échec front passager quand un autre vitest tourne ; vérifier et relancer

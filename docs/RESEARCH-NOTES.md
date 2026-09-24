@@ -1408,7 +1408,8 @@ milieu d'un paramètre produit le même JSON tronqué, sans aucune option.
 donne sous une forme lisible par un programme. `ModelInfo::cost` reste donc
 `None` pour ce fournisseur. Écrire une grille en dur serait exactement la valeur
 plausible et fausse qu'I-12 interdit ; OpenRouter, qui publie ses prix dans sa
-réponse, reste le seul fournisseur dont le coût est renseigné.
+réponse, reste le seul fournisseur dont le coût est renseigné (voir
+[Fournisseur OpenRouter](#fournisseur-openrouter--vérification-du-2026-09-24)).
 
 ### Côté OpenAI, pour la parité
 
@@ -1446,6 +1447,52 @@ commentaires SSE `:` de maintien de connexion, que le décodeur ignore. Les fait
 > ci-dessus viennent de `developers.openai.com`, qui sert la même
 > documentation — c'est aussi le domaine déjà utilisé plus haut dans ce fichier
 > pour la fiche de `gpt-6-astra`.
+
+## Fournisseur Gemini — vérification du 2026-09-24
+
+| Fait | Valeur | Source | Vérifié le |
+|---|---|---|---|
+| Hôte | `https://generativelanguage.googleapis.com` | [Generate content](https://ai.google.dev/api/generate-content) | 2026-09-24 |
+| Version de chemin | `v1beta` | idem | 2026-09-24 |
+| Chemin du flux | `models/{modèle}:streamGenerateContent` | idem | 2026-09-24 |
+| Paramètre de requête | `alt=sse` — sans lui l'API rend un tableau JSON entier plutôt qu'un flux | idem | 2026-09-24 |
+| En-tête de clé | `x-goog-api-key` | [Versions d'API](https://ai.google.dev/gemini-api/docs/api-versions) | 2026-09-24 |
+
+`v1beta` plutôt que `v1` : la référence de `generateContent` et de
+`streamGenerateContent` ne documente le chemin que sous `/v1beta/…`. La page
+des versions d'API confirme que `v1` est la version stable tandis que `v1beta`
+« porte les fonctionnalités récentes » et reste le défaut des SDK officiels.
+`GeminiProvider::with_api_version` permet de basculer vers `v1` le jour où
+Google y fait migrer `streamGenerateContent`, sans toucher `GEMINI_BASE_URL`.
+
+La clé passe par l'en-tête `x-goog-api-key` — montré dans les exemples `curl`
+de la page des versions d'API — et non par le paramètre `?key=…` que la
+référence de `generateContent` utilise elle aussi dans ses propres exemples :
+un en-tête ne finit jamais dans une URL journalisée, un paramètre de requête
+si ([I-03](../CLAUDE.md#i-03), [SECURITY](SECURITY.md#secrets)).
+
+[ARCHITECTURE §7.5](ARCHITECTURE.md#75-abstraction-des-fournisseurs) établit
+l'état réel du fournisseur : `GeminiProvider` construit cette requête puis
+refuse l'appel (`LlmError::NotImplemented`) avant tout `.send()`. Le schéma
+exact du flux de réponse et la liste des modèles disponibles restent non
+vérifiés ; aucune valeur n'est écrite pour eux ici.
+
+## Fournisseur OpenRouter — vérification du 2026-09-24
+
+| Fait | Valeur | Source | Vérifié le |
+|---|---|---|---|
+| Devise des tarifs | `USD` | [Models](https://openrouter.ai/docs/guides/overview/models) | 2026-09-24 |
+| Unité | prix par jeton, rendu en chaîne de caractères ; `WirePricing::into_cost` le convertit en prix par million | idem | 2026-09-24 |
+| Champ `prompt` | coût par jeton d'entrée | idem | 2026-09-24 |
+| Champ `completion` | coût par jeton de sortie | idem | 2026-09-24 |
+
+La réponse de l'API ne porte jamais la devise — seule cette page de
+documentation la donne. C'est pourquoi `OPENROUTER_CURRENCY` est une constante
+injectée côté Oxyn plutôt qu'un champ désérialisé depuis le fil, et cette ligne
+en est la source. La page consultée ne dit rien d'une valeur `-1` : la lecture
+de `parse_price` (`crates/oxyn-llm/src/openai_compatible/wire.rs`) — qui rejette
+tout prix négatif, donc `-1` compris — reste donc, pour ce point précis, non
+confirmée par la documentation du fournisseur.
 
 ## Bancs d'essai — vérification du 2026-09-10
 

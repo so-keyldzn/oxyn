@@ -19,9 +19,10 @@ use crate::types::{ChatRequest, Cost, ModelInfo, Support, ToolCall};
 
 /// Devise dans laquelle OpenRouter publie ses tarifs.
 ///
-/// TODO(phase 2) : à vérifier au registre et dater dans `RESEARCH-NOTES` avant
-/// d'afficher un coût à l'utilisateur (I-12). La réponse de l'API ne porte pas
-/// la devise ; seule la documentation du fournisseur la donne.
+/// La réponse de l'API ne porte pas la devise ; seule la documentation du
+/// fournisseur la donne.
+///
+/// Source: docs/RESEARCH-NOTES.md, « Fournisseur OpenRouter ».
 const OPENROUTER_CURRENCY: &str = "USD";
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -446,8 +447,12 @@ impl WirePricing {
     /// Convertit un tarif par jeton en tarif par million.
     ///
     /// Rend `None` dès qu'un des deux prix manque, ne se lit pas, ou est
-    /// négatif — `-1` signifie « tarification variable » chez OpenRouter, et
-    /// afficher `-1 000 000` serait pire que de ne rien afficher.
+    /// négatif. OpenRouter est connu pour publier `-1` sur un modèle à
+    /// tarification variable, mais la documentation consultée ne confirme pas
+    /// cette valeur (source : docs/RESEARCH-NOTES.md, « Fournisseur
+    /// OpenRouter », 2026-09-24) ; rejeter tout négatif reste prudent dans les
+    /// deux cas, puisqu'afficher `-1 000 000` serait pire que de ne rien
+    /// afficher.
     fn into_cost(self) -> Option<Cost> {
         let entree = parse_price(self.prompt.as_deref())?;
         let sortie = parse_price(self.completion.as_deref())?;

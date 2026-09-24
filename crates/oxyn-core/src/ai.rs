@@ -479,7 +479,7 @@ impl AiProviderConfig {
     /// An unreadable `base_url` on either side is never equal to anything —
     /// in doubt, the key is forgotten, which only costs a retype
     /// ([I-03](../../CLAUDE.md#i-03)). No I/O, and no URL is ever quoted in a
-    /// message, matching [`validate_base_url`]: an endpoint that fails to
+    /// message, matching `validate_base_url`: an endpoint that fails to
     /// parse says nothing here about what it contains.
     #[must_use]
     pub fn same_endpoint_as(&self, other: &Self) -> bool {

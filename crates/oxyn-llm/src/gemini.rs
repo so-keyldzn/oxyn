@@ -43,14 +43,19 @@ use crate::types::{ChatEvent, ChatMessage, ChatRequest, ModelInfo, Role};
 
 /// Point d'accès de l'API Gemini.
 ///
-/// TODO(phase 2) : à confirmer au registre et à dater dans `RESEARCH-NOTES`
-/// avant tout appel réel (I-12).
+/// Source: docs/RESEARCH-NOTES.md, « Fournisseur Gemini ».
 pub const GEMINI_BASE_URL: &str = "https://generativelanguage.googleapis.com";
 
-/// Version d'API dans le chemin. Même réserve I-12.
+/// Version d'API dans le chemin.
+///
+/// `v1beta` rather than `v1`: the streamGenerateContent reference only
+/// documents the path under `/v1beta/…`, and it remains the default used by
+/// the official SDKs. Source: docs/RESEARCH-NOTES.md, « Fournisseur Gemini ».
 pub const GEMINI_API_VERSION: &str = "v1beta";
 
 /// En-tête portant la clé.
+///
+/// Source: docs/RESEARCH-NOTES.md, « Fournisseur Gemini ».
 pub const API_KEY_HEADER: &str = "x-goog-api-key";
 
 /// Fournisseur Gemini.
