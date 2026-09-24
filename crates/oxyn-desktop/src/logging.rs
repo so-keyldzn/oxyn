@@ -29,7 +29,7 @@ pub(crate) fn start() {
 }
 
 /// The one layer, with both filters: what the user asked for, then the cap.
-fn layer<S, W>(filter: EnvFilter, writer: W) -> impl Layer<S>
+pub(crate) fn layer<S, W>(filter: EnvFilter, writer: W) -> impl Layer<S>
 where
     S: Subscriber + for<'span> LookupSpan<'span>,
     W: for<'writer> MakeWriter<'writer> + Send + Sync + 'static,

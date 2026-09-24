@@ -13,6 +13,8 @@ mod commands;
 mod credentials;
 mod ipc;
 mod logging;
+#[cfg(test)]
+mod sentinel_tests;
 
 use anyhow::{Context as _, Result};
 
