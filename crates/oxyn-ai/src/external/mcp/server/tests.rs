@@ -453,6 +453,7 @@ fn the_token_is_not_in_what_gets_printed() {
         Endpoint {
             url: "http://127.0.0.1:1/mcp".to_owned(),
             token: "the-secret-token".to_owned(),
+            tools: Vec::new(),
             stop: None,
         }
     );

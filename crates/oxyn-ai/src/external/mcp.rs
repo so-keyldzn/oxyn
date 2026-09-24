@@ -30,10 +30,12 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use oxyn_core::Actor;
+use oxyn_core::{Actor, OxynError};
 use oxyn_llm::{Reach, ToolCall};
 use serde_json::{Value, json};
 
+use crate::AiError;
+use crate::observer::{AgentEvent, AgentObserver};
 use crate::privacy::{PrivacyTier, allows_endpoint};
 use crate::runtime::run_tool_call;
 use crate::tools::{ToolRegistry, ToolScope};
@@ -146,6 +148,17 @@ impl ToolService {
         }
     }
 
+    /// The names of the tools the server announces, as `tools/list` gives them.
+    #[must_use]
+    pub fn served(&self) -> Vec<String> {
+        self.registry
+            .specs_for(&self.allowed)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|spec| spec.name)
+            .collect()
+    }
+
     /// Answers one JSON-RPC message.
     ///
     /// `None` means « nothing to send back »: the message was a notification,
@@ -226,6 +239,15 @@ impl ToolService {
         };
         // Read before the call is admitted, so a refused call spends nothing.
         let Some(tier) = self.tier.current().await else {
+            self.show_refusal(
+                turns.observer().as_deref(),
+                name,
+                OxynError::PolicyDenied {
+                    reason: "the connection is no longer in the workspace, or its privacy tier \
+                             cannot be read"
+                        .to_owned(),
+                },
+            );
             return Ok(refusal(
                 "this connection is no longer in the workspace, or its privacy tier cannot be \
                  read. Nothing ran.",
@@ -234,6 +256,16 @@ impl ToolService {
         // The same rule that refuses to launch an agent under this tier: an
         // external agent's reach is unknowable (`privacy::agent_reach`).
         if !allows_endpoint(tier, Reach::Unresolved) {
+            self.show_refusal(
+                turns.observer().as_deref(),
+                name,
+                OxynError::PolicyDenied {
+                    reason: format!(
+                        "the connection's privacy tier is `{tier}`: nothing leaves the machine, \
+                         so an external agent may not read it"
+                    ),
+                },
+            );
             return Ok(refusal(
                 "this connection is now local-only: nothing leaves the machine, so an external \
                  agent may not read it. Nothing ran; do not retry.",
@@ -241,13 +273,21 @@ impl ToolService {
         }
         let admitted = match turns.admit() {
             Admission::Admitted(admitted) => admitted,
+            // No question: no panel to show it in, and nobody looking.
             Admission::NoQuestion => {
                 return Ok(refusal(
                     "no question is in progress in Oxyn: tools run only while the user waits \
                      for an answer. Nothing ran.",
                 ));
             }
-            Admission::LimitReached { max } => {
+            Admission::LimitReached { max, observer } => {
+                self.show_refusal(
+                    Some(observer.as_ref()),
+                    name,
+                    OxynError::PolicyDenied {
+                        reason: format!("this answer has used its {max} tool calls"),
+                    },
+                );
                 return Ok(refusal(&format!(
                     "this answer has used its {max} tool calls. Nothing ran; answer with what \
                      you have."
@@ -285,11 +325,41 @@ impl ToolService {
             // Its text is **not** forwarded: the day `run_tool_call` propagates
             // a dispatch error, it would quote the server, and this branch would
             // hand that to the agent without the tier's redaction (I-04). The
-            // agent learns that it failed, which is what it can act on.
-            Err(_) => Ok(refusal(
-                "Oxyn could not run this tool call. Nothing ran; do not retry it.",
-            )),
+            // agent learns that it failed, which is what it can act on. The
+            // panel is told in Oxyn's words too, for the same reason.
+            Err(_) => {
+                self.show_refusal(
+                    Some(admitted.observer.as_ref()),
+                    name,
+                    OxynError::Internal("Oxyn could not translate this tool call".to_owned()),
+                );
+                Ok(refusal(
+                    "Oxyn could not run this tool call. Nothing ran; do not retry it.",
+                ))
+            }
         }
+    }
+
+    /// Shows, in the question's panel, a call refused before it reached the
+    /// bus.
+    ///
+    /// The agent's step for the call is hidden (`session::oxyn_calls`), so
+    /// without this a refused call would leave no trace. The reason is Oxyn's,
+    /// never the agent's; the tool is named only when it is one the server
+    /// announced, since otherwise the name is whatever the agent sent.
+    fn show_refusal(&self, observer: Option<&dyn AgentObserver>, name: &str, error: OxynError) {
+        let Some(observer) = observer else {
+            return;
+        };
+        let tool = if self.served().iter().any(|served| served == name) {
+            name
+        } else {
+            "unlisted tool"
+        };
+        observer.observe(AgentEvent::CallRejected {
+            tool,
+            error: &AiError::Core(error),
+        });
     }
 }
 

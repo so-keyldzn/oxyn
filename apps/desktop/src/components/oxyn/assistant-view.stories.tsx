@@ -702,6 +702,50 @@ export const ExternalAgentQueryWithRows: Story = {
   },
 }
 
+/**
+ * An external agent called one of Oxyn's tools after the connection went
+ * local-only. Its own step for the call is not drawn (the card is Oxyn's), so
+ * the refusal must be: in Oxyn's words, nothing having reached the bus.
+ */
+export const ExternalAgentCallRefusedBeforeTheBus: Story = {
+  args: {
+    selected: destinations[1] ?? null,
+    model: null,
+    state: assistantState(
+      threadOfEvents([
+        {
+          question: "List the unpaid invoices",
+          events: [
+            {
+              kind: "question",
+              text: "List the unpaid invoices",
+              mentions: [],
+            },
+            agentStarted,
+            {
+              kind: "callRejected",
+              tool: "execute_query",
+              error:
+                "denied by policy: the connection's privacy tier is `local`: nothing leaves the machine, so an external agent may not read it",
+            },
+            { kind: "textDelta", text: "I cannot read this connection." },
+            answered,
+          ],
+        },
+      ])
+    ),
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    await expect(
+      canvas.getByText(/refused before the bus, nothing ran/)
+    ).toBeVisible()
+    await expect(canvas.getByText(/privacy tier is `local`/)).toBeVisible()
+    // No agent step stands for the call.
+    await expect(canvas.queryByText(/Agent step/)).toBeNull()
+  },
+}
+
 export const TruncatedOffersToContinue: Story = {
   args: {
     state: assistantState(

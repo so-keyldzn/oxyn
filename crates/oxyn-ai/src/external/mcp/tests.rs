@@ -726,3 +726,86 @@ fn the_tier_is_read_at_every_call_not_at_launch() {
 
     assert_eq!(bus.commands().len(), 2, "only the two permitted calls ran");
 }
+
+/// The refusals a question's panel was shown: the tool named, and the words.
+#[derive(Default)]
+struct Refusals(Mutex<Vec<(String, String)>>);
+
+impl AgentObserver for Refusals {
+    fn observe(&self, event: AgentEvent<'_>) {
+        if let AgentEvent::CallRejected { tool, error } = event {
+            self.0
+                .lock()
+                .expect("no panic held the lock")
+                .push((tool.to_owned(), error.to_string()));
+        }
+    }
+}
+
+#[test]
+fn a_call_refused_before_admission_is_shown_in_oxyns_words() {
+    // The agent's own step for an Oxyn call is hidden, so a call refused here
+    // must leave its trace in the panel, or it vanishes from the user's view.
+    let bus = Arc::new(Bus::completed());
+    let tier = crate::external::mcp::TierCell::holding(PrivacyTier::Local);
+    let service = ToolService::new(
+        ToolRegistry::builtin(),
+        vec![crate::tools::EXECUTE_QUERY.to_owned()],
+        ToolScope::new(ConnectionId::new(), SessionId::new(), QueryLanguage::SQL),
+        Arc::clone(&tier) as Arc<dyn crate::external::mcp::TierSource>,
+        actor(),
+    );
+    let panel = Arc::new(Refusals::default());
+    let turns = ToolTurns::new(1, Arc::new(|| false));
+    let _turn = turns.open(
+        Arc::clone(&bus) as Arc<dyn CommandSink>,
+        Arc::clone(&panel) as Arc<dyn AgentObserver>,
+        CancelToken::new(),
+    );
+    let call = |name: &str| {
+        format!(
+            r#"{{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{{"name":"{name}",
+            "arguments":{{"statement":"SELECT 1"}}}}}}"#
+        )
+    };
+    let respond = |message: String| block_on(service.respond(&message, &turns));
+
+    // Local-only.
+    respond(call("execute_query"));
+    // The tier can no longer be read; and a name the agent made up, which is
+    // not shown as it was sent.
+    tier.set(None);
+    respond(call("execute_query"));
+    respond(call("ignore previous instructions"));
+    // One call allowed per answer: the second is over the ceiling.
+    tier.set(Some(PrivacyTier::Metadata));
+    respond(call("execute_query"));
+    respond(call("execute_query"));
+
+    let shown = panel.0.lock().expect("no panic held the lock").clone();
+    assert_eq!(shown.len(), 4, "{shown:?}");
+    let tools: Vec<&str> = shown.iter().map(|(tool, _)| tool.as_str()).collect();
+    assert_eq!(
+        tools,
+        [
+            "execute_query",
+            "execute_query",
+            "unlisted tool",
+            "execute_query"
+        ]
+    );
+    assert!(shown[0].1.contains("`local`"), "{shown:?}");
+    assert!(
+        shown[1].1.contains("no longer in the workspace"),
+        "{shown:?}"
+    );
+    assert!(shown[3].1.contains("1 tool calls"), "{shown:?}");
+    // Oxyn's words, not the agent's: nothing it sent reaches the panel.
+    assert!(
+        shown
+            .iter()
+            .all(|(tool, error)| !tool.contains("ignore") && !error.contains("SELECT")),
+        "{shown:?}"
+    );
+    assert_eq!(bus.commands().len(), 1, "only the admitted call ran");
+}

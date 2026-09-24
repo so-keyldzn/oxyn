@@ -149,6 +149,7 @@ impl ToolTurns {
         if active.calls >= self.max_calls {
             return Admission::LimitReached {
                 max: self.max_calls,
+                observer: Arc::clone(&active.observer),
             };
         }
         active.calls += 1;
@@ -161,6 +162,15 @@ impl ToolTurns {
             observer: Arc::clone(&active.observer),
             cancel: active.cancel.clone(),
         })
+    }
+
+    /// The panel of the question in progress, if one is: where a call refused
+    /// before admission is shown. Counts nothing, admits nothing.
+    pub(crate) fn observer(&self) -> Option<Arc<dyn AgentObserver>> {
+        self.lock()
+            .current
+            .as_ref()
+            .map(|active| Arc::clone(&active.observer))
     }
 
     fn lock(&self) -> std::sync::MutexGuard<'_, Slot> {
@@ -202,7 +212,11 @@ impl Drop for OpenTurn {
 pub(crate) enum Admission {
     Admitted(Admitted),
     NoQuestion,
-    LimitReached { max: usize },
+    /// Refused; `observer` is the question's panel, where the refusal shows.
+    LimitReached {
+        max: usize,
+        observer: Arc<dyn AgentObserver>,
+    },
 }
 
 /// A call let through: what it runs with.

@@ -889,6 +889,52 @@ Codex dont le rang 8 écrit `enabled = true`. Il ne lit ni le rang 3 ni le
 rang 9 : [ADR-0033](adr/0033-couches-de-configuration-codex.md) décide ces
 trois points.
 
+### Ce que les adaptateurs ACP disent d'un appel MCP — relu le 2026-09-24
+
+Question : comment reconnaître, dans les `tool_call` qu'un adaptateur diffuse,
+un appel à un outil du serveur MCP d'Oxyn, pour ne pas le dessiner une seconde
+fois à côté de sa carte ([UX-SPEC](UX-SPEC.md#ce-que-le-panneau-montre-dun-agent-externe)) ?
+Relu dans les archives du registre npm (`npm pack`) le 2026-09-24.
+
+**`@agentclientprotocol/claude-agent-acp` 0.78.0.**
+
+* `dist/tools.js`, `toolInfoFromToolUse`, branche `default` (l. 335-340) :
+  un outil que l'adaptateur ne connaît pas, donc tout outil MCP, a pour
+  `title` son nom et pour `kind` `"other"`.
+* `dist/acp-agent.js`, `toolCallNotification` (l. 7186-7210) : le `tool_call`
+  porte aussi `name` (champ instable, derrière la feature
+  `unstable_tool_call_name` de `agent-client-protocol-schema` 1.7.0 et non
+  activée ici). Il porte surtout `_meta.claudeCode.toolName`, rempli par
+  `claudeCodeMetaFromToolUse` (l. 7080-7098) avec le nom programmatique de
+  l'outil. Les mises à jour de fin d'appel reprennent ce `_meta`.
+* Pour un outil MCP, ce nom est `mcp__<serveur>__<outil>`, donc
+  `mcp__oxyn__describe_schema`.
+
+**`@agentclientprotocol/codex-acp` 1.12.0**, `dist/index.js` :
+
+* `createMcpToolCallUpdate` (l. 23035-23045) et `createExecuteToolCallUpdate`
+  (l. 23133-23143) : le `tool_call` a pour `kind` `"execute"`, pas `"other"`.
+  Son `title` vaut `mcp.<serveur>.<outil>`. Son `rawInput` vaut
+  `{server, tool, arguments}`, et son `_meta` `{is_mcp_tool_call: true}`.
+* `completeItemEvent`, cas `mcpToolCall` (l. 25123-25130) : la mise à jour de
+  fin porte le statut et le même `rawInput`, **sans `_meta`**.
+* `createMcpToolProgressEvent` (l. 25289-25299) : les progressions ne portent
+  pas de statut.
+
+**Ce qu'Oxyn en fait.** Le signal retenu diffère selon l'adaptateur. Chez
+Claude, c'est `_meta.claudeCode.toolName`. Chez Codex, c'est
+`_meta.is_mcp_tool_call`, avec `rawInput.server` et `rawInput.tool`. Dans les
+deux cas, le nom doit correspondre exactement à un outil que le serveur a
+annoncé.
+
+Le titre n'est pas retenu. Chez Claude, celui d'une commande shell est la
+commande elle-même, qui peut s'écrire comme un nom d'outil d'Oxyn. `rawInput`
+seul n'est pas retenu non plus : pour tout autre outil, ce sont les arguments
+que le modèle écrit.
+
+L'identifiant d'un appel reconnu est gardé jusqu'à sa fin : la fin chez Codex
+ne se désigne pas elle-même.
+
 ## Relecture locale des résultats — 2026-09-10
 
 La version de Tokio déjà résolue, `1.53.1`, reste inchangée. `oxyn-exec` active

@@ -124,6 +124,9 @@ impl Limits {
 pub struct Endpoint {
     url: String,
     token: String,
+    /// The tools announced on it, so the session can tell their calls apart
+    /// in what the agent streams.
+    tools: Vec<String>,
     stop: Option<tokio::sync::oneshot::Sender<()>>,
 }
 
@@ -153,6 +156,12 @@ impl Endpoint {
     #[must_use]
     pub fn token(&self) -> &str {
         &self.token
+    }
+
+    /// The names of the tools served, as the agent's `tools/list` gives them.
+    #[must_use]
+    pub fn tools(&self) -> &[String] {
+        &self.tools
     }
 }
 
@@ -208,6 +217,7 @@ pub(crate) async fn serve_within(
         uuid::Uuid::new_v4().simple()
     );
     let (stop, stopped) = tokio::sync::oneshot::channel();
+    let tools = service.served();
 
     let context = Arc::new(Context {
         service,
@@ -288,6 +298,7 @@ pub(crate) async fn serve_within(
         Endpoint {
             url: format!("http://127.0.0.1:{port}{PATH}"),
             token,
+            tools,
             stop: Some(stop),
         },
         driver,

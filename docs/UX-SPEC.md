@@ -944,8 +944,23 @@ machine** :
 * chaque étape de ses outils propres, réduite à **sa sorte** — lecture, édition,
   recherche… — et à son état : en attente, en cours, terminée, échouée. Le titre
   que l'agent compose pour l'étape n'est jamais affiché, ni son contenu : il
-  peut citer un chemin de la machine. L'étape est dessinée comme le travail de
-  l'agent, distincte d'un appel d'outil d'Oxyn, qui lui est passé par le bus ;
+  peut citer un chemin de la machine. Une sorte que l'agent ne précise pas
+  s'affiche « tool », jamais comme une erreur. L'étape est dessinée comme le
+  travail de l'agent, distincte d'un appel d'outil d'Oxyn, qui lui est passé
+  par le bus. Quand l'agent appelle un outil d'Oxyn, son adaptateur annonce
+  aussi l'appel comme une étape : cette étape n'est pas dessinée, puisque la
+  carte d'Oxyn montre déjà l'appel et fait autorité. Elle est reconnue par un
+  nom exact parmi les outils annoncés à l'agent, lu dans des champs structurés
+  et jamais dans le titre. Une étape non reconnue reste dessinée : en cacher
+  une qui n'est pas d'Oxyn cacherait ce que l'agent a fait
+  ([RESEARCH-NOTES](RESEARCH-NOTES.md#ce-que-les-adaptateurs-acp-disent-dun-appel-mcp--relu-le-2026-09-24)).
+  Un appel qu'Oxyn refuse avant le bus a donc sa propre trace : la ligne
+  « refused before the bus, nothing ran », avec la raison dans les mots
+  d'Oxyn, jamais ceux de l'agent. Cela vaut pour une connexion devenue
+  `local`, un niveau illisible, le plafond d'appels de la réponse atteint, ou
+  un appel qu'Oxyn n'a pas su traduire. L'outil n'y est nommé que s'il fait
+  partie de ceux annoncés à l'agent. Sans question en cours, rien ne s'affiche,
+  et rien ne s'exécute ;
 * son **plan**, remplacé en entier à chaque envoi et jamais fusionné avec le
   précédent : le protocole n'envoie ni différence ni identifiant d'étape. Une
   priorité inconnue s'affiche « moyenne », un état inconnu « en attente » —

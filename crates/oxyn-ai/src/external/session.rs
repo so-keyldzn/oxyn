@@ -47,6 +47,8 @@ use futures::future::{BoxFuture, Either, select};
 use futures::stream::StreamExt;
 use oxyn_core::{CancelToken, ExternalAgentConfig};
 
+use oxyn_calls::OxynCalls;
+
 use super::confine::{Confinement, ModeWatch};
 use super::prompt::AgentPrompt;
 use super::settings::{AgentSettings, SettingChange, SettingRefused, SettingValue};
@@ -495,6 +497,7 @@ impl ExternalSession {
             token: endpoint.token().to_owned(),
             // Declared once: over the protocol, or in the configuration above.
             over_acp: !tools_in_env,
+            served: endpoint.tools().to_vec(),
         });
         // The session's working directory is the process's own: announcing
         // another would point the agent at a directory it was not given.
@@ -716,6 +719,9 @@ struct ToolEndpoint {
     /// Named in `session/new`. Kept, and its token still redacted, when the
     /// agent's own configuration names it instead (see `super::confine`).
     over_acp: bool,
+    /// The tools announced on it: their calls are hidden from what the agent
+    /// streams, since each already has its Oxyn card (see [`oxyn_calls`]).
+    served: Vec<String>,
 }
 
 async fn drive(
@@ -728,6 +734,12 @@ async fn drive(
 ) {
     let watcher: Watcher = Arc::new(Mutex::new(None));
     let watch = Arc::new(ModeWatch::default());
+    let hidden = Arc::new(Mutex::new(OxynCalls::new(
+        tools
+            .as_ref()
+            .map(|tools| tools.served.clone())
+            .unwrap_or_default(),
+    )));
     let locked_mode = confinement.as_ref().map(|confinement| confinement.mode);
     let result = Client
         .builder()
@@ -736,6 +748,7 @@ async fn drive(
                 let watcher = Arc::clone(&watcher);
                 let settings = Arc::clone(&settings);
                 let watch = Arc::clone(&watch);
+                let hidden = Arc::clone(&hidden);
                 async move |notification: SessionNotification, cx| {
                     // Stopped at once, not at the next question: the turn in
                     // progress would otherwise go on in the wider mode.
@@ -747,8 +760,14 @@ async fn drive(
                         ));
                     }
                     // Settings go to the `watch`, question or not; the rest
-                    // only to the question being answered.
+                    // only to the question being answered. A call to Oxyn's
+                    // own tools is recognised question or not, so that its
+                    // later updates stay hidden too.
                     if !remember(&settings, &notification.update)
+                        && !hidden
+                            .lock()
+                            .unwrap_or_else(PoisonError::into_inner)
+                            .hides(&notification.update)
                         && let Some(observer) = current(&watcher)
                     {
                         relay(&*observer, notification.update);
@@ -1280,7 +1299,8 @@ fn remember(settings: &Settings, update: &SessionUpdate) -> bool {
 }
 
 /// Passes on what the agent streams. Only what Oxyn can show honestly: the
-/// answer, the reasoning, the kind and progress of the agent's own tools.
+/// answer, the reasoning, the kind and progress of the agent's own tools —
+/// its calls to Oxyn's are kept out before this, by [`OxynCalls`].
 fn relay(observer: &dyn AgentObserver, update: SessionUpdate) {
     match update {
         SessionUpdate::AgentMessageChunk(chunk) => {
@@ -1368,6 +1388,9 @@ const fn tool_status(status: ToolCallStatus) -> ExternalToolStatus {
 }
 
 /// The word shown for a kind of agent tool.
+///
+/// A kind the agent leaves as `other`, or that this build does not know, is
+/// « tool »: nothing failed, the agent just did not say which sort it was.
 pub(crate) const fn kind_label(kind: ToolKind) -> &'static str {
     match kind {
         ToolKind::Read => "read",
@@ -1379,9 +1402,11 @@ pub(crate) const fn kind_label(kind: ToolKind) -> &'static str {
         ToolKind::Think => "think",
         ToolKind::Fetch => "fetch",
         ToolKind::SwitchMode => "switch mode",
-        _ => "unknown tool",
+        _ => "tool",
     }
 }
+
+mod oxyn_calls;
 
 #[cfg(test)]
 mod tests;

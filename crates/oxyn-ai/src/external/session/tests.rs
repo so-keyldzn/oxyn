@@ -189,6 +189,88 @@ fn a_conversation_keeps_one_session_and_streams_what_can_be_shown() {
 }
 
 #[test]
+fn a_call_to_oxyns_tools_is_not_drawn_twice_and_another_tool_says_tool() {
+    let seen = Arc::new(Seen::default());
+    let observer: Arc<dyn AgentObserver> = seen.clone();
+    let named = |id: &str, name: &str| {
+        let mut meta = serde_json::Map::new();
+        meta.insert(
+            "claudeCode".to_owned(),
+            serde_json::json!({ "toolName": name }),
+        );
+        SessionUpdate::ToolCall(
+            ToolCall::new(ToolCallId::new(id), name)
+                .kind(ToolKind::Other)
+                .meta(meta),
+        )
+    };
+    let done = |id: &str| {
+        SessionUpdate::ToolCallUpdate(ToolCallUpdate::new(
+            ToolCallId::new(id),
+            ToolCallUpdateFields::new().status(ToolCallStatus::Completed),
+        ))
+    };
+    let updates = [
+        named("ours", "mcp__oxyn__describe_schema"),
+        done("ours"),
+        named("theirs", "mcp__oxyn_evil__describe_schema"),
+        done("theirs"),
+    ];
+
+    let ended = run_with(
+        Some(ToolEndpoint {
+            url: "http://127.0.0.1:9/mcp".to_owned(),
+            token: TOKEN.to_owned(),
+            over_acp: true,
+            served: vec!["describe_schema".to_owned()],
+        }),
+        move |channel| {
+            Agent
+                .builder()
+                .on_receive_request(
+                    async |request: InitializeRequest, responder, _cx| {
+                        responder.respond(InitializeResponse::new(request.protocol_version))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async |_: NewSessionRequest, responder, _cx| {
+                        responder.respond(NewSessionResponse::new(session_id()))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .on_receive_request(
+                    async move |_: PromptRequest, responder, cx| {
+                        for update in updates.clone() {
+                            cx.send_notification(SessionNotification::new(session_id(), update))?;
+                        }
+                        responder.respond(PromptResponse::new(StopReason::EndTurn))
+                    },
+                    agent_client_protocol::on_receive_request!(),
+                )
+                .connect_to(channel)
+                .boxed()
+        },
+        async move |session| {
+            session
+                .prompt(&prompt("tables?"), observer, &CancelToken::new())
+                .await
+        },
+    );
+
+    assert_eq!(ended, Ok(TurnEnd::Answered { truncated: false }));
+    // Oxyn's call has its card; only the other server's step is drawn, and
+    // its unnamed kind is not presented as a failure.
+    assert_eq!(
+        seen.lines(),
+        vec![
+            "tool:tool:Pending".to_owned(),
+            "tool:?:Completed".to_owned()
+        ]
+    );
+}
+
+#[test]
 fn the_agents_settings_follow_it_and_nothing_it_does_not_show_is_relayed() {
     use agent_client_protocol::schema::v1::{
         AvailableCommand, AvailableCommandsUpdate, ConfigOptionUpdate, CurrentModeUpdate,
@@ -952,6 +1034,7 @@ fn journal_of_a_conversation(capped: bool) -> String {
             url: "http://127.0.0.1:9/mcp".to_owned(),
             token: TOKEN.to_owned(),
             over_acp: true,
+            served: Vec::new(),
         };
         let ended = run_with(
             Some(tools),
@@ -1123,6 +1206,7 @@ fn an_agent_that_says_the_token_back_does_not_show_it() {
             url: "http://127.0.0.1:9/mcp".to_owned(),
             token: TOKEN.to_owned(),
             over_acp: true,
+            served: Vec::new(),
         }),
         |channel| {
             Agent
