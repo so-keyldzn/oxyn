@@ -19,6 +19,10 @@ const meta = {
     onChoose: fn(),
     onRetry: fn(),
   },
+  // A tile is a button, which only admits phrasing content.
+  afterEach: async ({ canvasElement }) => {
+    await expect(canvasElement.querySelector("button :is(div, p)")).toBeNull()
+  },
 } satisfies Meta<typeof DriverChoices>
 
 export default meta

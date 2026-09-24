@@ -4,6 +4,12 @@ import { GridViewIcon } from "@hugeicons/core-free-icons"
 
 import { BackendErrorAlert } from "@/components/oxyn/backend-error-alert"
 import type { BackendFailure } from "@/components/oxyn/backend-error-alert"
+import {
+  ButtonItemContent,
+  ButtonItemDescription,
+  ButtonItemMedia,
+  ButtonItemTitle,
+} from "@/components/oxyn/button-item"
 import { DriverLogo } from "@/components/oxyn/driver-logo"
 import {
   Command,
@@ -21,13 +27,7 @@ import {
   EmptyHeader,
   EmptyTitle,
 } from "@/components/ui/empty"
-import {
-  Item,
-  ItemContent,
-  ItemDescription,
-  ItemMedia,
-  ItemTitle,
-} from "@/components/ui/item"
+import { Item } from "@/components/ui/item"
 import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "cn"
 import type { DriverChoice } from "@/lib/ipc/types"
@@ -248,22 +248,22 @@ export function DriverChoices({
                 prominent && "flex-col flex-nowrap items-start p-4"
               )}
             >
-              <ItemMedia variant="icon">
+              <ButtonItemMedia>
                 <DriverLogo
                   driver={driver.id}
                   className={prominent ? "size-6" : "size-5"}
                 />
-              </ItemMedia>
-              <ItemContent className="w-full min-w-0 gap-0.5">
-                <ItemTitle className="w-full min-w-0">
+              </ButtonItemMedia>
+              <ButtonItemContent className="w-full min-w-0 gap-0.5">
+                <ButtonItemTitle className="w-full min-w-0">
                   <span className="truncate" title={driver.displayName}>
                     {driver.displayName}
                   </span>
-                </ItemTitle>
-                <ItemDescription className="truncate text-xs tabular-nums">
+                </ButtonItemTitle>
+                <ButtonItemDescription className="truncate text-xs tabular-nums">
                   {driver.family} · {reach(driver)}
-                </ItemDescription>
-              </ItemContent>
+                </ButtonItemDescription>
+              </ButtonItemContent>
             </Item>
           </div>
         ))}
@@ -281,17 +281,17 @@ export function DriverChoices({
               }
               className="min-w-0 text-left hover:bg-muted/50 disabled:pointer-events-none disabled:opacity-50"
             >
-              <ItemMedia variant="icon">
+              <ButtonItemMedia>
                 <HugeiconsIcon icon={GridViewIcon} strokeWidth={2} />
-              </ItemMedia>
-              <ItemContent className="min-w-0 gap-0.5">
-                <ItemTitle className="w-full min-w-0">
+              </ButtonItemMedia>
+              <ButtonItemContent className="min-w-0 gap-0.5">
+                <ButtonItemTitle className="w-full min-w-0">
                   <span className="truncate">All database types</span>
-                </ItemTitle>
-                <ItemDescription className="truncate text-xs tabular-nums">
+                </ButtonItemTitle>
+                <ButtonItemDescription className="truncate text-xs tabular-nums">
                   {drivers.length} types · search
-                </ItemDescription>
-              </ItemContent>
+                </ButtonItemDescription>
+              </ButtonItemContent>
             </Item>
           </div>
         ) : null}

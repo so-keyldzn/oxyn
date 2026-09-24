@@ -26,6 +26,10 @@ const meta = {
     onCancelOpening: fn(),
     onRetry: fn(),
   },
+  // A connection is a button, which only admits phrasing content.
+  afterEach: async ({ canvasElement }) => {
+    await expect(canvasElement.querySelector("button :is(div, p)")).toBeNull()
+  },
 } satisfies Meta<typeof SavedConnections>
 
 export default meta
