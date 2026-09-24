@@ -1,7 +1,7 @@
 // Which shapes can draw a result honestly, which one Oxyn picks, and why.
 //
-// Every shape of shadcn's chart gallery is offered; the ones these rows would
-// misdraw stay listed with their reason, never hidden. A reason is a fact
+// Every shape of shadcn's chart gallery is judged; the ones these rows would
+// misdraw are not offered, and their reason says why. A reason is a fact
 // about the rows ("a value is negative"), not a taste: taste is `autoShape`'s.
 
 import type { ChartData, ChartRow } from "@/components/oxyn/result-chart-model"

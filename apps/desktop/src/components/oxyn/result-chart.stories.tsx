@@ -6,6 +6,8 @@ import { chartData, chartPlan } from "./result-chart-model"
 import type { ChartData } from "./result-chart-model"
 import type { Cell, ResultColumn } from "@/lib/ipc/types"
 
+type Canvas = ReturnType<typeof within>
+
 /** What the chart reads from these columns and rows, as the component would. */
 function read(
   columns: Array<ResultColumn>,
@@ -127,6 +129,20 @@ const meta = {
 export default meta
 type Story = StoryObj<typeof meta>
 
+/** The shape menu, opened: its list box, portalled out of the canvas. */
+async function openShapes(canvas: Canvas) {
+  await userEvent.click(canvas.getByRole("combobox", { name: /^Chart shape/ }))
+  return within(document.body).findByRole("listbox")
+}
+
+/** Base UI leaves its list box unnamed: it must be gone before axe looks. */
+async function closeShapes() {
+  await userEvent.keyboard("{Escape}")
+  await waitFor(() =>
+    expect(within(document.body).queryByRole("listbox")).toBeNull()
+  )
+}
+
 /** The drawing, once Recharts has measured its box: marks, not an empty frame. */
 async function marks(root: HTMLElement, selector: string) {
   await waitFor(() =>
@@ -145,12 +161,12 @@ export const KeyFigure: Story = {
     await expect(
       canvas.getByText("Drawn as Key figure, chosen by Oxyn.")
     ).toBeInTheDocument()
-    // A scatter needs two rows: listed, refused, and saying why.
-    const scatter = canvas.getByRole("button", { name: "Scatter" })
-    await expect(scatter).toBeDisabled()
-    await expect(scatter).toHaveAccessibleDescription(
-      "Fewer than two rows hold both numbers."
-    )
+    // A scatter needs two rows: not offered.
+    const list = await openShapes(canvas)
+    await expect(
+      within(list).queryByRole("option", { name: "Scatter" })
+    ).toBeNull()
+    await closeShapes()
   },
 }
 
@@ -159,9 +175,10 @@ export const Area: Story = {
   args: { data: byDay(1) },
   play: async ({ canvas, canvasElement }) => {
     await marks(canvasElement, ".recharts-area-area")
+    // One control, naming only what is drawn.
     await expect(
-      canvas.getByRole("button", { name: "Automatic shape" })
-    ).toHaveAttribute("aria-pressed", "true")
+      canvas.getByRole("combobox", { name: "Chart shape: Auto · Area" })
+    ).toBeVisible()
     await expect(
       canvas.getByText("Drawn as Area, chosen by Oxyn.")
     ).toBeInTheDocument()
@@ -213,10 +230,16 @@ export const Bar: Story = {
     await expect(
       canvas.getByText("Drawn as Grouped bars, chosen by Oxyn.")
     ).toBeInTheDocument()
-    // Categories are not a trend: no line, and the reason is given.
+    // Categories are not a trend: no line is offered, nor its family.
+    const list = await openShapes(canvas)
     await expect(
-      canvas.getByRole("button", { name: "Line" })
-    ).toHaveAccessibleDescription(/would draw a trend they do not have/)
+      within(list).queryByRole("option", { name: "Straight line" })
+    ).toBeNull()
+    await expect(within(list).queryByText("Line")).toBeNull()
+    await expect(
+      within(list).getByRole("option", { name: "Grouped bars" })
+    ).toBeInTheDocument()
+    await closeShapes()
   },
 }
 
@@ -273,18 +296,16 @@ export const DonutWithTotal: Story = {
   },
 }
 
-/** A negative margin has no share of a whole: the pie stays listed, refused. */
+/** A negative margin has no share of a whole: no pie is offered. */
 export const PieRefused: Story = {
   args: { data: margins },
   play: async ({ canvas }) => {
-    const pie = canvas.getByRole("button", { name: "Pie" })
-    await expect(pie).toBeDisabled()
-    await expect(pie).toHaveAccessibleDescription(
-      "A value is negative: it cannot be part of a whole."
-    )
     await expect(
       canvas.getByText("Drawn as Vertical bars, chosen by Oxyn.")
     ).toBeInTheDocument()
+    const list = await openShapes(canvas)
+    await expect(within(list).queryByRole("option", { name: "Pie" })).toBeNull()
+    await closeShapes()
   },
 }
 
@@ -313,41 +334,32 @@ export const Scatter: Story = {
   },
 }
 
-/** The user's choice: a family, then a variant; « Auto » gives Oxyn's back. */
+/** The user's choice, in one menu; « Auto » gives Oxyn's back. */
 export const Choosing: Story = {
   args: { data: byStatus },
   play: async ({ canvas }) => {
-    await userEvent.click(canvas.getByRole("button", { name: "Bar" }))
+    let list = await openShapes(canvas)
+    // A shape these rows cannot draw is not offered.
     await expect(
-      canvas.getByText("Drawn as Vertical bars.")
-    ).toBeInTheDocument()
+      within(list).queryByRole("option", { name: "Grouped bars" })
+    ).toBeNull()
     await userEvent.click(
-      canvas.getByRole("combobox", { name: "Chart variant: Vertical bars" })
-    )
-    const list = await within(document.body).findByRole("listbox")
-    // Refused variants are listed, disabled, with their reason under the name.
-    await expect(
-      within(list).getByRole("option", { name: /Grouped bars/ })
-    ).toHaveAttribute("aria-disabled", "true")
-    await expect(
-      within(list).getByText("One numeric column: nothing to group.")
-    ).toBeInTheDocument()
-    await userEvent.click(
-      within(list).getByRole("option", { name: /Horizontal bars/ })
+      within(list).getByRole("option", { name: "Horizontal bars" })
     )
     await expect(
       canvas.getByText("Drawn as Horizontal bars.")
     ).toBeInTheDocument()
-    // Base UI leaves its list box unnamed: it must be gone before axe looks.
     await waitFor(() =>
       expect(within(document.body).queryByRole("listbox")).toBeNull()
     )
-    await userEvent.click(
-      canvas.getByRole("button", { name: "Automatic shape" })
-    )
+    list = await openShapes(canvas)
+    await userEvent.click(within(list).getByRole("option", { name: "Auto" }))
     await expect(
       canvas.getByText("Drawn as Donut, chosen by Oxyn.")
     ).toBeInTheDocument()
+    await waitFor(() =>
+      expect(within(document.body).queryByRole("listbox")).toBeNull()
+    )
   },
 }
 

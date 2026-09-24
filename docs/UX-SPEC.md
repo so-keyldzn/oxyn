@@ -751,11 +751,13 @@ de la grille le rappelle (« shown to you only; the model got the count »).
     horizontales, groupées, empilées, avec valeurs), ligne (droite, courbe, en
     escalier, avec points), secteurs (pie, donut, donut avec total), radar,
     barres radiales ; plus deux formes hors galerie écrites dans son style, le
-    nuage de points et le chiffre clé. Un sélecteur à deux niveaux — la
-    famille, en boutons d'icônes, puis la variante — part sur `Auto`.
-  * **Refus.** Une forme que les lignes dessineraient mal reste **visible et
-    désactivée**, sa raison en info-bulle et en description accessible ; une
-    variante refusée l'écrit sous son nom dans la liste. Refusent : un secteur
+    nuage de points et le chiffre clé. Un **seul** menu déroulant, qui part sur
+    `Auto` : fermé, il ne montre que la forme dessinée (icône de sa famille et
+    nom, `Auto · …` quand Oxyn a choisi) ; ouvert, il liste `Auto` puis les
+    formes possibles, groupées par famille.
+  * **Refus.** Une forme que les lignes dessineraient mal **n'est pas
+    proposée**, et une famille sans forme possible disparaît avec elles.
+    Refusent : un secteur
     ou une barre radiale sur des dates, avec plus d'une série, une seule
     catégorie ou plus de cinq (la palette a cinq couleurs), une valeur `NULL`
     ou négative, et pour le secteur une valeur nulle ou une catégorie répétée ;
