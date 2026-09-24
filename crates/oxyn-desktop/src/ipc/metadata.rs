@@ -126,6 +126,7 @@ impl PreviewShapeDraft {
             sort,
             predicate: self.predicate,
             offset: self.offset,
+            columns: None,
         };
         if shape.offset > 0 {
             // Checked on the sort itself: `needs_total_order` is already true

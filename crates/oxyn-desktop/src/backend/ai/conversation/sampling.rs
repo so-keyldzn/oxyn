@@ -18,8 +18,9 @@
 //! 5. approved: the tier is read again, the exchange is marked as leaving no
 //!    memory, and the read goes to the bus as the agent — a `PreviewRelation`
 //!    the driver composes and quotes ([I-10](../../../../../../CLAUDE.md#i-10)),
-//!    that the `PolicyGate` decides ([I-01](../../../../../../CLAUDE.md#i-01));
-//! 6. only the ticked columns are copied, the tier is read a third time, and
+//!    that the `PolicyGate` decides ([I-01](../../../../../../CLAUDE.md#i-01)),
+//!    projected on the ticked columns so the server returns nothing else;
+//! 6. those columns are copied, the tier is read a third time, and
 //!    the rows go back to `oxyn-ai` — which renders them by
 //!    `ContextBuilder::build`, never here;
 //! 7. only once that rendering kept them does `oxyn-ai` release the
@@ -364,7 +365,8 @@ impl AgentSink {
     }
 
     /// Reads the approved sample through the agent's own sink — the executor,
-    /// the `PolicyGate`, the journal — and copies the ticked columns only.
+    /// the `PolicyGate`, the journal —, projected on the ticked columns, and
+    /// copies them.
     ///
     /// Answers the read's command id, for the audit, and the rows. The
     /// server's words never come back: an error can quote the cell it refused.
@@ -377,17 +379,8 @@ impl AgentSink {
         rows: u32,
         cancel: &CancelToken,
     ) -> Result<(oxyn_core::CommandId, Vec<Vec<oxyn_core::ScalarValue>>), String> {
-        let Some(relation) = path.relation() else {
+        let Some(command) = samples::sample_read((connection, session), path, columns, rows) else {
             return Err("this is not a relation; nothing was read".to_owned());
-        };
-        let command = Command::PreviewRelation {
-            connection,
-            session,
-            catalog: path.catalog().map(str::to_owned),
-            namespace: path.namespace().map(str::to_owned),
-            relation: relation.to_owned(),
-            limit: rows,
-            shape: oxyn_core::PreviewShape::unordered(),
         };
         match self.sink.dispatch(actor, command, cancel).await {
             DispatchReport::Completed {

@@ -161,6 +161,9 @@ pub trait Session: Send + Sync {
     /// quotes, because Oxyn composes that fragment and answers for what it
     /// contains ([I-10](../../../CLAUDE.md#i-10)). A column the relation does
     /// not declare is refused, not forwarded in the hope the server rejects it.
+    /// The **projection** ([`PreviewShape::projection`]) is structured the same
+    /// way: each name is checked against the relation and quoted, and the
+    /// server returns those columns only.
     ///
     /// The **predicate** is SQL the user wrote, and it travels through
     /// untouched — neither parsed nor rewritten — exactly like the text of a

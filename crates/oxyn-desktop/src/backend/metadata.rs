@@ -100,6 +100,7 @@ impl Backend {
                 .collect(),
             predicate: None,
             offset: applied.offset,
+            columns: None,
         };
         Ok(pagination(&shape, unique_key, rows))
     }

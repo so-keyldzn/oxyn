@@ -1,8 +1,8 @@
 //! Pure SQL composition using SQLite attached databases, without an extra schema.
 //!
-//! Two halves that do not look alike ([ADR-0020]): the **order** is structured,
-//! so every column is quoted here and refused when the relation does not
-//! declare it; the **predicate** is SQL the user wrote, and travels through
+//! Two halves that do not look alike ([ADR-0020]): the **order** and the
+//! **projection** are structured, so every column is quoted here and refused
+//! when the relation does not declare it; the **predicate** is SQL the user wrote, and travels through
 //! untouched — neither parsed nor rewritten. What keeps the second one honest
 //! is not this module: the statement stays read-only for the engine itself
 //! (`sqlite3_stmt_readonly`, see [`crate::stream`]) and the row limit still
@@ -21,12 +21,13 @@ use oxyn_core::{
 /// SQLite quotes with double quotes, like the standard.
 const STYLE: QuoteStyle = QuoteStyle::Double;
 
-/// What the catalog says about a relation, as far as ordering needs it.
+/// What the catalog says about a relation, as far as ordering and projecting
+/// need it.
 ///
 /// Read from the engine **only** when the requested shape depends on it — a
 /// plain preview pays no `PRAGMA table_info` for a clause it does not compose.
 /// An empty [`Self::columns`] therefore means « nothing was read », and it is
-/// only ever paired with a shape that asks for no order.
+/// only ever paired with a shape that asks for neither order nor projection.
 #[derive(Debug, Default)]
 pub(crate) struct RelationFacts {
     /// Column names, as the catalog spells them.
@@ -87,9 +88,10 @@ pub(crate) fn request(
         CatalogPath::for_relation(Some(database), None, relation)?.qualify_sql(SqlDialect::Sqlite);
     let max_rows = usize::try_from(limit)
         .map_err(|_| OxynError::Config("preview limit exceeds platform capacity".into()))?;
+    let projection = projection(shape, facts)?;
     let order = order_by(shape, facts)?;
 
-    let mut text = format!("SELECT * FROM {qualified}");
+    let mut text = format!("SELECT {projection} FROM {qualified}");
     if let Some(predicate) = shape.predicate() {
         // Two guards around a fragment the driver does not parse, and each one
         // catches what the other lets through.
@@ -123,6 +125,32 @@ pub(crate) fn request(
             .with_intent(StatementIntent::Read)
             .with_limits(ExecLimits::default().with_max_rows(max_rows)),
     )
+}
+
+/// The select list: `*`, or the requested columns, each quoted.
+///
+/// # Erreurs
+/// Those of [`PreviewShape::projection`], and [`OxynError::CatalogUnavailable`]
+/// when a name is not a column of the relation — the same refusal as an
+/// unknown sort column, before the engine sees it.
+fn projection(shape: &PreviewShape, facts: &RelationFacts) -> Result<String> {
+    let Some(columns) = shape.projection()? else {
+        return Ok("*".to_owned());
+    };
+    let mut terms = Vec::with_capacity(columns.len());
+    for column in columns {
+        if !facts.columns.iter().any(|declared| declared == column) {
+            return Err(unknown_projected(column));
+        }
+        terms.push(quote_identifier(column, STYLE));
+    }
+    Ok(terms.join(", "))
+}
+
+fn unknown_projected(column: &str) -> OxynError {
+    OxynError::CatalogUnavailable(format!(
+        "cannot read `{column}` in a preview: the relation does not declare that column"
+    ))
 }
 
 /// The `ORDER BY` terms, or `None` when nothing needs ordering.
@@ -356,6 +384,48 @@ mod tests {
         };
         let request = compose(&shape, &RelationFacts::default()).expect("prédicat vide");
         assert_eq!(request.text, "SELECT * FROM \"main\".\"t\" LIMIT 200");
+    }
+
+    #[test]
+    fn une_projection_ne_lit_que_les_colonnes_nommees_citees_dans_l_ordre() {
+        let hostile = "e\"; DROP TABLE audit; --";
+        let shape = PreviewShape {
+            columns: Some(vec![hostile.into(), "id".into(), hostile.into()]),
+            sort: vec![PreviewSort::ascending("name")],
+            ..PreviewShape::default()
+        };
+        let request = compose(
+            &shape,
+            &facts(&[("id", true), ("name", false), (hostile, false)]),
+        )
+        .expect("projection");
+        assert_eq!(
+            request.text,
+            "SELECT \"e\"\"; DROP TABLE audit; --\", \"id\" FROM \"main\".\"t\" \
+             ORDER BY \"name\" ASC, \"id\" ASC LIMIT 200"
+        );
+        assert!(request.limits.read_only);
+    }
+
+    #[test]
+    fn une_colonne_projetee_inconnue_ou_une_projection_vide_est_refusee() {
+        let absente = PreviewShape {
+            columns: Some(vec!["id".into(), "absente".into()]),
+            ..PreviewShape::default()
+        };
+        let erreur = compose(&absente, &facts(&[("id", true)])).expect_err("refus attendu");
+        assert!(
+            matches!(&erreur, OxynError::CatalogUnavailable(message) if message.contains("absente")),
+            "{erreur}"
+        );
+        let vide = PreviewShape {
+            columns: Some(Vec::new()),
+            ..PreviewShape::default()
+        };
+        assert!(matches!(
+            compose(&vide, &facts(&[("id", true)])),
+            Err(OxynError::Config(_))
+        ));
     }
 
     #[test]

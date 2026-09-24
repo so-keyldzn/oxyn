@@ -109,6 +109,19 @@ et le SQL arbitraire est la fonctionnalité. Le SQL qu'**Oxyn compose**
 suggestion IA — ne concatène jamais un nom reçu : il passe par la fonction de
 citation d'identifiant du driver, et les valeurs sont liées.
 
+**La projection d'un aperçu suit la même règle.** `PreviewShape::columns`
+nomme les seules colonnes à lire : le driver prend la liste par
+`PreviewShape::projection`, qui la déduplique et la borne à
+`MAX_PROJECTED_COLUMNS` noms, vérifie chaque nom contre la description de la
+relation, puis le cite comme la relation elle-même. Un nom que la relation ne
+déclare pas est refusé par `OxynError::CatalogUnavailable` avant d'atteindre le
+serveur, comme une colonne de tri inconnue ; une liste vide est refusée par
+`OxynError::Config` et ne vaut jamais `SELECT *`, qui lirait justement ce que
+personne n'a approuvé. Une projection ignorée n'est pas une dégradation
+acceptable : c'est elle qui borne un échantillon aux colonnes cochées
+([ADR-0034](adr/0034-echantillon-pour-toute-destination.md)), et un driver qui
+ne sait pas la composer refuse l'aperçu.
+
 **Une exception, et une seule** : le prédicat d'aperçu. L'utilisateur y écrit un
 fragment de `WHERE` que le driver insère dans un `SELECT` composé par Oxyn —
 donc du texte libre dans du SQL composé. C'est délibéré et argumenté dans

@@ -1,8 +1,8 @@
 //! Pure SQL composition for relation previews.
 //!
-//! Two halves that do not look alike ([ADR-0020]): the **order** is structured,
-//! so every column is quoted here and refused when the relation does not
-//! declare it; the **predicate** is SQL the user wrote, and travels through
+//! Two halves that do not look alike ([ADR-0020]): the **order** and the
+//! **projection** are structured, so every column is quoted here and refused
+//! when the relation does not declare it; the **predicate** is SQL the user wrote, and travels through
 //! untouched — neither parsed nor rewritten.
 //!
 //! [ADR-0020]: ../../../docs/adr/0020-apercu-trie-filtre-parcouru.md
@@ -41,12 +41,14 @@ FROM column_types c JOIN pg_catalog.pg_type t ON t.oid = c.type_oid \
 JOIN pg_catalog.pg_namespace n ON n.oid = t.typnamespace \
 GROUP BY c.attnum, c.attname ORDER BY c.attnum";
 
-/// What the catalog says about a relation, as far as ordering needs it.
+/// What the catalog says about a relation, as far as ordering — and, on
+/// Redshift, projecting — needs it.
 ///
 /// Read from the server **only** when the requested shape depends on it — a
 /// plain preview pays no metadata round trip for a clause it does not compose.
 /// An empty [`Self::columns`] therefore means « nothing was read », and it is
-/// only ever paired with a shape that asks for no order.
+/// only ever paired with a shape that asks for no order, and with a projection
+/// only when the typed column list checks it instead.
 #[derive(Debug, Default)]
 pub(crate) struct RelationFacts {
     /// Column names, as the catalog spells them.
@@ -116,22 +118,7 @@ pub(crate) fn request_with_columns(
     let max_rows = usize::try_from(limit)
         .map_err(|_| OxynError::Config("preview limit exceeds platform capacity".into()))?;
     let style = QuoteStyle::for_dialect(dialect);
-    let projection = if columns.is_empty() {
-        "*".to_owned()
-    } else {
-        columns
-            .iter()
-            .map(|(name, as_text)| {
-                let name = quote_identifier(name, style);
-                if *as_text {
-                    format!("{name}::pg_catalog.text AS {name}")
-                } else {
-                    name
-                }
-            })
-            .collect::<Vec<_>>()
-            .join(", ")
-    };
+    let projection = select_list(columns, shape, facts, style)?;
     let order = order_by(shape, facts, style)?;
 
     let mut text = format!("SELECT {projection} FROM {qualified}");
@@ -167,6 +154,65 @@ pub(crate) fn request_with_columns(
     Ok(ExecRequest::new(QueryLanguage::Sql(dialect), text)
         .with_intent(StatementIntent::Read)
         .with_limits(ExecLimits::default().with_max_rows(max_rows)))
+}
+
+/// The select list: every column or the requested ones, each quoted, and cast
+/// to text when `columns` says the type has no binary form.
+///
+/// `columns` is the typed list read from the server, empty when none was read
+/// (Redshift, or a caller that needs no cast): a requested name is then
+/// checked against `facts` instead.
+///
+/// # Erreurs
+/// Those of [`PreviewShape::projection`], and [`OxynError::CatalogUnavailable`]
+/// when a name is not a column of the relation — the same refusal as an
+/// unknown sort column, before the server sees it.
+fn select_list(
+    columns: &[(String, bool)],
+    shape: &PreviewShape,
+    facts: &RelationFacts,
+    style: QuoteStyle,
+) -> Result<String> {
+    let render = |name: &str, as_text: bool| {
+        let name = quote_identifier(name, style);
+        if as_text {
+            format!("{name}::pg_catalog.text AS {name}")
+        } else {
+            name
+        }
+    };
+    let Some(requested) = shape.projection()? else {
+        if columns.is_empty() {
+            return Ok("*".to_owned());
+        }
+        return Ok(columns
+            .iter()
+            .map(|(name, as_text)| render(name, *as_text))
+            .collect::<Vec<_>>()
+            .join(", "));
+    };
+    let mut terms = Vec::with_capacity(requested.len());
+    for name in requested {
+        let as_text = if columns.is_empty() {
+            facts
+                .columns
+                .iter()
+                .any(|declared| declared == name)
+                .then_some(false)
+        } else {
+            columns
+                .iter()
+                .find(|(declared, _)| declared == name)
+                .map(|(_, as_text)| *as_text)
+        };
+        let Some(as_text) = as_text else {
+            return Err(OxynError::CatalogUnavailable(format!(
+                "cannot read `{name}` in a preview: the relation does not declare that column"
+            )));
+        };
+        terms.push(render(name, as_text));
+    }
+    Ok(terms.join(", "))
 }
 
 /// The `ORDER BY` terms, or `None` when nothing needs ordering.
@@ -456,6 +502,93 @@ mod tests {
         );
         assert_eq!(request.limits.max_rows, Some(1));
         assert!(request.limits.read_only);
+    }
+
+    #[test]
+    fn une_projection_ne_lit_que_les_colonnes_nommees_et_garde_leur_conversion() {
+        let hostile = "acl\"; DROP TABLE audit; --";
+        let shape = PreviewShape {
+            columns: Some(vec![hostile.into(), "id".into(), hostile.into()]),
+            ..PreviewShape::default()
+        };
+        let request = request_with_columns(
+            "db",
+            SqlDialect::Postgres,
+            &path(),
+            5,
+            &[
+                ("id".into(), false),
+                ("secret".into(), false),
+                (hostile.into(), true),
+            ],
+            &shape,
+            &RelationFacts::default(),
+        )
+        .expect("projection");
+        // `secret`, non demandée, n'est pas lue ; le doublon ne se compose pas.
+        assert_eq!(
+            request.text,
+            "SELECT \"acl\"\"; DROP TABLE audit; --\"::pg_catalog.text AS \
+             \"acl\"\"; DROP TABLE audit; --\", \"id\" FROM \"public\".\"t\" LIMIT 5"
+        );
+        assert!(request.limits.read_only);
+    }
+
+    #[test]
+    fn une_projection_sans_liste_typee_se_verifie_sur_la_description() {
+        // Redshift : aucune liste typée n'est lue, la description en tient lieu.
+        let shape = PreviewShape {
+            columns: Some(vec!["name".into()]),
+            ..PreviewShape::default()
+        };
+        let request = request(
+            "db",
+            SqlDialect::Redshift,
+            &path(),
+            5,
+            &shape,
+            &facts(&[("id", true), ("name", false)]),
+        )
+        .expect("projection");
+        assert_eq!(
+            request.text,
+            "SELECT \"name\" FROM \"public\".\"t\" LIMIT 5"
+        );
+    }
+
+    #[test]
+    fn une_colonne_projetee_inconnue_est_refusee_avant_le_serveur() {
+        let shape = PreviewShape {
+            columns: Some(vec!["absente".into(), "id".into()]),
+            ..PreviewShape::default()
+        };
+        let typee = request_with_columns(
+            "db",
+            SqlDialect::Postgres,
+            &path(),
+            5,
+            &[("id".into(), false)],
+            &shape,
+            &RelationFacts::default(),
+        );
+        let decrite = compose(&shape, &facts(&[("id", true)]));
+        // Rien de lu, rien de connu : un nom ne passe pas faute de vérification.
+        let rien = compose(&shape, &RelationFacts::default());
+        for erreur in [typee, decrite, rien] {
+            let erreur = erreur.expect_err("refus attendu");
+            assert!(
+                matches!(&erreur, OxynError::CatalogUnavailable(message) if message.contains("absente")),
+                "{erreur}"
+            );
+        }
+        let vide = PreviewShape {
+            columns: Some(Vec::new()),
+            ..PreviewShape::default()
+        };
+        assert!(matches!(
+            compose(&vide, &facts(&[("id", true)])),
+            Err(OxynError::Config(_))
+        ));
     }
 
     #[test]

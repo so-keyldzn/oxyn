@@ -1681,22 +1681,18 @@ impl Run<'_> {
         path: &oxyn_catalog::CatalogPath,
         columns: &[String],
     ) -> Result<Vec<Vec<oxyn_core::ScalarValue>>, Failure> {
-        let Some(relation) = path.relation() else {
+        let Some(command) = samples::sample_read(
+            (self.connection.id, session),
+            path,
+            columns,
+            samples::MAX_SAMPLE_ROWS,
+        ) else {
             return Err(Failure::new(
                 SampleRefused::OtherSource.to_string(),
                 FailureCategory::Refused,
             ));
         };
         let executor = &self.inner.executor;
-        let command = Command::PreviewRelation {
-            connection: self.connection.id,
-            session,
-            catalog: path.catalog().map(str::to_owned),
-            namespace: path.namespace().map(str::to_owned),
-            relation: relation.to_owned(),
-            limit: samples::MAX_SAMPLE_ROWS,
-            shape: oxyn_core::PreviewShape::default(),
-        };
         match executor
             .dispatch_as(preview, Actor::Human, command, self.cancel)
             .await

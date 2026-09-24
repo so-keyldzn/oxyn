@@ -1448,6 +1448,47 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn une_projection_ne_rend_que_les_colonnes_nommees() {
+        let session = atelier_apercu().await;
+        let forme = PreviewShape {
+            columns: Some(vec!["nom".into(), "id".into()]),
+            sort: vec![PreviewSort::ascending("id")],
+            ..PreviewShape::default()
+        };
+        let lots = apercu(&*session, "apercu", 3, &forme).await;
+        let schema = lots.first().expect("au moins un lot").schema();
+        let noms: Vec<&str> = schema
+            .fields()
+            .iter()
+            .map(|champ| champ.name().as_str())
+            .collect();
+        // `seau`, non demandée, n'est pas lue du moteur ; l'ordre est celui
+        // de la projection, pas celui de la table.
+        assert_eq!(noms, ["nom", "id"]);
+        assert_eq!(textes(&lots, 0), ["ligne-1", "ligne-2", "ligne-3"]);
+        assert_eq!(entiers(&lots, 1), [1, 2, 3]);
+
+        let jeton = CancelToken::new();
+        let chemin = CatalogPath::for_relation(None, Some(MAIN), "apercu").expect("chemin");
+        let inconnue = PreviewShape {
+            columns: Some(vec!["colonne_absente".into()]),
+            ..PreviewShape::default()
+        };
+        let err = refus(
+            session
+                .preview_request(&chemin, 10, &inconnue, &jeton)
+                .await,
+            "une colonne inconnue ne se projette pas",
+        );
+        assert!(
+            matches!(&err, OxynError::CatalogUnavailable(message)
+                if message.contains("colonne_absente")),
+            "{err}"
+        );
+        session.close().await.expect("fermeture");
+    }
+
+    #[tokio::test]
     async fn une_forme_que_la_relation_ne_permet_pas_est_refusee_en_le_disant() {
         let session = atelier_apercu().await;
         executer(session.as_ref(), "CREATE TABLE sans_cle (x TEXT)").await;

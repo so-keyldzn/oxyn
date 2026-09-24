@@ -486,3 +486,33 @@ fn a_column_gone_since_the_offer_copies_nothing() {
     let columns = ["id".to_owned(), "renamed".to_owned()];
     assert!(copy_rows(&buffer(3), &columns, MAX_SAMPLE_ROWS, &CancelToken::new()).is_none());
 }
+
+/// The read itself is bounded to the ticked columns: the server is not asked
+/// for the others, and the copy that follows filters nothing it was not told.
+#[test]
+fn a_sample_read_projects_the_ticked_columns_only() {
+    let (connection, session) = (ConnectionId::new(), SessionId::new());
+    let ticked = ["email".to_owned(), "id".to_owned()];
+    let Some(Command::PreviewRelation {
+        connection: target,
+        relation,
+        namespace,
+        limit,
+        shape,
+        ..
+    }) = sample_read((connection, session), &path("customers"), &ticked, 5)
+    else {
+        panic!("a relation is read by a preview");
+    };
+    assert_eq!(target, connection);
+    assert_eq!(
+        (relation.as_str(), namespace.as_deref()),
+        ("customers", Some("public"))
+    );
+    assert_eq!(limit, 5);
+    assert_eq!(shape.columns.as_deref(), Some(&ticked[..]));
+    assert!(shape.sort.is_empty() && shape.predicate().is_none() && shape.offset == 0);
+
+    let namespace = CatalogPath::for_namespace(None, "public").expect("a namespace path");
+    assert!(sample_read((connection, session), &namespace, &ticked, 5).is_none());
+}

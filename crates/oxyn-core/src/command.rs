@@ -768,6 +768,7 @@ mod tests {
                 sort: vec![crate::preview::PreviewSort::descending("id")],
                 predicate: Some("note LIKE '100%'".into()),
                 offset: 200,
+                columns: Some(vec!["id".into(), "note".into()]),
             },
         };
         assert_eq!(command.intent(), StatementIntent::Read);
