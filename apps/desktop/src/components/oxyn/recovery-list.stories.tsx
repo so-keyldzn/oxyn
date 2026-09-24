@@ -35,6 +35,7 @@ const meta = {
   component: RecoveryList,
   args: {
     abnormal: true,
+    unresolvedWrite: false,
     state: { status: "ready", entries },
     selected: new Set(entries.map((entry) => entry.id)),
     onToggle: fn(),
@@ -74,7 +75,12 @@ type Story = StoryObj<typeof meta>
 export const AfterACrash: Story = {
   play: async ({ canvas, args }) => {
     await expect(canvas.getByText(/Oxyn did not close normally/)).toBeVisible()
-    await userEvent.click(canvas.getByLabelText("Restore Untitled query"))
+    await expect(
+      canvas.getByRole("group", { name: "Working copies to restore" })
+    ).toBeInTheDocument()
+    const untitled = canvas.getByRole("checkbox", { name: "Untitled query" })
+    await expect(untitled).toHaveAccessibleDescription("No connection")
+    await userEvent.click(untitled)
     await userEvent.click(
       canvas.getByRole("button", { name: "Restore 1 selected item" })
     )
@@ -85,11 +91,51 @@ export const AfterACrash: Story = {
   },
 }
 
-/** Without a selection there is nothing to restore, and no action to press. */
+/** Clicking the title toggles its box: the label is the checkbox's. */
+export const LabelTogglesTheBox: Story = {
+  play: async ({ canvas, args }) => {
+    await userEvent.click(canvas.getByText("console_1.sql"))
+    await expect(args.onToggle).toHaveBeenCalledWith(entries[0])
+    await expect(
+      canvas.getByRole("checkbox", { name: "console_1.sql" })
+    ).not.toBeChecked()
+  },
+}
+
+/**
+ * Opened on demand from the library: no crash to announce, and history holds
+ * no write in doubt, so no warning either.
+ */
+export const OnDemand: Story = {
+  args: { abnormal: false, unresolvedWrite: false },
+  play: async ({ canvas }) => {
+    await expect(canvas.queryByText(/did not close normally/)).toBeNull()
+    await expect(
+      canvas.getByText(/^Choose the working copies to restore/)
+    ).toBeVisible()
+    await expect(canvas.queryByText(/unknown outcome/)).toBeNull()
+  },
+}
+
+/** A write in doubt in history: the screen says to inspect, never retries. */
+export const UnresolvedWrite: Story = {
+  args: { unresolvedWrite: true },
+  play: async ({ canvas }) => {
+    await expect(
+      canvas.getByText("A write may have an unknown outcome")
+    ).toBeVisible()
+    await expect(canvas.getByText(/never retries it/)).toBeVisible()
+  },
+}
+
+/** Without a selection the action stays in place, disabled. */
 export const NothingSelected: Story = {
   args: { selected: new Set(), abnormal: false },
-  play: async ({ canvas }) => {
-    await expect(canvas.queryByRole("button", { name: /^Restore/ })).toBeNull()
+  play: async ({ canvas, args }) => {
+    const restore = canvas.getByRole("button", { name: /^Restore/ })
+    await expect(restore).toBeDisabled()
+    await userEvent.click(restore, { pointerEventsCheck: 0 })
+    await expect(args.onRestore).not.toHaveBeenCalled()
   },
 }
 
@@ -101,10 +147,36 @@ export const NoWorkingCopy: Story = {
   args: { state: { status: "ready", entries: [] }, selected: new Set() },
 }
 
+/** A permanent failure: the server's words, and no button to try again. */
 export const Failed: Story = {
   args: {
-    state: { status: "error", message: "local operation cancelled" },
+    state: {
+      status: "error",
+      error: { message: "local state is corrupted", retryable: false },
+    },
     selected: new Set(),
+  },
+  play: async ({ canvas }) => {
+    await expect(canvas.getByText("local state is corrupted")).toBeVisible()
+    await expect(canvas.getByText(/will fail the same way/)).toBeVisible()
+    await expect(canvas.queryByRole("button", { name: "Try again" })).toBeNull()
+  },
+}
+
+/** A transient failure offers to try again, only on the user's click. */
+export const FailedRetryable: Story = {
+  args: {
+    state: {
+      status: "error",
+      error: { message: "database is locked", retryable: true },
+    },
+    selected: new Set(),
+  },
+  play: async ({ canvas, args }) => {
+    await expect(canvas.getByText("database is locked")).toBeVisible()
+    await expect(args.onRefresh).not.toHaveBeenCalled()
+    await userEvent.click(canvas.getByRole("button", { name: "Try again" }))
+    await expect(args.onRefresh).toHaveBeenCalledTimes(1)
   },
 }
 

@@ -23,7 +23,8 @@ export const Route = createFileRoute("/")({
         limit: 1,
       })
       .catch(() => null)
-    if (open && open.entries.length > 0) throw redirect({ to: "/recovery" })
+    if (open && open.entries.length > 0)
+      throw redirect({ to: "/recovery", search: { startup: true } })
   },
   component: ConnectionScreen,
 })

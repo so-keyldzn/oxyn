@@ -158,12 +158,7 @@ pub struct HistoryRecord {
 impl HistoryRecord {
     /// Whether replay controls must be withheld until the server state is reconciled.
     pub fn requires_reconciliation(&self) -> bool {
-        self.error_class == Some(ErrorClass::Ambiguous)
-            || (self.intent.is_mutating()
-                && (matches!(
-                    self.status,
-                    HistoryStatus::Running | HistoryStatus::Cancelled
-                ) || self.status == HistoryStatus::Failed && self.error_class.is_none()))
+        requires_reconciliation(self.intent, self.status, self.error_class)
     }
 
     /// Construit une entrée d'historique pour une exécution qui démarre.
@@ -486,6 +481,20 @@ impl<'a> History<'a> {
         self.store
             .with_connection(|conn| Ok(conn.execute("DELETE FROM query_history", [])?))
     }
+}
+
+/// One rule for a row read whole and for the startup scan, which reads only
+/// these three columns: two copies would drift, and the recovery warning would
+/// then stay silent over a write the history still flags.
+fn requires_reconciliation(
+    intent: StatementIntent,
+    status: HistoryStatus,
+    error_class: Option<ErrorClass>,
+) -> bool {
+    error_class == Some(ErrorClass::Ambiguous)
+        || (intent.is_mutating()
+            && (matches!(status, HistoryStatus::Running | HistoryStatus::Cancelled)
+                || status == HistoryStatus::Failed && error_class.is_none()))
 }
 
 /// La liste de colonnes, partagée par toutes les lectures.

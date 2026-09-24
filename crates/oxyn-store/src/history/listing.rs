@@ -198,4 +198,36 @@ impl History<'_> {
                     .transpose()
             })
     }
+
+    /// Whether any recorded execution still needs its server state inspected —
+    /// the rows the library marks `needs_inspection`.
+    ///
+    /// Reads three columns, stopping at the first match. A clean success is
+    /// excluded in SQL, since it never qualifies; everything else is decided by
+    /// the same rule as [`HistoryRecord::requires_reconciliation`].
+    ///
+    /// # Errors
+    /// [`crate::StoreError::Sqlite`] if the read fails.
+    pub fn any_requires_reconciliation(&self) -> Result<bool> {
+        self.store.with_connection(|connection| {
+            let mut query = connection.prepare(
+                "SELECT intent, status, error_class FROM query_history
+                 WHERE status <> 'succeeded' OR error_class IS NOT NULL",
+            )?;
+            let mut rows = query.query([])?;
+            while let Some(row) = rows.next()? {
+                let intent: String = row.get("intent")?;
+                let status: String = row.get("status")?;
+                let error_class: Option<String> = row.get("error_class")?;
+                if super::requires_reconciliation(
+                    intent_from_text(&intent),
+                    HistoryStatus::from_text(&status),
+                    error_class.as_deref().map(error_class_from_text),
+                ) {
+                    return Ok(true);
+                }
+            }
+            Ok(false)
+        })
+    }
 }
