@@ -319,12 +319,27 @@ pub(crate) fn restored_events(exchange: &Exchange, turns: &[Turn]) -> Vec<AiEven
         }
         for call in &record.tool_calls {
             let status = shown_as(call.status);
+            // No outcome was written for this call: it may have run, write
+            // included. Shown as a plain failure, it would read as « nothing
+            // applied » and invite the same statement again (I-13).
+            let unsettled = !matches!(
+                call.status,
+                ToolCallStatus::Completed
+                    | ToolCallStatus::Denied
+                    | ToolCallStatus::Cancelled
+                    | ToolCallStatus::Failed
+            );
+            let error_class = if unsettled {
+                Some("ambiguous")
+            } else {
+                call.error_class.and_then(class_word)
+            };
             events.push(AiEvent::RestoredCall {
                 tool: call.tool.clone(),
                 summary: call.summary.clone(),
                 statement: call.statement.clone(),
                 status,
-                error_class: call.error_class.and_then(class_word),
+                error_class,
                 // No row is ever written with a conversation, and the result
                 // the panel read died with the process: said, not drawn.
                 rows_not_kept: matches!(status, ToolStatus::Completed)
@@ -701,6 +716,56 @@ mod tests {
                 }
             )),
             "a reopened query does not say its rows are gone"
+        );
+    }
+
+    #[test]
+    fn a_reopened_call_without_a_report_says_it_may_have_applied() {
+        // The run ended before the call reported: the write may have reached
+        // the server. The card must not read « Failed » alone (I-13).
+        let log = vec![AiEvent::ToolCall {
+            call: 0,
+            tool: oxyn_ai::tools::EXECUTE_QUERY.to_owned(),
+            command: "Execute".to_owned(),
+            statement: Some("UPDATE invoices SET paid_at = now()".to_owned()),
+            connection: "local".to_owned(),
+            environment: None,
+            mutating: true,
+        }];
+        let turn = answer_of(&log, PrivacyTier::Metadata, false, None, None)
+            .turn
+            .expect("a turn");
+        let exchange = Exchange {
+            node: 0,
+            parent: None,
+            created_at: Default::default(),
+            tier: PrivacyTier::Metadata,
+            question: "mark it paid".to_owned(),
+            destination: oxyn_store::conversations::Destination::external_agent(
+                oxyn_core::ProviderId::for_new_agent(),
+                "agent",
+            ),
+            mentions: Vec::new(),
+            sample: None,
+            outcome: None,
+        };
+        let events = restored_events(
+            &exchange,
+            &[Turn {
+                ordinal: 0,
+                record: turn,
+            }],
+        );
+        assert!(
+            events.iter().any(|event| matches!(
+                event,
+                AiEvent::RestoredCall {
+                    status: ToolStatus::Failed,
+                    error_class: Some("ambiguous"),
+                    ..
+                }
+            )),
+            "a call with no recorded outcome is shown as a plain failure"
         );
     }
 }

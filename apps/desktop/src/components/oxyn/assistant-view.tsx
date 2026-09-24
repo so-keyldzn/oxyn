@@ -323,7 +323,10 @@ export function AssistantView(props: AssistantViewProps) {
         />
       ) : (
         <MessageScrollerProvider autoScroll>
-          <MessageScroller className="min-h-0 flex-1">
+          {/* While the button to the end shows, the conversation gives it a
+              strip of its own below the viewport: floating over the text, it
+              hid the words of whatever it covered. */}
+          <MessageScroller className="min-h-0 flex-1 has-[[data-slot=message-scroller-button][data-active=true]]:pb-9">
             <MessageScrollerViewport aria-label="Conversation">
               <MessageScrollerContent aria-live="off" className="gap-4 p-3">
                 {path.length === 0 ? (
@@ -397,7 +400,7 @@ export function AssistantView(props: AssistantViewProps) {
                 ))}
               </MessageScrollerContent>
             </MessageScrollerViewport>
-            <MessageScrollerButton />
+            <MessageScrollerButton className="data-[direction=end]:bottom-1" />
           </MessageScroller>
         </MessageScrollerProvider>
       )}

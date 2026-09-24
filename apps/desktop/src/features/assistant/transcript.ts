@@ -148,6 +148,67 @@ export interface CatalogEntry {
   stopped: CatalogReadStop | null
 }
 
+/** Reopened: a tool call as the workspace kept it. */
+export interface RestoredCallEntry {
+  kind: "restoredCall"
+  key: string
+  tool: string
+  summary: string
+  statement: string | null
+  status: ToolStatus
+  errorClass: ErrorClass | null
+  /** It returned rows the workspace did not keep. */
+  rowsNotKept: boolean
+}
+
+/**
+ * What the tool call card draws, live or reopened.
+ *
+ * One model for both, so a reopened call cannot drift into a rendering of its
+ * own. What the workspace does not keep — where the call ran, whether it could
+ * write, whether the tier withheld part of its report — is `null` or `false`
+ * on a reopened call, never guessed from the conversation's connection or the
+ * statement.
+ */
+export interface ToolCard {
+  tool: string
+  /** `null` on a reopened call: the workspace does not record it. */
+  target: { connection: string; environment: Environment | null } | null
+  /** `null` on a reopened call: the workspace does not record it. */
+  mutating: boolean | null
+  state: ToolCallState
+  statement: string | null
+  /** The server's words, whole — the same words a reopened call kept. */
+  detail: string | null
+  errorClass: ErrorClass | null
+  withheld: boolean
+}
+
+export function toolCardOf(entry: ToolCallEntry | RestoredCallEntry): ToolCard {
+  if (entry.kind === "tool") {
+    return {
+      tool: entry.tool,
+      target: { connection: entry.connection, environment: entry.environment },
+      mutating: entry.mutating,
+      state: entry.state,
+      statement: entry.statement,
+      detail: entry.detail,
+      errorClass: entry.errorClass,
+      withheld: entry.withheld,
+    }
+  }
+  return {
+    tool: entry.tool,
+    target: null,
+    mutating: null,
+    state: entry.status,
+    statement: entry.statement,
+    detail: entry.summary === "" ? null : entry.summary,
+    errorClass: entry.errorClass,
+    withheld: false,
+  }
+}
+
 export type Entry =
   | { kind: "turn"; key: string; turn: number; maxTurns: number }
   | CatalogEntry
@@ -173,17 +234,7 @@ export type Entry =
   | { kind: "olderNotLoaded"; key: string }
   /** Reopened: this exchange used a sample, so no answer was written. */
   | { kind: "answerNotKept"; key: string }
-  | {
-      kind: "restoredCall"
-      key: string
-      tool: string
-      summary: string
-      statement: string | null
-      status: ToolStatus
-      errorClass: ErrorClass | null
-      /** It returned rows the workspace did not keep. */
-      rowsNotKept: boolean
-    }
+  | RestoredCallEntry
   | { kind: "ended"; key: string; ending: Ending }
   | FailedEntry
 

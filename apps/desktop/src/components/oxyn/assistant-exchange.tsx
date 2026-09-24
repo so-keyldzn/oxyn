@@ -13,7 +13,10 @@ import { AssistantPlan } from "@/components/oxyn/assistant-plan"
 import { AssistantQuestion } from "@/components/oxyn/assistant-question"
 import { AssistantSources } from "@/components/oxyn/assistant-sources"
 import { AssistantThinking } from "@/components/oxyn/assistant-thinking"
-import { AssistantToolCall } from "@/components/oxyn/assistant-tool-call"
+import {
+  AssistantRestoredCall,
+  AssistantToolCall,
+} from "@/components/oxyn/assistant-tool-call"
 import { AssistantToolDraft } from "@/components/oxyn/assistant-tool-draft"
 import { AssistantUsage } from "@/components/oxyn/assistant-usage"
 import type { AssistantViewProps } from "@/components/oxyn/assistant-view"
@@ -171,24 +174,8 @@ function EntryView({
         </Marker>
       )
     case "restoredCall":
-      return (
-        <Marker className="items-start text-xs">
-          <MarkerContent>
-            <span className="font-mono">{entry.tool}</span> · {entry.summary}
-            {entry.statement ? (
-              <span className="mt-1 block font-mono break-all opacity-80">
-                {entry.statement}
-              </span>
-            ) : null}
-            {entry.rowsNotKept ? (
-              <span className="mt-1 block">
-                Result no longer available: the workspace keeps the statement,
-                never its rows. Nothing is rerun.
-              </span>
-            ) : null}
-          </MarkerContent>
-        </Marker>
-      )
+      return <AssistantRestoredCall entry={entry} />
+
     case "sampleSent":
       return (
         <Marker role="note" className="items-start text-xs">
