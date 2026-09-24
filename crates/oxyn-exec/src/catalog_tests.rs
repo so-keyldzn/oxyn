@@ -505,7 +505,7 @@ fn shutdown_cancels_catalog_provider_before_closing_session() {
 }
 
 #[test]
-fn refused_cache_merge_preserves_prior_data_and_emits_no_success() {
+fn merge_at_scope_limit_evicts_the_oldest_scope_and_publishes() {
     let probe = Arc::new(Probe::default());
     let (executor, connection) = bench(probe);
     block_on(executor.dispatch(
@@ -514,15 +514,29 @@ fn refused_cache_merge_preserves_prior_data_and_emits_no_success() {
         &CancelToken::new(),
     ))
     .expect("initial cache");
+    let describe = |relation: &str| {
+        refresh(
+            connection,
+            CatalogRefreshScope::Relation {
+                catalog: None,
+                namespace: None,
+                relation: relation.to_owned(),
+            },
+        )
+    };
+    block_on(executor.dispatch(Actor::Human, describe(HOSTILE), &CancelToken::new()))
+        .expect("oldest evictable scope");
+    let oldest = CatalogPath::for_relation(None, None, HOSTILE).expect("valid path");
     let state = executor
         .catalogs
         .read()
         .get(&connection)
         .cloned()
         .expect("cache state");
+    assert!(state.cache.read().relation(&oldest).is_some());
     {
         let mut budget = block_on(state.refresh.lock());
-        for i in 0..1023 {
+        for i in 0..1022 {
             budget
                 .reserve(
                     &CatalogRefreshScope::Namespaces {
@@ -534,18 +548,16 @@ fn refused_cache_merge_preserves_prior_data_and_emits_no_success() {
         }
     }
     let mut events = executor.subscribe();
-    let result = block_on(executor.dispatch(
-        Actor::Human,
-        refresh(
-            connection,
-            CatalogRefreshScope::Relations {
-                catalog: None,
-                namespace: None,
-            },
-        ),
-        &CancelToken::new(),
-    ));
-    assert!(matches!(result, Err(OxynError::Config(_))));
-    assert!(events.try_recv().is_err());
-    assert_eq!(state.cache.read().relation_count(), 1);
+    let result = block_on(executor.dispatch(Actor::Human, describe("newest"), &CancelToken::new()));
+    assert!(matches!(result, Ok(Outcome::CatalogRefreshed { .. })));
+    assert!(events.try_recv().is_ok());
+    let cache = state.cache.read();
+    assert!(cache.relation(&oldest).is_none(), "the oldest was evicted");
+    assert!(
+        cache.relation_summary(&oldest).is_some(),
+        "the root listing still names it"
+    );
+    let newest = CatalogPath::for_relation(None, None, "newest").expect("valid path");
+    assert!(cache.relation(&newest).is_some(), "the newest is served");
+    assert!(cache.server_info().is_some(), "the root is never evicted");
 }

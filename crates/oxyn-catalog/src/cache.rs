@@ -988,6 +988,65 @@ impl CatalogCache {
         }
     }
 
+    /// Drops what was read *under* a node, to bound memory.
+    ///
+    /// Unlike [`Self::forget`], the node itself stays where its parent's
+    /// listing put it: the object still exists, only its contents are no
+    /// longer held. The dropped levels read as never fetched, never as empty.
+    /// A node that no listing carries — created on the way by a direct
+    /// description — goes once empty: nothing would count it any more.
+    /// [`CatalogScope::Server`] empties the whole cache. An unknown node is a
+    /// no-op.
+    pub fn evict(&mut self, scope: &CatalogScope) {
+        tracing::debug!(scope = %scope, "catalog cache entry evicted");
+        match scope {
+            CatalogScope::Server => *self = Self::new(),
+            CatalogScope::Catalog(path) => {
+                let key = cle(path.catalog());
+                if self.catalogs.freshness == Freshness::Never {
+                    self.catalogs.value.shift_remove(key);
+                } else if let Some(catalog) = self.catalogs.value.get_mut(key) {
+                    catalog.namespaces = Cached::default();
+                }
+            }
+            CatalogScope::Namespace(path) => {
+                let Some(catalog) = self.catalogs.value.get_mut(cle(path.catalog())) else {
+                    return;
+                };
+                let key = cle(path.namespace());
+                if catalog.namespaces.freshness == Freshness::Never {
+                    catalog.namespaces.value.shift_remove(key);
+                } else if let Some(namespace) = catalog.namespaces.value.get_mut(key) {
+                    namespace.relations = Cached::default();
+                }
+            }
+            CatalogScope::Relation(path) => {
+                let Some(name) = path.relation() else {
+                    return;
+                };
+                let Some(namespace) = self.namespace_node_mut_opt(path) else {
+                    return;
+                };
+                let listed = namespace.relations.freshness != Freshness::Never;
+                let Some(node) = namespace.relations.value.get_mut(name) else {
+                    return;
+                };
+                node.detail = Cached::default();
+                node.indexes = Cached::default();
+                node.foreign_keys = Cached::default();
+                let empty = node.constraints.value.is_none()
+                    && node.incoming_keys.value.is_none()
+                    && node.definition.value.is_none();
+                if !listed && empty {
+                    namespace.relations.value.shift_remove(name);
+                }
+            }
+            CatalogScope::Constraints(_)
+            | CatalogScope::IncomingForeignKeys(_)
+            | CatalogScope::Definition(_) => self.forget(scope),
+        }
+    }
+
     // ── Navigation interne ──────────────────────────────────────────────────
 
     fn invalidate_catalog(catalogue: &mut CatalogNode) {
@@ -1156,6 +1215,67 @@ mod tests {
             )
             .expect("un espace de noms est bien un espace de noms");
         cache
+    }
+
+    #[test]
+    fn eviction_drops_contents_but_keeps_the_node_its_parent_listed() {
+        let mut cache = cache_postgres();
+        let table = chemin(Some("caisse"), Some("public"), "clients");
+        cache
+            .set_relation(&table, Relation::new("clients", RelationKind::Table))
+            .expect("relation");
+        cache.set_indexes(&table, vec![]).expect("indexes");
+        cache.set_constraints(&table, vec![]).expect("constraints");
+
+        cache.evict(&CatalogScope::Relation(table.clone()));
+        assert!(cache.relation_summary(&table).is_some());
+        assert!(cache.relation(&table).is_none());
+        assert!(cache.indexes(&table).is_none(), "unread, never empty");
+        assert!(cache.constraints(&table).is_some(), "own scope, kept");
+        assert_eq!(
+            cache.freshness(&CatalogScope::Relation(table.clone())),
+            Freshness::Never
+        );
+
+        let espace = espace_public();
+        cache.evict(&CatalogScope::Namespace(espace.clone()));
+        assert_eq!(cache.relations(&espace).count(), 0);
+        assert_eq!(cache.namespaces(Some("caisse")).count(), 1);
+        assert_eq!(
+            cache.freshness(&CatalogScope::Namespace(espace)),
+            Freshness::Never
+        );
+
+        let catalogue = CatalogPath::for_catalog("caisse").expect("valide");
+        cache.evict(&CatalogScope::Catalog(catalogue));
+        assert_eq!(cache.namespaces(Some("caisse")).count(), 0);
+        assert_eq!(cache.catalogs().count(), 1);
+        assert!(cache.server_info().is_some());
+    }
+
+    #[test]
+    fn eviction_removes_a_relation_no_listing_carries() {
+        let mut cache = CatalogCache::new();
+        let direct = chemin(None, Some("main"), "opened_from_a_tab");
+        let narrow = chemin(None, Some("main"), "with_constraints");
+        for path in [&direct, &narrow] {
+            cache
+                .set_relation(path, Relation::new("t", RelationKind::Table))
+                .expect("relation");
+        }
+        cache.set_constraints(&narrow, vec![]).expect("constraints");
+
+        cache.evict(&CatalogScope::Relation(direct.clone()));
+        cache.evict(&CatalogScope::Relation(narrow.clone()));
+        assert!(cache.relation_summary(&direct).is_none());
+        assert!(
+            cache.relation_summary(&narrow).is_some(),
+            "still carries its constraints"
+        );
+
+        cache.evict(&CatalogScope::Constraints(narrow.clone()));
+        cache.evict(&CatalogScope::Relation(narrow.clone()));
+        assert!(cache.relation_summary(&narrow).is_none());
     }
 
     #[test]

@@ -582,9 +582,14 @@ verrous et coopérativement chez le provider ; la déconnexion annule la lecture
 avant de fermer la session. Une panne conserve les données précédentes.
 `Outcome::CatalogRefreshed { connection, scope }` et l'événement `CatalogUpdated`
 (enveloppé avec la connexion) signalent une publication réussie sans transporter
-le catalogue. Le bus refuse avant fusion de dépasser 1 024 scopes ou 50 000 objets de
-métadonnées par connexion (listes, relations et champs), en conservant les données
-précédentes. Le décompte garde les maxima des scopes déjà lus, car relister un
+le catalogue. Le cache d'une connexion est borné à 1 024 scopes et 50 000 objets de
+métadonnées (listes, relations et champs). Avant fusion, le bus évince les scopes
+publiés le moins récemment jusqu'à ce que la nouvelle lecture tienne : le nœud
+évincé reste dans la liste de son parent, son contenu redevient « jamais lu », et
+ses scopes descendants partent avec lui. `Root` et les parents du scope publié ne
+sont jamais évincés ; si la lecture ne tient toujours pas, elle est refusée sans
+rien évincer. L'usage compté est la publication : l'UI lit le cache sans passer
+par le bus. Le décompte garde les maxima des scopes déjà lus, car relister un
 parent conserve ses détails enfants ; la déconnexion remet ce budget à zéro.
 Cette borne ne limite pas les octets des chaînes ni les vecteurs temporaires
 rendus par le provider, et ce trajet ne fournit pas de persistance hors ligne.
