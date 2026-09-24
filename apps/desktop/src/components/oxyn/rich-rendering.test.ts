@@ -14,13 +14,15 @@ const column = (name: string, dataType: string): ResultColumn => ({
 describe("a result chart", () => {
   it("needs a date or category axis and a numeric column", () => {
     expect(
-      chartPlan([column("day", "Date32"), column("total", "Decimal128(12, 2)")])
-    ).toEqual({ axis: 0, kind: "line", series: [1] })
-    expect(chartPlan([column("status", "Utf8"), column("n", "Int64")])).toEqual(
-      { axis: 0, kind: "bar", series: [1] }
-    )
-    expect(chartPlan([column("a", "Int64"), column("b", "Float64")])).toBeNull()
-    expect(chartPlan([column("a", "Utf8"), column("b", "Utf8")])).toBeNull()
+      chartPlan(
+        [column("day", "Date32"), column("total", "Decimal128(12, 2)")],
+        10
+      )
+    ).toEqual({ axis: 0, axisKind: "temporal", series: [1] })
+    expect(
+      chartPlan([column("status", "Utf8"), column("n", "Int64")], 10)
+    ).toEqual({ axis: 0, axisKind: "category", series: [1] })
+    expect(chartPlan([column("a", "Utf8"), column("b", "Utf8")], 10)).toBeNull()
   })
 
   it("reads back only what is plainly a number", () => {
@@ -49,7 +51,7 @@ describe("a result chart", () => {
       column("orders", "Int64"),
       column("share", "Decimal128(5, 2)"),
     ]
-    const plan = chartPlan(columns)
+    const plan = chartPlan(columns, 3)
     expect(plan).not.toBeNull()
     if (!plan) return
     const data = chartData(plan, columns, [

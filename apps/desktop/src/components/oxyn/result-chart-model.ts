@@ -1,8 +1,9 @@
-// What a result can be drawn as, decided from its columns and its first rows.
+// What a result can be drawn from, decided from its columns and its first rows.
 //
 // Cells arrive formatted by Rust (`oxyn_data::format_cell`): a chart reads the
 // text back, and only when it is unmistakably a number. A value it cannot read
-// is never guessed at — the column is left out, and the chart says so.
+// is never guessed at — the column is left out, and the chart says so. Which
+// shape draws these rows is `result-chart-shapes.ts`'s question.
 
 import type { Cell, ResultColumn } from "@/lib/ipc/types"
 
@@ -14,24 +15,31 @@ const NUMERIC = /^(U?Int(8|16|32|64)|Float(16|32|64)|Decimal(32|64|128|256))\b/
 const TEMPORAL = /^(Date(32|64)|Timestamp)\b/
 const CATEGORY = /^(Utf8|LargeUtf8|Utf8View|Boolean|Dictionary)\b/
 
+export type AxisKind = "temporal" | "category"
+
 export interface ChartPlan {
-  /** Column of the horizontal axis. */
-  axis: number
-  /** A date axis draws a line; a category axis draws bars. */
-  kind: "line" | "bar"
+  /** Column of the horizontal axis, `null` when none reads as one. */
+  axis: number | null
+  axisKind: AxisKind | null
   /** Candidate numeric columns, in result order. */
   series: Array<number>
 }
 
 /**
- * A chart for these columns, or `null`: one date or category column for the
- * axis, and at least one numeric column. A date axis wins over a category one.
+ * What these columns could draw, or `null` when nothing honest can be drawn
+ * from them — so that no control offers a chart that would come out empty.
+ *
+ * A date axis wins over a category one. Without an axis, two numbers still
+ * make a scatter, and a single row still makes key figures; one number over
+ * many rows makes nothing.
  */
-export function chartPlan(columns: Array<ResultColumn>): ChartPlan | null {
+export function chartPlan(
+  columns: Array<ResultColumn>,
+  rowCount: number
+): ChartPlan | null {
   const temporal = columns.findIndex((column) => TEMPORAL.test(column.dataType))
   const category = columns.findIndex((column) => CATEGORY.test(column.dataType))
   const axis = temporal !== -1 ? temporal : category
-  if (axis === -1) return null
   const series = columns
     .map((column, index) => ({ column, index }))
     .filter(
@@ -39,8 +47,14 @@ export function chartPlan(columns: Array<ResultColumn>): ChartPlan | null {
     )
     .map(({ index }) => index)
     .slice(0, CHART_MAX_SERIES)
-  if (series.length === 0) return null
-  return { axis, kind: temporal !== -1 ? "line" : "bar", series }
+  if (series.length === 0 || rowCount === 0) return null
+  if (axis === -1 && series.length < 2 && rowCount !== 1) return null
+  return {
+    axis: axis === -1 ? null : axis,
+    axisKind:
+      temporal !== -1 ? "temporal" : category !== -1 ? "category" : null,
+    series,
+  }
 }
 
 /** A plain decimal, possibly grouped by U+00A0 as Rust groups it. Nothing else. */
@@ -65,21 +79,28 @@ export function cellNumber(cell: Cell): number | null | undefined {
   return Number.isFinite(value) ? value : undefined
 }
 
-/** The label of an axis cell, as Rust wrote it. */
+/** The label of a cell, as Rust wrote it. */
 function cellLabel(cell: Cell): string {
   if (cell === null) return "NULL"
   if (typeof cell === "string") return cell
   return "text" in cell ? cell.text : cell.unrenderable
 }
 
+/** A point: `axis` is its label, `s0`, `s1`… its values. */
+export type ChartRow = Record<string, string | number | null>
+
 export interface ChartData {
-  kind: "line" | "bar"
-  axisName: string
+  axis: { name: string; kind: AxisKind } | null
   /** Series drawn, each keyed `s0`, `s1`… in `rows`. */
   series: Array<{ key: string; name: string }>
   /** Numeric columns left out because a value was not a number. */
   skipped: Array<string>
-  rows: Array<Record<string, string | number | null>>
+  rows: Array<ChartRow>
+  /**
+   * The first row's values as Rust wrote them, for key figures: a figure shown
+   * alone is read, not compared, and must match the grid and the export.
+   */
+  figures: Array<{ key: string; name: string; text: string }>
 }
 
 /**
@@ -104,20 +125,27 @@ export function chartData(
       name: columns[column]?.name ?? "",
     }))
   if (series.length === 0 || rows.length === 0) return null
+  const axis = plan.axis
   return {
-    kind: plan.kind,
-    axisName: columns[plan.axis]?.name ?? "",
+    axis:
+      axis === null || plan.axisKind === null
+        ? null
+        : { name: columns[axis]?.name ?? "", kind: plan.axisKind },
     series: series.map(({ key, name }) => ({ key, name })),
     skipped: plan.series
       .filter((column) => !series.some((drawn) => drawn.column === column))
       .map((column) => columns[column]?.name ?? ""),
     rows: rows.map((row) => {
-      const point: Record<string, string | number | null> = {
-        axis: cellLabel(row[plan.axis] ?? null),
-      }
+      const point: ChartRow = {}
+      if (axis !== null) point.axis = cellLabel(row[axis] ?? null)
       for (const { column, key } of series)
         point[key] = cellNumber(row[column] ?? null) ?? null
       return point
     }),
+    figures: series.map(({ column, key, name }) => ({
+      key,
+      name,
+      text: cellLabel(rows[0]?.[column] ?? null),
+    })),
   }
 }

@@ -21,3 +21,5 @@
 - [Lexical dans les stories](lexical-dans-les-stories.md) — `type` marche, `toHaveValue` non ; le menu typeahead réécrit son `aria-label` à chaque frappe
 - [Puce inline : ligne de base](puce-inline-ligne-de-base.md) — une icône SVG en premier enfant d'un inline-flex fait flotter la puce : texte seul en `self-baseline`
 - [Requête désactivée = pending](query-desactivee-est-pending.md) — `enabled: false` reste `isPending` : « en cours » = `fetchStatus !== "idle"`
+- [Blocs charts shadcn](blocs-charts-shadcn-registre.md) — les `chart-*` de la galerie ne sont que sous new-york-v4 ; `shadcn view` échoue en base-nova
+- [Select Base UI et axe](select-base-ui-listbox-sans-nom-axe.md) — attendre la fermeture de la listbox avant la fin du play, sinon aria-input-field-name

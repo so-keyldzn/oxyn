@@ -1,37 +1,25 @@
 import * as React from "react"
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Line,
-  LineChart,
-  XAxis,
-  YAxis,
-} from "recharts"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Alert02Icon } from "@hugeicons/core-free-icons"
 
 import type { FetchPage } from "@/components/oxyn/result-grid"
+import { CartesianDrawing } from "@/components/oxyn/result-chart-cartesian"
 import { chartData } from "@/components/oxyn/result-chart-model"
 import type { ChartData, ChartPlan } from "@/components/oxyn/result-chart-model"
-import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { ResultChartPicker } from "@/components/oxyn/result-chart-picker"
+import { PolarDrawing } from "@/components/oxyn/result-chart-polar"
 import {
-  ChartContainer,
-  ChartLegend,
-  ChartLegendContent,
-  ChartTooltip,
-  ChartTooltipContent,
-} from "@/components/ui/chart"
-import type { ChartConfig } from "@/components/ui/chart"
+  SHAPE_FAMILY,
+  SHAPE_LABEL,
+  autoShape,
+  scatterRows,
+  shapeToDraw,
+  shapeVerdicts,
+} from "@/components/oxyn/result-chart-shapes"
+import type { ChartShape } from "@/components/oxyn/result-chart-shapes"
+import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Spinner } from "@/components/ui/spinner"
 import type { ResultColumn } from "@/lib/ipc/types"
-
-const COLORS = [
-  "var(--chart-1)",
-  "var(--chart-2)",
-  "var(--chart-3)",
-  "var(--chart-4)",
-]
 
 type ChartState =
   | { status: "loading" }
@@ -39,66 +27,115 @@ type ChartState =
   | { status: "expired" }
   | { status: "error"; message: string }
 
-function Drawing({ data }: { data: ChartData }) {
-  // The keys are Oxyn's (`s0`, `s1`…), never a column name: `ChartStyle`
-  // writes them into a style sheet, where a hostile name would be CSS. The
-  // names are labels, drawn as React text by the legend and the tooltip.
-  const config: ChartConfig = Object.fromEntries(
-    data.series.map((series, index) => [
-      series.key,
-      { label: series.name, color: COLORS[index % COLORS.length] },
-    ])
-  )
-  const axes = (
-    <>
-      <CartesianGrid vertical={false} />
-      <XAxis
-        dataKey="axis"
-        tickLine={false}
-        axisLine={false}
-        tickMargin={8}
-        minTickGap={24}
-      />
-      <YAxis tickLine={false} axisLine={false} width={56} />
-      <ChartTooltip content={<ChartTooltipContent />} />
-      {data.series.length > 1 ? (
-        <ChartLegend content={<ChartLegendContent />} />
-      ) : null}
-    </>
-  )
+/**
+ * Not in shadcn's gallery: one row read as key figures, in the gallery's
+ * card-header type scale. The values are Rust's text, not a number redrawn —
+ * a figure shown alone must match the grid and the export.
+ */
+function KeyFigures({ data }: { data: ChartData }) {
   return (
-    <ChartContainer config={config} className="aspect-auto h-56 w-full">
-      {data.kind === "line" ? (
-        <LineChart data={data.rows} accessibilityLayer>
-          {axes}
-          {data.series.map((series) => (
-            <Line
-              key={series.key}
-              dataKey={series.key}
-              type="monotone"
-              stroke={`var(--color-${series.key})`}
-              strokeWidth={2}
-              dot={false}
-              connectNulls={false}
-              isAnimationActive={false}
-            />
-          ))}
-        </LineChart>
-      ) : (
-        <BarChart data={data.rows} accessibilityLayer>
-          {axes}
-          {data.series.map((series) => (
-            <Bar
-              key={series.key}
-              dataKey={series.key}
-              fill={`var(--color-${series.key})`}
-              radius={2}
-              isAnimationActive={false}
-            />
-          ))}
-        </BarChart>
-      )}
-    </ChartContainer>
+    <dl className="flex flex-wrap gap-x-8 gap-y-3 py-2">
+      {data.figures.map((figure) => (
+        <div key={figure.key} className="flex min-w-0 flex-col gap-0.5">
+          <dt className="truncate text-xs text-muted-foreground">
+            {figure.name}
+          </dt>
+          <dd className="font-mono text-2xl font-semibold break-all tabular-nums">
+            {figure.text}
+          </dd>
+        </div>
+      ))}
+    </dl>
+  )
+}
+
+function Drawing({ shape, data }: { shape: ChartShape; data: ChartData }) {
+  switch (SHAPE_FAMILY[shape]) {
+    case "kpi":
+      return <KeyFigures data={data} />
+    case "pie":
+    case "radar":
+    case "radial":
+      return <PolarDrawing shape={shape} data={data} />
+    default:
+      return <CartesianDrawing shape={shape} data={data} />
+  }
+}
+
+/** What is drawn, said in words: the figure's caption, read by a screen reader. */
+function caption(shape: ChartShape, data: ChartData): string {
+  const names = data.series.map((series) => series.name)
+  const axis = data.axis?.name ?? ""
+  const parts: Array<string> = []
+  switch (SHAPE_FAMILY[shape]) {
+    case "kpi":
+      parts.push(`${names.join(", ")}, from the only row the query returned`)
+      break
+    case "scatter": {
+      const [x, y, ...rest] = names
+      parts.push(`${y ?? ""} against ${x ?? ""}`)
+      const missing = data.rows.length - scatterRows(data).length
+      if (missing > 0)
+        parts.push(`${missing} rows without both values left out`)
+      if (rest.length > 0)
+        parts.push(`not drawn by a scatter: ${rest.join(", ")}`)
+      break
+    }
+    case "pie":
+      parts.push(`${names.join(", ")} by ${axis}, largest share first`)
+      break
+    default:
+      parts.push(
+        `${names.join(", ")} by ${axis}, in the order the query returned`
+      )
+      if (shape === "area-stacked" || shape === "bar-stacked")
+        parts.push("stacked: the top edge is their sum")
+      if (shape === "area-expanded")
+        parts.push("each point as a share of its row's total")
+  }
+  if (data.skipped.length > 0)
+    parts.push(`left out, not plainly numeric: ${data.skipped.join(", ")}`)
+  return parts.join(" · ")
+}
+
+/** The rows, drawn by Oxyn's pick or the user's, with the picker above. */
+export function ResultChartView({
+  data,
+  initialChoice = "auto",
+}: {
+  data: ChartData
+  /** For stories: the user's choice already made. */
+  initialChoice?: ChartShape | "auto"
+}) {
+  const [choice, setChoice] = React.useState<ChartShape | "auto">(initialChoice)
+  const verdicts = React.useMemo(() => shapeVerdicts(data), [data])
+  const auto = React.useMemo(() => autoShape(data, verdicts), [data, verdicts])
+  const shape = shapeToDraw(choice, auto, verdicts)
+  if (shape === null)
+    return (
+      <p className="px-3 py-2 text-xs text-muted-foreground">
+        Nothing to chart: no shape can draw these rows honestly.
+      </p>
+    )
+  return (
+    <figure
+      data-slot="assistant-result-chart"
+      className="flex min-w-0 flex-col gap-2 px-3 py-2"
+    >
+      <ResultChartPicker
+        choice={choice === "auto" || shape !== choice ? "auto" : choice}
+        drawn={shape}
+        verdicts={verdicts}
+        onChoose={setChoice}
+      />
+      <Drawing shape={shape} data={data} />
+      <figcaption className="text-xs text-muted-foreground">
+        {caption(shape, data)}
+      </figcaption>
+      <p className="sr-only" aria-live="polite">
+        {`Drawn as ${SHAPE_LABEL[shape]}${choice === "auto" ? ", chosen by Oxyn" : ""}.`}
+      </p>
+    </figure>
   )
 }
 
@@ -106,8 +143,9 @@ function Drawing({ data }: { data: ChartData }) {
  * The first rows of an agent's result, as a chart — the ones the grid shows,
  * read from the same buffer, and never more than `rows`.
  *
- * Nothing is recomputed: no sorting, no aggregation. What is drawn is what
- * the query returned, in its order; a column that is not plainly numeric is
+ * Nothing is recomputed but what a shape is: a pie is read largest share
+ * first, a donut writes its total, a 100 % stack its shares. Every other shape
+ * draws the rows in the query's order; a column that is not plainly numeric is
  * left out and named.
  */
 export function AssistantResultChart({
@@ -194,20 +232,6 @@ export function AssistantResultChart({
             rows.
           </p>
         )
-      return (
-        <figure
-          data-slot="assistant-result-chart"
-          className="flex min-w-0 flex-col gap-1 px-3 py-2"
-        >
-          <Drawing data={state.data} />
-          <figcaption className="text-xs text-muted-foreground">
-            {state.data.series.map((series) => series.name).join(", ")} by{" "}
-            {state.data.axisName}, in the order the query returned
-            {state.data.skipped.length > 0
-              ? ` · left out, not plainly numeric: ${state.data.skipped.join(", ")}`
-              : null}
-          </figcaption>
-        </figure>
-      )
+      return <ResultChartView data={state.data} />
   }
 }

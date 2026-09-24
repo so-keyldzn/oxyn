@@ -734,18 +734,63 @@ de la grille le rappelle (« shown to you only; the model got the count »).
   rows. », sans alerte) ; erreur (le message du backend entier, `Try again`
   seulement s'il est déclaré retentable) ; **expirée** (« Result no longer
   available », sans rien proposer qui relance la requête).
-* **Graphique.** Quand les colonnes comptent une date (`Date*`, `Timestamp`)
-  ou une catégorie (texte, booléen) et au moins une colonne numérique (entier,
-  flottant, décimal), le pied offre `Chart`, qui bascule entre la grille et un
-  graphique — en ligne sur un axe de dates, en barres sur un axe de catégories,
-  quatre séries au plus. Sans ces colonnes, le bouton **n'existe pas**. Le
-  graphique lit la même page bornée que la grille (100 lignes au plus), dans
-  l'ordre renvoyé par la requête : rien n'est trié ni agrégé dans la webview.
-  Les nombres sont relus depuis les cellules formatées par Rust, et seulement
-  s'ils en sont sans ambiguïté (chiffres, point décimal, exposant, séparateur
-  de milliers U+00A0) ; une colonne qui contient autre chose — une valeur
-  coupée, `NaN`, du texte — est laissée de côté **et nommée** sous le
-  graphique. Si aucune ne reste, il le dit (« Nothing to chart »).
+* **Graphique.** Le pied offre `Chart`, qui bascule entre la grille et un
+  graphique, quand les colonnes comptent au moins une colonne numérique
+  (entier, flottant, décimal) et de quoi la dessiner : une date (`Date*`,
+  `Timestamp`) ou une catégorie (texte, booléen) pour l'axe ; à défaut, deux
+  colonnes numériques, ou une seule ligne. Sinon le bouton **n'existe pas**.
+  Quatre séries au plus. Le graphique lit la même page bornée que la grille
+  (100 lignes au plus). Les nombres sont relus depuis les cellules formatées
+  par Rust, et seulement s'ils en sont sans ambiguïté (chiffres, point décimal,
+  exposant, séparateur de milliers U+00A0) ; une colonne qui contient autre
+  chose — une valeur coupée, `NaN`, du texte — est laissée de côté **et
+  nommée** sous le graphique. Si aucune ne reste, il le dit (« Nothing to
+  chart »).
+  * **Formes.** Toute la galerie shadcn charts est proposée : aire (simple,
+    empilée, empilée à 100 %, en escalier, en dégradé), barres (verticales,
+    horizontales, groupées, empilées, avec valeurs), ligne (droite, courbe, en
+    escalier, avec points), secteurs (pie, donut, donut avec total), radar,
+    barres radiales ; plus deux formes hors galerie écrites dans son style, le
+    nuage de points et le chiffre clé. Un sélecteur à deux niveaux — la
+    famille, en boutons d'icônes, puis la variante — part sur `Auto`.
+  * **Refus.** Une forme que les lignes dessineraient mal reste **visible et
+    désactivée**, sa raison en info-bulle et en description accessible ; une
+    variante refusée l'écrit sous son nom dans la liste. Refusent : un secteur
+    ou une barre radiale sur des dates, avec plus d'une série, une seule
+    catégorie ou plus de cinq (la palette a cinq couleurs), une valeur `NULL`
+    ou négative, et pour le secteur une valeur nulle ou une catégorie répétée ;
+    une ligne ou une aire sur des catégories (elle tracerait une tendance
+    qu'elles n'ont pas) ou sur un seul point ; un empilement avec une seule
+    série, une valeur négative ou `NULL`, et à 100 % une ligne de somme nulle ;
+    des barres verticales à plusieurs séries (ce sont des barres groupées) et
+    groupées à une seule ; des valeurs écrites sur plus de douze barres ; un
+    radar hors de 3 à 8 catégories, avec un `NULL` ou un négatif ; un nuage
+    sans deux colonnes numériques ni deux lignes qui les portent toutes deux ;
+    un chiffre clé sur plus d'une ligne ; toute forme à axe quand il n'y en a
+    pas. Le choix de l'utilisateur ne vaut que tant que les lignes le
+    permettent ; sinon `Auto` reprend.
+  * **Auto**, dans cet ordre : une seule ligne donne des **chiffres clés**, le
+    texte exact de Rust ; sans axe, deux nombres donnent un **nuage** ; sur des
+    dates, une série donne une **aire**, plusieurs des **lignes** ; sur des
+    catégories, une série positive de 2 à 5 parts distinctes donne un
+    **donut**, plus de douze catégories ou un libellé de plus de quatorze
+    caractères des **barres horizontales**, sinon des **barres verticales**,
+    groupées s'il y a plusieurs séries. Le radar n'est jamais choisi seul : il
+    pose toutes les colonnes sur une même échelle radiale, et les colonnes
+    d'une requête partagent rarement une unité.
+  * **Ordre et calcul.** Les lignes sont dessinées dans l'ordre renvoyé par la
+    requête, sauf le secteur, lu de la plus grande part à la plus petite. Rien
+    n'est agrégé dans la webview, à trois exceptions près, toutes propres à la
+    forme choisie et dites dans la légende : le total du donut (la somme des
+    cinq parts au plus qu'il montre), les parts d'un empilement à 100 %, et le
+    sommet d'un empilement, qui est une somme.
+  * **Accessibilité.** `accessibilityLayer` sur chaque graphique, une légende
+    dès qu'il y a plusieurs séries ou des parts, une légende de figure qui dit
+    ce qui est dessiné, et la forme courante annoncée (« Drawn as Donut,
+    chosen by Oxyn »). Les couleurs sont la palette fixe `--chart-1` à
+    `--chart-5`, d'un contraste d'au moins 3:1 avec le fond dans les deux
+    thèmes (WCAG 1.4.11) ; aucune donnée n'entre dans les clés ni dans les
+    couleurs.
 
 **Durée de vie.** Le résultat d'un agent est un résultat retenu sans lecteur :
 il vit jusqu'à ce que la rétention l'évince selon les bornes

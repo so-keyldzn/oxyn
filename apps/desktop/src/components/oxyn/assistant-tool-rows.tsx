@@ -82,11 +82,13 @@ export function AssistantToolRows({
 }) {
   const [charted, setCharted] = React.useState(false)
   const columns = state.status === "open" ? state.columns : null
+  const chartRows =
+    state.status === "open" ? Math.min(state.rows, CHAT_ROWS) : 0
   // Offered only when the columns allow one: a button that draws nothing
   // would be a control that lies about what it offers.
   const plan = React.useMemo(
-    () => (columns ? chartPlan(columns) : null),
-    [columns]
+    () => (columns ? chartPlan(columns, chartRows) : null),
+    [columns, chartRows]
   )
   switch (state.status) {
     case "loading":
