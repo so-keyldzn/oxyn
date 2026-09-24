@@ -55,9 +55,15 @@ il ne tourne pas : la CI l'appelle
 `Stop` le rappelle, la définition de « terminé » s'y adosse. Ajouter un contrôle
 ailleurs, c'est le rendre optionnel.
 
-**La CI n'ajoute aucun contrôle.** Elle appelle `make qualite` et rien d'autre.
-Un contrôle qui n'existerait que dans le fichier de workflow serait irreproductible
-en local : on découvrirait son existence en le voyant échouer.
+**La CI n'ajoute aucun contrôle.** Elle appelle les cibles de `make qualite`,
+réparties en jobs parallèles, et rien d'autre. Un contrôle qui n'existerait que
+dans le fichier de workflow serait irreproductible en local : on découvrirait son
+existence en le voyant échouer.
+
+Le découpage a le risque inverse : une cible ajoutée à `qualite` et oubliée dans
+le workflow ne tournerait jamais en CI. `make socle` le refuse
+(`controler_couverture_ci`). Une nouvelle cible de la porte s'ajoute donc aux
+deux endroits dans le même commit.
 
 ## Où vivent les interdits mécanisables
 

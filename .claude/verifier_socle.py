@@ -229,6 +229,83 @@ def controler_graphe_dependances() -> list[str]:
     return erreurs
 
 
+# `make qualite` et le workflow de CI doivent dire la même chose. La CI appelle
+# les cibles de la porte en morceaux, dans des jobs parallèles : une cible
+# ajoutée à `qualite` sans l'être au workflow ne tournerait jamais sur une
+# machine, et rien ne le dirait.
+MAKEFILE = RACINE / "Makefile"
+WORKFLOW_QUALITE = RACINE / ".github" / "workflows" / "qualite.yml"
+MOTIF_REGLE = re.compile(r"^([A-Za-z][\w-]*)\s*:(?!=)\s*(.*)$")
+MOTIF_SOUS_MAKE = re.compile(r"\$\(MAKE\)((?:\s+[^\s;&|]+)+)")
+MOTIF_MAKE_CI = re.compile(r"^\s*(?:-\s+)?run:\s*make\s+(.+)$")
+
+
+def _regles_makefile() -> dict[str, tuple[list[str], bool]]:
+    """Cible → (cibles qu'elle atteint, porte-t-elle une recette qui contrôle)."""
+    regles: dict[str, tuple[list[str], bool]] = {}
+    courante: str | None = None
+    for ligne in MAKEFILE.read_text(encoding="utf-8").splitlines():
+        if ligne.startswith("\t") and courante:
+            atteintes, recette = regles[courante]
+            sous = MOTIF_SOUS_MAKE.search(ligne)
+            if sous:
+                atteintes += [m for m in sous.group(1).split() if not m.startswith("-")]
+            else:
+                recette = True
+            regles[courante] = (atteintes, recette)
+            continue
+        m = MOTIF_REGLE.match(ligne)
+        if m and not ligne.startswith("."):
+            courante = m.group(1)
+            deps = [d for d in m.group(2).split() if "$" not in d]
+            regles[courante] = (deps, False)
+        elif ligne and not ligne.startswith(("\t", "#", "ifeq", "else", "endif")):
+            courante = None
+    return regles
+
+
+def _atteintes(regles: dict[str, tuple[list[str], bool]], depart: list[str]) -> set[str]:
+    vues: set[str] = set()
+    pile = list(depart)
+    while pile:
+        cible = pile.pop()
+        if cible in vues:
+            continue
+        vues.add(cible)
+        pile += regles.get(cible, ([], False))[0]
+    return vues
+
+
+def controler_couverture_ci() -> list[str]:
+    if not WORKFLOW_QUALITE.is_file() or not MAKEFILE.is_file():
+        return []
+    regles = _regles_makefile()
+    appelees: list[str] = []
+    for ligne in WORKFLOW_QUALITE.read_text(encoding="utf-8").splitlines():
+        m = MOTIF_MAKE_CI.match(ligne)
+        if m:
+            # `SHARD=${{ matrix.tranche }}/2` : l'expression contient des espaces.
+            mots = re.sub(r"\$\{\{.*?\}\}", "", m.group(1)).split()
+            appelees += [c for c in mots if "=" not in c and not c.startswith("-")]
+    if not appelees:
+        return [f"{WORKFLOW_QUALITE.relative_to(RACINE)} : aucun `run: make …` — la CI ne passe pas la porte"]
+    inconnues = [c for c in appelees if c not in regles]
+    couvertes = _atteintes(regles, appelees)
+    # Seules les cibles qui contrôlent quelque chose comptent : un agrégat comme
+    # `front` n'exécute rien lui-même, et `qualite` est le tout qu'on compare.
+    oubliees = sorted(
+        c for c in _atteintes(regles, ["qualite"]) - {"qualite"}
+        if regles[c][1] and c not in couvertes
+    )
+    erreurs = [f"qualite.yml appelle `make {c}`, cible absente du Makefile" for c in inconnues]
+    erreurs += [
+        f"qualite.yml ne couvre pas `make {c}`, atteinte par `make qualite` — "
+        "l'ajouter à un job, sans quoi elle ne tourne jamais en CI"
+        for c in oubliees
+    ]
+    return erreurs
+
+
 def principal() -> int:
     erreurs = (
         controler_liens()
@@ -236,6 +313,7 @@ def principal() -> int:
         + controler_regles()
         + controler_hooks()
         + controler_graphe_dependances()
+        + controler_couverture_ci()
     )
     avertissements = controler_paths_inertes()
 

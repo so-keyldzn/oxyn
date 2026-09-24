@@ -1,12 +1,17 @@
 # La porte de qualité du dépôt.
 #
-# `make qualite` est le SEUL point d'entrée : la CI l'appelle
-# (.github/workflows/qualite.yml), le hook Stop le rappelle, la définition de
-# « terminé » s'y adosse. Un contrôle ajouté ailleurs est un contrôle optionnel.
+# `make qualite` est le SEUL point d'entrée : le hook Stop le rappelle, la
+# définition de « terminé » s'y adosse. Un contrôle ajouté ailleurs est un
+# contrôle optionnel.
+#
+# La CI (.github/workflows/qualite.yml) en appelle les morceaux dans des jobs
+# parallèles — `front-controles`, `front-tests`, `front-build`, `rust` — pour ne
+# pas faire attendre le Rust derrière les stories. Elle n'ajoute rien : `make
+# socle` refuse un workflow qui oublierait une cible atteinte par `qualite`.
 #
 # Voir .claude/rules/manifestes.md et .claude/checklists/fin-de-tache.md.
 
-.PHONY: qualite format lint test doc todo hooks socle aide front desktop desktop-dev
+.PHONY: qualite format lint test doc deny todo hooks socle aide front front-controles front-tests front-build rust desktop desktop-dev
 
 CARGO := cargo
 PROFIL ?= debug
@@ -31,6 +36,7 @@ aide:
 	@echo "make hooks     rejoue les tests des hooks"
 	@echo "make todo      refuse une marque de travail restant sans échéance"
 	@echo "make front     contrôle le front : format, lint, types, tests, stories, build"
+	@echo "make rust      contrôle le Rust : format, clippy, tests, doc, dépendances"
 	@echo "make desktop-dev  lance l'application Tauri avec rechargement à chaud"
 	@echo "make desktop   construit l'application Tauri (PROFIL=release pour publier)"
 	@echo ""
@@ -62,10 +68,12 @@ ifeq ($(wildcard Cargo.toml),)
 	@echo "Aucun Cargo.toml : les contrôles Rust n'ont PAS tourné."
 	@echo "Ce n'est pas un succès complet — voir docs/IMPLEMENTATION-PLAN.md, phase 0."
 else
-	@$(MAKE) --no-print-directory front format lint test doc deny
+	@$(MAKE) --no-print-directory front rust
 	@echo ""
 	@echo "Porte de qualité franchie."
 endif
+
+rust: format lint test doc deny
 
 # Licences et avis de sécurité publiés — le seul contrôle de la porte qui
 # regarde les dépendances plutôt que le code. `docs/SECURITY.md` § Dépendances en
@@ -106,13 +114,22 @@ doc:
 	RUSTDOCFLAGS="-D warnings" $(CARGO) doc --workspace --no-deps --all-features
 
 # Avant les cibles Rust, et pas après : le build du front produit le dossier que
-# `oxyn-desktop` embarque à la compilation.
-front: $(TAURI)
+# `oxyn-desktop` embarque à la compilation. Un job de CI qui lance `rust` lance
+# donc `front-build` avant lui.
+front: front-controles front-tests front-build
+
+front-controles: $(TAURI)
 	cd $(FRONT) && pnpm exec prettier --check .
 	cd $(FRONT) && pnpm exec eslint .
 	cd $(FRONT) && pnpm exec tsc --noEmit
+
+# `SHARD=1/2` ne lance que la première moitié des fichiers de test : la CI
+# répartit ainsi les stories sur plusieurs runners. Sans SHARD, tout tourne.
+front-tests: $(TAURI)
 	cd $(FRONT) && pnpm exec playwright install chromium
-	cd $(FRONT) && pnpm exec vitest run
+	cd $(FRONT) && pnpm exec vitest run $(if $(SHARD),--shard=$(SHARD))
+
+front-build: $(TAURI)
 	cd $(FRONT) && pnpm build
 
 todo:

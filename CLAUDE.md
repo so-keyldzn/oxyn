@@ -51,7 +51,7 @@ Aucune version ne s'écrit de mémoire : voir [I-12](#i-12).
 
 | | |
 |---|---|
-| `make qualite` | **la** porte de qualité : socle, TODO datés, front (format, lint, types, stories, build), format, clippy, tests, doc. Rien n'est terminé sans elle, et la CI n'appelle qu'elle |
+| `make qualite` | **la** porte de qualité : socle, TODO datés, front (format, lint, types, stories, build), format, clippy, tests, doc. Rien n'est terminé sans elle, et la CI n'appelle qu'elle, en jobs parallèles |
 | `make desktop-dev` | l'application Tauri avec rechargement à chaud, sur un workspace temporaire |
 | `script/nouvelle-crate` | crée une crate déjà conforme — voir le piège des règles plus bas |
 | [`/plan`](.claude/commands/plan.md) [`/implementer`](.claude/commands/implementer.md) [`/relire`](.claude/commands/relire.md) | le cycle courant |
@@ -195,8 +195,9 @@ protocole : [.claude/hooks/README.md](.claude/hooks/README.md).
 
 Les hooks ne valent que pour une session Claude. Ce qui vaut pour **tout le
 monde**, humain compris, passe par `make qualite` — appelée par la CI
-([.github/workflows/qualite.yml](.github/workflows/qualite.yml)), qui n'ajoute
-aucun contrôle de son côté :
+([.github/workflows/qualite.yml](.github/workflows/qualite.yml)) en jobs
+parallèles, qui n'ajoute aucun contrôle de son côté et dont `make socle` vérifie
+qu'elle n'en oublie aucun :
 
 | Ce qui refuse | L'invariant tenu |
 |---|---|
