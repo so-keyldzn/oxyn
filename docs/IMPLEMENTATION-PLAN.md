@@ -1105,11 +1105,12 @@ dans les sources de `sqlx-postgres 0.9.0`.
 dans `connection/stream.rs` — puis les **jette** : il en fait un événement
 `tracing`/`log` sur la cible `sqlx::postgres::notice`, et rien d'autre. Son
 propre commentaire à cet endroit dit « do we need this to be more configurable?
-if you are reading this comment and think so, open an issue ». Les types `Notice`
-et `PgSeverity` ne sont pas atteignables depuis l'extérieur : `mod message` est
-privé dans `src/lib.rs`. **Il n'existe donc aucune API d'abonnement.**
+if you are reading this comment and think so, open an issue ». Le type `Notice`
+n'est pas atteignable depuis l'extérieur : `mod message` est privé dans
+`src/lib.rs`, qui ne réexporte que `PgSeverity`. **Il n'existe donc aucune API
+d'abonnement.**
 
-Trois voies, aucune gratuite :
+Trois voies étaient ouvertes, aucune gratuite :
 
 1. **Écouter la cible `tracing`.** Une couche filtrant `sqlx::postgres::notice`
    récupère le texte. Le problème est l'**attribution** : l'événement ne porte ni
@@ -1131,8 +1132,13 @@ Côté SQLite, il n'y a rien à faire et rien à regretter : sans serveur, il n'
 pas de notice. La capacité se déclarera absente, et l'onglet n'existera pas pour
 ce driver — ce que [ADR-0003](adr/0003-driver-capabilities.md) exige déjà.
 
-Conclusion pratique : ce lot n'est pas implémentable en l'état sans choisir
-entre (2) attendre et (3) réécrire. Il ne se décide pas seul.
+**Décidé le 2026-09-24 (audit, D13) : la voie 2.** L'onglet `Messages` attend
+que `sqlx` expose les notices ; le driver ne passe pas à `tokio-postgres`, et la
+voie 1 reste écartée pour la mauvaise attribution qu'elle produirait. L'état
+amont — le ticket [#3621](https://github.com/transact-rs/sqlx/issues/3621), sans
+réponse — est suivi et daté dans
+[RESEARCH-NOTES](RESEARCH-NOTES.md#suivis-amont) ; le lot se rouvre quand une
+version de `sqlx` livre l'abonnement.
 
 **`Find in loaded results…`** (`273:37024`) — **implémenté le 2026-09-14.**
 `oxyn-data/src/find.rs` et `workspace/find.rs`, neuf tests.
@@ -1386,10 +1392,11 @@ droite se rejoue avec `cargo test -p <crate> <motif>`.
 surface de la planche `191:1521`, qui n'attend pas du code mais une contrainte
 en amont.
 
-* `Messages` attend une décision technique hors de notre contrôle :
-  `sqlx-postgres 0.9.0` jette les notices dans un événement `tracing` sans
-  identité de connexion, et `mod message` est privé. Attendre l'amont, ou
-  réécrire le driver PostgreSQL en `tokio-postgres` — ce qui demande son ADR.
+* `Messages` attend l'amont : `sqlx-postgres 0.9.0` jette les notices dans un
+  événement `tracing` sans identité de connexion, et `Notice` n'est pas exporté.
+  Attendre plutôt que réécrire le driver en `tokio-postgres` est décidé depuis le
+  2026-09-24 (D13) ; l'état amont est suivi dans
+  [RESEARCH-NOTES](RESEARCH-NOTES.md#suivis-amont).
 
 Tout le reste de la maquette est implémenté et éprouvé.
 
