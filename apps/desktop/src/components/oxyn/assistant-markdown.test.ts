@@ -1,7 +1,10 @@
 import { describe, expect, it } from "vitest"
 
 import {
+  ERD_MAX_NAMES,
+  isErdBlock,
   isSqlBlock,
+  parseErdNames,
   parseInline,
   parseMarkdown,
 } from "./assistant-markdown-model"
@@ -75,5 +78,45 @@ describe("the assistant markdown model", () => {
       "list",
       "table",
     ])
+  })
+})
+
+describe("an erd block", () => {
+  it("is drawn only once closed and labelled erd", () => {
+    const blocks = parseMarkdown("```erd\norders\n```\n\n```ERD\ncustomers")
+    expect(blocks.map(isErdBlock)).toEqual([true, false])
+  })
+
+  it("names tables one per line, qualified or not, quotes honoured", () => {
+    const { names, dropped } = parseErdNames(
+      [
+        "-- the order tables",
+        "- public.orders;",
+        "customers,",
+        '"Sales"."Q1.totals"',
+        'shop."say ""hi"""',
+        "public.orders",
+        "",
+        "prod.public.items",
+      ].join("\n")
+    )
+    expect(dropped).toBe(0)
+    expect(
+      names.map(({ namespace, relation }) => [namespace, relation])
+    ).toEqual([
+      ["public", "orders"],
+      [null, "customers"],
+      ["Sales", "Q1.totals"],
+      ["shop", 'say "hi"'],
+      ["public", "items"],
+    ])
+  })
+
+  it("drops a line that is not a name, and counts the surplus", () => {
+    expect(parseErdNames('a..b\n"open\n.x').names).toEqual([])
+    const many = Array.from({ length: ERD_MAX_NAMES + 3 }, (_, i) => `t${i}`)
+    const { names, dropped } = parseErdNames(many.join("\n"))
+    expect(names).toHaveLength(ERD_MAX_NAMES)
+    expect(dropped).toBe(3)
   })
 })

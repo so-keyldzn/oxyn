@@ -42,6 +42,7 @@ import type { ExchangeNode } from "./thread"
 import { useAssistantAvailable } from "./use-assistant-available"
 import { useMentionSearch } from "./mention-search"
 import { ToolRows } from "./tool-rows"
+import { ErdBlock } from "./erd-block"
 import { AssistantEntryButton } from "@/components/oxyn/assistant-entry-button"
 import type { AgentStartupControls } from "@/components/oxyn/assistant-agent-startup"
 import type { ModelListState } from "@/components/oxyn/assistant-header"
@@ -327,6 +328,14 @@ export function AssistantPanel({
             />
           )
         }
+        // Names resolved against this connection's catalog, never believed.
+        renderErd={(request) => (
+          <ErdBlock
+            open={open}
+            request={request}
+            onOpenObject={(address) => openObject(open.connection, address)}
+          />
+        )}
         onChangeAgentSetting={(intent) =>
           changeAgentSetting(open.connection, intent)
         }

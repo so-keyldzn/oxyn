@@ -1,10 +1,14 @@
+import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
   Alert02Icon,
   ArrowExpand01Icon,
+  ChartBarLineIcon,
   TimeQuarterPassIcon,
 } from "@hugeicons/core-free-icons"
 
+import { AssistantResultChart } from "@/components/oxyn/assistant-result-chart"
+import { chartPlan } from "@/components/oxyn/result-chart-model"
 import { HEADER_HEIGHT, ResultGrid } from "@/components/oxyn/result-grid"
 import type { FetchPage } from "@/components/oxyn/result-grid"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -76,6 +80,14 @@ export function AssistantToolRows({
   /** Only for an error the backend declared retryable. */
   onRetry?: () => void
 }) {
+  const [charted, setCharted] = React.useState(false)
+  const columns = state.status === "open" ? state.columns : null
+  // Offered only when the columns allow one: a button that draws nothing
+  // would be a control that lies about what it offers.
+  const plan = React.useMemo(
+    () => (columns ? chartPlan(columns) : null),
+    [columns]
+  )
   switch (state.status) {
     case "loading":
       return (
@@ -147,31 +159,56 @@ export function AssistantToolRows({
           data-slot="assistant-tool-rows"
           className="flex min-w-0 flex-col border-t"
         >
-          <div
-            className="flex min-h-0 flex-col"
-            style={{
-              height: `calc(${HEADER_HEIGHT + SCROLLBAR_ROOM}px + ${visible} * var(--grid-row-height, 24px))`,
-            }}
-          >
-            <ResultGrid
-              resultKey={state.result}
+          {charted && plan ? (
+            <AssistantResultChart
+              plan={plan}
               columns={state.columns}
-              rowCount={shown}
+              rows={shown}
               fetchPage={fetchPage}
-              className="flex-1"
-              aria-label="Rows the query returned"
             />
-          </div>
+          ) : (
+            <div
+              className="flex min-h-0 flex-col"
+              style={{
+                height: `calc(${HEADER_HEIGHT + SCROLLBAR_ROOM}px + ${visible} * var(--grid-row-height, 24px))`,
+              }}
+            >
+              <ResultGrid
+                resultKey={state.result}
+                columns={state.columns}
+                rowCount={shown}
+                fetchPage={fetchPage}
+                className="flex-1"
+                aria-label="Rows the query returned"
+              />
+            </div>
+          )}
           <div className="flex flex-wrap items-center gap-x-2 gap-y-1 border-t px-3 py-1.5 text-xs text-muted-foreground">
             <span className="tabular-nums">
               {rowsCaption(state.rows, state.truncated)}
             </span>
             <span>· shown to you only; the model got the count</span>
+            {plan ? (
+              <Button
+                size="xs"
+                variant={charted ? "secondary" : "ghost"}
+                aria-pressed={charted}
+                className="ml-auto"
+                onClick={() => setCharted((on) => !on)}
+              >
+                <HugeiconsIcon
+                  icon={ChartBarLineIcon}
+                  strokeWidth={2}
+                  data-icon="inline-start"
+                />
+                Chart
+              </Button>
+            ) : null}
             {onOpenAll ? (
               <Button
                 size="xs"
                 variant="outline"
-                className="ml-auto"
+                className={plan ? undefined : "ml-auto"}
                 onClick={onOpenAll}
               >
                 <HugeiconsIcon

@@ -1,14 +1,18 @@
 import * as React from "react"
-import { HugeiconsIcon } from "@hugeicons/react"
-import { CodeIcon } from "@hugeicons/core-free-icons"
 
+import { CodeBlock } from "@/components/oxyn/assistant-code-block"
 import {
-  isSqlBlock,
+  isErdBlock,
+  isMermaidBlock,
+  parseErdNames,
   parseMarkdown,
 } from "@/components/oxyn/assistant-markdown-model"
-import type { Block, Inline } from "@/components/oxyn/assistant-markdown-model"
-import { AssistantCopyButton } from "@/components/oxyn/assistant-copy-button"
-import { Button } from "@/components/ui/button"
+import type {
+  Block,
+  ErdRequest,
+  Inline,
+} from "@/components/oxyn/assistant-markdown-model"
+import { AssistantMermaid } from "@/components/oxyn/assistant-mermaid"
 import { Separator } from "@/components/ui/separator"
 import { cn } from "@/lib/utils"
 
@@ -74,63 +78,20 @@ function InlineContent({ nodes }: { nodes: Array<Inline> }) {
   )
 }
 
-function CodeBlock({
+function ErdBlock({
   block,
-  onOpenSql,
-  openSqlDisabledReason,
-  onCopy,
+  renderErd,
 }: {
   block: Extract<Block, { type: "code" }>
-  onOpenSql?: (sql: string) => void
-  openSqlDisabledReason?: string | null
-  onCopy?: (text: string) => Promise<boolean> | boolean
+  renderErd: (request: ErdRequest) => React.ReactNode
 }) {
-  const sql = onOpenSql !== undefined && isSqlBlock(block)
-  return (
-    <figure
-      data-slot="assistant-code"
-      className="flex min-w-0 flex-col overflow-hidden rounded-lg border bg-card"
-    >
-      {block.language !== "" || sql || onCopy ? (
-        <figcaption className="flex h-8 items-center justify-between gap-2 border-b px-2.5 text-xs text-muted-foreground">
-          <span className="font-mono">
-            {block.language || (sql ? "sql" : "code")}
-          </span>
-          {sql ? (
-            <Button
-              size="xs"
-              variant="ghost"
-              disabled={Boolean(openSqlDisabledReason)}
-              title={openSqlDisabledReason ?? undefined}
-              onClick={() => onOpenSql(block.text.trim())}
-            >
-              <HugeiconsIcon
-                icon={CodeIcon}
-                strokeWidth={2}
-                data-icon="inline-start"
-              />
-              Open in console
-            </Button>
-          ) : null}
-          {onCopy ? (
-            <AssistantCopyButton
-              text={block.text.trim()}
-              label="Copy code"
-              onCopy={onCopy}
-            />
-          ) : null}
-        </figcaption>
-      ) : null}
-      <pre
-        data-selectable
-        tabIndex={0}
-        aria-label={sql ? "Proposed SQL" : "Code"}
-        className="overflow-x-auto p-3 font-mono text-xs leading-5 whitespace-pre outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      >
-        <code>{block.text}</code>
-      </pre>
-    </figure>
-  )
+  // Parsed once per text: a closed block no longer changes while the rest of
+  // the answer streams.
+  const request = React.useMemo(() => {
+    const { names, dropped } = parseErdNames(block.text)
+    return { names, ignoredNames: dropped, source: block.text }
+  }, [block.text])
+  return <>{renderErd(request)}</>
 }
 
 function Blocks({
@@ -138,11 +99,13 @@ function Blocks({
   onOpenSql,
   openSqlDisabledReason,
   onCopy,
+  renderErd,
 }: {
   blocks: Array<Block>
   onOpenSql?: (sql: string) => void
   openSqlDisabledReason?: string | null
   onCopy?: (text: string) => Promise<boolean> | boolean
+  renderErd?: (request: ErdRequest) => React.ReactNode
 }) {
   return (
     <>
@@ -169,6 +132,15 @@ function Blocks({
             )
           }
           case "code":
+            // Only once closed: a half-written list would draw, then redraw,
+            // a diagram of the tables named so far.
+            if (renderErd && isErdBlock(block))
+              return (
+                <ErdBlock key={index} block={block} renderErd={renderErd} />
+              )
+            // Closed only, for the same reason; and loaded only then.
+            if (isMermaidBlock(block))
+              return <AssistantMermaid key={index} source={block.text} />
             return (
               <CodeBlock
                 key={index}
@@ -204,7 +176,7 @@ function Blocks({
                 key={index}
                 className="flex flex-col gap-2 border-l-2 pl-3 text-muted-foreground"
               >
-                <Blocks blocks={block.blocks} />
+                <Blocks blocks={block.blocks} renderErd={renderErd} />
               </blockquote>
             )
           case "rule":
@@ -264,6 +236,7 @@ export function AssistantMarkdown({
   onOpenSql,
   openSqlDisabledReason,
   onCopy,
+  renderErd,
   className,
 }: {
   text: string
@@ -272,6 +245,11 @@ export function AssistantMarkdown({
   openSqlDisabledReason?: string | null
   /** Offers to copy each code block; resolves to whether it worked. */
   onCopy?: (text: string) => Promise<boolean> | boolean
+  /**
+   * Draws a closed `erd` block — the feature resolves its names against the
+   * catalog. Without it the block stays code, as any other.
+   */
+  renderErd?: (request: ErdRequest) => React.ReactNode
   className?: string
 }) {
   const blocks = React.useMemo(() => parseMarkdown(text), [text])
@@ -288,6 +266,7 @@ export function AssistantMarkdown({
         onOpenSql={onOpenSql}
         openSqlDisabledReason={openSqlDisabledReason}
         onCopy={onCopy}
+        renderErd={renderErd}
       />
     </div>
   )

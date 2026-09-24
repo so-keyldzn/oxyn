@@ -64,6 +64,139 @@ export function isSqlBlock(
   return language === "" || language === "sql"
 }
 
+export type CodeBlock = Extract<Block, { type: "code" }>
+
+/**
+ * A table an `erd` block names, as the model wrote it. It is a request, not a
+ * fact: the feature resolves it against the catalog, and a name the catalog
+ * does not hold is shown as not found — never drawn from its spelling.
+ */
+export interface ErdName {
+  /** `null` when the model did not qualify the name. */
+  namespace: string | null
+  relation: string
+  /** The line as written, for the « not found » list. */
+  written: string
+}
+
+/** What a closed `erd` block asks the feature to draw. */
+export interface ErdRequest {
+  names: Array<ErdName>
+  /** Names past `ERD_MAX_NAMES`, not looked up. */
+  ignoredNames: number
+  /** The block's text, for « Show source ». */
+  source: string
+}
+
+/** Names one `erd` block may ask for; the rest is announced, not drawn. */
+export const ERD_MAX_NAMES = 20
+
+/** A line longer than this is not a table name, whatever it says. */
+const ERD_MAX_LINE = 256
+
+/** Is this a closed `mermaid` block, one the answer may draw? */
+export function isMermaidBlock(block: Block): block is CodeBlock {
+  return (
+    block.type === "code" &&
+    block.closed &&
+    block.language.toLowerCase() === "mermaid" &&
+    block.text.trim() !== ""
+  )
+}
+
+/** Is this a closed `erd` block, one the answer may draw as a diagram? */
+export function isErdBlock(block: Block): block is CodeBlock {
+  return (
+    block.type === "code" &&
+    block.closed &&
+    block.language.toLowerCase() === "erd" &&
+    block.text.trim() !== ""
+  )
+}
+
+/**
+ * Splits `schema.table` on the dots outside double quotes, as SQL spells a
+ * qualified name: `"a.b".c` is two segments, and `""` inside quotes is one
+ * quote. `null` for a name that is not one — an empty segment, an open quote.
+ */
+function erdSegments(name: string): Array<string> | null {
+  const segments: Array<string> = []
+  let current = ""
+  let quoted = false
+  let wasQuoted = false
+  for (let index = 0; index < name.length; index += 1) {
+    const char = name[index]
+    if (quoted) {
+      if (char === '"' && name[index + 1] === '"') {
+        current += '"'
+        index += 1
+      } else if (char === '"') {
+        quoted = false
+      } else {
+        current += char
+      }
+    } else if (char === '"') {
+      quoted = true
+      wasQuoted = true
+    } else if (char === ".") {
+      if (current === "") return null
+      segments.push(current)
+      current = ""
+      wasQuoted = false
+    } else {
+      current += char
+    }
+  }
+  if (quoted || (current === "" && !wasQuoted)) return null
+  segments.push(current)
+  return segments
+}
+
+/**
+ * The tables an `erd` block names, one per line, possibly `schema.table`.
+ *
+ * Blank lines and comments (`--`, `#`, `//`) are skipped, as are list markers
+ * and a trailing `;` or `,` a model tends to add. Beyond `ERD_MAX_NAMES`, the
+ * names are counted in `dropped` so the diagram can say it is partial.
+ */
+export function parseErdNames(text: string): {
+  names: Array<ErdName>
+  dropped: number
+} {
+  const names: Array<ErdName> = []
+  const seen = new Set<string>()
+  let dropped = 0
+  for (const raw of text.replace(/\r\n?/g, "\n").split("\n")) {
+    const line = raw
+      .trim()
+      .replace(/^[-*+]\s+/, "")
+      .replace(/[;,]\s*$/, "")
+      .trim()
+    if (
+      line === "" ||
+      line.startsWith("--") ||
+      line.startsWith("#") ||
+      line.startsWith("//") ||
+      line.length > ERD_MAX_LINE
+    )
+      continue
+    const segments = erdSegments(line)
+    if (segments === null) continue
+    // `catalog.schema.table`: the catalog is the connection's, not the model's.
+    const relation = segments.at(-1) ?? ""
+    const namespace = segments.length > 1 ? (segments.at(-2) ?? null) : null
+    const key = JSON.stringify([namespace, relation])
+    if (seen.has(key)) continue
+    seen.add(key)
+    if (names.length >= ERD_MAX_NAMES) {
+      dropped += 1
+      continue
+    }
+    names.push({ namespace, relation, written: line })
+  }
+  return { names, dropped }
+}
+
 function splitRow(line: string): Array<string> {
   let row = line.trim()
   if (row.startsWith("|")) row = row.slice(1)

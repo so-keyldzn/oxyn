@@ -722,6 +722,18 @@ de la grille le rappelle (« shown to you only; the model got the count »).
   rows. », sans alerte) ; erreur (le message du backend entier, `Try again`
   seulement s'il est déclaré retentable) ; **expirée** (« Result no longer
   available », sans rien proposer qui relance la requête).
+* **Graphique.** Quand les colonnes comptent une date (`Date*`, `Timestamp`)
+  ou une catégorie (texte, booléen) et au moins une colonne numérique (entier,
+  flottant, décimal), le pied offre `Chart`, qui bascule entre la grille et un
+  graphique — en ligne sur un axe de dates, en barres sur un axe de catégories,
+  quatre séries au plus. Sans ces colonnes, le bouton **n'existe pas**. Le
+  graphique lit la même page bornée que la grille (100 lignes au plus), dans
+  l'ordre renvoyé par la requête : rien n'est trié ni agrégé dans la webview.
+  Les nombres sont relus depuis les cellules formatées par Rust, et seulement
+  s'ils en sont sans ambiguïté (chiffres, point décimal, exposant, séparateur
+  de milliers U+00A0) ; une colonne qui contient autre chose — une valeur
+  coupée, `NaN`, du texte — est laissée de côté **et nommée** sous le
+  graphique. Si aucune ne reste, il le dit (« Nothing to chart »).
 
 **Durée de vie.** Le résultat d'un agent est un résultat retenu sans lecteur :
 il vit jusqu'à ce que la rétention l'évince selon les bornes
@@ -839,6 +851,76 @@ conversation relue revérifie chaque adresse contre le cache : un objet que le
 cache sait disparu s'affiche atténué, avec « not found », et n'ouvre rien. Sans
 preuve de sa disparition, une puce reste normale. Le libellé vient du catalogue :
 c'est une entrée hostile, rendue comme du texte.
+
+### Un bloc `erd` se dessine depuis le catalogue, pas depuis la réponse
+
+Un bloc de code clôturé de langage `erd` dans une réponse liste des noms de
+tables, un par ligne, éventuellement qualifiés `schema.table` (citations SQL
+comprises : `"Ventes"."T1.totaux"`). Une fois le bloc **fermé**, le panneau le
+dessine en diagramme ; tant que la réponse s'écrit, il reste du texte — un
+diagramme redessiné à chaque nom arrivé se lirait comme un défaut.
+
+* **Les noms sont des demandes, pas des faits.** Chacun est cherché par
+  `search_catalog` parmi les objets qu'Oxyn a déjà lus : l'orthographe exacte
+  d'abord, puis sans casse si une seule table correspond. Un nom qui désigne
+  deux tables n'est pas tranché (« matches auth.users, public.users: not drawn
+  until qualified ») ; un nom introuvable est **dit**, jamais dessiné d'après son
+  orthographe (« Not found among the objects Oxyn has read »). La recherche
+  n'introspecte pas : une table d'un schéma jamais déplié n'est pas trouvée, et
+  le message le laisse entendre.
+* **Ce qui est dessiné vient du backend.** Colonnes, clé primaire et colonnes de
+  clé étrangère sont lues par les mêmes commandes que la vue d'objet
+  (`relation_facets`, puis `refresh_relation_facet` pour une facette jamais lue) ;
+  les arêtes sont les clés étrangères. Aux tables nommées s'ajoutent leurs
+  **voisines directes** par une clé, sortante ou entrante, et les clés entre
+  deux tables dessinées. Aucun modèle n'est consulté, et un même catalogue
+  donne le même diagramme (disposition dagre, de gauche à droite : la table qui
+  porte la clé avant celle qu'elle référence).
+* **Borné.** Un bloc est lu jusqu'à 20 noms, un diagramme s'arrête à 40 tables
+  et une table montre 12 colonnes, clés d'abord ; chaque surplus est compté et
+  dit. Quatre lectures au plus sont en vol à la fois.
+* **Navigable.** Déplacer à la souris, zoomer par les boutons, le pincement ou
+  le clavier (flèches, `+`, `-`, `0` pour ajuster) quand le diagramme a le
+  focus. La molette fait défiler la conversation, pas le diagramme. Un clic sur
+  le nom d'une table l'ouvre dans le workspace, comme depuis le catalogue ; rien
+  ne s'exécute. Les clés sont aussi écrites en liste pour un lecteur d'écran.
+* **États.** Lecture en cours ; dessiné ; rien à dessiner (tous les noms
+  introuvables) ; erreur — le message du backend entier, sans paraphrase, avec
+  `Try again`, qui relit sans rien écrire. Une lecture de métadonnées qui
+  exigerait une approbation est refusée et dite, comme dans la vue d'objet.
+* `Show source` montre le texte du bloc tel que le modèle l'a écrit.
+
+Pour qu'un modèle sache émettre ce bloc, l'invite système doit le décrire ;
+sans cela, il n'apparaît que si l'utilisateur le demande.
+
+### Le code et les diagrammes d'une réponse restent du texte jusqu'au bout
+
+Une réponse de modèle est une entrée hostile
+([SECURITY](SECURITY.md#surface-dentrée)) : rien de ce qu'elle écrit ne devient
+du balisage dans la page.
+
+* **Coloration.** Un bloc de code **fermé** est coloré par shiki, rendu en
+  jetons React (`<span>` et texte) — jamais en HTML. Les langages sont chargés
+  à la demande, au premier bloc qui les nomme : SQL et ses dialectes, JSON,
+  JavaScript, TypeScript, JSX, TSX, Python, shell, YAML, TOML, XML/HTML, diff,
+  Rust, Go ; un bloc sans langage est lu comme du SQL. Un autre langage, un
+  bloc de plus de 50 000 caractères ou une grammaire qui échoue restent en
+  texte brut. Les couleurs sont celles de l'éditeur SQL, en variables CSS :
+  elles suivent le thème clair ou sombre. Pendant que la réponse s'écrit, le
+  bloc ouvert reste en texte brut ; une fois coloré, un bloc n'est plus
+  recalculé (mémoire par contenu). `Copy code` et `Open in console` sont
+  inchangés.
+* **mermaid.** Un bloc `mermaid` **fermé** est dessiné ; mermaid n'est chargé
+  qu'à ce moment. Le dessin est affiché par une image
+  (`<img src="data:image/svg+xml;base64,…">`), qui n'exécute rien, ne charge
+  rien et ne reçoit aucun événement. mermaid tourne en `securityLevel:
+  "strict"`, `htmlLabels: false`, sans rendu automatique, avec 20 000
+  caractères et 500 arêtes au plus ; ces réglages sont déclarés `secure`, que
+  le diagramme ne peut pas modifier. Ses lignes de configuration —
+  directives `%%{init}%%` et en-tête `---` — sont retirées avant le rendu, et
+  le bloc le dit. `Show source` montre le texte. Un diagramme invalide affiche
+  l'erreur de mermaid, lisible, avec sa source. Le dessin suit le thème de
+  l'application au moment du rendu, et se redessine s'il change.
 
 ### Ce que le panneau montre d'un agent externe
 
