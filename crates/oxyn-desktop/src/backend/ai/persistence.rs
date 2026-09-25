@@ -41,7 +41,9 @@ use oxyn_store::conversations::{
 pub(crate) use super::threads::Restored;
 use super::threads::RestoredNode;
 use crate::ipc::IpcError;
-use crate::ipc::ai::{AiEvent, Ending, FailureCategory, ThreadSummary, ToolStatus};
+use crate::ipc::ai::{
+    AiEvent, Ending, FailureCategory, OrphanThreadSummary, ThreadSummary, ToolStatus,
+};
 
 /// Conversations the history panel lists for one connection.
 const MAX_HISTORY: usize = 64;
@@ -460,6 +462,27 @@ pub(crate) fn history(executor: &Arc<Executor>, connection: ConnectionId) -> Vec
             // A thread of the workspace that is not open here runs nothing:
             // a run lives in the window that started it.
             running: false,
+        })
+        .collect()
+}
+
+/// The workspace's conversations whose connection was deleted, under the name
+/// they kept. Read-only: nothing here opens one.
+///
+/// Blocks: the store is SQLite.
+pub(crate) fn orphans(executor: &Arc<Executor>) -> Vec<OrphanThreadSummary> {
+    executor
+        .store()
+        .conversations()
+        .orphans(executor.workspace(), MAX_HISTORY)
+        .unwrap_or_default()
+        .into_iter()
+        .map(|orphan| OrphanThreadSummary {
+            id: orphan.summary.id.to_string(),
+            title: orphan.summary.title,
+            connection_name: orphan.connection_name,
+            updated_at_ms: milliseconds(orphan.summary.updated_at.timestamp_millis()),
+            exchanges: usize::try_from(orphan.summary.turns).unwrap_or(usize::MAX),
         })
         .collect()
 }

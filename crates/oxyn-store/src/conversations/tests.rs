@@ -375,12 +375,81 @@ fn un_fil_survit_a_la_suppression_de_sa_connexion() {
     assert_eq!(tout_le_fil(&store, id).len(), 1);
 }
 
+/// Une connexion supprimée laisse ses fils lisibles dans la liste des
+/// orphelins, sous son nom d'alors ; ceux d'une connexion vivante, d'un autre
+/// workspace ou sans connexion n'y figurent pas.
+#[test]
+fn les_fils_d_une_connexion_supprimee_se_listent_sous_son_nom() {
+    let (store, workspace, supprimee) = decor();
+    let orphelin = fil(&store, workspace, supprimee);
+    store
+        .conversations()
+        .append(
+            orphelin,
+            &TurnRecord::new(TurnRole::User, PrivacyTier::Metadata, "une question"),
+        )
+        .expect("écriture");
+
+    let vivante = ConnectionConfig::new("entrepôt", DriverId::postgres());
+    store
+        .connections()
+        .save(workspace, &vivante)
+        .expect("connexion");
+    fil(&store, workspace, vivante.id);
+    let sans_connexion = Conversation::new(workspace, fournisseur(), "Sans connexion");
+    store
+        .conversations()
+        .save(&sans_connexion)
+        .expect("enregistrement");
+    let ailleurs = store.workspaces().create("ailleurs").expect("workspace").id;
+    fil(&store, ailleurs, ConnectionId::new());
+
+    assert!(
+        store
+            .conversations()
+            .orphans(workspace, 10)
+            .expect("liste")
+            .is_empty(),
+        "tant que la connexion existe, son fil n'est pas orphelin"
+    );
+
+    store.connections().delete(supprimee).expect("suppression");
+
+    let orphelins = store.conversations().orphans(workspace, 10).expect("liste");
+    assert_eq!(orphelins.len(), 1);
+    assert_eq!(orphelins[0].summary.id, orphelin);
+    assert_eq!(orphelins[0].summary.turns, 1);
+    assert_eq!(orphelins[0].connection_name.as_deref(), Some("base client"));
+
+    // Lister un orphelin ne permet pas de l'effacer au nom d'une autre
+    // connexion : la suppression porte la connexion dans son `WHERE`.
+    assert!(
+        !store
+            .conversations()
+            .delete(vivante.id, orphelin)
+            .expect("suppression refusée sans erreur")
+    );
+    assert_eq!(
+        store
+            .conversations()
+            .orphans(workspace, 10)
+            .expect("liste")
+            .len(),
+        1
+    );
+}
+
 /// Un tour écrit dans un fil disparu n'est pas une panne, c'est un `None`.
 #[test]
 fn ecrire_dans_un_fil_disparu_rend_none() {
     let (store, workspace, connexion) = decor();
     let id = fil(&store, workspace, connexion);
-    assert!(store.conversations().delete(id).expect("suppression"));
+    assert!(
+        store
+            .conversations()
+            .delete(connexion, id)
+            .expect("suppression")
+    );
 
     let tour = TurnRecord::new(TurnRole::User, PrivacyTier::Metadata, "trop tard");
     assert_eq!(
@@ -403,7 +472,10 @@ fn supprimer_un_fil_emporte_ses_tours() {
             )
             .expect("écriture");
     }
-    store.conversations().delete(id).expect("suppression");
+    store
+        .conversations()
+        .delete(connexion, id)
+        .expect("suppression");
 
     let restants: i64 = store
         .with_connection(|conn| {

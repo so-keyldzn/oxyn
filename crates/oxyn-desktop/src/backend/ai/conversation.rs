@@ -48,8 +48,8 @@ use crate::backend::Inner;
 use crate::ipc::ai::{
     AgentExit, AgentSettingAnswer, AgentSettingChange, AgentSettingsView, AgentStart, AiEvent,
     AiUpdate, AskRequest, AskStarted, ContextSummary, Cut, Destination, DestinationChoice, Ending,
-    FailureCategory, MemoryReset, Money, PlanEntry, SignInHelp, SignInMethod, ThreadSummary,
-    ThreadView, ToolStatus, error_class, preset_of, preset_sign_in,
+    FailureCategory, MemoryReset, Money, OrphanThreadSummary, PlanEntry, SignInHelp, SignInMethod,
+    ThreadSummary, ThreadView, ToolStatus, error_class, preset_of, preset_sign_in,
 };
 use crate::ipc::ai::{SampleApproval, SampleRequest};
 use crate::ipc::{CatalogAddress, IpcError, RelationField};
@@ -1127,6 +1127,18 @@ impl Backend {
         all
     }
 
+    /// The conversations of this workspace whose connection was deleted.
+    ///
+    /// No connection to name, since it is gone: the list is the workspace's.
+    /// A read by the same path as [`Self::ai_threads`]; nothing opens, renames
+    /// or deletes one of these from here.
+    pub async fn ai_orphan_threads(&self) -> Vec<OrphanThreadSummary> {
+        let executor = Arc::clone(&self.inner.executor);
+        tokio::task::spawn_blocking(move || persistence::orphans(&executor))
+            .await
+            .unwrap_or_default()
+    }
+
     /// A whole conversation, and `channel` as its live stream from now on.
     ///
     /// A read: nothing is asked again. This is how the panel takes a
@@ -1210,7 +1222,9 @@ impl Backend {
             for result in results {
                 executor.forget_result(result);
             }
-            executor.store().conversations().delete(id)
+            // Only a thread of this connection: an id listed elsewhere — a
+            // deleted connection's — is not deleted through this one.
+            executor.store().conversations().delete(connection, id)
         })
         .await;
         Ok(())

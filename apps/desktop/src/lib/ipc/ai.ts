@@ -270,6 +270,16 @@ export const ThreadSummary = z.object({
 })
 export type ThreadSummary = z.infer<typeof ThreadSummary>
 
+/** A conversation whose connection was deleted: listed, never reopened. */
+export const OrphanThreadSummary = z.object({
+  id: z.string(),
+  title: z.string(),
+  connectionName: z.string().nullable(),
+  updatedAtMs: z.number().nonnegative(),
+  exchanges: z.number().int().nonnegative(),
+})
+export type OrphanThreadSummary = z.infer<typeof OrphanThreadSummary>
+
 export const Selection = z.object({
   parent: z.number().int().nonnegative().nullable(),
   node: z.number().int().nonnegative(),
@@ -840,6 +850,9 @@ export const ai = {
 
   threads: (connection: string) =>
     call("ai_threads", z.array(ThreadSummary), { connection }),
+
+  /** The workspace's conversations whose connection was deleted. A read. */
+  orphanThreads: () => call("ai_orphan_threads", z.array(OrphanThreadSummary)),
 
   /**
    * Lists on the server the tables and views of the schemas never expanded,

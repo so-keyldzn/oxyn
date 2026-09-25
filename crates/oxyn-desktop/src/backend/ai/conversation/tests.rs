@@ -2933,3 +2933,6 @@ mod approved_samples {
 
 /// A write an agent proposes waits, inside its call, for the user's decision.
 mod approvals;
+
+/// What the history panel reads besides the open connection's threads.
+mod history;

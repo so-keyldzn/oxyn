@@ -39,6 +39,21 @@ export const NamesTheConnection: Story = {
   },
 }
 
+/** Before deleting, the dialog says the conversations stay, under this name. */
+export const KeepsItsConversations: Story = {
+  play: async () => {
+    const dialog = within(document.body)
+    await dialog.findByRole("button", { name: "Cancel" })
+    await expect(
+      document.body.querySelector(
+        '[data-slot="delete-connection-conversations"]'
+      )
+    ).toHaveTextContent(
+      "Its assistant conversations are kept in this workspace, under the name billing"
+    )
+  },
+}
+
 export const EscapeCancels: Story = {
   play: async ({ args }) => {
     const dialog = within(document.body)

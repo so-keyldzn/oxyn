@@ -40,6 +40,7 @@
 //! the interface thread ([I-05](../../../CLAUDE.md#i-05)).
 
 mod mentions;
+mod orphans;
 mod retention;
 #[cfg(test)]
 mod tests;
@@ -48,6 +49,7 @@ mod tree;
 pub use mentions::{
     ExchangeMention, MAX_EXCHANGE_MENTIONS, MAX_MENTION_NAME_BYTES, MAX_MENTIONS_BYTES,
 };
+pub use orphans::OrphanConversation;
 pub use retention::{PruneReport, RetentionPolicy};
 pub use tree::{
     AnswerEnding, BranchPage, EXCHANGE_LAYOUT_BYTES, Exchange, ExchangeOutcome, ExchangeRecord,
@@ -1006,18 +1008,23 @@ impl<'a> Conversations<'a> {
         })
     }
 
-    /// Deletes one thread and its turns. Returns `false` if it was already gone.
+    /// Deletes one thread of `owner` and its turns. Returns `false` if it was
+    /// already gone, or is not about `owner`.
+    ///
+    /// The owner is in the `WHERE`, not checked beforehand: a caller holding a
+    /// thread id from elsewhere — a deleted connection's, listed read-only —
+    /// cannot delete it through another connection.
     ///
     /// The turns go with it through `ON DELETE CASCADE`, in the same
     /// transaction: there is no state where half a transcript survives.
     ///
     /// # Errors
     /// [`StoreError::Sqlite`] if the delete fails.
-    pub fn delete(&self, id: ConversationId) -> Result<bool> {
+    pub fn delete(&self, owner: ConnectionId, id: ConversationId) -> Result<bool> {
         self.store.with_connection(|connection| {
             let removed = connection.execute(
-                "DELETE FROM ai_conversations WHERE id = ?1",
-                params![id.to_string()],
+                "DELETE FROM ai_conversations WHERE id = ?1 AND connection_id = ?2",
+                params![id.to_string(), owner.to_string()],
             )?;
             Ok(removed > 0)
         })
