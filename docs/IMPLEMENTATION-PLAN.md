@@ -2025,6 +2025,26 @@ retirés et selon quelle règle, avec les nombres de `RetentionPolicy`
 Le journal `info` reste. Tenu par
 `the_launch_prune_is_transmitted_with_its_rule`.
 
+## Licence : ce qui reste avant le passage en public
+
+[ADR-0044](adr/0044-licence-gpl-et-contrat-apache.md) est en place depuis le
+2026-09-25 : licences, `NOTICE`, `CLA.md`, `CONTRIBUTING.md`, mentions tierces
+dans l'application. Il reste quatre gestes qui ne sont pas des fichiers du dépôt,
+ou qui ne se font qu'une fois :
+
+- **activer la signature du CLA** au passage du dépôt en public. Le choix
+  prévu est CLA Assistant (<https://cla-assistant.io>) sur `so-keyldzn/oxyn`,
+  qui pointe vers `CLA.md`. `CONTRIBUTING.md` annonce déjà le bot. Tant qu'il
+  n'est pas actif, aucune contribution externe ne se fusionne ;
+- **offrir le source avec tout binaire distribué** (GPLv3, § 6). Le dépôt
+  public y suffit. Avant cela, aucun binaire ne sort du cercle du titulaire ;
+- **faire relire `CLA.md` par un avocat**, en même temps que la cession des
+  droits à la société. `NOTICE`, le champ `copyright` de
+  `crates/oxyn-desktop/tauri.conf.json` et la § 1 du CLA changent alors de
+  titulaire ;
+- **publier les interfaces WIT sous Apache-2.0** en phase 4, dans un
+  répertoire ou une crate qui porte cette licence seule.
+
 ## Ce qui n'a pas sa place ici
 
 Les décisions. Une phase qui a besoin d'un arbitrage écrit un ADR

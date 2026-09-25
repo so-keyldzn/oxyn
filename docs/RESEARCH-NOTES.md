@@ -1682,3 +1682,17 @@ celle de la FSF.** Les mentions tierces de l'application reproduisent ce texte.
 porte la mention « Incompatible With Secondary Licenses ». La recherche a été
 faite dans `~/.cargo/registry/src` le 2026-09-25 ; les seules occurrences sont
 dans le texte de la licence elle-même, qui cite la mention en modèle.
+
+### Le modèle du CLA
+
+| Fait | Valeur | Source |
+|---|---|---|
+| Modèle | Apache Software Foundation, *Individual Contributor License Agreement* V2.2 | <https://www.apache.org/licenses/icla.pdf>, téléchargé le 2026-09-25 |
+| Licence accordée (§ 2) | « perpetual, worldwide, non-exclusive, no-charge, royalty-free, irrevocable copyright license to reproduce, prepare derivative works of, publicly display, publicly perform, sublicense, and distribute » | même document |
+| Licence de brevet (§ 3) | limitée aux revendications nécessairement enfreintes par la contribution ; résiliée pour qui intente une action en contrefaçon | même document |
+
+Les écarts entre `CLA.md` et ce modèle sont listés à la fin de `CLA.md`. Le
+droit de sous-licencier (« sublicense ») est ce qui permet de relicencier ; la
+§ 2 de `CLA.md` l'écrit en clair. La cession (§ 9) n'existe pas dans le modèle.
+**Ce texte n'a pas été relu par un avocat** : la relecture est à faire avec la
+cession des droits à la société.
