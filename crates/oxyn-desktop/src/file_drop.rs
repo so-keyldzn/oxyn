@@ -24,6 +24,7 @@
 //! `subscribe_menu`, and what it produces reaches data only through the
 //! console's `Run` or the connection form's submit, which do (I-01).
 
+use std::collections::HashMap;
 use std::fs::File;
 use std::io::Read as _;
 use std::path::Path;
@@ -56,22 +57,29 @@ const DATABASE_FILES: &[(&str, &str)] = &[
     ("duckdb", "duckdb"),
 ];
 
-/// What the application manages: the front's channel.
+/// What the application manages: each window's channel, by label.
 #[derive(Default)]
 pub struct FileDrops {
-    channel: Mutex<Option<Channel<DroppedFile>>>,
+    channels: Mutex<HashMap<String, Channel<DroppedFile>>>,
 }
 
 impl FileDrops {
-    /// The front's channel, replacing the previous one: a reloaded page
+    /// A window's channel, replacing its previous one: a reloaded page
     /// subscribes again.
-    pub fn subscribe(&self, channel: Channel<DroppedFile>) {
-        *self.channel.lock() = Some(channel);
+    pub fn subscribe(&self, window: &str, channel: Channel<DroppedFile>) {
+        self.channels.lock().insert(window.to_owned(), channel);
     }
 
-    fn deliver(&self, file: DroppedFile) {
-        let Some(channel) = self.channel.lock().clone() else {
-            tracing::debug!("a file was dropped before the front listened");
+    /// A closed window: its channel goes.
+    pub fn forget(&self, window: &str) {
+        self.channels.lock().remove(window);
+    }
+
+    /// Sends a classified file to the window it was dropped on, and to it
+    /// alone (ADR-0043).
+    fn deliver(&self, window: &str, file: DroppedFile) {
+        let Some(channel) = self.channels.lock().get(window).cloned() else {
+            tracing::debug!("a file was dropped before its window listened");
             return;
         };
         if let Err(error) = channel.send(file) {
@@ -80,16 +88,25 @@ impl FileDrops {
     }
 }
 
-/// The window event handler: a drop on the main window is classified on the
-/// blocking pool, never on the main thread that delivered it (I-05).
-pub fn on_window_event(window: &Window, event: &WindowEvent, main: &str) {
+/// The window event handler: a drop on one of Oxyn's windows is classified
+/// on the blocking pool, never on the main thread that delivered it (I-05),
+/// and handed to that window.
+pub fn on_window_event(window: &Window, event: &WindowEvent) {
     let WindowEvent::DragDrop(DragDropEvent::Drop { paths, .. }) = event else {
         return;
     };
-    if window.label() != main || paths.is_empty() {
+    let app = window.app_handle().clone();
+    if paths.is_empty()
+        || app
+            .state::<Backend>()
+            .inner
+            .windows
+            .key_of(window.label())
+            .is_err()
+    {
         return;
     }
-    let app = window.app_handle().clone();
+    let label = window.label().to_owned();
     let paths = paths.clone();
     // Not held: a bounded read that ends by itself and answers through the
     // channel, with nothing a caller could cancel or wait for.
@@ -97,7 +114,7 @@ pub fn on_window_event(window: &Window, event: &WindowEvent, main: &str) {
         let drivers = app.state::<Backend>().driver_choices();
         let drops = app.state::<FileDrops>();
         for file in classify_all(&paths, &drivers) {
-            drops.deliver(file);
+            drops.deliver(&label, file);
         }
     });
 }

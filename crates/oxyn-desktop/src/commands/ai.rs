@@ -24,10 +24,11 @@
 
 use oxyn_core::ConnectionId;
 use tauri::ipc::Channel;
-use tauri::{AppHandle, Runtime, State};
+use tauri::{AppHandle, Manager as _, Runtime, State, Webview};
 use tauri_plugin_dialog::{DialogExt, MessageDialogButtons, MessageDialogKind};
 
 use crate::backend::Backend;
+use crate::commands::windows::{bring_to_front, caller};
 use crate::ipc::ai::{
     AgentDraft, AgentPresetDraft, AgentSettingAnswer, AgentSettingChange, AgentStart,
     AgentStartRequest, AiUpdate, AskRequest, AskStarted, DeclaredProvider, DestinationChoice,
@@ -40,6 +41,26 @@ fn connection(value: &str) -> Result<ConnectionId, IpcError> {
     value
         .parse()
         .map_err(|error| IpcError::invalid(format!("invalid connection: {error}")))
+}
+
+/// The connection named, once the calling window holds its assistant.
+///
+/// The assistant's state is kept by connection: its conversations, the
+/// agent that serves them and the samples it asked for belong to one window
+/// at a time (ADR-0043). Another window asking for them does not take them:
+/// the window that has them comes to the front.
+fn assistant(backend: &Backend, webview: &Webview, value: &str) -> Result<ConnectionId, IpcError> {
+    let window = caller(backend, webview)?;
+    let connection = connection(value)?;
+    match backend.inner.windows.claim_assistant(window, connection) {
+        Ok(()) => Ok(connection),
+        Err(owner) => {
+            bring_to_front(webview.app_handle(), owner);
+            Err(IpcError::invalid(
+                "The assistant of this connection is open in another window",
+            ))
+        }
+    }
 }
 
 #[tauri::command]
@@ -164,30 +185,34 @@ pub async fn ai_detect_agent(
 /// Asks a question; returns once it is accepted, the answer streams on `channel`.
 #[tauri::command]
 pub async fn ai_ask(
+    webview: Webview,
     backend: State<'_, Backend>,
     request: AskRequest,
     channel: Channel<AiUpdate>,
 ) -> Result<AskStarted, IpcError> {
+    assistant(&backend, &webview, &request.connection)?;
     backend.ai_ask(request, channel).await
 }
 
 #[tauri::command]
 pub fn ai_cancel(
+    webview: Webview,
     backend: State<'_, Backend>,
     connection: String,
     thread: String,
 ) -> Result<bool, IpcError> {
-    backend.ai_cancel(self::connection(&connection)?, &thread)
+    backend.ai_cancel(assistant(&backend, &webview, &connection)?, &thread)
 }
 
 /// In memory only: forgets a grant, reads nothing.
 #[tauri::command]
 pub fn ai_withdraw_sample(
+    webview: Webview,
     backend: State<'_, Backend>,
     connection: String,
     request: String,
 ) -> Result<(), IpcError> {
-    backend.ai_withdraw_sample(self::connection(&connection)?, &request);
+    backend.ai_withdraw_sample(assistant(&backend, &webview, &connection)?, &request);
     Ok(())
 }
 
@@ -199,12 +224,17 @@ pub fn ai_withdraw_sample(
 /// waiting on it and returns — the read runs on that call's task.
 #[tauri::command]
 pub fn ai_answer_sample(
+    webview: Webview,
     backend: State<'_, Backend>,
     connection: String,
     request: String,
     columns: Option<Vec<String>>,
 ) -> Result<(), IpcError> {
-    backend.ai_answer_sample(self::connection(&connection)?, &request, columns.as_deref())
+    backend.ai_answer_sample(
+        assistant(&backend, &webview, &connection)?,
+        &request,
+        columns.as_deref(),
+    )
 }
 
 #[tauri::command]
@@ -234,48 +264,56 @@ pub async fn ai_orphan_threads(
 /// streams on `channel`. Nothing is asked again.
 #[tauri::command]
 pub async fn ai_open_thread(
+    webview: Webview,
     backend: State<'_, Backend>,
     connection: String,
     thread: String,
     channel: Channel<AiUpdate>,
 ) -> Result<ThreadView, IpcError> {
     backend
-        .ai_open_thread(self::connection(&connection)?, &thread, channel)
+        .ai_open_thread(
+            assistant(&backend, &webview, &connection)?,
+            &thread,
+            channel,
+        )
         .await
 }
 
 #[tauri::command]
 pub async fn ai_rename_thread(
+    webview: Webview,
     backend: State<'_, Backend>,
     connection: String,
     thread: String,
     title: String,
 ) -> Result<(), IpcError> {
     backend
-        .ai_rename_thread(self::connection(&connection)?, &thread, &title)
+        .ai_rename_thread(assistant(&backend, &webview, &connection)?, &thread, &title)
         .await
 }
 
 #[tauri::command]
 pub async fn ai_delete_thread(
+    webview: Webview,
     backend: State<'_, Backend>,
     connection: String,
     thread: String,
 ) -> Result<(), IpcError> {
     backend
-        .ai_delete_thread(self::connection(&connection)?, &thread)
+        .ai_delete_thread(assistant(&backend, &webview, &connection)?, &thread)
         .await
 }
 
 #[tauri::command]
 pub async fn ai_select_version(
+    webview: Webview,
     backend: State<'_, Backend>,
     connection: String,
     thread: String,
     node: u32,
 ) -> Result<(), IpcError> {
     backend
-        .ai_select_version(self::connection(&connection)?, &thread, node)
+        .ai_select_version(assistant(&backend, &webview, &connection)?, &thread, node)
         .await
 }
 
@@ -286,13 +324,18 @@ pub async fn ai_select_version(
 /// agent the panel started for the connection.
 #[tauri::command]
 pub async fn ai_authenticate(
+    webview: Webview,
     backend: State<'_, Backend>,
     connection: String,
     thread: Option<String>,
     method: String,
 ) -> Result<(), IpcError> {
     backend
-        .ai_authenticate(self::connection(&connection)?, thread.as_deref(), &method)
+        .ai_authenticate(
+            assistant(&backend, &webview, &connection)?,
+            thread.as_deref(),
+            &method,
+        )
         .await
 }
 
@@ -306,9 +349,11 @@ pub async fn ai_authenticate(
 /// prompt is sent: nothing of the database leaves.
 #[tauri::command]
 pub async fn ai_start_agent(
+    webview: Webview,
     backend: State<'_, Backend>,
     request: AgentStartRequest,
 ) -> Result<AgentStart, IpcError> {
+    assistant(&backend, &webview, &request.connection)?;
     backend.ai_start_agent(request).await
 }
 
@@ -317,16 +362,18 @@ pub async fn ai_start_agent(
 /// at the executor.
 #[tauri::command]
 pub async fn ai_stop_agent_start(
+    webview: Webview,
     backend: State<'_, Backend>,
     connection: String,
 ) -> Result<bool, IpcError> {
-    Ok(backend.ai_stop_agent_start(self::connection(&connection)?))
+    Ok(backend.ai_stop_agent_start(assistant(&backend, &webview, &connection)?))
 }
 
 /// Offers a row sample of a relation for the next question — what would be
 /// read and where it would go, never a value. `Sampled` only.
 #[tauri::command]
 pub async fn ai_request_sample(
+    webview: Webview,
     backend: State<'_, Backend>,
     connection: String,
     thread: Option<String>,
@@ -336,7 +383,7 @@ pub async fn ai_request_sample(
 ) -> Result<SampleRequest, IpcError> {
     backend
         .ai_request_sample(
-            self::connection(&connection)?,
+            assistant(&backend, &webview, &connection)?,
             thread,
             parent,
             address,
@@ -350,13 +397,18 @@ pub async fn ai_request_sample(
 /// started for the connection.
 #[tauri::command]
 pub async fn ai_set_agent_setting(
+    webview: Webview,
     backend: State<'_, Backend>,
     connection: String,
     thread: Option<String>,
     change: AgentSettingChange,
 ) -> Result<AgentSettingAnswer, IpcError> {
     backend
-        .ai_set_agent_setting(self::connection(&connection)?, thread.as_deref(), change)
+        .ai_set_agent_setting(
+            assistant(&backend, &webview, &connection)?,
+            thread.as_deref(),
+            change,
+        )
         .await
 }
 
@@ -372,9 +424,21 @@ pub async fn ai_list_mentionable(
         .await
 }
 
+/// Only the window that holds the assistant of the connection forgets its
+/// conversation; from another, nothing happens.
 #[tauri::command]
-pub fn ai_forget(backend: State<'_, Backend>, connection: String) -> Result<(), IpcError> {
-    backend.close_ai_conversation(self::connection(&connection)?);
+pub fn ai_forget(
+    webview: Webview,
+    backend: State<'_, Backend>,
+    connection: String,
+) -> Result<(), IpcError> {
+    let window = caller(&backend, &webview)?;
+    let connection = self::connection(&connection)?;
+    let windows = &backend.inner.windows;
+    if windows.has_assistant(window, connection) {
+        backend.close_ai_conversation(connection);
+        windows.release_assistant(window, connection);
+    }
     Ok(())
 }
 

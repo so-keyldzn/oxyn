@@ -14,10 +14,10 @@ use anyhow::{Context as _, Result};
 use oxyn_core::{AppSessionId, Command, WorkspaceId};
 use oxyn_store::Store;
 use oxyn_store::sessions::PreviousShutdown;
-use parking_lot::Mutex;
 use tauri::ipc::Channel;
 use tokio::sync::Notify;
 
+use super::windows::{Answer, WindowKey};
 use super::{Backend, Inner};
 use crate::ipc::recovery::{RecoveryStatus, ShutdownSignal};
 
@@ -46,8 +46,6 @@ pub(crate) struct LocalWork {
     previous: PreviousShutdown,
     unresolved_write: bool,
     pending: Arc<PendingWrites>,
-    shutdown: Mutex<Option<Channel<ShutdownSignal>>>,
-    flushed: Notify,
     closing: AtomicBool,
     closed: AtomicBool,
 }
@@ -91,8 +89,6 @@ impl LocalWork {
             previous,
             unresolved_write,
             pending: Arc::new(PendingWrites::default()),
-            shutdown: Mutex::new(None),
-            flushed: Notify::new(),
             closing: AtomicBool::new(false),
             closed: AtomicBool::new(false),
         })
@@ -162,29 +158,30 @@ impl Backend {
     }
 
     /// What the recovery screen may assert: observed at startup, never re-read.
+    ///
+    /// Only the window built at launch may offer it: it speaks of how the
+    /// previous launch ended, which a window opened later by `New window`
+    /// did not witness, and one screen per window would offer the same
+    /// copies twice (ADR-0043).
     #[must_use]
-    pub fn recovery_status(&self) -> RecoveryStatus {
+    pub fn recovery_status(&self, window: WindowKey) -> RecoveryStatus {
         let local = &self.inner.workbench.local;
+        let initial = self.inner.windows.is_initial(window);
         RecoveryStatus {
-            abnormal: local.previous.needs_recovery(),
-            unresolved_write: local.unresolved_write,
+            abnormal: initial && local.previous.needs_recovery(),
+            unresolved_write: initial && local.unresolved_write,
         }
     }
 
-    /// Where the backend asks the webview to flush its drafts before closing.
+    /// Where the backend asks this window to flush its drafts before closing.
     /// A reload replaces the channel.
-    pub fn subscribe_shutdown(&self, channel: Channel<ShutdownSignal>) {
-        *self.inner.workbench.local.shutdown.lock() = Some(channel);
+    pub fn subscribe_shutdown(&self, window: WindowKey, channel: Channel<ShutdownSignal>) {
+        self.inner.windows.subscribe_shutdown(window, channel);
     }
 
-    /// The webview's shutdown channel, if one is subscribed.
-    pub(super) fn shutdown_channel(&self) -> Option<Channel<ShutdownSignal>> {
-        self.inner.workbench.local.shutdown.lock().clone()
-    }
-
-    /// The webview has submitted every draft it held.
-    pub fn shutdown_flushed(&self) {
-        self.inner.workbench.local.flushed.notify_waiters();
+    /// This window has submitted every draft it held.
+    pub fn shutdown_flushed(&self, window: WindowKey) {
+        self.inner.windows.flushed(window);
     }
 
     /// Waits for already submitted local writes, even those whose view is gone.
@@ -286,19 +283,32 @@ impl Backend {
 
     async fn shutdown_within(&self, flush_grace: Duration) {
         let local = &self.inner.workbench.local;
-        let channel = local.shutdown.lock().clone();
-        // Recorded all the same, see above: the warning says which drafts may
-        // be missing.
-        match channel {
-            None => tracing::warn!("no webview subscribed to the shutdown; drafts not flushed"),
-            Some(channel) => {
-                let flushed = local.flushed.notified();
-                if channel.send(ShutdownSignal::FlushDrafts).is_err() {
-                    tracing::warn!("the webview could not be asked to flush its drafts");
-                } else if tokio::time::timeout(flush_grace, flushed).await.is_err() {
-                    tracing::warn!("the webview did not confirm its drafts were flushed");
-                }
-            }
+        // Every window at once, `flush_grace` bounding them all rather than
+        // each: a close is recorded once every webview has answered, or the
+        // grace has passed (ADR-0043). Recorded all the same, see above: the
+        // warning says which drafts may be missing.
+        let windows = &self.inner.windows;
+        let all = windows.keys();
+        windows.expect_answers(&all);
+        let asked: Vec<WindowKey> = all
+            .iter()
+            .copied()
+            .filter(|window| windows.shutdown_signal(*window, ShutdownSignal::FlushDrafts))
+            .collect();
+        if asked.is_empty() {
+            tracing::warn!("no webview subscribed to the shutdown; drafts not flushed");
+        } else if asked.len() < all.len() {
+            tracing::warn!(
+                windows = all.len() - asked.len(),
+                "some windows could not be asked to flush their drafts"
+            );
+        }
+        let flushed = windows.answers(&asked, Answer::flushed, flush_grace).await;
+        if flushed.len() < asked.len() {
+            tracing::warn!(
+                windows = asked.len() - flushed.len(),
+                "some webviews did not confirm their drafts were flushed"
+            );
         }
         match tokio::time::timeout(WRITES_GRACE, self.close_session_after_local_writes()).await {
             Ok(()) => {}
@@ -337,11 +347,13 @@ mod tests {
         )
         .expect("backend");
         assert!(
-            !backend.recovery_status().abnormal,
+            !backend.recovery_status(backend.test_window()).abnormal,
             "a first launch speaks of no crash"
         );
         assert!(
-            !backend.recovery_status().unresolved_write,
+            !backend
+                .recovery_status(backend.test_window())
+                .unresolved_write,
             "nor of a write it never saw"
         );
 
@@ -395,7 +407,7 @@ mod tests {
         exit_and_age(&store, first);
 
         let next = Backend::assemble(store, secrets).expect("relaunch");
-        assert!(!next.recovery_status().abnormal);
+        assert!(!next.recovery_status(next.test_window()).abnormal);
     }
 
     /// A webview subscribed to the shutdown. `confirms` says whether it answers
@@ -405,16 +417,20 @@ mod tests {
         let asked = Arc::new(AtomicUsize::new(0));
         let count = Arc::clone(&asked);
         let inner = Arc::downgrade(&backend.inner);
-        backend.subscribe_shutdown(Channel::new(move |_| {
-            count.fetch_add(1, Ordering::SeqCst);
-            if !reachable {
-                return Err(tauri::Error::FailedToReceiveMessage);
-            }
-            if let (true, Some(inner)) = (confirms, inner.upgrade()) {
-                Backend { inner }.shutdown_flushed();
-            }
-            Ok(())
-        }));
+        let window = backend.test_window();
+        backend.subscribe_shutdown(
+            window,
+            Channel::new(move |_| {
+                count.fetch_add(1, Ordering::SeqCst);
+                if !reachable {
+                    return Err(tauri::Error::FailedToReceiveMessage);
+                }
+                if let (true, Some(inner)) = (confirms, inner.upgrade()) {
+                    Backend { inner }.shutdown_flushed(window);
+                }
+                Ok(())
+            }),
+        );
         asked
     }
 
@@ -459,7 +475,7 @@ mod tests {
         );
 
         let next = Backend::assemble(store, secrets).expect("relaunch");
-        assert!(!next.recovery_status().abnormal);
+        assert!(!next.recovery_status(next.test_window()).abnormal);
     }
 
     /// A webview that never confirms, or cannot be reached: the close is
@@ -488,7 +504,7 @@ mod tests {
 
             let next = Backend::assemble(store, secrets).expect("relaunch");
             assert!(
-                !next.recovery_status().abnormal,
+                !next.recovery_status(next.test_window()).abnormal,
                 "reachable: {reachable}; an unconfirmed flush is not a crash"
             );
         }
@@ -517,12 +533,12 @@ mod tests {
                 .await
             })
             .expect("the shutdown is bounded");
-        first.shutdown_flushed();
+        first.shutdown_flushed(first.test_window());
         assert!(first.shutdown_finished());
         exit_and_age(&store, first);
 
         let next = Backend::assemble(store, secrets).expect("relaunch");
-        assert!(!next.recovery_status().abnormal);
+        assert!(!next.recovery_status(next.test_window()).abnormal);
     }
 
     /// The Dock's Quit: macOS ends the loop without `ExitRequested`, and the
@@ -542,7 +558,7 @@ mod tests {
         exit_and_age(&store, first);
 
         let next = Backend::assemble(store, secrets).expect("relaunch");
-        assert!(!next.recovery_status().abnormal);
+        assert!(!next.recovery_status(next.test_window()).abnormal);
     }
 
     /// A write still running when macOS ends the process: the close is never
@@ -577,7 +593,7 @@ mod tests {
 
         let next = Backend::assemble(store, secrets).expect("relaunch");
         assert!(
-            next.recovery_status().abnormal,
+            next.recovery_status(next.test_window()).abnormal,
             "a close nobody could confirm offers recovery"
         );
         drop(write);
@@ -599,13 +615,13 @@ mod tests {
         exit_and_age(&store, killed);
 
         let relaunch = Backend::assemble(Arc::clone(&store), secrets.clone()).expect("relaunch");
-        assert!(relaunch.recovery_status().abnormal);
+        assert!(relaunch.recovery_status(relaunch.test_window()).abnormal);
         runtime.block_on(relaunch.shutdown());
         exit_and_age(&store, relaunch);
 
         let next = Backend::assemble(store, secrets).expect("the launch after");
         assert!(
-            !next.recovery_status().abnormal,
+            !next.recovery_status(next.test_window()).abnormal,
             "a crash already announced does not come back after an ordinary close"
         );
     }
@@ -634,9 +650,11 @@ mod tests {
             .expect("aged heartbeat");
         let backend = Backend::assemble(store, Arc::new(oxyn_secrets::MemorySecretStore::new()))
             .expect("backend");
-        assert!(backend.recovery_status().abnormal);
+        assert!(backend.recovery_status(backend.test_window()).abnormal);
         assert!(
-            !backend.recovery_status().unresolved_write,
+            !backend
+                .recovery_status(backend.test_window())
+                .unresolved_write,
             "a crash alone is not a write with an unknown outcome"
         );
     }
@@ -664,7 +682,7 @@ mod tests {
         store.history().record(&expired).expect("recorded");
         let backend = Backend::assemble(store, Arc::new(oxyn_secrets::MemorySecretStore::new()))
             .expect("backend");
-        let status = backend.recovery_status();
+        let status = backend.recovery_status(backend.test_window());
         assert!(status.unresolved_write);
         assert!(!status.abnormal, "and says nothing of a crash");
     }
@@ -696,18 +714,18 @@ mod tests {
             .expect("recorded");
         let secrets = Arc::new(oxyn_secrets::MemorySecretStore::new());
         let first = Backend::assemble(Arc::clone(&store), secrets.clone()).expect("backend");
-        assert!(first.recovery_status().unresolved_write);
+        assert!(first.recovery_status(first.test_window()).unresolved_write);
 
         runtime
             .block_on(first.reconcile_history_entry(entry))
             .expect("the user inspected the server");
         assert!(
-            first.recovery_status().unresolved_write,
+            first.recovery_status(first.test_window()).unresolved_write,
             "this launch keeps what it observed at startup"
         );
 
         let next = Backend::assemble(store, secrets).expect("next launch");
-        assert!(!next.recovery_status().unresolved_write);
+        assert!(!next.recovery_status(next.test_window()).unresolved_write);
     }
 
     #[test]

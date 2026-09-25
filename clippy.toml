@@ -40,5 +40,16 @@ disallowed-methods = [
     # Analyser depuis un lecteur relit octet par octet ; c'est aussi le chemin
     # sur lequel une réponse serveur arrive (I-09), et il faut pouvoir borner sa
     # taille avant de la désérialiser.
+    # ADR-0043 — rien n'est diffusé aux webviews. Les six méthodes d'émission
+    # de `tauri::Emitter` (tauri 2.11.5, `src/lib.rs`, relevées le 2026-09-25)
+    # sont le chemin de la diffusion : chaque fenêtre recevrait le flux des
+    # autres et le trierait elle-même. Un `Channel` par fenêtre, filtré en Rust.
+    { path = "tauri::Emitter::emit", reason = "Broadcasting to every webview leaks one window's stream to the others (ADR-0043). Send on the window's own Channel, filtered in Rust." },
+    { path = "tauri::Emitter::emit_str", reason = "Broadcasting to every webview leaks one window's stream to the others (ADR-0043). Send on the window's own Channel, filtered in Rust." },
+    { path = "tauri::Emitter::emit_to", reason = "An event is not a window's own channel, and the front has no permission to listen (ADR-0043). Send on the window's own Channel." },
+    { path = "tauri::Emitter::emit_str_to", reason = "An event is not a window's own channel, and the front has no permission to listen (ADR-0043). Send on the window's own Channel." },
+    { path = "tauri::Emitter::emit_filter", reason = "Filtering a broadcast is still a broadcast (ADR-0043). Send on the window's own Channel, filtered in Rust." },
+    { path = "tauri::Emitter::emit_str_filter", reason = "Filtering a broadcast is still a broadcast (ADR-0043). Send on the window's own Channel, filtered in Rust." },
+
     { path = "serde_json::from_reader", reason = "Parsing from a reader is far slower than from a slice, and gives no way to bound the input before deserializing it (I-09). Read into a buffer first.", replacement = "serde_json::from_slice" },
 ]

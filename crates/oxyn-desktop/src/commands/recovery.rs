@@ -4,9 +4,11 @@
 use std::time::Duration;
 
 use tauri::ipc::Channel;
-use tauri::{AppHandle, Manager as _, RunEvent, State, WindowEvent};
+use tauri::{AppHandle, Manager as _, RunEvent, State, Webview, WindowEvent};
 
-use crate::backend::{Backend, ExitStep};
+use crate::backend::{Backend, ExitStep, WindowKey};
+use crate::commands::windows::{bring_to_front, caller, close_requested, forget_window};
+use crate::ipc::IpcError;
 use crate::ipc::recovery::{RecoveryStatus, ShutdownSignal};
 use crate::logging::FileJournal;
 use crate::menu::{self, MenuBar};
@@ -28,41 +30,57 @@ const JOURNAL_GRACE: Duration = Duration::from_secs(1);
 /// soon as it returns. Past it, the close stays unwritten.
 const FORCED_EXIT_GRACE: Duration = Duration::from_secs(2);
 
+/// Only the window built at launch is told how the previous launch ended.
 #[tauri::command]
-pub fn recovery_status(backend: State<'_, Backend>) -> RecoveryStatus {
-    backend.recovery_status()
+pub fn recovery_status(
+    webview: Webview,
+    backend: State<'_, Backend>,
+) -> Result<RecoveryStatus, IpcError> {
+    Ok(backend.recovery_status(caller(&backend, &webview)?))
 }
 
 #[tauri::command]
-pub fn subscribe_shutdown(backend: State<'_, Backend>, channel: Channel<ShutdownSignal>) {
-    backend.subscribe_shutdown(channel);
+pub fn subscribe_shutdown(
+    webview: Webview,
+    backend: State<'_, Backend>,
+    channel: Channel<ShutdownSignal>,
+) -> Result<(), IpcError> {
+    backend.subscribe_shutdown(caller(&backend, &webview)?, channel);
+    Ok(())
 }
 
 #[tauri::command]
-pub fn shutdown_flushed(backend: State<'_, Backend>) {
-    backend.shutdown_flushed();
+pub fn shutdown_flushed(webview: Webview, backend: State<'_, Backend>) -> Result<(), IpcError> {
+    backend.shutdown_flushed(caller(&backend, &webview)?);
+    Ok(())
 }
 
-/// The webview shows the transactions that hold the exit
+/// The webview shows what it was asked to resolve — the exit's transactions,
+/// or its window's close
 /// ([ADR-0043](../../../../docs/adr/0043-multi-fenetre.md)).
 ///
-/// Takes nothing. Outside an exit waiting for it, does nothing; at worst, a
-/// script keeps an exit the user asked for waiting on the user's decision.
-/// Synchronous: it only wakes a waiting task.
+/// Takes nothing. Outside a wait for it, does nothing; at worst, a script
+/// keeps an exit or a close the user asked for waiting on the user's
+/// decision. Synchronous: it only wakes a waiting task.
 #[tauri::command]
-pub fn shutdown_acknowledged(backend: State<'_, Backend>) {
-    backend.shutdown_acknowledged();
+pub fn shutdown_acknowledged(
+    webview: Webview,
+    backend: State<'_, Backend>,
+) -> Result<(), IpcError> {
+    backend.shutdown_acknowledged(caller(&backend, &webview)?);
+    Ok(())
 }
 
-/// `Cancel` in the dialog of an exit held by a transaction: the exit is
-/// abandoned before anything is flushed or recorded.
+/// `Cancel` in the dialog of an exit held by a transaction, or of this
+/// window's close: abandoned before anything is flushed, recorded or closed.
 ///
-/// Takes nothing. Outside such an exit, does nothing; at worst, a script
-/// cancels an exit the user asked for. Synchronous: in-memory state and one
-/// channel message.
+/// Takes nothing. Outside such an exit or close, does nothing; at worst, a
+/// script cancels an exit the user asked for. Synchronous: in-memory state
+/// and channel messages.
 #[tauri::command]
-pub fn cancel_exit(backend: State<'_, Backend>) {
-    backend.cancel_exit();
+pub fn cancel_exit(webview: Webview, backend: State<'_, Backend>) -> Result<(), IpcError> {
+    backend.cancel_exit(caller(&backend, &webview)?);
+    Ok(())
 }
 
 /// `File ▸ Exit` of Windows and Linux, and the palette's Quit: the ordered
@@ -86,19 +104,17 @@ pub fn request_exit(app: AppHandle, journal: State<'_, ExitJournal>) {
 /// the window open, and an unconfirmed close is left unrecorded.
 pub fn on_run_event(app: &AppHandle, event: &RunEvent, journal: Option<&FileJournal>) {
     match event {
-        RunEvent::WindowEvent {
-            event: WindowEvent::CloseRequested { api, .. },
-            ..
-        } => {
-            api.prevent_close();
-            begin_exit(app, journal);
-        }
+        RunEvent::WindowEvent { label, event, .. } => on_window_event(app, label, event, journal),
         // Quit is the one entry Rust runs itself: a frozen webview must not
-        // keep the user in (ADR-0038). Every other entry is the front's.
+        // keep the user in (ADR-0038). Every other entry is the front's, and
+        // goes to the window that has the focus now, to it alone (ADR-0043).
         RunEvent::MenuEvent(event) if event.id() == menu::QUIT => begin_exit(app, journal),
         RunEvent::MenuEvent(event) => {
             if let Some(bar) = app.try_state::<MenuBar>() {
-                bar.forward(event.id().as_ref());
+                let windows = &app.state::<Backend>().inner.windows;
+                let focused = windows.focused().map(WindowKey::label);
+                let first = windows.keys().first().map(|key| key.label());
+                bar.forward(event.id().as_ref(), focused.as_deref(), first.as_deref());
             }
         }
         RunEvent::ExitRequested { api, .. } => {
@@ -128,10 +144,52 @@ pub fn on_run_event(app: &AppHandle, event: &RunEvent, journal: Option<&FileJour
     }
 }
 
+/// A window's events. Each only updates the registry in memory or spawns a
+/// task: nothing here writes, or waits for a lock a task holds (I-05).
+fn on_window_event(
+    app: &AppHandle,
+    label: &str,
+    event: &WindowEvent,
+    journal: Option<&FileJournal>,
+) {
+    let backend = app.state::<Backend>();
+    match event {
+        // The last window's close is the application's exit; another's closes
+        // its consoles, after its webview has asked (ADR-0043).
+        WindowEvent::CloseRequested { api, .. } => {
+            api.prevent_close();
+            match backend.inner.windows.key_of(label) {
+                Ok(window) => {
+                    close_requested(app, backend.inner().clone(), window, journal.cloned());
+                }
+                // Not one of ours: nothing of Oxyn's to keep it for.
+                Err(_) => begin_exit(app, journal),
+            }
+        }
+        WindowEvent::Focused(focused) => {
+            let windows = &backend.inner.windows;
+            windows.focus(label, *focused);
+            if *focused && let Some(bar) = app.try_state::<MenuBar>() {
+                bar.refocus(Some(label));
+            }
+        }
+        // Destroyed by a path that did not release it — the system, a crash
+        // of the webview: what it held is let go all the same.
+        WindowEvent::Destroyed => {
+            if let Ok(window) = backend.inner.windows.key_of(label) {
+                forget_window(app, label);
+                let backend = backend.inner().clone();
+                tauri::async_runtime::spawn(async move { backend.release_window(window).await });
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Lists the open transactions, then begins the ordered shutdown once and
 /// exits — unless a transaction holds the exit for the user to resolve
 /// (ADR-0043). Asked again while the dialog is open, it lists again.
-fn begin_exit(app: &AppHandle, journal: Option<&FileJournal>) {
+pub(crate) fn begin_exit(app: &AppHandle, journal: Option<&FileJournal>) {
     let backend = app.state::<Backend>().inner().clone();
     let app = app.clone();
     let journal = journal.cloned();
@@ -141,13 +199,12 @@ fn begin_exit(app: &AppHandle, journal: Option<&FileJournal>) {
         match backend.exit_step().await {
             ExitStep::Proceed => {}
             ExitStep::Held => return,
-            ExitStep::Asked => {
-                // The dialog is in the webview: brought to the front, since
-                // the exit may have been asked from the Dock or another app.
-                // Every window, without presuming how many there are.
-                for window in app.webview_windows().values() {
-                    let _ = window.unminimize();
-                    let _ = window.set_focus();
+            ExitStep::Asked(windows) => {
+                // The dialog is in each window that holds a transaction:
+                // those come to the front, since the exit may have been asked
+                // from the Dock or another app — and they alone.
+                for window in windows {
+                    bring_to_front(&app, window);
                 }
                 return;
             }

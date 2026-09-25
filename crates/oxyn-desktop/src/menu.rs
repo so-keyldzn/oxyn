@@ -30,6 +30,12 @@ use crate::ipc::menu::{MenuActivation, MenuEntryState};
 /// The entry Rust runs itself, through the ordered shutdown (ADR-0038).
 pub const QUIT: &str = "app.quit";
 
+/// The entries that act on the application rather than on a window
+/// ([ADR-0043](../../../docs/adr/0043-multi-fenetre.md)): they have no
+/// target, so any window may run them, and they stay enabled when no window
+/// has the focus. Quit is Rust's own.
+const APPLICATION_ENTRIES: &[&str] = &["window.new", "app.settings"];
+
 /// Coupled by path to the front, on purpose: moving the file breaks this
 /// build, not the menu of a released version (ADR-0041, « Conséquences »).
 const MANIFEST: &str = include_str!("../../../apps/desktop/src/lib/actions/actions.json");
@@ -414,11 +420,19 @@ pub(crate) enum MenuStateError {
     UnknownVariant { id: String, variant: usize },
 }
 
-/// The menu bar the application manages: the front's channel, and the
-/// entries the front may switch.
+/// The menu bar the application manages: each window's channel and last
+/// declared state, and the entries the front may switch.
+///
+/// The bar is global to the process on macOS: an entry chosen goes to the
+/// window that has the focus when the event is received, on that window's
+/// channel alone, and the bar shows the state that window declared. Windows
+/// are named by their Tauri label, which Rust chose (`backend/windows.rs`).
 #[derive(Default)]
 pub struct MenuBar {
-    channel: Mutex<Option<Channel<MenuActivation>>>,
+    channels: Mutex<HashMap<String, Channel<MenuActivation>>>,
+    /// What each window last declared, checked, applied while it has the
+    /// focus.
+    states: Mutex<HashMap<String, Vec<Change>>>,
     known: Mutex<HashMap<String, Known>>,
     #[cfg(target_os = "macos")]
     items: Mutex<HashMap<String, NativeItem>>,
@@ -493,15 +507,62 @@ impl MenuBar {
             .collect()
     }
 
-    /// Applies the front's state to the native entries.
-    ///
-    /// Called on the main thread by a synchronous command: only `muda`
-    /// setters, no I/O ([I-05](../../../CLAUDE.md#i-05)).
+    /// Applies a declared state to the native entries, as the tests read it.
+    #[cfg(test)]
+    pub(crate) fn apply(&self, entries: &[MenuEntryState]) -> Result<(), MenuStateError> {
+        let changes = self.plan(entries)?;
+        self.apply_changes(changes);
+        Ok(())
+    }
+
+    /// Records the state `window` declares, and shows it if that window has
+    /// the focus. Checked whole before anything is recorded.
     ///
     /// # Errors
     /// [`MenuStateError`] for an unknown id or variant; nothing is changed then.
-    pub(crate) fn apply(&self, entries: &[MenuEntryState]) -> Result<(), MenuStateError> {
+    pub(crate) fn report(
+        &self,
+        window: &str,
+        entries: &[MenuEntryState],
+        focused: Option<&str>,
+    ) -> Result<(), MenuStateError> {
         let changes = self.plan(entries)?;
+        self.states
+            .lock()
+            .insert(window.to_owned(), changes.clone());
+        if focused == Some(window) {
+            self.apply_changes(changes);
+        }
+        Ok(())
+    }
+
+    /// Shows the state the focused window last declared — at each change of
+    /// focus. Without a focused window, or before it declared anything, every
+    /// window entry is disabled and only the application's stay enabled.
+    pub(crate) fn refocus(&self, focused: Option<&str>) {
+        let declared = focused.and_then(|window| self.states.lock().get(window).cloned());
+        let changes = declared.unwrap_or_else(|| self.without_focus());
+        self.apply_changes(changes);
+    }
+
+    /// Every entry disabled but the application's.
+    fn without_focus(&self) -> Vec<Change> {
+        self.known
+            .lock()
+            .iter()
+            .map(|(id, item)| Change {
+                id: id.clone(),
+                enabled: id == QUIT || APPLICATION_ENTRIES.contains(&id.as_str()),
+                label: item.labels.first().cloned().unwrap_or_default(),
+                accelerator: item.accelerator.clone(),
+                checked: item.check.then_some(false),
+            })
+            .collect()
+    }
+
+    /// Called on the main thread by a synchronous command or the event loop:
+    /// only `muda` setters, no I/O ([I-05](../../../CLAUDE.md#i-05)).
+    fn apply_changes(&self, changes: Vec<Change>) {
         #[cfg(target_os = "macos")]
         {
             let items = self.items.lock();
@@ -529,23 +590,47 @@ impl MenuBar {
         }
         #[cfg(not(target_os = "macos"))]
         drop(changes);
-        Ok(())
     }
 
-    /// The front's channel, replacing the previous one: a reloaded page
+    /// A window's channel, replacing its previous one: a reloaded page
     /// subscribes again, and its predecessor's callbacks are gone.
-    pub fn subscribe(&self, channel: Channel<MenuActivation>) {
-        *self.channel.lock() = Some(channel);
+    pub fn subscribe(&self, window: &str, channel: Channel<MenuActivation>) {
+        self.channels.lock().insert(window.to_owned(), channel);
     }
 
-    /// Sends a chosen entry to the front. An id the bar did not build — a
-    /// system item, another menu — is not the front's to run.
-    pub fn forward(&self, id: &str) {
+    /// A closed window: its channel and state go.
+    pub(crate) fn forget(&self, window: &str) {
+        self.channels.lock().remove(window);
+        self.states.lock().remove(window);
+    }
+
+    /// The window a chosen entry goes to: the focused one; for an entry of
+    /// the application, which has no target, `fallback` when none has the
+    /// focus. An id the bar did not build — a system item, another menu — is
+    /// not the front's to run, and Quit is Rust's.
+    fn target<'a>(
+        &self,
+        id: &str,
+        focused: Option<&'a str>,
+        fallback: Option<&'a str>,
+    ) -> Option<&'a str> {
         if id == QUIT || !self.known.lock().contains_key(id) {
-            return;
+            return None;
         }
-        let Some(channel) = self.channel.lock().clone() else {
-            tracing::debug!(entry = %id, "a menu entry was chosen before the front listened");
+        if APPLICATION_ENTRIES.contains(&id) {
+            focused.or(fallback)
+        } else {
+            focused
+        }
+    }
+
+    /// Sends a chosen entry to its window, and to it alone.
+    pub fn forward(&self, id: &str, focused: Option<&str>, fallback: Option<&str>) {
+        let Some(window) = self.target(id, focused, fallback) else {
+            return;
+        };
+        let Some(channel) = self.channels.lock().get(window).cloned() else {
+            tracing::debug!(entry = %id, "a menu entry was chosen before its window listened");
             return;
         };
         if let Err(error) = channel.send(MenuActivation { id: id.to_owned() }) {
@@ -966,6 +1051,67 @@ mod tests {
         // Without a native bar (Windows, Linux), no id is the bar's.
         let bar = MenuBar::default();
         assert!(bar.apply(&[state("console.run", 0, true)]).is_err());
-        bar.forward("console.run");
+        assert_eq!(bar.target("console.run", Some("a"), Some("b")), None);
+        bar.forward("console.run", Some("a"), Some("b"));
+    }
+
+    #[test]
+    fn an_entry_goes_to_the_focused_window_only() {
+        let bar = bar();
+        assert_eq!(bar.target("console.run", Some("a"), Some("b")), Some("a"));
+        // No window has the focus: a window action has no target.
+        assert_eq!(bar.target("console.run", None, Some("b")), None);
+        // An application action has none either, so any window may run it.
+        assert_eq!(bar.target("window.new", None, Some("b")), Some("b"));
+        assert_eq!(bar.target("window.new", Some("a"), Some("b")), Some("a"));
+        assert_eq!(bar.target(QUIT, Some("a"), Some("b")), None);
+    }
+
+    #[test]
+    fn only_the_focused_window_state_is_kept_for_the_bar() {
+        let bar = bar();
+        let disabled = MenuEntryState {
+            enabled: false,
+            ..state("console.run", 0, true)
+        };
+        bar.report("a", &[state("console.run", 0, true)], Some("b"))
+            .expect("a known entry");
+        bar.report("b", &[disabled], Some("b"))
+            .expect("a known entry");
+        assert_eq!(
+            bar.states
+                .lock()
+                .get("a")
+                .and_then(|changes| changes.first())
+                .map(|c| c.enabled),
+            Some(true)
+        );
+        // An unknown id records nothing for that window.
+        assert!(
+            bar.report("a", &[state("nope", 0, true)], Some("a"))
+                .is_err()
+        );
+        assert!(
+            bar.states
+                .lock()
+                .get("a")
+                .is_some_and(|changes| changes.len() == 1)
+        );
+        bar.forget("a");
+        assert!(bar.states.lock().get("a").is_none());
+    }
+
+    #[test]
+    fn without_focus_only_the_application_entries_stay_enabled() {
+        let bar = bar();
+        let enabled: Vec<String> = bar
+            .without_focus()
+            .into_iter()
+            .filter(|change| change.enabled)
+            .map(|change| change.id)
+            .collect();
+        let mut enabled = enabled;
+        enabled.sort();
+        assert_eq!(enabled, ["app.quit", "app.settings", "window.new"]);
     }
 }

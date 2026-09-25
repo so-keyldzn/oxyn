@@ -19,7 +19,7 @@
   "app": {
     "windows": [
       {
-        "label": "main",
+        "label": "workspace",
         "title": "Oxyn",
         "width": 1280,
         "height": 820,

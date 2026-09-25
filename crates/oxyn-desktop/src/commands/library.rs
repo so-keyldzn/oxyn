@@ -1,8 +1,10 @@
 //! Query documents and local history commands. None reaches a database.
 
-use tauri::State;
+use oxyn_core::DocumentId;
+use tauri::{State, Webview};
 
 use super::parse;
+use super::windows::{caller, run_owned};
 use crate::backend::Backend;
 use crate::ipc::IpcError;
 use crate::ipc::library::{
@@ -17,60 +19,84 @@ pub fn new_query_document() -> String {
     oxyn_core::DocumentId::new().to_string()
 }
 
+/// Only consoles save: the document becomes this window's, and a console of
+/// another window can no longer write it (ADR-0043).
 #[tauri::command]
 pub async fn save_query_document(
+    webview: Webview,
     backend: State<'_, Backend>,
     command_id: String,
     change: DocumentChange,
 ) -> Result<DocumentWrite, IpcError> {
+    let window = caller(&backend, &webview)?;
     let id = parse("command id", &command_id)?;
-    let document = parse("document", &change.document)?;
+    let document: DocumentId = parse("document", &change.document)?;
+    backend.inner.windows.claim_document(window, document)?;
     let connection = change
         .connection
         .as_deref()
         .map(|connection| parse("connection", connection))
         .transpose()?;
-    backend
-        .save_query_document(id, document, connection, change)
-        .await
+    run_owned(
+        &backend,
+        window,
+        id,
+        backend.save_query_document(id, document, connection, change),
+        |_| false,
+    )
+    .await
 }
 
 #[tauri::command]
 pub async fn close_query_document(
+    webview: Webview,
     backend: State<'_, Backend>,
     command_id: String,
     document: String,
     revision: u64,
     discard: bool,
 ) -> Result<DocumentWrite, IpcError> {
-    backend
-        .close_query_document(
-            parse("command id", &command_id)?,
-            parse("document", &document)?,
-            revision,
-            discard,
-        )
-        .await
+    let window = caller(&backend, &webview)?;
+    let id = parse("command id", &command_id)?;
+    let document: DocumentId = parse("document", &document)?;
+    backend.inner.windows.check_document(window, document)?;
+    let write = run_owned(
+        &backend,
+        window,
+        id,
+        backend.close_query_document(id, document, revision, discard),
+        |_| false,
+    )
+    .await?;
+    backend.inner.windows.release_document(window, document);
+    Ok(write)
 }
 
 #[tauri::command]
 pub fn release_query_document(
+    webview: Webview,
     backend: State<'_, Backend>,
     document: String,
 ) -> Result<(), IpcError> {
-    backend.release_query_document(parse("document", &document)?);
+    let window = caller(&backend, &webview)?;
+    let document: DocumentId = parse("document", &document)?;
+    backend.inner.windows.check_document(window, document)?;
+    backend.release_query_document(document);
+    backend.inner.windows.release_document(window, document);
     Ok(())
 }
 
 #[tauri::command]
 pub async fn delete_query_document(
+    webview: Webview,
     backend: State<'_, Backend>,
     document: String,
     revision: u64,
 ) -> Result<(), IpcError> {
-    backend
-        .delete_query_document(parse("document", &document)?, revision)
-        .await
+    let window = caller(&backend, &webview)?;
+    let document: DocumentId = parse("document", &document)?;
+    backend.inner.windows.check_document(window, document)?;
+    backend.delete_query_document(document, revision).await
 }
 
 #[tauri::command]
@@ -134,13 +160,22 @@ pub async fn list_history_connections(
     backend.list_history_connections(before).await
 }
 
+/// A retained result is the workspace's (ADR-0017): any window may open it,
+/// and then reads it as one more view of its own.
 #[tauri::command]
 pub async fn open_retained_result(
+    webview: Webview,
     backend: State<'_, Backend>,
     connection: String,
     result: String,
 ) -> Result<RetainedResult, IpcError> {
-    backend
-        .open_retained_result(parse("connection", &connection)?, parse("result", &result)?)
-        .await
+    let window = caller(&backend, &webview)?;
+    let result = parse("result", &result)?;
+    let opened = backend
+        .open_retained_result(parse("connection", &connection)?, result)
+        .await?;
+    if matches!(opened, RetainedResult::Open { .. }) {
+        backend.inner.windows.claim_result(window, result, true);
+    }
+    Ok(opened)
 }
