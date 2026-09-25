@@ -1053,15 +1053,25 @@ mod tests {
         let (connection, session) = ids(&open);
         let id = CommandId::new();
         let mut events = backend.subscribe();
+        // One full batch, then an endless scan that matches nothing: the
+        // statement cannot end before it is interrupted. A statement that kept
+        // yielding rows would end on its own at the row limit, a few batches
+        // after the first — sometimes before the cancellation arrived.
+        const MATCHING: usize = oxyn_driver_sqlite::BatchLimits::DEFAULT_MAX_ROWS;
+        const {
+            assert!(
+                MATCHING < oxyn_core::ExecLimits::DEFAULT_MAX_ROWS,
+                "the matching rows stay under the row limit, which would end the statement"
+            );
+        }
+        let sql = format!(
+            "WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM n) \
+             SELECT x FROM n WHERE x <= {MATCHING}"
+        );
 
         let running = runtime.spawn({
             let backend = backend.clone();
-            async move {
-                backend
-                    .execute(id, connection, session,
-                        "WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<1000000000) SELECT x FROM n".into())
-                    .await
-            }
+            async move { backend.execute(id, connection, session, sql).await }
         });
         runtime.block_on(async {
             tokio::time::timeout(std::time::Duration::from_secs(10), async {
