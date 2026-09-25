@@ -17,6 +17,8 @@ import type { DocumentWrite } from "@/lib/ipc/library"
  */
 export const DRAFT_IDLE_MS = 250
 
+const TITLE_TOO_LONG = "Query names must not exceed 256 UTF-8 bytes."
+
 /** Where a console's text comes from when it opens. */
 export interface ConsoleSeed {
   document: string
@@ -96,6 +98,8 @@ export function useConsoleDocument({
   latest.current = { document, title, text, conflict, closing }
   const revision = React.useRef(seed.revision)
   const lastDraft = React.useRef({ title: seed.title, text: seed.text })
+  /** Numbers draft attempts, refused ones included. */
+  const draftAttempt = React.useRef(0)
   /** The named save or close under way, which the user may still cancel. */
   const inFlight = React.useRef<Cancellable | null>(null)
 
@@ -114,27 +118,45 @@ export function useConsoleDocument({
       lastDraft.current.title === current.title
     )
       return
-    if (titleTooLong(current.title)) return
+    // Only the last draft attempt speaks: an answer to an earlier one would
+    // announce a state the editor has left (UX-SPEC § Autosauvegarde).
+    const attempt = ++draftAttempt.current
+    if (titleTooLong(current.title)) {
+      setDraftNotice(`Draft not saved: ${TITLE_TOO_LONG}`)
+      return
+    }
     revision.current += 1
-    lastDraft.current = { title: current.title, text: current.text }
+    const sent = { title: current.title, text: current.text }
+    lastDraft.current = sent
     setDraftNotice("Saving recovery draft…")
     try {
       const write = await library.saveDocument(newCommandId(), {
         document: current.document,
         revision: revision.current,
-        title: current.title,
-        text: current.text,
+        title: sent.title,
+        text: sent.text,
         connection,
         named: false,
       })
       if (write.type === "saved") void refreshLibrary(queryClient)
       if (latest.current.document !== current.document) return
-      if (write.type === "saved")
-        setDraftNotice("Recovery draft saved locally.")
-      else if (write.type === "conflict" && onConflict(write))
+      if (write.type === "conflict" && onConflict(write)) {
         setDraftNotice(`Draft not saved: ${write.message}`)
+        return
+      }
+      if (draftAttempt.current !== attempt) return
+      if (write.type === "saved")
+        setDraftNotice(
+          latest.current.text === sent.text &&
+            latest.current.title === sent.title
+            ? "Recovery draft saved locally."
+            : "Newer edits are not in the recovery draft yet."
+        )
+      else if (write.type === "superseded")
+        setDraftNotice("Draft replaced by a newer save of this query.")
     } catch (error) {
-      setDraftNotice(`Draft not saved: ${message(error)}`)
+      if (draftAttempt.current === attempt)
+        setDraftNotice(`Draft not saved: ${message(error)}`)
     }
   }, [connection, queryClient])
 
@@ -169,7 +191,7 @@ export function useConsoleDocument({
       setNotice(
         current.title.trim() === ""
           ? "A saved query needs a name."
-          : "Query names must not exceed 256 UTF-8 bytes."
+          : TITLE_TOO_LONG
       )
       return false
     }
@@ -349,9 +371,7 @@ export function useConsoleDocument({
     closing,
     draftNotice,
     saveState,
-    titleError: titleTooLong(title)
-      ? "Query names must not exceed 256 UTF-8 bytes."
-      : null,
+    titleError: titleTooLong(title) ? TITLE_TOO_LONG : null,
     fromAgent: seed.fromAgent,
     change,
     flush,
