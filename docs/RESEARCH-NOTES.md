@@ -234,8 +234,8 @@ Sources vérifiées le **2026-09-07** lors de l'intégration GPUI :
 | Marque Oxyn | Même Figma, composant `149:22199`, relu après la mise à jour des couleurs | Deux SVG 32 × 32 px selon le thème, marges internes conservées ; fragment orangé à la source, recoloré en vert-de-gris le 2026-09-23, tracés inchangés ([marque](../assets/brand/README.md#couleurs)) |
 | Geist | [vercel/geist-font](https://github.com/vercel/geist-font/tree/10dc7658f13c38a474cde201bb09a4617267545b/fonts/Geist/ttf) | Regular, Medium et SemiBold, TTF embarqués sous SIL OFL |
 
-Nœuds, dimensions et SHA-256 : [icônes](../assets/ui/provenance.json) et
-[polices](../assets/fonts/provenance.json). Les notices de licence restent avec
+Nœuds, dimensions et SHA-256 : icônes dans `assets/ui/provenance.json` et
+polices dans `assets/fonts/provenance.json`, retirés du dépôt, lisibles au commit `8a1b7ff`. Les notices de licence restent avec
 les ressources. Les fichiers ne sont pas chargés depuis Figma au démarrage :
 `UiAssets` rend les octets inclus à la compilation et les polices sont
 enregistrées avant l'ouverture de la fenêtre.
@@ -344,7 +344,7 @@ dans la session qui utilise le service.
 Fichier `Yviemi4brBczzdRdBp1ONv`, collection `Oxyn / Primitives`. Lus par le
 serveur MCP Figma Dev Mode local (`get_metadata`, `get_variable_defs`), pas
 recopiés d'une capture. Les couleurs et les icônes ont leur propre provenance,
-plus détaillée, dans [`assets/ui/provenance.json`](../assets/ui/provenance.json).
+plus détaillée, dans `assets/ui/provenance.json`, retiré du dépôt, lisible au commit `8a1b7ff`.
 
 Les dimensions, espacements et rayons sont publiés dans
 `crates/oxyn-ui/src/theme.rs` — `Metrics`, `Spacing`, `Radii` — où chaque champ
@@ -385,10 +385,10 @@ dépendance de code.
 
 | Fait | Valeur | Source | Vérifié le |
 |---|---|---|---|
-| Police d'interface | Geist Regular, Medium, SemiBold, commit `10dc7658f13c38a474cde201bb09a4617267545b` | [vercel/geist-font](https://github.com/vercel/geist-font) ; SHA-256 dans [`assets/fonts/provenance.json`](../assets/fonts/provenance.json) | 2026-09-07 |
+| Police d'interface | Geist Regular, Medium, SemiBold, commit `10dc7658f13c38a474cde201bb09a4617267545b` | [vercel/geist-font](https://github.com/vercel/geist-font) ; SHA-256 dans `assets/fonts/provenance.json`, retiré du dépôt, lisible au commit `8a1b7ff` | 2026-09-07 |
 | Licence de la police | SIL Open Font License 1.1 | `assets/fonts/OFL.txt`, `assets/fonts/LICENSE.txt` | 2026-09-07 |
-| Icônes | Hugeicons Stroke Rounded, 12 glyphes, commit `f9dbcca8d72cc2777a0ccd873c274d9bf7a153e6` | [hugeicons/hugeicons-static](https://github.com/hugeicons/hugeicons-static) ; SHA-256 dans [`assets/ui/provenance.json`](../assets/ui/provenance.json) | 2026-09-07 |
-| Licence des icônes | **Aucune licence MIT attribuée** ; le README amont autorise l'usage tel quel, sans mention d'un droit de redistribution | [`assets/ui/HUGEICONS-UPSTREAM-README.txt`](../assets/ui/HUGEICONS-UPSTREAM-README.txt) | 2026-09-07 |
+| Icônes | Hugeicons Stroke Rounded, 12 glyphes, commit `f9dbcca8d72cc2777a0ccd873c274d9bf7a153e6` | [hugeicons/hugeicons-static](https://github.com/hugeicons/hugeicons-static) ; SHA-256 dans `assets/ui/provenance.json`, retiré du dépôt, lisible au commit `8a1b7ff` | 2026-09-07 |
+| Licence des icônes | **Aucune licence MIT attribuée** ; le README amont autorise l'usage tel quel, sans mention d'un droit de redistribution | `assets/ui/HUGEICONS-UPSTREAM-README.txt`, retiré du dépôt, lisible au commit `8a1b7ff` | 2026-09-07 |
 
 > **À trancher avant la première publication de binaire.** Oxyn redistribue ces
 > douze glyphes en les liant dans l'exécutable. Tant qu'aucune version n'est

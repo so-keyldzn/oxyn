@@ -243,8 +243,8 @@ ici :
   `oxyn-desktop/src/main.rs`) ; le sélecteur de fichiers par `⌘O`, ou `⌘N` pour
   une base SQLite à créer, n'est pas demandé (décision du 2026-09-24) — le front
   n'offre qu'un `Browse…` vers un fichier existant ;
-- **`assets/fonts/` et `assets/ui/`**, que seul `oxyn-ui` lisait, n'ont plus de
-  lecteur ;
+- ~~**`assets/fonts/` et `assets/ui/`**, que seul `oxyn-ui` lisait~~ — retirés
+  le 2026-09-25, aucun lecteur ne restant ; lisibles au commit `8a1b7ff` ;
 - ~~**des commentaires de code nomment encore `oxyn-app`, `oxyn-ui` ou GPUI**~~ —
   fait le 2026-09-25 : le dernier, dans les tests de `oxyn-core/src/value.rs`,
   renvoie désormais au rendu `∅ NULL` de
