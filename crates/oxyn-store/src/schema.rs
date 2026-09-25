@@ -707,6 +707,17 @@ const M0015_DROP_CATALOG_CACHE: &str = "DROP TABLE IF EXISTS catalog_cache;";
 /// antérieure : rien n'a été vérifié.
 const M0016_HISTORY_RECONCILED: &str = "ALTER TABLE query_history ADD COLUMN reconciled_at TEXT;";
 
+/// Migration 17 — quand un lancement suivant a annoncé un arrêt anormal.
+///
+/// Sans elle, une session abandonnée le restait pour toujours : un seul
+/// plantage montrait l'écran de reprise à chaque lancement, fermetures propres
+/// comprises. `closed_at` reste `NULL` — inscrire une fermeture ici mentirait
+/// sur la façon dont le lancement s'est terminé. Un horodatage plutôt qu'un
+/// drapeau, pour la même raison que la migration 16 : il se lit sans Oxyn
+/// ([I-11](../../../CLAUDE.md#i-11)). `NULL` sur toute ligne antérieure : les
+/// sessions déjà abandonnées sont annoncées une dernière fois.
+const M0017_APP_SESSIONS_REPORTED: &str = "ALTER TABLE app_sessions ADD COLUMN reported_at TEXT;";
+
 /// Toutes les migrations, dans l'ordre d'application.
 pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -788,6 +799,11 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 16,
         name: "history_reconciled",
         sql: M0016_HISTORY_RECONCILED,
+    },
+    Migration {
+        version: 17,
+        name: "app_sessions_reported",
+        sql: M0017_APP_SESSIONS_REPORTED,
     },
 ];
 

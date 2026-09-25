@@ -88,7 +88,9 @@ impl FileJournal {
     /// For an exit: what was logged just before is what explains it.
     pub(crate) fn flush(&self, within: Duration) {
         let (ack, written) = sync_channel(1);
-        if self.queue.send(Message::Flush(ack)).is_ok() {
+        // Not `send`: a full queue behind a stalled disk would block without
+        // bound, and a full queue already means the journal is dropping lines.
+        if self.queue.try_send(Message::Flush(ack)).is_ok() {
             // A timeout leaves the lines to the thread; nothing more to do.
             let _ = written.recv_timeout(within);
         }

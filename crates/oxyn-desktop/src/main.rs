@@ -60,7 +60,10 @@ fn main() -> Result<()> {
         }
     };
 
-    tauri::Builder::default()
+    let builder = tauri::Builder::default();
+    #[cfg(target_os = "macos")]
+    let builder = builder.menu(commands::recovery::application_menu);
+    builder
         .plugin(tauri_plugin_dialog::init())
         .manage(backend)
         // Grouped by feature. A feature module adds its block here and nowhere
@@ -163,7 +166,7 @@ fn main() -> Result<()> {
         .context("building the Tauri application")?
         // Closing waits for drafts and local writes before recording the
         // session close (ADR-0021).
-        .run(|app, event| commands::recovery::on_run_event(app, &event));
+        .run(move |app, event| commands::recovery::on_run_event(app, &event, journal.as_ref()));
 
     Ok(())
 }
