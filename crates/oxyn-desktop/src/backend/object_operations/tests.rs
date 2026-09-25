@@ -645,17 +645,20 @@ fn a_statement_other_than_the_announced_one_is_refused_before_any_session() {
         (OperationKind::Rename, r#"DROP TABLE "main"."t""#),
         (OperationKind::Drop, r#"DROP TABLE "main"."t"; DROP VIEW v"#),
     ] {
+        // An answer, not an error: the front reads an error of this call as
+        // « may have been sent ».
+        let outcome = fixture
+            .runtime
+            .block_on(fixture.backend.run_object_operation(
+                CommandId::new(),
+                fixture.connection,
+                operation,
+                sql.to_owned(),
+            ))
+            .expect("refused before sending");
         assert!(
-            fixture
-                .runtime
-                .block_on(fixture.backend.run_object_operation(
-                    CommandId::new(),
-                    fixture.connection,
-                    operation,
-                    sql.to_owned(),
-                ))
-                .is_err(),
-            "{sql}"
+            matches!(outcome, ObjectOperationOutcome::NotSent { .. }),
+            "{sql}: {outcome:?}"
         );
     }
     assert_eq!(fixture.sessions(), before);

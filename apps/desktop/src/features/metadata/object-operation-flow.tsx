@@ -188,8 +188,10 @@ export function useObjectOperation(
           return
       }
     } catch (caught) {
-      // Refused before anything was sent: the text or the id.
-      setPhase({ kind: "notSent", message: messageOf(caught) })
+      // The backend answers every refusal before sending as `notSent`: an
+      // error here is a lost or unreadable answer, possibly after the
+      // statement ran. Never offered again (I-13).
+      setPhase({ kind: "ambiguous", message: messageOf(caught) })
     } finally {
       running.current = null
     }

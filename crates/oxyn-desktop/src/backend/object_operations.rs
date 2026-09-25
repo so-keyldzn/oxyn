@@ -231,11 +231,9 @@ fn settled(outcome: Result<Outcome, OxynError>) -> ObjectOperationOutcome {
         Ok(_) => ObjectOperationOutcome::Failed {
             message: "The executor answered something other than an execution.".to_owned(),
         },
-        Err(error) if error.class() == ErrorClass::Ambiguous => {
-            ObjectOperationOutcome::Ambiguous {
-                message: error.to_string(),
-            }
-        }
+        Err(error) if error.class() == ErrorClass::Ambiguous => ObjectOperationOutcome::Ambiguous {
+            message: error.to_string(),
+        },
         Err(error) => ObjectOperationOutcome::Failed {
             message: error.to_string(),
         },
@@ -276,6 +274,9 @@ impl Backend {
             .executor
             .sessions()
             .get(session)
+            // Another connection's session would lend the box capabilities
+            // that are not this connection's.
+            .filter(|slot| slot.connection() == connection)
             .ok_or_else(|| IpcError::invalid("This session is no longer open"))?
             .capabilities();
         let path = address.to_path()?;
@@ -335,8 +336,10 @@ impl Backend {
     /// `decide`. The box itself approves nothing.
     ///
     /// # Errors
-    /// `sql` is not one statement of the announced kind, or `id` is already
-    /// running.
+    /// None of its own: a refusal before sending — the statement is not one
+    /// of the announced kind, `id` already runs — is
+    /// [`ObjectOperationOutcome::NotSent`], so that an error of the call can
+    /// only mean the answer was lost after sending.
     pub async fn run_object_operation(
         &self,
         id: CommandId,
@@ -345,10 +348,20 @@ impl Backend {
         sql: String,
     ) -> Result<ObjectOperationOutcome, IpcError> {
         let inner = &self.inner;
-        let config = self.read_config(connection).await?;
+        // Every refusal before sending is an answer, not an error: the front
+        // then reads any error of this call as « may have been sent » (I-13).
+        let config = match self.read_config(connection).await {
+            Ok(config) => config,
+            Err(error) => return Ok(not_sent(error.message)),
+        };
         let dialect = oxyn_query::dialect_for(&config.driver);
-        check_statement(&sql, dialect, operation).map_err(IpcError::invalid)?;
-        let cancel = self.track(id)?;
+        if let Err(refusal) = check_statement(&sql, dialect, operation) {
+            return Ok(not_sent(refusal));
+        }
+        let cancel = match self.track(id) {
+            Ok(cancel) => cancel,
+            Err(error) => return Ok(not_sent(error.message)),
+        };
         inner.policy.register(&config);
 
         let session = match self.open_review_session(connection, &cancel).await {
@@ -476,7 +489,12 @@ impl Backend {
         Ok(session)
     }
 
-    fn hold_review_session(&self, command: CommandId, connection: ConnectionId, session: SessionId) {
+    fn hold_review_session(
+        &self,
+        command: CommandId,
+        connection: ConnectionId,
+        session: SessionId,
+    ) {
         self.inner
             .object_operations
             .held
@@ -513,11 +531,15 @@ impl Backend {
             .lock()
             .keys()
             .copied()
+            // In this order: `decide` tracks the id before `approve` takes the
+            // pending entry. Read the other way round, a decision starting
+            // between the two reads would look finished, and its session
+            // would close under the statement it runs.
             .filter(|command| {
-                !self.is_tracked(*command)
-                    && approvals
-                        .peek(*command)
-                        .is_none_or(|pending| pending.is_expired())
+                approvals
+                    .peek(*command)
+                    .is_none_or(|pending| pending.is_expired())
+                    && !self.is_tracked(*command)
             })
             .collect();
         for command in stale {
