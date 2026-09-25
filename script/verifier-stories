@@ -1,0 +1,89 @@
+#!/usr/bin/env python3
+"""Refuse un composant Oxyn qu'aucune story ne rend.
+
+`.claude/rules/front.md` le dit : un composant de `src/components/oxyn` a ses
+stories, et ses stories sont ses tests — `make front` les rend dans Chromium,
+axe compris. Un composant sans story n'échoue nulle part : il échappe
+simplement à axe et à tout `play`, et personne ne le remarque.
+
+Ce qu'est un composant, ce qui le couvre et ce qui l'exempte est écrit une
+fois, dans `.claude/rules/front.md` § « Chaque composant Oxyn a ses stories » :
+ce script l'applique, il ne la redéfinit pas.
+
+Appelé par `make front-controles`, donc par `make front` et `make qualite`.
+"""
+
+from __future__ import annotations
+
+import re
+import sys
+from pathlib import Path
+
+RACINE = Path(__file__).resolve().parents[1]
+COMPOSANTS = RACINE / "apps" / "desktop" / "src" / "components" / "oxyn"
+
+# Des pièces qui n'ont de sens qu'à l'intérieur de leur parent : elles sont
+# rendues, axe compris, par les stories de celui-ci. Chaque entrée nomme cette
+# story ; une entrée sans elle serait un trou, pas une exemption.
+EXEMPTS = {
+    "assistant-code-block": "rendu par assistant-rich-blocks.stories.tsx, via AssistantMarkdown",
+    "assistant-mermaid": "rendu par assistant-rich-blocks.stories.tsx, via AssistantMarkdown",
+    "assistant-mention-menu": "greffon Lexical, rendu par assistant-composer.stories.tsx",
+    "assistant-mention-node": "nœud Lexical, rendu par assistant-composer.stories.tsx",
+    "result-chart-cartesian": "rendu par result-chart.stories.tsx, via ResultChartView",
+    "result-chart-polar": "rendu par result-chart.stories.tsx, via ResultChartView",
+    "result-chart-picker": "rendu par result-chart.stories.tsx, via ResultChartView",
+    # TODO(2026-10-15, débloqué par la fusion du lot qui modifie assistant-exchange.tsx) :
+    # écrire assistant-exchange.stories.tsx pour ExchangeView, rendu en attendant
+    # par assistant-view.stories.tsx.
+    "assistant-exchange": "rendu par assistant-view.stories.tsx, en attendant les siennes",
+}
+
+MOTIF_IMPORT = re.compile(
+    r"""from\s+["'](?:\./|@/components/oxyn/)([\w.-]+)["']"""
+)
+
+
+def composants() -> list[str]:
+    return sorted(
+        f.stem
+        for f in COMPOSANTS.glob("*.tsx")
+        if not f.name.endswith((".stories.tsx", ".test.tsx"))
+    )
+
+
+def importes_par_une_story() -> set[str]:
+    importes: set[str] = set()
+    for story in COMPOSANTS.glob("*.stories.tsx"):
+        importes.update(MOTIF_IMPORT.findall(story.read_text(encoding="utf-8")))
+    return importes
+
+
+def principal() -> int:
+    noms = composants()
+    couverts = importes_par_une_story()
+    erreurs = [
+        f"{nom}.tsx : aucune story ne l'importe — écrire {nom}.stories.tsx"
+        for nom in noms
+        if nom not in couverts and nom not in EXEMPTS
+    ]
+    # Une exemption qui ne sert plus se retire : sinon elle couvrira un jour,
+    # sans que personne ne l'ait décidé, un composant qui n'a rien à voir.
+    erreurs += [
+        f"{nom} : exemption périmée — le fichier n'existe plus ou une story l'importe"
+        for nom in EXEMPTS
+        if nom not in noms or nom in couverts
+    ]
+
+    for message in erreurs:
+        print(f"ERREUR         {message}")
+
+    if erreurs:
+        print(f"\nStories : {len(erreurs)} composant(s) sans story.")
+        return 1
+    print(f"Stories : {len(noms)} composants, chacun rendu par une story.")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(principal())
