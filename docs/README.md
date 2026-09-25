@@ -67,6 +67,9 @@ Pour localiser les planches et leurs états avant implémentation, consulter
 | [0038](adr/0038-un-plantage-s-annonce-une-fois.md) | Un plantage s'annonce une fois, et ⌘Q passe par l'arrêt ordonné | accepté |
 | [0039](adr/0039-etat-de-transaction-d-une-session.md) | Une session rend l'état de transaction qu'elle a constaté, et la console ne montre que celui-là | proposé |
 | [0040](adr/0040-inscrire-la-fermeture-d-une-sortie-forcee.md) | Une sortie que macOS ne laisse pas retenir inscrit sa fermeture | accepté |
+| [0041](adr/0041-registre-d-actions-menus-et-raccourcis.md) | Un registre d'actions unique alimente la barre de menus, les menus contextuels, la palette et les raccourcis | proposé |
+| [0042](adr/0042-revue-sur-place-des-operations-destructrices.md) | `Drop…`, `Truncate…` et `Rename…` s'exécutent depuis une revue sur place, comme du SQL utilisateur | proposé |
+| [0043](adr/0043-multi-fenetre.md) | Plusieurs fenêtres dans un seul processus, chacune propriétaire de ses consoles et de ses sessions | proposé |
 
 Les ADR restent `proposé` jusqu'au premier commit de code qui les met en œuvre.
 

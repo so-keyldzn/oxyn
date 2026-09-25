@@ -261,6 +261,91 @@ deux crates. Côté front, [I-01](../CLAUDE.md#i-01) est désormais tenu par
 `.claude/hooks/code_interdit.py`, qui refuse tout appelant d'`invoke` hors de
 `apps/desktop/src/lib/ipc/client.ts`.
 
+## Interactions d'une application de bureau — décidé le 2026-09-25
+
+Objectif : qu'Oxyn se manipule comme une application native — barre de menus,
+clic droit sur chaque surface, raccourcis, palette, glisser-déposer, plusieurs
+fenêtres. Le comportement est dans [UX-SPEC](UX-SPEC.md#menus-raccourcis-et-gestes),
+les décisions dans [ADR-0041](adr/0041-registre-d-actions-menus-et-raccourcis.md),
+[ADR-0042](adr/0042-revue-sur-place-des-operations-destructrices.md) et
+[ADR-0043](adr/0043-multi-fenetre.md). Rien n'est encore implémenté ; les
+interfaces sont écrites en shadcn/ui (`menubar`, `context-menu`, `command`,
+`alert-dialog`, `kbd`), sauf la barre native de macOS, construite en Rust.
+
+Arbitrages de l'utilisateur, le 2026-09-25 : barre de menus aussi sous Windows
+et Linux ; `Drop…`, `Truncate…`, `Rename…` dans la V1, par une revue sur place ;
+multi-fenêtre dans la V1 ; annulation par `Esc` ; pas de `⌘1…9` ; `⌘/` et `⌘F`
+changent d'action selon la zone qui a le focus ; fermer la dernière fenêtre
+quitte l'application, macOS compris ; `Toggle side panel` est `Ctrl+Shift+B`
+sous Windows et Linux ; les consoles d'une fermeture ordinaire reviennent dans
+leur fenêtre, hors ligne ; une transaction ouverte retient la sortie
+(`Commit`, `Rollback`, `Cancel`), sauf le Quit du Dock, qui l'annule et le
+journalise ; `File ▸ Exit` sous Windows et Linux.
+
+Lots, dans l'ordre :
+
+1. **Hygiène « pas un navigateur »** — menu contextuel de la webview limité aux
+   champs, `⌘R`, zoom de page et pincement neutralisés, correction et
+   guillemets typographiques coupés dans les champs, liens externes vers le
+   navigateur du système (ADR-0041).
+2. **Registre d'actions** — `actions.json` et `registry.ts`, écouteur clavier
+   unique, raccordement des boutons existants ; barre native macOS
+   (`menu.rs`, `subscribe_menu`, `set_menu_state`), qui remplace
+   `application_menu` de `commands/recovery.rs` en gardant le Quit
+   d'[ADR-0038](adr/0038-un-plantage-s-annonce-une-fois.md) traité en Rust ;
+   barre `menubar` sous Windows et Linux, avec `File ▸ Exit` et la commande
+   `request_exit` (ADR-0041 § 5).
+3. **Menus contextuels** — grille et en-têtes de colonne, onglets, éditeur SQL,
+   connexions enregistrées, bibliothèque, assistant, ERD ; compléments du
+   catalogue.
+4. **Revue destructive** — `review_object_operation`, `run_object_operation`,
+   qui approuve une commande retenue par `confirm_held`, donc par le dialogue
+   natif d'[ADR-0037](adr/0037-dialogue-natif-pour-les-confirmations-critiques.md)
+   sur `production` ; drapeaux de capacité `TRUNCATE`, `TRANSACTIONAL_DDL`,
+   `RESTRICT_DEPENDENTS`, chacun prouvé par un test d'intégration du driver
+   avant d'être déclaré (ADR-0042).
+5. **Palette et ouverture rapide** — `⌘K`, `⌘P`, feuille des raccourcis.
+6. **Glisser-déposer** — interne sur événements de pointeur, dépôt de fichiers
+   depuis le système (ADR-0041).
+7. **Multi-fenêtre** — abonnements par fenêtre, `WindowRegistry`, capability
+   par motif `workspace-*`, migration de disposition, `Open in new window`,
+   restauration par fenêtre, consoles comprises après une fermeture ordinaire
+   (ADR-0043).
+8. **Transaction ouverte à la sortie** — étape avant l'arrêt ordonné,
+   `ShutdownSignal::ResolveTransactions`, `shutdown_acknowledged`,
+   `cancel_exit`, journal de la sortie forcée (ADR-0043). **Ce qui le
+   débloque** : l'acceptation et la mise en œuvre d'ADR-0039.
+
+Écarts relevés en rédigeant, non tranchés, re-vérifiés sur `origin/main` le
+2026-09-25 :
+
+- sous macOS, `⌘W` est lié deux fois : par `workspace-screen.tsx` (fermer
+  l'onglet actif) et par l'élément prédéfini `Close Window` que le menu
+  d'ADR-0038 garde dans `File` et `Window`. Si la frappe atteint le menu,
+  `performClose:` lance l'arrêt ordonné et `⌘W` quitte Oxyn ; l'ordre de
+  livraison n'est pas vérifié (ADR-0041, point à vérifier n° 1). ADR-0041 retire
+  ce prédéfini ; d'ici là, le vérifier à la main dans `make desktop-dev` ;
+- `⌘1` (catalogue) et `⌘⇧H` (bibliothèque) étaient liés par le code sans être
+  écrits dans UX-SPEC ; ils le sont désormais, section « Clavier » ;
+- UX-SPEC dit qu'une fenêtre conserve plusieurs workspaces de connexion, et ce
+  plan le répète (« Les workspaces de connexion sont conservés dans la
+  fenêtre ») ; `workspace-host.tsx` et `release-workspace.ts` libèrent le
+  précédent à chaque changement de connexion ;
+- ADR-0025 cite `workspace/definition.rs`, `open_definition_console` et
+  `library::OpenQuery::Copy`, disparus avec GPUI ; le composeur actuel est
+  `crates/oxyn-desktop/src/backend/proposal.rs` ;
+- DRIVER-CONTRACT §6 parle d'une fonction de citation du driver ; le code
+  appelle partout `oxyn_catalog::quote_identifier` ;
+- ADR-0029 dit qu'une commande Tauri ne fait qu'émettre une `Command`, ce que
+  `subscribe_events` et `shutdown_flushed` démentent déjà ;
+- la description de `capabilities/main.json` dit la fenêtre sans barre de
+  titre : ce n'est vrai que sous macOS ;
+- `.claude/commands/adr.md` affirme que `make socle` attrape un ADR absent de
+  l'index : `verifier_socle.py` ne le contrôle pas.
+
+Reste à vérifier à la main : le double lien de `⌘W` sous macOS (premier écart
+ci-dessus), dans `make desktop-dev`, avant le lot 2.
+
 ## D'où viennent ces phases
 
 ### Intégration complète de la maquette — travail engagé le 2026-09-10

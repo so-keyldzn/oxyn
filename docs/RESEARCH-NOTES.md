@@ -1586,3 +1586,40 @@ Deux points d'usage vérifiés à l'exécution, et non déduits de la documentat
 La campagne de mesure elle-même, ses conditions et ses résultats sont dans
 [PERFORMANCE](PERFORMANCE.md#campagne-de-mesure-du-2026-09-10) : ce fichier-ci ne
 porte que les faits externes.
+
+## Menus, fenêtres et DDL destructeur — vérification du 2026-09-25
+
+Faits sur lesquels reposent
+[ADR-0041](adr/0041-registre-d-actions-menus-et-raccourcis.md),
+[ADR-0042](adr/0042-revue-sur-place-des-operations-destructrices.md) et
+[ADR-0043](adr/0043-multi-fenetre.md). Côté Tauri, lus dans le source des
+versions de `Cargo.lock` dépaquetées dans le registre local : `tauri` 2.11.5,
+`tauri-utils` 2.9.3, `tauri-runtime-wry` 2.11.4, `wry` 0.55.1, `muda` 0.19.3 ;
+côté front, `@codemirror/commands` 6.11.0, dépendance transitive de
+`@uiw/react-codemirror`. Ce que tao fait de `terminate:` (Quit prédéfini, Dock,
+fermeture de session) est au tableau d'[Interface Tauri et front](#interface-tauri-et-front),
+et le comportement du dialogue de message sans fenêtre parente sous la liste
+d'ADR-0037 : ni l'un ni l'autre n'est repris ici.
+
+| Sujet | Fait vérifié | Source |
+|---|---|---|
+| Menu macOS par défaut | Sans menu fourni, `Builder::build` pose `Menu::default` (application, File, Edit, View, Window, Help) tant que `enable_macos_default_menu` vaut `true`, le défaut ; rien sous Windows et Linux | `tauri` `src/app.rs`, `src/menu/menu.rs` |
+| Rôles système | Les entrées Edit de `muda` sont des sélecteurs AppKit (`copy:`, `paste:`, `cut:`, `selectAll:`, `undo:`, `redo:`) ; Quit est `terminate:`, Close Window `performClose:` | `muda` `src/platform_impl/macos/mod.rs` |
+| Accélérateurs prédéfinis | Sous macOS, `Close Window` porte `⌘W`, `Quit` `⌘Q`, `Hide` `⌘H`, `Hide Others` `⌘⌥H` ; ailleurs, `Close Window` porte `Alt+F4` | `muda` 0.19.3 `src/items/predefined.rs` |
+| Élément de menu | `set_text`, `set_enabled`, `set_accelerator` ; aucune infobulle ; un raccourci affiché est un raccourci lié | `muda` 0.19.3 |
+| Permissions | `event` et `menu` sont des permissions de cœur : `listen` côté JS en exige une ; les commandes de l'application et les `Channel` n'y sont pas soumis | `tauri` 2.11.5 ; description de `capabilities/main.json` |
+| Barre de titre | `titleBarStyle` ne vaut que pour macOS | `tauri-utils` `src/config.rs` |
+| Zoom et accélérateurs | `zoomHotkeysEnabled` vaut `false` ; `back_forward_navigation_gestures` vaut `false` ; `with_browser_accelerator_keys` de `wry` (vrai par défaut sous WebView2) n'est pas exposé par `tauri-runtime-wry` ; `allowLinkPreview` vaut `true` sous macOS | `tauri-utils` `src/config.rs`, `wry`, `tauri-runtime-wry` |
+| Dépôt de fichiers | `dragDropEnabled` vaut `true` ; « Disabling it is required to use HTML5 drag and drop on the frontend on Windows » | `tauri-utils` `src/config.rs` |
+| Capability | Le champ `windows` accepte un motif glob | `tauri-utils` `src/acl/capability.rs` |
+| Identité de l'appelant | Une commande peut recevoir la `Webview` ou la `WebviewWindow` qui l'invoque, fournie par l'environnement d'exécution | `tauri` `src/webview/mod.rs`, `src/webview/webview_window.rs` |
+| `Channel` | Livre à la webview qui l'a créé, et à elle seule | `tauri` `src/ipc/channel.rs` |
+| Événements de menu | L'écouteur est global à l'application, quelle que soit la fenêtre | `tauri`, doc de `on_menu_event` |
+| Création de fenêtre | « deadlocks when used in a synchronous command or event handlers » sous Windows | `tauri`, doc de `WebviewWindowBuilder::new` |
+| Dernière fenêtre | Sa destruction émet `RunEvent::ExitRequested { code: None }`, empêchable ; `RunEvent::Reopen` n'existe que sous macOS | `tauri-runtime-wry` `src/lib.rs` ; `tauri` `src/app.rs` |
+| Dialogue avec fenêtre parente | Sous macOS, `rfd` présente un dialogue de message sans parent par `utils::sync_pop_dialog` ou `async_pop_dialog` — l'alerte `CFUserNotificationDisplayAlert` d'ADR-0037 —, et avec parent par un `NSAlert` en feuille (`beginSheetModalForWindow`) | `rfd` 0.16.0 `src/backend/macos/message_dialog.rs`, `show` et `show_async` |
+| Gabarit de fenêtre | Une fenêtre déclarée `"create": false` sert de gabarit à `WebviewWindowBuilder::from_config` | `tauri-utils`, `WindowConfig::create` |
+| PostgreSQL | `DROP TABLE` vaut `RESTRICT` ; `TRUNCATE` refuse une table référencée et est transactionnel ; le DDL est transactionnel sauf base et tablespace | [sql-droptable](https://www.postgresql.org/docs/18/sql-droptable.html), [sql-truncate](https://www.postgresql.org/docs/18/sql-truncate.html), [wiki](https://wiki.postgresql.org/wiki/Transactional_DDL_in_PostgreSQL:_A_Competitive_Analysis) — version documentaire 18 |
+| Redshift | `TRUNCATE` « commits the transaction in which it is run » ; `DROP TABLE` vaut `RESTRICT` | [r_TRUNCATE](https://docs.aws.amazon.com/redshift/latest/dg/r_TRUNCATE.html), [r_DROP_TABLE](https://docs.aws.amazon.com/redshift/latest/dg/r_DROP_TABLE.html) |
+| MySQL 8.4 | `DROP TABLE`, `TRUNCATE TABLE`, `RENAME TABLE`, `ALTER TABLE` valident implicitement | [implicit-commit](https://dev.mysql.com/doc/refman/8.4/en/implicit-commit.html) |
+| SQLite | Pas de `TRUNCATE` ; `DROP TABLE` passe malgré une vue dépendante, et malgré des lignes filles quand `foreign_keys` vaut `0` ; `DROP` se défait par `ROLLBACK` | constaté avec le client `sqlite3` 3.51.0 ; le driver embarque 3.50.2, d'où l'exigence d'ADR-0042 : un test d'intégration du driver avant de déclarer chaque drapeau |

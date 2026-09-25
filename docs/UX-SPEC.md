@@ -62,6 +62,10 @@ Une revue ne contient les opérations que d'une seule connexion. Une transaction
 ouverte sur une autre connexion dispose de sa propre vue, nommant sa connexion
 et son environnement ; ses actions ne figurent pas dans la confirmation courante.
 
+`Drop…`, `Truncate…` et `Rename…` du catalogue appliquent cette règle dans une
+revue sur place, décrite dans
+[Opérations destructrices depuis le catalogue](#opérations-destructrices-depuis-le-catalogue).
+
 ## Annulation
 
 Toute opération dépassant le budget de 300 ms
@@ -135,8 +139,11 @@ vieilli est un arrêt anormal ; tout le reste n'en est pas un
 ([ADR-0021](adr/0021-marqueur-d-arret.md)).
 
 L'écran de reprise n'apparaît donc **pas** après une fermeture ordinaire, même
-s'il reste des copies de travail : celles-ci se retrouvent dans la bibliothèque.
-Un écran montré à chaque démarrage cesse d'être lu, et c'est le jour où une
+s'il reste des copies de travail : les consoles ouvertes à la fermeture
+reviennent **dans leur fenêtre, hors ligne**, sans sélection, sans reconnexion
+ni exécution, comme les éditeurs repris de « Restauration sélective au
+démarrage » ; elles restent aussi dans la bibliothèque
+([ADR-0043](adr/0043-multi-fenetre.md)). Un écran montré à chaque démarrage cesse d'être lu, et c'est le jour où une
 écriture a réellement été interrompue qu'il faut qu'il le soit.
 
 Au redémarrage après un arrêt anormal, Oxyn présente les onglets et brouillons
@@ -302,6 +309,271 @@ dans Structure, conserve son traitement de texte ou de code.
 Les pièces jointes de contexte IA conservent leur nom sur une seule ligne,
 avec une ellipse de fin si nécessaire. Le nom complet reste consultable dans
 les sources jointes et la revue du contexte sortant ; le retrait reste local.
+
+## Menus, raccourcis et gestes
+
+Le registre d'actions qui porte ces menus est décidé par
+[ADR-0041](adr/0041-registre-d-actions-menus-et-raccourcis.md) ; la revue des
+opérations destructrices par
+[ADR-0042](adr/0042-revue-sur-place-des-operations-destructrices.md) ; les
+fenêtres par [ADR-0043](adr/0043-multi-fenetre.md). Cette section
+dit ce que l'utilisateur voit ; elle ne redéfinit aucun comportement déjà écrit
+ailleurs dans ce document, elle y renvoie.
+
+### Une action, un libellé, un raccourci
+
+Toute action a **un seul libellé et un seul raccourci**, les mêmes dans la barre
+de menus, le clic droit, la palette et la feuille des raccourcis. Une entrée de
+menu déclenche exactement ce que déclenche le bouton du même nom : même
+commande, même revue, même annulation. Un libellé qui change d'une surface à
+l'autre fait croire à deux actions ; un raccourci affiché qui n'est pas celui
+qui marche est pire que pas de raccourci.
+
+Une même touche peut porter deux actions **dans deux zones différentes** :
+c'est la zone qui a le focus qui décide, la plus précise l'emportant sur le
+niveau global (`⌘/` et `⌘F`, plus bas). Jamais deux actions dans la même
+zone, et le libellé de menu affiché suit la zone active.
+
+Une entrée qui vaut pour la surface mais ne peut pas servir maintenant — rien
+de sélectionné, une exécution en cours, un niveau IA qui refuse — est
+**grisée, avec sa raison**, lisible au survol comme au clavier. Elle n'est
+absente que dans les cas que ce document fixe déjà : une capacité que la source
+ne déclare pas (« Filtrer, trier, parcourir », « Contexte de session d'une
+console »), aucune destination IA déclarée (« Le workspace IA n'existe que s'il
+a été configuré »). S'y ajoute un cas propre aux menus : les entrées
+destructrices n'existent pas pour un agent, qui n'a pas de menu à ouvrir et à
+qui aucun outil ne les offre.
+
+### Barre de menus
+
+Sur macOS, la barre de menus est **native**. Sur Windows et Linux, elle a le
+même contenu, en première rangée de la page, sous la barre de titre du
+système : `Alt` révèle les mnémoniques, `F10` lui donne le focus, et sous
+1200 px — le seuil de « Largeur réduite » — elle se replie en un seul bouton de
+menu. `Ctrl` y remplace `⌘` dans tous les raccourcis de cette section, sauf
+`⌘⌥B`, qui y devient `Ctrl+Shift+B` : `Ctrl+Alt` y est la touche `AltGr`, et
+volerait un caractère.
+
+| Menu | Entrées |
+|---|---|
+| `Oxyn` (macOS) | `About Oxyn`, `Settings…` `⌘,`, `Hide Oxyn`, `Quit Oxyn` `⌘Q` |
+| `File` | `New console` `⌘T`, `New window`, `New connection…`, `Open from library…`, `Open Recent ▸`, `Save` `⌘S`, `Save as…`, `Close tab` `⌘W`, `Export…`, et sous Windows et Linux `Exit` `Ctrl+Q` |
+| `Edit` | `Undo`, `Redo`, `Cut`, `Copy`, `Paste`, `Select All`, `Find` `⌘F` |
+| `View` | `Toggle sidebar` `⌘B`, `Toggle side panel` `⌘⌥B`, `Assistant`, `Text size ▸`, `Enter full screen`, `Theme ▸` |
+| `Query` | `Run` `⌘↵`, `Run all` `⌘⇧↵`, `Explain`, `Cancel` `Esc`, `Format` |
+| `Window` | les fenêtres ouvertes, et les entrées de fenêtre du système |
+| `Help` | `Documentation`, `Keyboard shortcuts` `⌘/` |
+
+Ce que ces entrées font est écrit ailleurs, et le menu n'y ajoute rien :
+
+- `Quit Oxyn` et `⌘Q` sous macOS, `File ▸ Exit` et `Ctrl+Q` sous Windows et
+  Linux, font exactement ce que fait la fermeture de la dernière fenêtre
+  ([ADR-0038](adr/0038-un-plantage-s-annonce-une-fois.md)), pour toutes les
+  fenêtres à la fois : une transaction ouverte est d'abord résolue (« Fenêtres »,
+  plus bas), puis les brouillons sont écrits, la fermeture est inscrite, et
+  les consoles ne sont pas fermées une à une — elles reviennent dans leur
+  fenêtre, comme le dit « Restauration après un arrêt brutal ». Le `Quit` du
+  Dock et la fermeture de session de macOS ne laissent ni écrire les dernières
+  frappes ni résoudre une transaction, qui est annulée ; ils inscrivent la
+  fermeture ([ADR-0040](adr/0040-inscrire-la-fermeture-d-une-sortie-forcee.md)) ;
+- `Close tab` est `⌘W` de « Consoles indépendantes » ; aucune entrée ne ferme
+  la fenêtre par `⌘W` ;
+- `Undo` et `Redo` défont une édition locale — texte, disposition —, jamais
+  une écriture sur le serveur, qui ne s'annule pas après coup
+  (« Ce qui n'est jamais optimiste ») ;
+- `Find` cherche dans la zone qui a le focus : l'éditeur, ou le résultat ;
+- `Run`, `Run all`, `Explain` et `Cancel` sont ceux de la barre de la console
+  (« Portée de Run dans une console SQL », « Explain », « Annulation ») : grisés
+  dans les mêmes cas que leurs boutons ;
+- `Text size` choisit l'un des préréglages de « Lisibilité et hauteur de
+  grille », le même choix que les préférences et la barre de résultat,
+  sauvegardé de la même façon ;
+- `Assistant` ouvre l'assistant dans le panneau latéral ; sans destination IA
+  déclarée, l'entrée n'existe pas ;
+- `Export…` suit « Ce qui est exporté est ce qui est affiché », y compris pour
+  un résultat tronqué.
+
+### Menus contextuels
+
+Le clic droit ouvre le menu **de ce qui est sous le pointeur**. Ses entrées sont
+des actions du registre : même libellé et même raccourci qu'ailleurs.
+
+| Surface | Entrées |
+|---|---|
+| Catalogue | `Open data`, `View structure`, `View DDL`, `New console on this schema`, `Copy qualified name`, `Copy as ▸` (`Quoted name`, `SELECT *`, `INSERT template`, `DDL`), `Refresh this level`, `Collapse all`, `Pin to question`, puis `Rename…`, `Truncate…`, `Drop…` |
+| Connexion enregistrée | `Connect` ou `Disconnect`, `New console`, `Refresh catalog`, `Edit…`, `Duplicate`, `Change environment…`, `Copy connection`, `Delete…` |
+| Onglet | `Close`, `Close others`, `Close to the right`, `Close all`, `Duplicate`, `Rename…`, `Open in new window`, `Reveal in library` |
+| Cellule ou sélection de la grille | `Copy value`, `Copy rows as ▸` (`TSV`, `CSV`, `JSON`, `Markdown`, `INSERT`, `IN list`), `Inspect full value`, `Filter by this value`, `Exclude this value`, `Is NULL`, `Sort ▸`, `Hide column`, `Open referenced row`, `Send to assistant` |
+| En-tête de colonne | `Sort ▸`, `Filter…`, `Hide`, `Freeze`, `Autosize`, `Copy name`, `Copy values` |
+| Éditeur SQL | `Cut`, `Copy`, `Paste`, `Run selection`, `Run statement`, `Explain`, `Format`, `Toggle comment`, `Open object under cursor`, `Ask assistant about selection` |
+| Bibliothèque | `Open`, `Rename…`, `Duplicate`, `Reveal in Finder` (`Reveal in Explorer` sous Windows), `Copy path`, `Delete…` |
+| Assistant, message | `Copy answer`, `Copy as Markdown`, `Regenerate answer` ; sur une question : `Edit question` |
+| Assistant, bloc de code | `Copy code`, `Open in console` |
+| Assistant, mention | `Open object` |
+| Diagramme `erd` | `Open table`, `Copy name`, `Re-layout`, `Export image…` |
+
+Ce que chaque surface garantit :
+
+- **Catalogue.** Tout SQL qu'une entrée `Copy as` compose cite ses identifiants
+  par le driver ([I-10](../CLAUDE.md#i-10)) ; il part au presse-papiers, rien ne
+  s'exécute. `New console on this schema` ouvre une console dont le contexte de
+  session est ce schéma, et n'existe que là où ce contexte existe (« Contexte
+  de session d'une console »). Les trois entrées destructrices sont décrites
+  plus bas.
+- **Connexion enregistrée.** `Copy connection` ne copie jamais de secret
+  ([I-03](../CLAUDE.md#i-03)) : le presse-papiers est l'un des six canaux.
+- **Onglet.** Fermer plusieurs onglets applique à chacun la règle de fermeture
+  d'une console : chaque console qui la demande est nommée, et `Cancel` arrête
+  la série. Le clic milieu ferme l'onglet ; `⌘⇧T` rouvre le dernier fermé, sans
+  rien exécuter. `Duplicate` ouvre une console indépendante, avec sa propre
+  session.
+- **Grille.** `Filter by this value`, `Exclude this value`, `Is NULL` et `Sort`
+  passent par le filtre et le tri de l'aperçu (« Filtrer, trier, parcourir ») :
+  le prédicat qu'Oxyn compose cite l'identifiant par le driver et lie la
+  valeur. Sur le résultat d'une console, ils sont grisés : le SQL écrit par
+  l'utilisateur n'est jamais réécrit. `Hide column` est la même action que
+  `Columns` (« Colonnes et inspection des valeurs »). `Send to assistant` ne
+  transmet de valeurs que par l'écran d'approbation d'un échantillon, sous
+  `Sampled` ; ailleurs il est grisé, avec le niveau pour raison
+  ([I-04](../CLAUDE.md#i-04)).
+- **En-tête de colonne.** `Copy values` dit ce qu'il copie : « N loaded rows »,
+  jamais « the column » — la colonne entière n'est pas en mémoire, et ne le
+  sera pas pour une copie ([I-06](../CLAUDE.md#i-06)). `Freeze` et `Autosize`
+  sont locaux, comme la visibilité.
+- **Éditeur SQL.** `Run selection` et `Run statement` sont la portée de
+  `⌘↵` rendue explicite (« Portée de Run dans une console SQL ») ; dans un
+  éditeur en lecture seule, ils n'existent pas, comme le raccourci. `Open object
+  under cursor` résout le nom contre le catalogue déjà lu, comme une mention.
+- **Assistant.** Un bloc de code n'offre jamais `Run` : il devient du texte dans
+  une console, et c'est l'utilisateur qui l'exécute
+  ([I-07](../CLAUDE.md#i-07), « Une proposition n'est jamais exécutée par le
+  fait de l'être »).
+
+### Clavier
+
+| Raccourci | Effet |
+|---|---|
+| `⌘K` | la palette : toutes les actions du registre, avec leur raccourci, les indisponibles grisées avec leur raison |
+| `⌘P` | ouvrir un objet par son nom, parmi les objets déjà chargés — la portée est annoncée, comme dans la recherche du catalogue |
+| `⌘/` | la feuille des raccourcis |
+| `⌃Tab`, `⌃⇧Tab` | l'onglet suivant, le précédent (« Consoles indépendantes ») |
+| `F6`, `⇧F6` | la zone suivante, la précédente : catalogue, éditeur, résultats, panneau latéral |
+| `⇧F10`, touche `Menu` | le menu contextuel de l'élément focalisé, comme le clic droit |
+
+`⌘J` (retour à l'éditeur), `⌘B` (sidebar) et `⌘2` (grille de l'aperçu)
+gardent le sens que leur donnent « Navigation du premier workspace » et
+« Filtrer, trier, parcourir » ; `⌘T`, `⌘W` et `⌘S` celui de « Consoles
+indépendantes » et « Sauvegarde d'une console ». `⌘1` montre le catalogue et
+`⌘⇧H` la bibliothèque dans la sidebar ; `⌘,` ouvre les réglages. Aucun
+`⌘1…9` ne sélectionne un onglet.
+
+Un raccourci que l'éditeur SQL définit l'emporte **seulement quand l'éditeur a le
+focus** : `⌘/` y commente la ligne, `⌘F` y cherche dans le texte ; ailleurs, ils
+gardent leur sens global.
+
+Les raccourcis tiennent sur une disposition non QWERTY, AZERTY comprise : ce
+que les menus, la palette et la feuille affichent est la combinaison à presser
+sur la disposition active, pas celle d'un clavier américain.
+
+### Souris et glisser
+
+- **Double-clic** sur une cellule ouvre `Inspect full value` ; sur le bord d'un
+  en-tête de colonne, il rend à la colonne sa largeur par défaut. Une table du
+  catalogue s'ouvre déjà au clic (« Données d'une table sélectionnée »).
+- **Glisser** une table du catalogue vers l'éditeur insère son nom qualifié,
+  cité par le driver ; rien ne s'exécute.
+- Les onglets et les colonnes se **réordonnent** au glisser. C'est local : ni le
+  SQL, ni les lignes reçues, ni l'ordre des colonnes d'un export ne changent,
+  comme pour leur visibilité.
+- **Déposer** un fichier `.sql` l'ouvre dans une console, sans l'exécuter. Un
+  fichier `.sqlite` ou `.duckdb` propose une connexion, si un driver
+  enregistré le lit ; elle commence en `production`, comme toute nouvelle
+  connexion (« Navigation du premier workspace »).
+- `⇧` et la molette font défiler horizontalement.
+
+### Ce qu'Oxyn ne fait pas, parce que ce n'est pas un navigateur
+
+L'interface tourne dans une webview ; rien de la webview ne doit se voir.
+
+- **Pas de menu contextuel de page** — `Reload`, `Inspect` et leurs voisins
+  n'existent nulle part. Un champ de texte sans menu propre garde `Cut`, `Copy`
+  et `Paste`.
+- **Pas de rechargement** : `⌘R` ne fait rien. Un rechargement perdrait l'état
+  non sauvegardé de la fenêtre.
+- **Pas de zoom de page**, ni au clavier ni au pincement : la taille du texte
+  passe par `View ▸ Text size`. Le diagramme `erd` garde son propre zoom,
+  pincement compris, qui ne touche que le diagramme.
+- **Pas d'historique de navigation** : aucune touche ni geste ne ramène à une
+  « page précédente ». Le retour de l'écran de connexion vers le workspace
+  resté ouvert est une action nommée, pas un historique.
+- **Pas de correction orthographique**, de majuscule automatique ni de
+  guillemets typographiques dans les champs : un nom de table corrigé en
+  silence est un nom faux.
+- **Le texte du cadre d'interface ne se sélectionne pas** — libellés, onglets,
+  barres. Ce qui est du contenu le reste : SQL, DDL, valeurs, messages
+  d'erreur, réponses de l'assistant.
+- **Un lien externe s'ouvre dans le navigateur du système**, jamais dans la
+  fenêtre d'Oxyn.
+
+### Opérations destructrices depuis le catalogue
+
+`Drop…`, `Truncate…` et `Rename…` ouvrent une **boîte de revue sur place**
+(ADR-0042, qui précise [ADR-0025](adr/0025-proposition-de-changement-de-schema.md)).
+Elle applique « Les opérations destructrices » et y ajoute :
+
+- le **SQL complet** qui partira, composé par Oxyn avec ses identifiants cités ;
+- la connexion et son environnement **nommés** ;
+- sur une connexion `production`, le bouton ne s'active qu'une fois **le nom de
+  l'objet tapé** ; `Cancel` garde le focus initial et Entrée seule ne valide
+  rien (« Repères permanents »). Le nom tapé protège d'une méprise sur l'objet ;
+  il n'accorde rien ;
+- `CASCADE` n'est **jamais coché par défaut** ;
+- les **dépendances connues** du catalogue sont listées, et la liste dit
+  qu'elle se limite à ce qui est connu ;
+- la boîte dit si, pour ce moteur, le DDL est **transactionnel** ou non —
+  c'est-à-dire si un échec peut laisser un état à moitié appliqué.
+
+Ce que la boîte soumet passe ensuite par la politique, comme tout SQL. Sur
+`production`, l'accord est donné dans le **dialogue natif** d'Oxyn, qui nomme
+la connexion et cite l'instruction
+([ADR-0037](adr/0037-dialogue-natif-pour-les-confirmations-critiques.md)) :
+aucun second écran ne s'intercale. Ailleurs, `Drop…` et `Truncate…`
+demandent l'approbation dans la même boîte, et `Rename…` s'exécute.
+
+Une entrée que le moteur ne sait pas faire est grisée avec sa raison — sur
+SQLite, `Truncate…` ; ce qui est offert suit les capacités déclarées par le
+driver (ADR-0042). Après une exécution réussie,
+le catalogue se relit (« Ce qui se met à jour tout seul »). Un délai dépassé
+n'est **pas rejoué** : la boîte dit que le serveur a peut-être appliqué, et
+propose de rafraîchir le catalogue pour le constater
+([I-13](../CLAUDE.md#i-13)). Ces entrées ne sont jamais offertes à un agent.
+
+### Fenêtres
+
+`New window` ouvre une fenêtre vide ; `Open in new window` y déplace l'onglet
+choisi (ADR-0043). **Une console vit dans une seule fenêtre** à la fois. La
+barre de menus vise la fenêtre active. Les fenêtres et leur position sont
+rendues au démarrage ; les consoles suivent les règles de restauration de ce
+document (« Restauration après un arrêt brutal », « Restauration sélective au
+démarrage »), fenêtre par fenêtre, hors ligne, sans reconnexion ni exécution.
+Un onglet ne s'arrache pas de sa fenêtre à la souris : il en change par `Open
+in new window`. Fermer une fenêtre ferme ses consoles, après le dialogue qui
+nomme celles qui le demandent ; fermer la dernière quitte Oxyn, sur toutes les
+plateformes, comme `Quit Oxyn` (ADR-0043).
+
+**Une transaction ouverte retient la sortie.** Avant de quitter, et avant de
+fermer une fenêtre, un dialogue liste chaque console dont la transaction est
+ouverte, ou dont l'état n'est pas connu, avec sa connexion et son
+environnement ([ADR-0039](adr/0039-etat-de-transaction-d-une-session.md)). Il
+offre `Commit`,
+`Rollback` et `Cancel` ; le focus est sur `Cancel`, et Entrée seule ne valide
+rien. `Commit` et `Rollback` partent comme si l'utilisateur les avait tapés
+dans chaque console, et la sortie ne continue que quand chaque session dit
+n'avoir plus de transaction. Un `Commit` refusé par le serveur s'affiche et
+retient la sortie ; un `Commit` dont l'issue est inconnue n'est jamais
+rejoué ([I-13](../CLAUDE.md#i-13)). `Cancel` laisse l'application, ses
+fenêtres et ses transactions intactes. Sans transaction ouverte, aucun
+dialogue ne s'ouvre.
 
 ## Colonnes et inspection des valeurs
 
