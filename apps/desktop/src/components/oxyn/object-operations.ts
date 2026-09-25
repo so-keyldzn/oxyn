@@ -19,6 +19,7 @@ export const HOSTILE_NAME =
   "This name holds control characters: write the statement in a console."
 const NO_DDL = "This connection does not accept schema changes."
 const NO_TRUNCATE = "This database has no TRUNCATE statement."
+const NOT_KNOWN = "Catalog operations are not available here."
 
 // Control characters (Unicode Cc), line and paragraph separators, and the
 // direction controls: shown or escaped, the name would not be the one run.
@@ -37,10 +38,13 @@ function applies(operation: OperationKind, kind: string) {
 export function operationOffer(
   operation: OperationKind,
   node: CatalogNode,
-  capabilities: ReadonlyArray<string>
+  capabilities: ReadonlyArray<string> | null
 ): OperationOffer {
   if (node.address.relation === null || !applies(operation, node.kind))
     return { state: "absent" }
+  // No session to read them from: the entry stays, greyed, as on a sibling
+  // whose session is known.
+  if (capabilities === null) return { state: "greyed", reason: NOT_KNOWN }
   if (!capabilities.includes("DDL")) return { state: "greyed", reason: NO_DDL }
   if (operation === "truncate" && !capabilities.includes("TRUNCATE"))
     return { state: "greyed", reason: NO_TRUNCATE }

@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest"
 
 import { chooseDestination, getPinState, pinObject, unpin } from "./object-pin"
-import { canPin } from "@/components/oxyn/catalog-tree"
+import { pinOffer } from "@/components/oxyn/catalog-tree"
 import type { PinToQuestion } from "@/components/oxyn/catalog-tree"
 import type { CatalogNode } from "@/lib/ipc/types"
 
@@ -59,17 +59,26 @@ describe("pinning an object to the question", () => {
     expect(fresh.getPinState("pins-4").chosenKey).toBeNull()
   })
 
-  it("is offered only where a sample can follow", () => {
-    expect(canPin(offered, relation("customers"))).toBe(true)
-    expect(canPin({ ...offered, tier: "metadata" }, relation("c"))).toBe(false)
-    expect(canPin({ ...offered, tier: "local" }, relation("c"))).toBe(false)
+  it("is offered only where a sample can follow, greyed where the tier keeps rows back", () => {
+    expect(pinOffer(offered, relation("customers"))).toBe(true)
+    expect(pinOffer({ ...offered, tier: "metadata" }, relation("c"))).toEqual({
+      reason: "The connection's AI level is Metadata",
+    })
+    expect(pinOffer({ ...offered, tier: "local" }, relation("c"))).toEqual({
+      reason: "The connection's AI level is Local",
+    })
     // An external agent receives an approved sample too (ADR-0034).
-    expect(canPin({ ...offered, destination: "agent" }, relation("c"))).toBe(
+    expect(pinOffer({ ...offered, destination: "agent" }, relation("c"))).toBe(
       true
     )
-    expect(canPin({ ...offered, destination: null }, relation("c"))).toBe(false)
+    // No AI destination: the entry does not exist (UX-SPEC).
+    expect(pinOffer({ ...offered, destination: null }, relation("c"))).toBe(
+      "absent"
+    )
+    expect(pinOffer(undefined, relation("c"))).toBe("absent")
     // A sample is rows: an object that holds none has nothing to offer.
-    expect(canPin(offered, relation("f", false))).toBe(false)
-    expect(canPin(undefined, relation("c"))).toBe(false)
+    expect(pinOffer(offered, relation("f", false))).toEqual({
+      reason: "This object holds no rows",
+    })
   })
 })

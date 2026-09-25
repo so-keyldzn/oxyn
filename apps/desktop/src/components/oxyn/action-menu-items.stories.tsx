@@ -81,6 +81,7 @@ export const GridCellOfAConsole: Story = {
           oneColumn: false,
           relation: false,
           loadedRows: 40,
+          shownColumns: 4,
           ai: { kind: "withheld", label: "Schema only" },
         },
         actions: {
@@ -128,6 +129,7 @@ export const GridHeader: Story = {
           oneColumn: true,
           relation: true,
           loadedRows: 200,
+          shownColumns: 4,
           ai: { kind: "none" },
         },
         actions: {
@@ -192,6 +194,7 @@ export const CatalogCopyAs: Story = {
           schemaContext: false,
           definition: false,
           expanded: true,
+          pin: "absent",
         },
         actions: {
           openData: fn(),

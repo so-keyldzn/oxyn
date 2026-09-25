@@ -325,7 +325,8 @@ async function openMenuOn(target: HTMLElement) {
 /**
  * The menu of a saved query: `Open` names where its copy opens, `Reveal`
  * says why it waits, and `Delete…` asks first, as the button does. Rename,
- * Duplicate and Copy path are not offered: nothing yet does them safely.
+ * Duplicate and Copy path are greyed, with what they wait for: nothing yet
+ * does them safely.
  */
 export const SavedQueryContextMenu: Story = {
   args: { view: "saved", state: { status: "saved", entries: saved } },
@@ -336,9 +337,17 @@ export const SavedQueryContextMenu: Story = {
       .map((item) => item.firstChild?.textContent?.trim())
     await expect(names).toEqual([
       "Open",
+      "Rename…",
+      "Duplicate",
       expect.stringMatching(/^Reveal in (Finder|Explorer)$/),
+      "Copy path",
       "Delete…",
     ])
+    await expect(
+      screen.getByRole("menuitem", { name: /^Copy path/ })
+    ).toHaveTextContent(
+      "Not available yet: the library does not give the file's path"
+    )
     await expect(
       screen.getByRole("menuitem", { name: /^Open/ })
     ).toHaveTextContent("Opens an unrun copy in billing replica")
@@ -361,21 +370,26 @@ export const SavedQueryContextMenu: Story = {
 }
 
 /**
- * The menu of a history row: `Open` alone — and not for the write awaiting
- * inspection, which offers no editable copy (I-13).
+ * The menu of a history row: `Open`, greyed for the write awaiting
+ * inspection, which offers no editable copy (I-13). A history row is no file:
+ * nothing there is renamed, duplicated or revealed.
  */
 export const HistoryRowContextMenu: Story = {
   play: async ({ canvas, args }) => {
-    // A write awaiting inspection is not opened (I-13), and a history row has
-    // no file: nothing is offered, so no menu opens.
-    await userEvent.pointer({
-      keys: "[MouseRight]",
-      target: canvas.getByText(/UPDATE invoices SET paid_at/),
-    })
-    await expect(screen.queryByRole("menu")).toBeNull()
+    // A write awaiting inspection is not opened (I-13): said, not hidden.
+    await openMenuOn(canvas.getByText(/UPDATE invoices SET paid_at/))
+    const open = screen.getByRole("menuitem", { name: /^Open/ })
+    await expect(open).toHaveAttribute("aria-disabled", "true")
+    await expect(open).toHaveTextContent(
+      "A write awaiting inspection opens no editable copy"
+    )
+    await userEvent.keyboard("{Escape}")
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull())
 
     await openMenuOn(canvas.getByText(/SELECT c.name, i.amount/))
-    await expect(screen.queryByRole("menuitem", { name: /^Delete/ })).toBeNull()
+    await expect(
+      screen.queryByRole("menuitem", { name: /^(Rename|Duplicate|Copy path)/ })
+    ).toBeNull()
     await userEvent.click(screen.getByRole("menuitem", { name: /^Open/ }))
     await expect(args.onOpenHistory).toHaveBeenCalledWith(history[0])
     await waitFor(() => expect(screen.queryByRole("menu")).toBeNull())

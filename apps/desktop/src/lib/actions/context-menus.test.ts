@@ -131,6 +131,7 @@ describe("context menus", () => {
           oneColumn: true,
           relation: false,
           loadedRows: 10,
+          shownColumns: 3,
           ai: { kind: "none" },
         },
         actions: { sort: nothing, copyRows: nothing, copyValue: nothing },
@@ -153,5 +154,159 @@ describe("context menus", () => {
     })
     // No AI destination: Send to assistant does not exist.
     expect(reason("grid.sendToAssistant")).toBeUndefined()
+  })
+
+  it("never lose an entry because its surface left the handler out", () => {
+    const everything = new Proxy(
+      {},
+      { get: () => nothing, has: () => true }
+    ) as Record<string, () => void>
+    // The same targets, handlers given or not: a surface that forgets one
+    // greys the entry with a reason, and two targets of the same kind keep
+    // the same menu (UX-SPEC, « Une action, un libellé, un raccourci »).
+    const workspace = (actions: Record<string, () => void>) => ({
+      state: {
+        activeTab: "console:1",
+        tabCount: 3,
+        consoleCount: 3,
+        objectActive: false,
+        hasAside: false,
+        hasAssistant: true,
+      },
+      actions: actions as never,
+    })
+    const offered = { state: "offered" } as const
+    const targets = (actions: Record<string, () => void>) =>
+      ({
+        catalog: {
+          catalogNode: {
+            state: {
+              relation: true,
+              holdsRecords: true,
+              schemaContext: false,
+              definition: true,
+              expanded: true,
+              pin: true,
+            },
+            actions,
+          },
+          objectOperation: {
+            state: {
+              offers: { rename: offered, truncate: offered, drop: offered },
+            },
+            actions,
+          },
+        },
+        structureColumn: {
+          objectOperation: {
+            state: {
+              offers: {
+                rename: offered,
+                truncate: { state: "absent" },
+                drop: { state: "absent" },
+              },
+            },
+            actions,
+          },
+        },
+        connection: {
+          connection: { state: { open: false, busy: false }, actions },
+        },
+        tab: {
+          workspace: workspace(everything),
+          tab: {
+            state: { console: true, count: 3, toTheRight: 1, saved: true },
+            actions,
+          },
+        },
+        gridCell: {
+          grid: {
+            state: {
+              target: "cell",
+              origin: "preview",
+              filterable: true,
+              sortable: true,
+              selectedRows: 2,
+              oneColumn: true,
+              relation: true,
+              loadedRows: 10,
+              shownColumns: 3,
+              ai: { kind: "sampled" },
+            },
+            actions,
+          },
+        },
+        gridHeader: {
+          grid: {
+            state: {
+              target: "header",
+              origin: "preview",
+              filterable: true,
+              sortable: true,
+              selectedRows: 0,
+              oneColumn: true,
+              relation: true,
+              loadedRows: 10,
+              shownColumns: 3,
+              ai: { kind: "none" },
+            },
+            actions,
+          },
+        },
+        editor: {
+          workspace: workspace(everything),
+          editorMenu: {
+            state: {
+              readOnly: false,
+              selection: true,
+              objectUnderCursor: true,
+            },
+            actions,
+          },
+        },
+        library: {
+          libraryEntry: {
+            state: { file: true, awaitingInspection: false },
+            actions,
+          },
+        },
+        assistantAnswer: {
+          assistant: { state: { answering: false }, actions },
+        },
+        assistantQuestion: {
+          assistant: { state: { answering: false }, actions },
+        },
+        assistantCode: {
+          assistant: { state: { answering: false }, actions },
+        },
+        assistantMention: {
+          assistant: { state: { answering: false }, actions },
+        },
+        erd: { erd: { state: {}, actions } },
+      }) satisfies Record<Surface, ActionSources> as Record<
+        Surface,
+        ActionSources
+      >
+    const ids = (surface: Surface, sources: ActionSources) =>
+      menuRows(surface, contextWith(sources))
+        .flat()
+        .flatMap((row) => (row.kind === "entry" ? [row.entry] : row.entries))
+    const wired = targets(everything)
+    const bare = targets({})
+    for (const surface of Object.keys(CONTEXT_MENUS) as Array<Surface>) {
+      const full = ids(surface, wired[surface])
+      const unwired = ids(surface, bare[surface])
+      expect(
+        unwired.map((entry) => entry.id),
+        surface
+      ).toEqual(full.map((entry) => entry.id))
+      for (const entry of unwired) {
+        const before = full.find((candidate) => candidate.id === entry.id)
+        if (before?.state === true)
+          expect(entry.state, `${surface}: ${entry.id}`).toHaveProperty(
+            "reason"
+          )
+      }
+    }
   })
 })

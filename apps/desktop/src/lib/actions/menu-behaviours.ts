@@ -35,14 +35,33 @@ type TargetKey =
 
 type SourceOf<TKey extends TargetKey> = NonNullable<ActionSources[TKey]>
 
+/**
+ * Why an entry is greyed on a surface that did not give its handler. Said by
+ * surface, since what is missing is the surface's, not the target's.
+ */
+const NOT_WIRED: Record<TargetKey, string> = {
+  grid: "Not available for this result",
+  tab: "Not available for this tab",
+  editorMenu: "Not available in this editor",
+  connection: "Not available for this connection here",
+  libraryEntry: "Not available for this entry",
+  assistant: "Not available for this message",
+  erd: "Not available in this diagram",
+  catalogNode: "Not available in this catalog view",
+  objectOperation: "Catalog operations are not available here",
+}
+
 const NOT_REWRITTEN = { reason: "The SQL you wrote is never rewritten" }
 const COPY_LIMIT = MAX_COPY_ROWS.toLocaleString("en-US")
 
 /**
  * An entry of the `key` surface running `pick`'s handler.
  *
- * Absent when the menu is not this surface's, or when the surface does not
- * offer the handler; otherwise `check` decides, on the target's state.
+ * Absent when the menu is not this surface's, or when `check` says the
+ * target is not one the entry applies to — the cases UX-SPEC fixes (« Une
+ * action, un libellé, un raccourci »). A handler the surface did not give
+ * never hides an entry: it is greyed with what is missing, so two targets of
+ * the same kind always offer the same menu.
  */
 function onTarget<TKey extends TargetKey>(
   key: TKey,
@@ -50,13 +69,16 @@ function onTarget<TKey extends TargetKey>(
   check: (
     state: SourceOf<TKey>["state"],
     context: ActionContext
-  ) => Availability = () => true
+  ) => Availability = () => true,
+  missing: string = NOT_WIRED[key]
 ): ActionBehaviour {
   return {
     enabled: (context) => {
       const source = context.sources[key] as SourceOf<TKey> | undefined
-      if (!source || !pick(source)) return "absent"
-      return check(source.state, context)
+      if (!source) return "absent"
+      const state = check(source.state, context)
+      if (state !== true) return state
+      return pick(source) ? true : { reason: missing }
     },
     run: (context) => {
       const source = context.sources[key] as SourceOf<TKey> | undefined
@@ -75,6 +97,13 @@ function notYet(key: TargetKey, reason: string): ActionBehaviour {
     enabled: (context) => (context.sources[key] ? { reason } : "absent"),
     run: () => undefined,
   }
+}
+
+/** A grid with no column looks empty: the last shown one stays. */
+function lastColumnStays(state: GridMenuState): Availability {
+  return state.shownColumns > 1
+    ? true
+    : { reason: "The last shown column stays" }
 }
 
 /** Filter and sort compose the preview's SQL; a console's is never touched. */
@@ -140,7 +169,7 @@ function previewEntry(
       if (!grid) return "absent"
       const shape = previewShape(grid.state, declared)
       if (shape !== true) return shape
-      return pick(grid.actions) ? true : "absent"
+      return pick(grid.actions) ? true : { reason: NOT_WIRED.grid }
     },
     run: (context) => {
       const grid = context.sources.grid
@@ -255,10 +284,13 @@ export const menuBehaviours: Record<string, ActionBehaviour> = {
   "tab.revealInLibrary": onTarget(
     "tab",
     (source) => source.actions.revealInLibrary,
-    (state) =>
-      state.saved
+    (state) => {
+      if (!state.console)
+        return { reason: "Only a console is saved in the library" }
+      return state.saved
         ? true
         : { reason: "This console is not saved in the library" }
+    }
   ),
 
   "grid.copyValue": onTarget(
@@ -278,7 +310,11 @@ export const menuBehaviours: Record<string, ActionBehaviour> = {
   "grid.filterNull": valueFilter(),
   "grid.sortAscending": sort(false),
   "grid.sortDescending": sort(true),
-  "grid.hideColumn": onTarget("grid", (source) => source.actions.hideColumn),
+  "grid.hideColumn": onTarget(
+    "grid",
+    (source) => source.actions.hideColumn,
+    lastColumnStays
+  ),
   "grid.openReferencedRow": notYet(
     "grid",
     "Not available yet: the grid does not know which key a column belongs to"
@@ -303,7 +339,11 @@ export const menuBehaviours: Record<string, ActionBehaviour> = {
     run: (context) => context.sources.grid?.actions.sendToAssistant?.(),
   },
   "column.filter": previewEntry("filterable", (actions) => actions.filter),
-  "column.hide": onTarget("grid", (source) => source.actions.hideColumn),
+  "column.hide": onTarget(
+    "grid",
+    (source) => source.actions.hideColumn,
+    lastColumnStays
+  ),
   "column.freeze": notYet(
     "grid",
     "Not available yet: the grid cannot freeze a column"
@@ -397,17 +437,33 @@ export const menuBehaviours: Record<string, ActionBehaviour> = {
   "connection.delete": onTarget(
     "connection",
     (source) => source.actions.delete,
-    (state) => (state.busy ? { reason: "The connection is busy" } : true)
+    (state) => {
+      // As the button: the connection in use is left first.
+      if (state.open) return { reason: "Disconnect it to delete it" }
+      return state.busy ? { reason: "The connection is busy" } : true
+    }
   ),
 
   "library.openEntry": onTarget(
     "libraryEntry",
-    (source) => source.actions.open
+    (source) => source.actions.open,
+    (state) =>
+      state.awaitingInspection
+        ? { reason: "A write awaiting inspection opens no editable copy" }
+        : true
   ),
-  "library.rename": onTarget("libraryEntry", (source) => source.actions.rename),
+  "library.rename": onTarget(
+    "libraryEntry",
+    (source) => source.actions.rename,
+    // A history row is no file: there is nothing to rename or point at.
+    (state) => (state.file ? true : "absent"),
+    "Not available yet: a saved query cannot be renamed in one step"
+  ),
   "library.duplicate": onTarget(
     "libraryEntry",
-    (source) => source.actions.duplicate
+    (source) => source.actions.duplicate,
+    (state) => (state.file ? true : "absent"),
+    "Not available yet: a saved query cannot be duplicated in one step"
   ),
   // Only a saved query is a file to reveal; a history row has none.
   "library.reveal": {
@@ -419,7 +475,9 @@ export const menuBehaviours: Record<string, ActionBehaviour> = {
   },
   "library.copyPath": onTarget(
     "libraryEntry",
-    (source) => source.actions.copyPath
+    (source) => source.actions.copyPath,
+    (state) => (state.file ? true : "absent"),
+    "Not available yet: the library does not give the file's path"
   ),
   "library.delete": onTarget("libraryEntry", (source) => source.actions.delete),
 
@@ -450,7 +508,8 @@ export const menuBehaviours: Record<string, ActionBehaviour> = {
   ),
   "assistant.openInConsole": onTarget(
     "assistant",
-    (source) => source.actions.openInConsole
+    (source) => source.actions.openInConsole,
+    (state) => state.openSql ?? true
   ),
   "assistant.openObject": onTarget(
     "assistant",
@@ -512,7 +571,11 @@ export const menuBehaviours: Record<string, ActionBehaviour> = {
     (source) => source.actions.collapseAll,
     (state) => (state.expanded ? true : { reason: "Nothing is expanded" })
   ),
-  "catalog.pin": onTarget("catalogNode", (source) => source.actions.pin),
+  "catalog.pin": onTarget(
+    "catalogNode",
+    (source) => source.actions.pin,
+    (state) => state.pin
+  ),
   "object.rename": operation("rename"),
   "object.truncate": operation("truncate"),
   "object.drop": operation("drop"),

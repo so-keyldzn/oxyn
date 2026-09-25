@@ -61,8 +61,9 @@ const changeEnvironment = fn()
 
 /**
  * The context menu of a row: `Edit…` is the button, `Change environment…`
- * what the host gives. Nothing opens a connection from the settings, and the
- * connection in use offers no `Delete…`, as its button is disabled.
+ * what the host gives. What the settings do not do — open a connection,
+ * refresh its catalog — is greyed with its reason, as on any other surface;
+ * the connection in use greys `Delete…` with the button's reason.
  */
 export const ContextMenu: Story = {
   args: {
@@ -77,10 +78,14 @@ export const ContextMenu: Story = {
     })
     await page.findByRole("menu")
     await expect(page.queryByRole("menuitem", { name: /^Connect/ })).toBeNull()
-    await expect(
-      page.queryByRole("menuitem", { name: /^Refresh catalog/ })
-    ).toBeNull()
-    await expect(page.queryByRole("menuitem", { name: /^Delete/ })).toBeNull()
+    const refresh = page.getByRole("menuitem", { name: /^Refresh catalog/ })
+    await expect(refresh).toHaveAttribute("aria-disabled", "true")
+    await expect(refresh).toHaveTextContent(
+      "Not available for this connection here"
+    )
+    const remove = page.getByRole("menuitem", { name: /^Delete/ })
+    await expect(remove).toHaveAttribute("aria-disabled", "true")
+    await expect(remove).toHaveTextContent("Disconnect it to delete it")
     await userEvent.click(
       page.getByRole("menuitem", { name: "Change environment…" })
     )

@@ -175,14 +175,15 @@ describe("gridMenuSource", () => {
     await expect(text).rejects.toThrow("This value is no longer available.")
   })
 
-  it("never hides the last shown column", () => {
-    const { actions } = gridMenuSource(
+  it("says the last shown column stays rather than dropping the entry", () => {
+    const { state, actions } = gridMenuSource(
       hostOf(
         { hideColumn: vi.fn() },
         { kind: "header", column: 1, anchor },
         { shown: [1] }
       )
     )
-    expect(actions.hideColumn).toBeUndefined()
+    expect(state.shownColumns).toBe(1)
+    expect(actions.hideColumn).toBeDefined()
   })
 })

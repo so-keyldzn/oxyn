@@ -272,20 +272,18 @@ export function LibraryPanel({
           libraryEntry:
             menu.kind === "saved"
               ? {
-                  state: { file: true },
+                  state: { file: true, awaitingInspection: false },
                   actions: {
                     open: () => onOpenSaved(menu.entry),
                     delete: () => setDeleting(menu.entry),
                   },
                 }
               : {
-                  state: { file: false },
-                  actions: {
-                    // A write awaiting inspection offers no editable copy.
-                    open: menu.row.needsInspection
-                      ? undefined
-                      : () => onOpenHistory(menu.row),
+                  state: {
+                    file: false,
+                    awaitingInspection: menu.row.needsInspection,
                   },
+                  actions: { open: () => onOpenHistory(menu.row) },
                 },
         }}
       />
