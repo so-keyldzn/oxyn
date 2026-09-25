@@ -125,12 +125,16 @@ export const settingsBackend = {
   connectionDetails: (connection: string) =>
     call("connection_details", ConnectionDetails, { connection }),
 
+  /**
+   * `null` when a change of environment or privacy tier was not confirmed in
+   * the host's native dialog: nothing of the edit is saved (ADR-0037).
+   */
   updateConnection: (
     commandId: string,
     connection: string,
     edit: ConnectionEdit
   ) =>
-    call("update_connection", ConnectionChange, {
+    call("update_connection", ConnectionChange.nullable(), {
       commandId,
       connection,
       edit,

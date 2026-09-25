@@ -31,6 +31,8 @@ use oxyn_store::Store;
 use parking_lot::Mutex;
 use tokio::sync::broadcast;
 
+use self::confirm::HostAnswer;
+pub(crate) use self::confirm::{HostConfirm, NativeDialog};
 use crate::credentials::KeyringCredentials;
 use crate::ipc::{
     self, CommandOutcome, ConnectResponse, ConnectionDraft, ConnectionTest, DriverChoice, IpcError,
@@ -76,6 +78,9 @@ pub(crate) struct Inner {
     /// AI: the assistant conversation of each connection, kept across a
     /// webview reload and never persisted (UX-SPEC).
     pub(crate) ai: ai::AiState,
+    /// The host's dialog for critical decisions, and the one it may have open
+    /// ([ADR-0037](../../../docs/adr/0037-dialogue-natif-pour-les-confirmations-critiques.md)).
+    pub(crate) confirmations: confirm::Confirmations,
     /// Metadata and results: the searches remembered for « next match ».
     pub(crate) results: results::ResultsState,
 }
@@ -95,13 +100,18 @@ impl Backend {
     /// so: it runs once, before the window exists, and a failure here must
     /// reach the user as text rather than as a window onto nothing.
     ///
+    /// `confirm` is the host's dialog for critical decisions. No default: a
+    /// backend without one does not exist, so no critical decision passes for
+    /// want of a dialog (ADR-0037).
+    ///
     /// # Errors
     /// Local state unreadable, driver registry inconsistent, keyring absent.
-    pub fn open() -> Result<Self> {
+    pub(crate) fn open(confirm: Arc<dyn HostConfirm>) -> Result<Self> {
         KeyringSecretStore::availability().context("the system keyring is unavailable")?;
-        Self::assemble(
+        Self::assemble_with(
             Arc::new(Store::open_default().context("opening the local workspace state")?),
             Arc::new(KeyringSecretStore::new()),
+            confirm::Confirmations::new(confirm, confirm::Timing::HOST),
         )
     }
 
@@ -109,10 +119,38 @@ impl Backend {
     ///
     /// # Errors
     /// If the in-memory state cannot be created.
-    pub fn open_temporary() -> Result<Self> {
-        Self::assemble(
+    pub(crate) fn open_temporary_with(confirm: Arc<dyn HostConfirm>) -> Result<Self> {
+        Self::open_in_memory(confirm::Confirmations::new(confirm, confirm::Timing::HOST))
+    }
+
+    /// A temporary workspace whose host confirms every critical decision at
+    /// once: the tests that are not about the dialog.
+    ///
+    /// # Errors
+    /// If the in-memory state cannot be created.
+    #[cfg(test)]
+    pub(crate) fn open_temporary() -> Result<Self> {
+        Self::open_in_memory(confirm::Confirmations::confirming())
+    }
+
+    /// A temporary workspace on a scripted host and its own timing: the
+    /// tests of the dialog itself.
+    ///
+    /// # Errors
+    /// If the in-memory state cannot be created.
+    #[cfg(test)]
+    pub(crate) fn open_scripted(
+        confirm: Arc<confirm::ScriptedConfirm>,
+        timing: confirm::Timing,
+    ) -> Result<Self> {
+        Self::open_in_memory(confirm::Confirmations::new(confirm, timing))
+    }
+
+    fn open_in_memory(confirmations: confirm::Confirmations) -> Result<Self> {
+        Self::assemble_with(
             Arc::new(Store::open_in_memory().context("opening temporary workspace state")?),
             Arc::new(oxyn_secrets::MemorySecretStore::new()),
+            confirmations,
         )
     }
 
@@ -128,7 +166,18 @@ impl Backend {
         )
     }
 
+    /// [`Self::assemble_with`] on a host that confirms every critical
+    /// decision at once: the tests that are not about the dialog.
+    #[cfg(test)]
     fn assemble(store: Arc<Store>, secrets: Arc<dyn SecretStore>) -> Result<Self> {
+        Self::assemble_with(store, secrets, confirm::Confirmations::confirming())
+    }
+
+    fn assemble_with(
+        store: Arc<Store>,
+        secrets: Arc<dyn SecretStore>,
+        confirmations: confirm::Confirmations,
+    ) -> Result<Self> {
         let mut drivers = DriverRegistry::new();
         drivers
             .register(Arc::new(SqliteDriver::new()))
@@ -180,6 +229,7 @@ impl Backend {
                 workbench: consoles::Workbench::new(local),
                 settings: settings::SettingsState::default(),
                 ai: ai::AiState::default(),
+                confirmations,
                 results: results::ResultsState::default(),
             }),
         };
@@ -436,23 +486,28 @@ impl Backend {
         approved: bool,
     ) -> Result<Option<ConnectResponse>, IpcError> {
         let inner = &self.inner;
-        let Some(config) = inner.pending_connections.lock().remove(&command) else {
+        if !inner.pending_connections.lock().contains_key(&command) {
             return Err(IpcError::invalid("No connection is awaiting this decision"));
-        };
+        }
         if !approved {
+            inner.pending_connections.lock().remove(&command);
             inner.executor.reject(command);
             return Ok(None);
         }
-        // Registered under the pending command's id: `cancel(command)` must
-        // reach the approval and the session opening that follows. Refused,
-        // the decision stays pending rather than losing its configuration.
-        let cancel = match self.track(command) {
-            Ok(cancel) => cancel,
-            Err(error) => {
-                inner.pending_connections.lock().insert(command, config);
-                return Err(error);
-            }
+        // Registered under the pending command's id, before the host is asked:
+        // `cancel(command)` must reach the approval and the session opening
+        // that follows, and no other command may take this id while the
+        // dialog is open. Refused, the decision stays pending.
+        let cancel = self.track(command)?;
+        // Before the configuration is taken: a busy dialog leaves it pending.
+        let answer = self.confirm_held(command).await?;
+        let Some(config) = inner.pending_connections.lock().remove(&command) else {
+            return Err(IpcError::invalid("No connection is awaiting this decision"));
         };
+        if answer == HostAnswer::Refused {
+            inner.executor.reject(command);
+            return Ok(None);
+        }
         match inner.executor.approve("human", command, &cancel).await? {
             Outcome::ConnectionSaved { .. } => {}
             Outcome::Denied { reason, .. } => return Err(IpcError::invalid(reason)),
@@ -582,20 +637,37 @@ impl Backend {
         approved: bool,
     ) -> Result<CommandOutcome, IpcError> {
         let inner = &self.inner;
-        if !approved {
+        let reject = |reason: &str| {
             let answer = inner.ai.decisions.answer(command);
             inner.executor.reject(command);
             answer.report(DispatchReport::Denied {
                 command,
                 reason: "the user rejected this statement".to_owned(),
             });
-            return Ok(CommandOutcome::Denied {
-                reason: "Operation rejected".into(),
-            });
+            Ok(CommandOutcome::Denied {
+                reason: reason.to_owned(),
+            })
+        };
+        if !approved {
+            return reject("Operation rejected");
         }
-        // Tracked before the waiting agent's answer is taken: refused, the
-        // decision stays pending and the agent still waits on it.
+        // A connection's creation, edit or deletion completes on its own path:
+        // approved here, its secrets and the policy would never follow it.
+        if inner.pending_connections.lock().contains_key(&command)
+            || inner.settings.pending_changes.lock().contains_key(&command)
+        {
+            return Err(IpcError::invalid(
+                "This decision belongs to the connection screen",
+            ));
+        }
+        // Tracked before the host is asked and before the waiting agent's
+        // answer is taken: no other command may take this id while the dialog
+        // is open, and refused, the decision stays pending and the agent still
+        // waits on it. A busy dialog leaves it untouched too.
         let cancel = self.track(command)?;
+        if self.confirm_held(command).await? == HostAnswer::Refused {
+            return reject("Not confirmed in the Oxyn dialog: nothing was run");
+        }
         let answer = inner.ai.decisions.answer(command);
         let decided = inner.executor.approve("human", command, &cancel).await;
         answer.report(DispatchReport::decided(command, &decided));
@@ -1150,6 +1222,7 @@ mod tests {
 }
 
 mod ai;
+pub(crate) mod confirm;
 mod consoles;
 mod documents;
 mod library;

@@ -40,6 +40,7 @@ use oxyn_core::{Actor, Command, CommandId, ConnectionConfig, ConnectionId};
 use oxyn_exec::Outcome;
 
 use crate::backend::Backend;
+use crate::backend::confirm::{self, HostAnswer};
 use crate::credentials::KeyringCredentials;
 use crate::ipc::settings::{ConnectionChange, ConnectionDetails, ConnectionEdit};
 use crate::ipc::{IpcError, SavedConnection};
@@ -108,19 +109,37 @@ impl Backend {
     /// connection, except the marking, which the policy reads on every command.
     /// A changed parameter forgets the stored secrets (see the module).
     ///
+    /// A change of environment or privacy tier is confirmed in the host's
+    /// dialog before anything is sent, whatever the policy then decides
+    /// (ADR-0037): `None` when it was not, and nothing of the edit is saved.
+    ///
     /// # Errors
-    /// An empty name, a value under a secret field's key, a refusal.
+    /// An empty name, a value under a secret field's key, a refusal, another
+    /// critical dialog already open.
     pub async fn update_connection(
         &self,
         id: CommandId,
         connection: ConnectionId,
         edit: ConnectionEdit,
-    ) -> Result<ConnectionChange, IpcError> {
-        // Saved directly, an edit must not land between an approval's check
-        // and its save: the approval would overwrite it unseen.
-        let _serial = self.inner.settings.decisions.lock().await;
+    ) -> Result<Option<ConnectionChange>, IpcError> {
         let current = self.read_config(connection).await?;
         let (config, secrets) = self.edited(&current, edit)?;
+        let shown = confirm::secrets_shown(&secrets);
+        if self.confirm_marking(&current, &config, &shown).await? == HostAnswer::Refused {
+            return Ok(None);
+        }
+        // Saved directly, an edit must not land between an approval's check
+        // and its save: the approval would overwrite it unseen. Taken after
+        // the dialog, which may stay open minutes: the configuration is read
+        // again under it, and one saved meanwhile refuses what was confirmed.
+        let _serial = self.inner.settings.decisions.lock().await;
+        if self.read_config(connection).await? != current {
+            return Err(IpcError::invalid(format!(
+                "\"{}\" changed while this change was being confirmed, so it was not applied. \
+                 Open the connection again and redo the change on its current settings.",
+                current.name
+            )));
+        }
         let inner = &self.inner;
         let cancel = self.track(id)?;
         let outcome = inner
@@ -135,7 +154,7 @@ impl Backend {
             )
             .await?;
         match outcome {
-            Outcome::ConnectionSaved { .. } => Ok(self.finish_update(&config, secrets).await),
+            Outcome::ConnectionSaved { .. } => Ok(Some(self.finish_update(&config, secrets).await)),
             Outcome::NeedsApproval {
                 command,
                 reason,
@@ -149,7 +168,7 @@ impl Backend {
                         origin: Box::new(current.clone()),
                     },
                 );
-                Ok(approval(command, reason, preview, &current.name))
+                Ok(Some(approval(command, reason, preview, &current.name)))
             }
             Outcome::Denied { reason, .. } => Err(IpcError::invalid(reason)),
             _ => Err(IpcError::invalid("The connection was not saved")),
@@ -215,17 +234,31 @@ impl Backend {
         approved: bool,
     ) -> Result<Option<ConnectionChange>, IpcError> {
         let inner = &self.inner;
-        let Some(pending) = inner.settings.pending_changes.lock().remove(&command) else {
-            return Err(IpcError::invalid(
-                "No connection change is awaiting this decision",
-            ));
-        };
+        let missing = || IpcError::invalid("No connection change is awaiting this decision");
+        if !inner.settings.pending_changes.lock().contains_key(&command) {
+            return Err(missing());
+        }
         if !approved {
+            inner.settings.pending_changes.lock().remove(&command);
+            inner.executor.reject(command);
+            return Ok(None);
+        }
+        // Tracked before the host is asked: no other command may take this id
+        // while the dialog is open. Refused, the change stays pending rather
+        // than losing what it holds.
+        let cancel = self.track(command)?;
+        // Before the change is taken: a busy dialog leaves it pending.
+        let answer = self.confirm_held(command).await?;
+        let Some(pending) = inner.settings.pending_changes.lock().remove(&command) else {
+            return Err(missing());
+        };
+        if answer == HostAnswer::Refused {
             inner.executor.reject(command);
             return Ok(None);
         }
         // One approval at a time: another one saved between this check and
         // this save would make the check vouch for a state that is gone.
+        // Taken after the dialog, which may stay open minutes.
         let _serial = inner.settings.decisions.lock().await;
         let connection = pending.origin().id;
         let saved = self
@@ -264,18 +297,6 @@ impl Backend {
                 pending.origin().name
             )));
         }
-        // Refused, the change stays pending rather than losing what it holds.
-        let cancel = match self.track(command) {
-            Ok(cancel) => cancel,
-            Err(error) => {
-                inner
-                    .settings
-                    .pending_changes
-                    .lock()
-                    .insert(command, pending);
-                return Err(error);
-            }
-        };
         let outcome = inner.executor.approve("human", command, &cancel).await?;
         match (outcome, pending) {
             (

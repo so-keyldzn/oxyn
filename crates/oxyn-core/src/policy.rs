@@ -256,6 +256,25 @@ impl DefaultPolicy {
         self.connections.read().get(&id).cloned()
     }
 
+    /// L'environnement sur lequel le gate juge `cmd`, quand l'appelant annonce
+    /// `announced`.
+    ///
+    /// Exposé pour qu'un appelant qui doit savoir si une décision porte sur la
+    /// production — le dialogue natif d'ADR-0037 — lise **ce** calcul plutôt
+    /// qu'une copie qui divergerait.
+    #[must_use]
+    pub fn retained_environment(&self, cmd: &Command, announced: Environment) -> Environment {
+        let facts = cmd.target_connection().and_then(|id| self.facts(id));
+        Self::retain(announced, facts.as_ref())
+    }
+
+    /// Le plus contraignant entre l'environnement annoncé et celui dont la
+    /// connexion est marquée : un appelant qui se trompe ne doit pas pouvoir
+    /// dégrader la protection.
+    fn retain(announced: Environment, facts: Option<&ConnectionFacts>) -> Environment {
+        facts.map_or(announced, |f| announced.max(f.environment))
+    }
+
     /// Nom montrable d'une connexion, ou une mention neutre si elle est
     /// inconnue. Ne rend **jamais** l'identifiant (I-03).
     fn display_name(facts: Option<&ConnectionFacts>) -> String {
@@ -316,10 +335,7 @@ impl PolicyGate for DefaultPolicy {
         let mutating = cmd.is_mutating();
         let facts = cmd.target_connection().and_then(|id| self.facts(id));
 
-        // L'environnement retenu est le plus contraignant entre celui que
-        // l'appelant annonce et celui dont la connexion est marquée. Un
-        // appelant qui se trompe ne doit pas pouvoir dégrader la protection.
-        let env = facts.as_ref().map_or(env, |f| env.max(f.environment));
+        let env = Self::retain(env, facts.as_ref());
 
         // ── Refus ───────────────────────────────────────────────────────────
 

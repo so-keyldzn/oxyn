@@ -194,7 +194,8 @@ fn an_edit_goes_through_the_bus_and_refreshes_the_policy() {
     change.values.remove("user");
     let answer = runtime
         .block_on(backend.update_connection(CommandId::new(), config.id, change))
-        .expect("saved");
+        .expect("saved")
+        .expect("the scripted host confirms the marking change");
     let ConnectionChange::Saved {
         connection,
         secrets_error,
@@ -273,6 +274,7 @@ fn a_production_edit_writes_its_secrets_only_once_approved_and_keeps_the_others(
     let ask = |backend: &Backend| match runtime
         .block_on(backend.update_connection(CommandId::new(), config.id, retyped.clone()))
         .expect("policy answers")
+        .expect("no marking change to confirm")
     {
         ConnectionChange::Approval {
             command, preview, ..
@@ -382,6 +384,7 @@ fn saved_edit(
     match runtime
         .block_on(backend.update_connection(CommandId::new(), config.id, change))
         .expect("saved")
+        .expect("the scripted host confirms")
     {
         ConnectionChange::Saved { secrets_error, .. } => secrets_error,
         other => panic!("a local edit is saved without approval, got {other:?}"),
@@ -458,6 +461,7 @@ fn a_moved_production_connection_keeps_its_secret_until_the_move_is_approved() {
     let ConnectionChange::Approval { command, .. } = runtime
         .block_on(backend.update_connection(CommandId::new(), config.id, typed))
         .expect("policy answers")
+        .expect("the scripted host confirms")
     else {
         panic!("a production edit needs approval");
     };
@@ -477,6 +481,7 @@ fn a_moved_production_connection_keeps_its_secret_until_the_move_is_approved() {
     let ask = |change: ConnectionEdit| match runtime
         .block_on(backend.update_connection(CommandId::new(), config.id, change))
         .expect("policy answers")
+        .expect("the scripted host confirms")
     {
         ConnectionChange::Approval { command, .. } => {
             command.parse::<CommandId>().expect("a minted id")
@@ -517,6 +522,7 @@ fn held_edits(
     let ask = |change: ConnectionEdit| match runtime
         .block_on(backend.update_connection(CommandId::new(), config.id, change))
         .expect("policy answers")
+        .expect("the scripted host confirms")
     {
         ConnectionChange::Approval { command, .. } => {
             command.parse::<CommandId>().expect("a minted id")
@@ -770,6 +776,7 @@ fn a_deletion_goes_through_the_bus_and_forgets_the_secrets() {
     if let ConnectionChange::Approval { command, .. } = runtime
         .block_on(backend.update_connection(CommandId::new(), config.id, change))
         .expect("policy answers")
+        .expect("no marking change to confirm")
     {
         runtime
             .block_on(backend.decide_connection_change(command.parse().expect("id"), true))

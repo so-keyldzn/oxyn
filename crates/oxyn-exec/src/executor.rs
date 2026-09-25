@@ -2062,7 +2062,12 @@ impl Executor {
     /// [`Production`](Environment::Production) : c'est le même « fermé par
     /// défaut » que le gate lui-même, et ignorer un marquage inconnu
     /// reviendrait à traiter la production comme du local.
-    fn environment_of(&self, command: &Command) -> Environment {
+    ///
+    /// Public pour l'interface, qui doit savoir si l'accord qu'on lui demande
+    /// porte sur la production (ADR-0037) en lisant le calcul même qu'on
+    /// soumet au gate.
+    #[must_use]
+    pub fn environment_of(&self, command: &Command) -> Environment {
         match command {
             // La connexion n'est pas encore enregistrée : c'est sa propre
             // déclaration qui fait foi, et le gate la recoupera.

@@ -126,6 +126,14 @@ pub enum ApprovalError {
         /// La borne atteinte.
         limit: usize,
     },
+
+    /// Une demande attend déjà sous cet identifiant.
+    ///
+    /// La remplacer changerait ce qu'un accord en cours de lecture approuve :
+    /// l'utilisateur lirait une instruction et en validerait une autre
+    /// (ADR-0037 § 2).
+    #[error("a command is already awaiting approval under this identifier")]
+    AlreadyPending,
 }
 
 impl From<ApprovalError> for OxynError {
@@ -234,8 +242,9 @@ impl ApprovalRegistry {
     ///
     /// # Erreurs
     /// [`ApprovalError::QueueFull`] quand la borne de demandes simultanées est
-    /// atteinte. La commande n'est alors pas mise de côté, et l'appelant doit
-    /// la traiter comme refusée.
+    /// atteinte, [`ApprovalError::AlreadyPending`] quand une demande attend
+    /// déjà sous `id`. La commande n'est alors pas mise de côté, et l'appelant
+    /// doit la traiter comme refusée.
     pub fn submit(
         &self,
         id: CommandId,
@@ -263,6 +272,9 @@ impl ApprovalRegistry {
             return Err(ApprovalError::QueueFull {
                 limit: self.capacity,
             });
+        }
+        if guard.pending.contains_key(&id) {
+            return Err(ApprovalError::AlreadyPending);
         }
         guard.pending.insert(id, entree.clone());
         Ok(entree)
@@ -329,6 +341,16 @@ impl ApprovalRegistry {
     #[must_use]
     pub fn pending(&self) -> Vec<PendingCommand> {
         self.queue.lock().pending.values().cloned().collect()
+    }
+
+    /// La demande qui attend sous `id`, sans la retirer.
+    ///
+    /// Pour qui doit savoir sur quoi porte un accord **avant** de le donner —
+    /// le dialogue natif d'ADR-0037 ; [`take`](Self::take) reste le seul
+    /// retrait, et le seul à vérifier la péremption.
+    #[must_use]
+    pub fn peek(&self, id: CommandId) -> Option<PendingCommand> {
+        self.queue.lock().pending.get(&id).cloned()
     }
 
     /// Nombre de demandes en attente, périmées comprises.
@@ -441,6 +463,30 @@ mod tests {
         let reprise = registre.take(id).expect("accord donné");
         assert_eq!(reprise.command, cmd);
         assert_eq!(reprise.actor, Actor::Human);
+    }
+
+    #[test]
+    fn une_demande_en_attente_ne_se_remplace_pas() {
+        // Remplacée pendant qu'un dialogue la montre, l'accord donné à ce
+        // qu'on a lu exécuterait autre chose (ADR-0037).
+        let registre = ApprovalRegistry::new();
+        let id = CommandId::new();
+        let lue = commande();
+        registre
+            .submit(id, Actor::Human, lue.clone(), "production", None)
+            .expect("la file est vide");
+        let autre = Command::Execute {
+            connection: ConnectionId::new(),
+            session: SessionId::new(),
+            request: Box::new(ExecRequest::new(QueryLanguage::SQL, "DROP TABLE audit")),
+        };
+        assert_eq!(
+            registre
+                .submit(id, Actor::Human, autre, "production", None)
+                .err(),
+            Some(ApprovalError::AlreadyPending)
+        );
+        assert_eq!(registre.take(id).expect("accord donné").command, lue);
     }
 
     #[test]

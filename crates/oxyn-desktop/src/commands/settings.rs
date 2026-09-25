@@ -49,7 +49,7 @@ pub async fn update_connection(
     command_id: String,
     connection: String,
     edit: ConnectionEdit,
-) -> Result<ConnectionChange, IpcError> {
+) -> Result<Option<ConnectionChange>, IpcError> {
     let id: CommandId = parse("command id", &command_id)?;
     backend
         .update_connection(id, parse("connection", &connection)?, edit)
