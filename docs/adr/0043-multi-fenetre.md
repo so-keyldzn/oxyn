@@ -486,13 +486,29 @@ transaction n'est pas résolue, rien n'est vidé, rien n'est inscrit, et
 `Cancel` rend l'application intacte. Pour la fermeture d'une fenêtre qui n'est
 pas la dernière, la même étape porte sur ses seules sessions.
 
-**Ce qui est listé.** Le backend lit l'état de chaque session de console qui
-déclare `TRANSACTIONS`, par `Session::transaction_state` — la lecture ordonnée
-d'ADR-0039, sans aller-retour réseau —, bornée à `FLUSH_GRACE` (2 s) : une
-session qui ne répond pas dans ce délai compte comme `Unknown`. Une session
-`Open`, ou `Unknown`, est listée. Aucune : l'arrêt ordonné commence
-aussitôt, comme aujourd'hui. Le front ne fournit pas la liste : il pourrait
-l'avoir périmée, et une XSS pourrait la vider.
+**Ce qui est listé.** Le backend liste chaque session de console qui déclare
+`TRANSACTIONS`, avec le **dernier état que l'exécuteur a constaté** pour elle :
+celui que `Outcome::Connected` porte à l'ouverture de la console, puis celui de
+chaque `Event::TransactionState` publié à la fin d'une exécution
+([ADR-0039](0039-etat-de-transaction-d-une-session.md) § 3 et § 4). Une
+session dont une instruction de console est en cours compte comme `Unknown`
+jusqu'à ce que sa fin publie un état ; des événements manqués par un abonné en
+retard rendent `Unknown` toutes les sessions. Avant de lire, le backend
+applique les événements déjà publiés, en attendant au plus `FLUSH_GRACE`
+(2 s) ; au-delà, toutes comptent comme `Unknown`. Une session `Open`, ou
+`Unknown`, est listée. Aucune : l'arrêt ordonné commence aussitôt, comme
+aujourd'hui. Le front ne fournit pas la liste : il pourrait l'avoir périmée,
+et une XSS pourrait la vider.
+
+*Précision de mise en œuvre, 2026-09-25 :* le texte proposé faisait lire
+l'état par `Session::transaction_state` depuis le pont. C'était un appel au
+driver hors du bus, celui qu'ADR-0039 § 4 a déjà retiré au nom
+d'[I-01](../../CLAUDE.md#i-01) : la sortie lit l'état que l'exécuteur a
+constaté et publié, sans rien demander à la session
+(`crates/oxyn-desktop/src/backend/exit.rs`). Le signal porte la session et non
+le document, que le backend ne connaît pas : la fenêtre nomme la console
+d'après ses onglets, et le journal d'une sortie sans accusé nomme la connexion
+et la session.
 
 **Où le dialogue vit : dans la webview.** Le backend envoie à chaque fenêtre
 concernée, par son canal d'arrêt (`subscribe_shutdown`, par fenêtre), le
@@ -530,6 +546,14 @@ attend l'`Event::TransactionState` de chaque session (ADR-0039 § 3) :
   le dialogue reste ouvert sur les sessions non résolues. Un `COMMIT` dont
   l'issue est ambiguë n'est **jamais** rejoué ([I-13](../../CLAUDE.md#i-13)) :
   c'est l'état constaté ensuite qui dit s'il a pris ;
+
+  *Précision de mise en œuvre, 2026-09-25 :* les instructions partent une à
+  une et la première erreur arrête la série. Un `COMMIT` qui a échoué, ou dont
+  la réponse n'est pas arrivée, n'est plus proposé pour cette session : seuls
+  `Rollback` et `Cancel` restent, et `COMMIT` tapé dans la console reste
+  possible après `Cancel`. `run_console` ne rend la main qu'après la
+  publication de l'état : la fenêtre rappelle `request_exit` dès que chaque
+  instruction a répondu, et c'est la relecture du backend qui tranche ;
 * `Cancel`, dans n'importe quelle fenêtre — la fenêtre appelle `cancel_exit`,
   et la sortie est abandonnée pour toutes : les autres fenêtres referment leur
   dialogue (`ShutdownSignal::ExitCancelled`), et rien n'a été vidé ni inscrit.

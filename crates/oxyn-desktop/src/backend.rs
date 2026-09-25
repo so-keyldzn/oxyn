@@ -33,6 +33,7 @@ use tokio::sync::broadcast;
 
 use self::confirm::HostAnswer;
 pub(crate) use self::confirm::{HostConfirm, NativeDialog};
+pub(crate) use self::exit::ExitStep;
 use crate::credentials::KeyringCredentials;
 use crate::ipc::{
     self, CommandOutcome, ConnectResponse, ConnectionDraft, ConnectionTest, DriverChoice, IpcError,
@@ -245,6 +246,11 @@ impl Backend {
         }
         tracing::info!(connections = known, "saved connections registered");
 
+        // Subscribed before anything runs: a state published earlier would
+        // be missed, and a transaction left out of the exit (ADR-0043).
+        let consoles = Arc::new(exit::ConsoleTransactions::new(executor.subscribe()));
+        tauri::async_runtime::spawn(Arc::clone(&consoles).follow());
+
         let backend = Self {
             inner: Arc::new(Inner {
                 executor: Arc::new(executor),
@@ -253,7 +259,7 @@ impl Backend {
                 credentials,
                 running: Mutex::default(),
                 pending_connections: Mutex::new(HashMap::new()),
-                workbench: consoles::Workbench::new(local),
+                workbench: consoles::Workbench::new(local, consoles),
                 settings: settings::SettingsState::default(),
                 ai: ai::AiState::default(),
                 confirmations,
@@ -1289,6 +1295,7 @@ mod ai;
 pub(crate) mod confirm;
 mod consoles;
 mod documents;
+mod exit;
 mod library;
 mod metadata;
 mod object_operations;

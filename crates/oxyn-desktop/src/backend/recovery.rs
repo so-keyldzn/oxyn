@@ -177,6 +177,11 @@ impl Backend {
         *self.inner.workbench.local.shutdown.lock() = Some(channel);
     }
 
+    /// The webview's shutdown channel, if one is subscribed.
+    pub(super) fn shutdown_channel(&self) -> Option<Channel<ShutdownSignal>> {
+        self.inner.workbench.local.shutdown.lock().clone()
+    }
+
     /// The webview has submitted every draft it held.
     pub fn shutdown_flushed(&self) {
         self.inner.workbench.local.flushed.notify_waiters();
@@ -240,10 +245,14 @@ impl Backend {
     /// may still record the close, always after the writes, if the process
     /// lives long enough. An ordered shutdown already under way is not waited
     /// for: the process ends with it, and whatever it recorded stands.
+    ///
+    /// A transaction still open on a console is not resolved: the end of the
+    /// process rolls it back, and the journal names its session (ADR-0043).
     pub(crate) fn close_on_forced_exit(&self, grace: Duration) -> bool {
         if !self.begin_shutdown() {
             return self.inner.workbench.local.closed.load(Ordering::SeqCst);
         }
+        self.warn_forced_exit_transactions();
         let (done, finished) = std::sync::mpsc::sync_channel(1);
         let backend = self.clone();
         tauri::async_runtime::spawn(async move {

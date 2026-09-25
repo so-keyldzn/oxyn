@@ -9,6 +9,8 @@
 
 mod capabilities;
 
+use std::sync::Arc;
+
 use oxyn_core::{
     Actor, CancelToken, Capabilities, Command, CommandId, ConnectionId, ExecRequest, OxynError,
     QueryLanguage, SessionId,
@@ -17,24 +19,29 @@ use oxyn_exec::Outcome;
 
 use super::Backend;
 use super::documents::Writers;
+use super::exit::{ConsoleTransactions, ExitHold};
 use super::recovery::LocalWork;
 use crate::ipc::consoles::{
     ConsoleRun, ConsoleSession, ContextOutcome, RunTarget, SessionPlace, bind,
 };
 use crate::ipc::{self, CommandOutcome, IpcError};
 
-/// The consoles' share of the backend state: document writers and the local
-/// work the shutdown waits for.
+/// The consoles' share of the backend state: document writers, the local
+/// work the shutdown waits for, and the transactions that hold the exit.
 pub(crate) struct Workbench {
     pub(crate) writers: Writers,
     pub(crate) local: LocalWork,
+    pub(crate) consoles: Arc<ConsoleTransactions>,
+    pub(crate) exit: ExitHold,
 }
 
 impl Workbench {
-    pub(crate) fn new(local: LocalWork) -> Self {
+    pub(crate) fn new(local: LocalWork, consoles: Arc<ConsoleTransactions>) -> Self {
         Self {
             writers: Writers::default(),
             local,
+            consoles,
+            exit: ExitHold::default(),
         }
     }
 }
@@ -131,6 +138,13 @@ impl Backend {
             self.close_console(connection, session).await?;
             return Err(IpcError::invalid("Opening the console was cancelled."));
         }
+        // Listed at the exit while its transaction is open (ADR-0043).
+        inner.workbench.consoles.opened(
+            session,
+            connection,
+            config.name.clone(),
+            transaction_state,
+        );
         self.console_session(session, config.read_only, transaction_state)
     }
 
@@ -166,6 +180,7 @@ impl Backend {
         connection: ConnectionId,
         session: SessionId,
     ) -> Result<(), IpcError> {
+        self.inner.workbench.consoles.closed(session);
         match self
             .inner
             .executor
@@ -296,15 +311,27 @@ impl Backend {
         let params = bind(&run.parameters).map_err(|error| IpcError::invalid(error.to_string()))?;
         let mut request = ExecRequest::new(QueryLanguage::Sql(dialect), text).with_params(params);
         request.limits.read_only = config.read_only;
-        self.run(
-            id,
-            Command::Execute {
-                connection,
-                session,
-                request: Box::new(request),
-            },
-        )
-        .await
+        let consoles = &self.inner.workbench.consoles;
+        let before = consoles.running(session);
+        let outcome = self
+            .run(
+                id,
+                Command::Execute {
+                    connection,
+                    session,
+                    request: Box::new(request),
+                },
+            )
+            .await;
+        // Nothing ran, so no state will be published: the session is where
+        // it was. An approved statement publishes its own at its end.
+        if matches!(
+            outcome,
+            Ok(CommandOutcome::Denied { .. } | CommandOutcome::NeedsApproval { .. })
+        ) {
+            consoles.not_run(session, before);
+        }
+        outcome
     }
 }
 

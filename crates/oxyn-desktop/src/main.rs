@@ -159,6 +159,9 @@ fn main() -> Result<()> {
             commands::recovery::recovery_status,
             commands::recovery::subscribe_shutdown,
             commands::recovery::shutdown_flushed,
+            // An open transaction holds the exit (ADR-0043): no argument
+            commands::recovery::shutdown_acknowledged,
+            commands::recovery::cancel_exit,
             // Menu bar and exit: interface plumbing, no `Command` (ADR-0041)
             commands::menu::subscribe_menu,
             commands::menu::set_menu_state,
