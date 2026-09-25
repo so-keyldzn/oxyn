@@ -245,7 +245,9 @@ export const NoSearchHit: Story = {
 
 /**
  * The menu hands the node over: the qualified name is the backend's, never
- * assembled here from a hostile segment (I-10).
+ * assembled here from a hostile segment (I-10). A tree given neither the
+ * composed copies nor a session's operations still lists them, greyed with
+ * what is missing: two tables never offer two different menus.
  */
 export const ContextMenu: Story = {
   args: { onOpen: fn(), onCopyName: fn(), onRefresh: fn() },
@@ -253,9 +255,31 @@ export const ContextMenu: Story = {
     await userEvent.click(canvas.getByText("public"))
     await userEvent.pointer({
       keys: "[MouseRight]",
-      target: canvas.getByText(HOSTILE),
+      target: canvas.getByText("invoices"),
     })
     const menu = within(document.body)
+    await menu.findByRole("menuitem", { name: "Copy qualified name" })
+    for (const name of [/^Rename…/, /^Truncate…/, /^Drop…/]) {
+      const entry = menu.getByRole("menuitem", { name })
+      await expect(entry).toHaveAttribute("aria-disabled", "true")
+      await expect(entry).toHaveTextContent(
+        "Catalog operations are not available here."
+      )
+    }
+    await userEvent.click(menu.getByRole("menuitem", { name: /^Copy as/ }))
+    const insert = await menu.findByRole("menuitem", {
+      name: /^INSERT template/,
+    })
+    await expect(insert).toHaveAttribute("aria-disabled", "true")
+    await expect(insert).toHaveTextContent("Not available in this catalog view")
+    // The submenu first, then the menu.
+    await userEvent.keyboard("{Escape}{Escape}")
+    await waitFor(() => expect(menu.queryByRole("menu")).toBeNull())
+
+    await userEvent.pointer({
+      keys: "[MouseRight]",
+      target: canvas.getByText(HOSTILE),
+    })
     await userEvent.click(
       await menu.findByRole("menuitem", { name: "Copy qualified name" })
     )
@@ -345,18 +369,34 @@ export const PinToQuestion: Story = {
 }
 
 /**
- * Under `metadata`, no row can leave: the action is absent, not greyed — a
- * disabled item would advertise a path the tier closes.
+ * Under `metadata`, no row can leave: the entry is greyed with the tier,
+ * as the grid's `Send to assistant` (UX-SPEC: a tier that refuses greys).
  */
-export const NoPinUnderMetadata: Story = {
+export const PinGreyedUnderMetadata: Story = {
   args: {
     onCopyName: fn(),
     pin: { tier: "metadata", destination: "provider", onPin: fn() },
   },
   play: async ({ canvas }) => {
     const menu = await openInvoicesMenu(canvas)
+    const pin = menu.getByRole("menuitem", { name: /^Pin to question/ })
+    await expect(pin).toHaveAttribute("aria-disabled", "true")
+    await expect(pin).toHaveTextContent("The connection's AI level is Metadata")
+    await userEvent.keyboard("{Escape}")
+    await waitFor(() => expect(menu.queryByRole("menu")).toBeNull())
+  },
+}
+
+/** No AI destination is declared: the entry does not exist (UX-SPEC). */
+export const NoPinWithoutDestination: Story = {
+  args: {
+    onCopyName: fn(),
+    pin: { tier: "sampled", destination: null, onPin: fn() },
+  },
+  play: async ({ canvas }) => {
+    const menu = await openInvoicesMenu(canvas)
     await expect(
-      menu.queryByRole("menuitem", { name: "Pin to question" })
+      menu.queryByRole("menuitem", { name: /^Pin to question/ })
     ).toBeNull()
     await userEvent.keyboard("{Escape}")
     await waitFor(() => expect(menu.queryByRole("menu")).toBeNull())

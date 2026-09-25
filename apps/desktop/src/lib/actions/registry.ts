@@ -243,7 +243,9 @@ export const behaviours: Record<string, ActionBehaviour> = {
   "tab.close": inWorkspace(
     (workspace, context) => {
       if (context.sources.tab)
-        return context.sources.tab.actions.close ? true : "absent"
+        return context.sources.tab.actions.close
+          ? true
+          : { reason: "Not available for this tab" }
       return workspace.state.activeTab === null
         ? { reason: "No tab is open" }
         : true

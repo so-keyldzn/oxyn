@@ -188,13 +188,13 @@ export function gridMenuSource(
     oneColumn: selection ? selection.columns.length === 1 : true,
     relation: menu.relation,
     loadedRows: rowCount,
+    shownColumns: shown.length,
     ai: menu.ai,
   }
   const actions: GridMenuActions = {
     sort: sort && ((descending) => sort(name, descending)),
     filter: filter && (() => afterClose(() => filter(name))),
-    // The last shown column stays: a grid with no column looks empty.
-    hideColumn: hide && shown.length > 1 ? () => hide(column) : undefined,
+    hideColumn: hide && (() => hide(column)),
   }
   if (target.kind === "cell") {
     const position = target.position

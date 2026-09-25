@@ -255,7 +255,7 @@ export const ContextMenuOfAClosedConnection: Story = {
 
 /**
  * The connection whose workspace stayed open: `Disconnect` rather than
- * `Connect`, its catalog refreshable, and no `Delete…` until it is left.
+ * `Connect`, its catalog refreshable, and `Delete…` greyed until it is left.
  */
 export const ContextMenuOfTheOpenConnection: Story = {
   args: {
@@ -265,7 +265,9 @@ export const ContextMenuOfTheOpenConnection: Story = {
   play: async () => {
     const page = await openMenuOn("billing")
     await expect(page.queryByRole("menuitem", { name: "Connect" })).toBeNull()
-    await expect(page.queryByRole("menuitem", { name: /Delete/ })).toBeNull()
+    const remove = page.getByRole("menuitem", { name: /Delete/ })
+    await expect(remove).toHaveAttribute("aria-disabled", "true")
+    await expect(remove).toHaveTextContent("Disconnect it to delete it")
     await expect(
       page.getByRole("menuitem", { name: "Refresh catalog" })
     ).not.toHaveAttribute("aria-disabled", "true")

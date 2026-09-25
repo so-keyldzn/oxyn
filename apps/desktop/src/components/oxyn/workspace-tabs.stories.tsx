@@ -329,8 +329,8 @@ export const TabMenu: Story = {
       page.getByRole("menuitem", { name: /Duplicate/ })
     ).toHaveTextContent("Only a console is duplicated")
     await expect(
-      page.queryByRole("menuitem", { name: /Reveal in library/ })
-    ).toBeNull()
+      page.getByRole("menuitem", { name: /Reveal in library/ })
+    ).toHaveTextContent("Only a console is saved in the library")
     await userEvent.click(
       page.getByRole("menuitem", {
         name: /^Close(?! (others|to the right|all))/,

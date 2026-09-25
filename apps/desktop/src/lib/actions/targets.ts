@@ -3,8 +3,9 @@
 //
 // A surface never publishes its target for good: its menu builds a context
 // with the target for the time it is open (`menuContext`), and every entry is
-// evaluated and invoked on that context. A handler the surface leaves out is
-// an entry the surface does not offer; what greys an entry is in the state.
+// evaluated and invoked on that context. What the state says decides whether
+// an entry applies to the target — absent only in the cases UX-SPEC fixes —
+// and greys it; a handler the surface leaves out greys it too, never hides it.
 
 /** Where the rows of a grid come from. */
 export type GridOrigin =
@@ -41,6 +42,8 @@ export interface GridMenuState {
   relation: boolean
   /** Rows the result holds now, for `Copy values` (I-06). */
   loadedRows: number
+  /** Columns shown: the last one is never hidden. */
+  shownColumns: number
   ai: GridAiLevel
 }
 
@@ -118,6 +121,8 @@ export interface ConnectionMenuActions {
 export interface LibraryMenuState {
   /** The entry is a file on disk (a saved query), with a path. */
   file: boolean
+  /** A history write marked for inspection: it opens no editable copy. */
+  awaitingInspection: boolean
 }
 
 export interface LibraryMenuActions {
@@ -131,6 +136,11 @@ export interface LibraryMenuActions {
 export interface AssistantMenuState {
   /** An answer is being written: it cannot be regenerated yet. */
   answering: boolean
+  /**
+   * `Open in console` on a code block: absent from a block that is not SQL,
+   * greyed with the reason its button gives. Only a code block sets it.
+   */
+  openSql?: true | { reason: string } | "absent"
 }
 
 export interface AssistantMenuActions {
@@ -163,6 +173,8 @@ export interface CatalogMenuState {
   definition: boolean
   /** Some level of the tree is expanded. */
   expanded: boolean
+  /** `Pin to question` on this node (`pinOffer`). */
+  pin: true | { reason: string } | "absent"
 }
 
 export interface CatalogMenuActions {

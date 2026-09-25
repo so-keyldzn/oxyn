@@ -92,10 +92,15 @@ export function CodeBlock({
   const lines = useTokens(block)
   const [anchor, setAnchor] = React.useState<Element | null>(null)
   const code = block.text.trim()
-  // The entries of the buttons below, and only those: never `Run` (I-07). An
-  // entry whose button is absent or disabled is absent too.
-  const openInConsole =
-    sql && !openSqlDisabledReason ? () => onOpenSql(code) : undefined
+  // The entries of the buttons below, and only those: never `Run` (I-07).
+  // Absent from a block that is not SQL; greyed, with the button's reason,
+  // where the button is disabled.
+  const openSql = !isSqlBlock(block)
+    ? "absent"
+    : openSqlDisabledReason
+      ? { reason: openSqlDisabledReason }
+      : true
+  const openInConsole = sql ? () => onOpenSql(code) : undefined
   const copyCode = onCopy
     ? () => void copyFromMenu(onCopy, code, "Code")
     : undefined
@@ -155,7 +160,7 @@ export function CodeBlock({
         anchor={anchor}
         sources={{
           assistant: {
-            state: { answering: false },
+            state: { answering: false, openSql },
             actions: { copyCode, openInConsole },
           },
         }}

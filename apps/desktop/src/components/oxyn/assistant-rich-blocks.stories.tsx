@@ -225,7 +225,8 @@ export const CodeBlockMenuNeverRuns: Story = {
 
 /**
  * Where the button cannot open the statement — its provenance cannot be
- * recorded —, the menu does not offer it either: only `Copy code` remains.
+ * recorded —, the menu greys it with the button's reason. It never offers
+ * `Run` (I-07).
  */
 export const CodeBlockMenuWithoutProvenance: Story = {
   args: {
@@ -237,7 +238,13 @@ export const CodeBlockMenuWithoutProvenance: Story = {
     const page = await openCodeMenu(canvasElement)
     await expect(
       page.getAllByRole("menuitem").map((item) => item.textContent.trim())
-    ).toEqual(["Copy code"])
+    ).toEqual([
+      "Copy code",
+      "Open in consoleThis answer cannot be opened in a console: Oxyn cannot record where it came from.",
+    ])
+    await expect(
+      page.getByRole("menuitem", { name: /^Open in console/ })
+    ).toHaveAttribute("aria-disabled", "true")
     await userEvent.click(page.getByRole("menuitem", { name: "Copy code" }))
     await expect(args.onCopy).toHaveBeenCalledWith(PROPOSED)
     await waitFor(() => expect(page.queryByRole("menu")).toBeNull())

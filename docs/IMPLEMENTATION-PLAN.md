@@ -405,11 +405,11 @@ Lots, dans l'ordre :
      selection` (le composeur ne reçoit pas de texte de l'extérieur), `Re-layout`
      et `Export image…` de l'ERD, `Reveal in Finder`/`Explorer` (attend une
      commande système, comme `open_external`), `Open in new window` (lot 7) ;
-   - **absentes** de la bibliothèque : `Rename…`, `Duplicate` et `Copy path` —
-     il faudrait `rename_query_document` et `duplicate_query_document` en Rust,
-     la composition ouvrir-puis-sauvegarder n'étant pas atomique, et
-     `DocumentEntry` ne porte pas de chemin. UX-SPEC ne prévoit pas cette
-     absence ;
+   - **grisées** dans la bibliothèque, avec ce qu'elles attendent (lot 3 ter) :
+     `Rename…`, `Duplicate` et `Copy path` — il faudrait
+     `rename_query_document` et `duplicate_query_document` en Rust, la
+     composition ouvrir-puis-sauvegarder n'étant pas atomique, et
+     `DocumentEntry` ne porte pas de chemin ;
    - `Duplicate` d'une connexion ouvre le formulaire de création pré-rempli des
      seuls paramètres non secrets ; la copie commence en `production`, au
      niveau IA par défaut, et rien n'est enregistré avant `Connect`. Il n'est
@@ -467,6 +467,31 @@ Lots, dans l'ordre :
      d'où l'hypothèse d'une build antérieure au lot 3. La story
      `SiblingTablesShareTheirMenu` tient l'égalité ; l'utilisateur revérifie
      sur la build installée.
+
+   **Lot 3 ter — une entrée ne disparaît plus faute de gestionnaire, fait le
+   2026-09-25.** La capture du lot 3 bis montrait un menu d'`invoices` sans
+   `Copy as ▸` ni opérations, faute de gestionnaires donnés à l'arbre : c'est
+   très probablement ce qui a donné deux menus à l'utilisateur. Désormais
+   (`onTarget` de `lib/actions/menu-behaviours.ts`), l'état de la cible décide
+   seul de l'absence — les cas d'UX-SPEC, « Une action, un libellé, un
+   raccourci » : type d'objet, capacité non déclarée, aucune destination IA,
+   agent —, et un gestionnaire que la surface ne donne pas **grise** l'entrée
+   avec une raison propre à la surface. Le catalogue fournit toujours sa source
+   d'opérations (« Catalog operations are not available here. » sans session).
+   Changements de comportement, sur toutes les surfaces :
+   - `Pin to question` sous un niveau autre que `Sampled` est **grisé** avec le
+     niveau, comme `Send to assistant` de la grille ; il restait absent,
+     contre UX-SPEC (« un niveau IA qui refuse » grise) ;
+   - `Delete…` d'une connexion ouverte est grisé (« Disconnect it to delete
+     it »), `Reveal in library` d'un onglet d'objet grisé (« Only a console is
+     saved in the library »), `Open` d'une écriture en attente d'inspection
+     grisé, `Open in console` d'un bloc de code grisé avec la raison du bouton,
+     `Hide` de la dernière colonne grisé ;
+   - dans les réglages, les entrées de connexion que l'écran ne fait pas
+     (`Refresh catalog`, `New console`, `Duplicate`…) sont grisées.
+   Tenu par `context-menus.test.ts` (« never lose an entry because its surface
+   left the handler out », sur toutes les surfaces) et les stories des
+   surfaces, dont `Oxyn/CatalogTree` `ContextMenu`.
 4. **Revue destructive** — `review_object_operation`, `run_object_operation`,
    qui approuve une commande retenue par `confirm_held`, donc par le dialogue
    natif d'[ADR-0037](adr/0037-dialogue-natif-pour-les-confirmations-critiques.md)

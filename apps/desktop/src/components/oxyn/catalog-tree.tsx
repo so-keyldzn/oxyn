@@ -30,6 +30,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import type { Availability } from "@/lib/actions/behaviour"
 import type { ActionSources } from "@/lib/actions/context"
 import type { CopyAsForm } from "@/lib/actions/targets"
 import type { CatalogSearchHit } from "@/lib/ipc/metadata"
@@ -42,6 +43,7 @@ import { ActionMenuContent } from "./action-menu-items"
 import { hasInsertableName, useNameDrag } from "./catalog-name-drag"
 import type { NameTransfer } from "./catalog-name-drag"
 import { operationOffer } from "./object-operations"
+import { PRIVACY_TIERS } from "./privacy-tier"
 import { InputGroupTextInput } from "./text-field"
 
 /**
@@ -82,14 +84,28 @@ export interface CopyAs {
   onCopy: (node: CatalogNode, form: CopyAsForm) => void
 }
 
-export function canPin(pin: PinToQuestion | undefined, node: CatalogNode) {
-  return (
-    pin !== undefined &&
-    pin.tier === "sampled" &&
-    pin.destination !== null &&
-    node.address.relation !== null &&
-    node.holdsRecords
+/**
+ * « Pin to question » on `node`: absent where no AI destination is declared
+ * or the node is not a relation (UX-SPEC), greyed where the tier keeps rows
+ * back or the object holds none — the same reason as the grid's `Send to
+ * assistant`.
+ */
+export function pinOffer(
+  pin: PinToQuestion | undefined,
+  node: CatalogNode
+): Availability {
+  if (
+    pin === undefined ||
+    pin.destination === null ||
+    node.address.relation === null
   )
+    return "absent"
+  if (pin.tier !== "sampled")
+    return {
+      reason: `The connection's AI level is ${PRIVACY_TIERS[pin.tier].label}`,
+    }
+  if (!node.holdsRecords) return { reason: "This object holds no rows" }
+  return true
 }
 
 export function addressKey(address: CatalogAddress) {
@@ -595,6 +611,7 @@ export function CatalogTree({
             onNewConsole !== undefined && node.kind === "namespace",
           definition: copyAs?.definition ?? false,
           expanded: expanded.size > 0,
+          pin: pinOffer(pin, node),
         },
         actions: {
           openData: openAt ? () => openAt(node, "data") : undefined,
@@ -607,21 +624,27 @@ export function CatalogTree({
           copyAs: copyAs ? (form) => copyAs.onCopy(node, form) : undefined,
           refresh: onRefresh ? () => onRefresh(node) : undefined,
           collapseAll: () => setExpanded(() => new Set()),
-          pin: pin && canPin(pin, node) ? () => pin.onPin(node) : undefined,
+          pin: pin ? () => pin.onPin(node) : undefined,
         },
       },
     }
-    if (operations)
-      sources.objectOperation = {
-        state: {
-          offers: {
-            rename: operationOffer("rename", node, operations.capabilities),
-            truncate: operationOffer("truncate", node, operations.capabilities),
-            drop: operationOffer("drop", node, operations.capabilities),
-          },
+    // Always the target of the three operations: a tree given no session
+    // greys them, as its sibling with one would offer them.
+    const capabilities = operations?.capabilities ?? null
+    sources.objectOperation = {
+      state: {
+        offers: {
+          rename: operationOffer("rename", node, capabilities),
+          truncate: operationOffer("truncate", node, capabilities),
+          drop: operationOffer("drop", node, capabilities),
         },
-        actions: { review: (kind) => operations.onOperation(node, kind) },
-      }
+      },
+      actions: {
+        review: operations
+          ? (kind) => operations.onOperation(node, kind)
+          : undefined,
+      },
+    }
     return sources
   }
 
