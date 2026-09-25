@@ -9,6 +9,8 @@ import {
   setLaunchCopies,
   setMovedConsole,
 } from "@/features/session"
+import { toast } from "@/components/ui/toast"
+import { BackendError } from "@/lib/ipc/client"
 import { recovery } from "@/lib/ipc/recovery"
 import { windows } from "@/lib/ipc/windows"
 
@@ -22,7 +24,18 @@ export const Route = createFileRoute("/")({
     markRecoveryOffered()
     // Built by `Open in new window`: the tab it received opens at once, on
     // the connection it came with. Such a window has nothing to restore.
-    const handoff = await windows.takeHandoff().catch(() => null)
+    // Taken once by the backend: an answer this build cannot read is said,
+    // never swallowed — the session it carried is this window's until it
+    // closes.
+    const handoff = await windows.takeHandoff().catch((error: unknown) => {
+      toast.add({
+        title: "The moved tab could not be opened",
+        description:
+          error instanceof BackendError ? error.message : String(error),
+        type: "warning",
+      })
+      return null
+    })
     if (handoff) {
       if (handoff.type === "console") setMovedConsole(handoff)
       openConnection(handoff.open)

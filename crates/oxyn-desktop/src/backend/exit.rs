@@ -22,6 +22,7 @@ use tokio::sync::broadcast::{self, error::TryRecvError};
 
 use super::Backend;
 use super::windows::{Answer, WindowKey};
+use crate::ipc::IpcError;
 use crate::ipc::recovery::{ExitScope, ExitTransaction, ShutdownSignal};
 
 /// How long the webview may take to acknowledge `ResolveTransactions`, and
@@ -45,6 +46,9 @@ struct ConsoleEntry {
     /// `state`: a late event of the previous statement must not make a
     /// running one look settled.
     running: usize,
+    /// The console is moving to another window: nothing may run on it until
+    /// the move ends (ADR-0043).
+    moving: bool,
 }
 
 impl ConsoleEntry {
@@ -178,6 +182,7 @@ impl ConsoleTransactions {
             name,
             state,
             running: 0,
+            moving: false,
         });
     }
 
@@ -199,17 +204,74 @@ impl ConsoleTransactions {
     /// A console statement is sent to `session`, by `run_console` or by an
     /// approval: until the returned guard drops, an exit lists the session as
     /// `Unknown`.
-    pub(crate) fn run_on(self: &Arc<Self>, session: SessionId) -> RunningStatement {
-        let counted = self
+    ///
+    /// # Errors
+    /// The console is moving to another window: its outcome would come back
+    /// to a window that no longer holds it.
+    pub(crate) fn run_on(
+        self: &Arc<Self>,
+        session: SessionId,
+    ) -> Result<RunningStatement, IpcError> {
+        let mut entries = self.entries.lock();
+        let entry = entries.iter_mut().find(|entry| entry.session == session);
+        if entry.as_ref().is_some_and(|entry| entry.moving) {
+            return Err(IpcError::invalid(
+                "This console is moving to another window; run it there.",
+            ));
+        }
+        let counted = entry.map(|entry| entry.running += 1).is_some();
+        Ok(RunningStatement {
+            consoles: Arc::clone(self),
+            session: counted.then_some(session),
+        })
+    }
+
+    /// Marks `session` as moving to another window, if nothing runs on it:
+    /// checked and marked under one lock, so no statement starts in between.
+    /// The mark ends with the returned guard.
+    ///
+    /// # Errors
+    /// A statement runs, another move is under way, or no console holds the
+    /// session.
+    pub(crate) fn begin_move(
+        self: &Arc<Self>,
+        session: SessionId,
+    ) -> Result<MovingConsole, IpcError> {
+        let mut entries = self.entries.lock();
+        let Some(entry) = entries.iter_mut().find(|entry| entry.session == session) else {
+            return Err(IpcError::invalid(
+                "This console has no session to move. Attach it to a connection first.",
+            ));
+        };
+        if entry.running > 0 || entry.moving {
+            return Err(IpcError::invalid(
+                "Wait for the statement to finish before moving the console.",
+            ));
+        }
+        entry.moving = true;
+        Ok(MovingConsole {
+            consoles: Arc::clone(self),
+            session,
+        })
+    }
+}
+
+/// A console moving to another window; see [`ConsoleTransactions::begin_move`].
+pub(crate) struct MovingConsole {
+    consoles: Arc<ConsoleTransactions>,
+    session: SessionId,
+}
+
+impl Drop for MovingConsole {
+    fn drop(&mut self) {
+        if let Some(entry) = self
+            .consoles
             .entries
             .lock()
             .iter_mut()
-            .find(|entry| entry.session == session)
-            .map(|entry| entry.running += 1)
-            .is_some();
-        RunningStatement {
-            consoles: Arc::clone(self),
-            session: counted.then_some(session),
+            .find(|entry| entry.session == self.session)
+        {
+            entry.moving = false;
         }
     }
 }

@@ -784,10 +784,26 @@ la seconde apporte la disposition persistée, la restauration par fenêtre et
   résultat expiré entre-temps n'est pas montré, et sa vue est rendue.
 - **Refus.** Le menu grise l'entrée, avec sa raison, pendant une exécution,
   une confirmation, un export ou une sauvegarde de la console, et sur une
-  console hors ligne. Le backend refuse de son côté une console dont une
-  instruction tourne encore, d'après l'état de transaction qu'il suit, et
-  tout ce qu'une autre fenêtre possède. Une revue destructive ouverte tient
-  son dialogue au premier plan : le menu d'onglet n'est pas atteignable.
+  console hors ligne. Le backend refuse de son côté tout ce qu'une autre
+  fenêtre possède, une console dont une instruction tourne et une console
+  dont une instruction attend une confirmation. Il **marque** la console
+  « en déplacement » sous le même verrou qui constate qu'elle est inactive :
+  jusqu'à la fin du déplacement, `run_console` et `decide` y sont refusés,
+  si bien qu'aucune instruction ne part pendant l'ouverture de la session de
+  catalogue. Une revue destructive ouverte tient son dialogue au premier
+  plan : le menu d'onglet n'est pas atteignable.
+- **Tout ce qui peut échouer précède le transfert** : configuration, session
+  de catalogue, description des deux sessions. Après lui, seule l'écriture
+  des deux lignes de disposition reste, et son échec est journalisé sans
+  défaire le déplacement : une console transférée puis abandonnée fermerait
+  sa session, et sa transaction avec. La console quitte la ligne de la
+  source pour celle de la cible.
+- **L'assistant reste à la fenêtre qui le tient**, sur la connexion ;
+  `ai_ask` vérifie désormais que la session nommée est celle de la fenêtre
+  appelante, pour que l'assistant de la source ne travaille pas dans la
+  session déplacée.
+- **Un handoff illisible par le front est dit**, pas avalé : la fenêtre
+  garde la session jusqu'à sa fermeture.
 - **La cible ne restaure rien d'autre** : ni écran de reprise, ni copies. Sa
   première console est la console déplacée, avec la mention « Moved from
   another window. Nothing was executed. »

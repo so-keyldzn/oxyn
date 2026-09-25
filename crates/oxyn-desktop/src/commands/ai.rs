@@ -210,6 +210,13 @@ pub async fn ai_ask(
     channel: Channel<AiUpdate>,
 ) -> Result<AskStarted, IpcError> {
     assistant(&backend, &webview, &request.connection)?;
+    // The session the agent works in is this window's: a console moved to
+    // another window keeps its connection, not its assistant (ADR-0043).
+    let session = crate::commands::parse("session", &request.session)?;
+    backend
+        .inner
+        .windows
+        .check_session(caller(&backend, &webview)?, session)?;
     backend.ai_ask(request, channel).await
 }
 

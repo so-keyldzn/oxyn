@@ -194,3 +194,50 @@ fn a_window_that_cannot_be_built_gives_the_console_back() {
         "the user's session, and any transaction on it, stay open"
     );
 }
+
+/// Checked and marked under one lock: a statement started while the new
+/// window opens would answer to a window that no longer holds the console.
+#[test]
+fn nothing_runs_on_a_console_while_it_moves() {
+    let runtime = runtime();
+    let _guard = runtime.enter();
+    let backend = Backend::open_temporary().expect("temporary backend");
+    let source = backend.reserve_window(true).expect("a window");
+    let (_, session) = opened(&runtime, &backend, source);
+    let consoles = &backend.inner.workbench.consoles;
+
+    let moving = consoles.begin_move(session).expect("idle");
+    assert!(consoles.run_on(session).is_err());
+    assert!(consoles.begin_move(session).is_err(), "one move at a time");
+    drop(moving);
+    assert!(consoles.run_on(session).is_ok(), "a refused move frees it");
+}
+
+/// The console leaves the source's line for the target's: the next launch
+/// reopens it in one window, not as a copy no window claims.
+#[test]
+fn a_moved_console_changes_lines() {
+    let runtime = runtime();
+    let _guard = runtime.enter();
+    let backend = Backend::open_temporary().expect("temporary backend");
+    let source = backend.reserve_window(true).expect("a window");
+    let (connection, session) = opened(&runtime, &backend, source);
+    let request = console(connection, session, None);
+    let HandoffRequest::Console { document, .. } = &request else {
+        unreachable!("built as a console");
+    };
+    let document: DocumentId = document.parse().expect("an id");
+    backend
+        .inner
+        .layouts
+        .move_console(WindowKey::of(oxyn_core::WindowId::new()), source, document);
+    let target = backend.reserve_window(false).expect("a target");
+
+    runtime
+        .block_on(backend.hand_off(source, target, request))
+        .expect("moved");
+
+    let layouts = &backend.inner.layouts;
+    assert!(layouts.consoles(source).is_empty());
+    assert_eq!(layouts.consoles(target), vec![document]);
+}
