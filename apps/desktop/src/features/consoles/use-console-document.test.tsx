@@ -1,9 +1,9 @@
 import * as React from "react"
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
-import { act, renderHook } from "@testing-library/react"
-import { beforeEach, describe, expect, it, vi } from "vitest"
+import { act, cleanup, renderHook } from "@testing-library/react"
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest"
 
-import { useConsoleDocument } from "./use-console-document"
+import { DRAFT_IDLE_MS, useConsoleDocument } from "./use-console-document"
 import type { ConsoleSeed } from "./use-console-document"
 import type { DocumentWrite } from "@/lib/ipc/library"
 
@@ -77,11 +77,38 @@ async function answer(index: number, write: DocumentWrite) {
   })
 }
 
-describe("the recovery draft notice", () => {
-  beforeEach(() => {
-    store.writes = []
+// Without globals, Testing Library does not unmount on its own: a hook left
+// mounted keeps its draft timer, which then fires once the file's environment
+// is gone and fails the whole run with `window is not defined`.
+afterEach(() => {
+  cleanup()
+  vi.useRealTimers()
+})
+
+beforeEach(() => {
+  store.writes = []
+})
+
+describe("the recovery draft timer", () => {
+  it("writes a pending draft once typing pauses", () => {
+    vi.useFakeTimers()
+    const hook = open()
+    act(() => hook.result.current.change({ text: "SELECT 1" }))
+    act(() => vi.advanceTimersByTime(DRAFT_IDLE_MS))
+    expect(store.writes.map((write) => write.text)).toEqual(["SELECT 1"])
   })
 
+  it("does not outlive the console", () => {
+    vi.useFakeTimers()
+    const hook = open()
+    act(() => hook.result.current.change({ text: "SELECT 1" }))
+    hook.unmount()
+    vi.advanceTimersByTime(DRAFT_IDLE_MS)
+    expect(store.writes).toHaveLength(0)
+  })
+})
+
+describe("the recovery draft notice", () => {
   it("says the draft is not saved when the name is out of bounds", async () => {
     const hook = open()
     act(() => hook.result.current.change({ title: "x".repeat(257) }))
