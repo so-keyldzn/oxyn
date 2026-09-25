@@ -411,8 +411,16 @@ impl Backend {
         let first = windows.keys().first().copied();
         let mut open: BTreeMap<WindowKey, Vec<ExitTransaction>> = BTreeMap::new();
         for entry in self.holding(entries) {
-            let Some(window) = windows.owner_of_session(entry.session).or(first) else {
-                continue;
+            let window = match (windows.owner_of_session(entry.session), first) {
+                (Some(owner), _) => owner,
+                // Claimed by the window asked about it: its dialog's
+                // `Commit` and `Rollback` go through `run_console`, which
+                // refuses a session the window does not own.
+                (None, Some(first)) => {
+                    windows.claim_session(first, entry.connection, entry.session);
+                    first
+                }
+                (None, None) => continue,
             };
             if only.is_some_and(|only| only != window) {
                 continue;

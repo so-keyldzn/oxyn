@@ -7,7 +7,7 @@
 //! the host's dialog approves it ([I-01](../../../../CLAUDE.md#i-01),
 //! [I-02](../../../../CLAUDE.md#i-02)).
 
-use oxyn_core::SessionId;
+use oxyn_core::{ConnectionId, SessionId};
 use tauri::{State, Webview};
 
 use super::parse;
@@ -56,11 +56,17 @@ pub async fn run_object_operation(
 ) -> Result<ObjectOperationOutcome, IpcError> {
     let window = caller(&backend, &webview)?;
     let id = parse("command id", &command_id)?;
+    let connection: ConnectionId = parse("connection", &connection)?;
+    if !backend.inner.windows.holds(window, connection) {
+        return Err(IpcError::invalid(
+            "This connection is not open in this window",
+        ));
+    }
     run_owned(
         &backend,
         window,
         id,
-        backend.run_object_operation(id, parse("connection", &connection)?, operation, sql),
+        backend.run_object_operation(id, connection, operation, sql),
         |outcome| matches!(outcome, ObjectOperationOutcome::NeedsApproval { .. }),
     )
     .await

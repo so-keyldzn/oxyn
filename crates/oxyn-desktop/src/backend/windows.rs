@@ -338,6 +338,17 @@ impl WindowRegistry {
         self.claim_command(window, command)
     }
 
+    /// Whether `command` is another window's. Records nothing: a cancel for
+    /// an id nobody claimed — one that has not been dispatched yet — must
+    /// not grow the registry.
+    pub(crate) fn command_elsewhere(&self, window: WindowKey, command: CommandId) -> bool {
+        self.state
+            .lock()
+            .commands
+            .get(&command)
+            .is_some_and(|owner| *owner != window)
+    }
+
     /// Forgets the owner of a command that has answered and waits for
     /// nothing.
     pub(crate) fn release_command(&self, window: WindowKey, command: CommandId) {

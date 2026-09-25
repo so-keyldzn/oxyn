@@ -82,6 +82,15 @@ fn a_command_of_another_window_is_refused() {
     assert_eq!(refused.message, "This command belongs to another window");
     assert!(registry.claim_command(right, command).is_err());
     assert!(registry.check_command(left, command).is_ok());
+    // A cancel checks without recording: an unknown id grows nothing.
+    assert!(registry.command_elsewhere(right, command));
+    let unknown = CommandId::new();
+    assert!(!registry.command_elsewhere(right, unknown));
+    assert!(
+        registry.claim_command(left, unknown).is_ok(),
+        "still nobody's"
+    );
+    registry.release_command(left, unknown);
     // Released by its answer, the id is nobody's.
     registry.release_command(right, command);
     assert!(

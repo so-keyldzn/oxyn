@@ -280,6 +280,30 @@ fn the_exit_asks_each_window_about_its_own_transactions_only() {
 }
 
 #[test]
+fn a_session_no_window_claims_is_given_to_the_window_asked_about_it() {
+    let bench = bench(true, true);
+    bench.ok(&bench.right, "BEGIN");
+    bench
+        .backend
+        .inner
+        .windows
+        .release_session(bench.right.console);
+    let ExitStep::Asked(asked) = bench.exit_step() else {
+        panic!("the transaction holds the exit");
+    };
+    assert_eq!(asked, vec![bench.left.key], "the first window is asked");
+    // Its dialog's `Rollback` goes through `run_console`, which now accepts it.
+    assert!(
+        bench
+            .backend
+            .inner
+            .windows
+            .check_session(bench.left.key, bench.right.console)
+            .is_ok()
+    );
+}
+
+#[test]
 fn a_silent_window_does_not_hold_the_exit_of_the_others() {
     let bench = bench(true, false);
     bench.ok(&bench.left, "BEGIN");

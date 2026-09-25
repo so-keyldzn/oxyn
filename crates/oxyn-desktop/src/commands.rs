@@ -203,8 +203,9 @@ pub async fn decide(
     Ok(outcome)
 }
 
-/// A command of another window is refused; one not dispatched yet is
-/// claimed, so that its early cancellation still reaches it.
+/// A command of another window is refused; one not dispatched yet is let
+/// through, and its early cancellation waits for it in the tracker, bounded
+/// there.
 #[tauri::command]
 pub fn cancel(
     webview: Webview,
@@ -213,7 +214,9 @@ pub fn cancel(
 ) -> Result<bool, IpcError> {
     let window = caller(&backend, &webview)?;
     let command = parse("command id", &command_id)?;
-    backend.inner.windows.check_command(window, command)?;
+    if backend.inner.windows.command_elsewhere(window, command) {
+        return Err(IpcError::invalid("This command belongs to another window"));
+    }
     Ok(backend.cancel(command))
 }
 

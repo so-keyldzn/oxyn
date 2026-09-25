@@ -26,6 +26,13 @@ pub async fn open_console(
     let window = caller(&backend, &webview)?;
     let id = parse("command id", &command_id)?;
     let connection: ConnectionId = parse("connection", &connection)?;
+    // A console opens in a workspace of this window: a script cannot keep
+    // open, hidden here, a connection the user closed in another window.
+    if !backend.inner.windows.holds(window, connection) {
+        return Err(IpcError::invalid(
+            "This connection is not open in this window",
+        ));
+    }
     let console = run_owned(
         &backend,
         window,

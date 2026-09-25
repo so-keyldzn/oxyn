@@ -189,6 +189,12 @@ Ce qui entre dans Oxyn et n'est pas fiable, par ordre de sous-estimation :
    les méthodes d'émission de `tauri::Emitter`. Ce qu'une XSS dans une fenêtre
    en tire : ouvrir des fenêtres jusqu'à la borne, fermer la sienne, retenir
    ou annuler sa propre fermeture. Elle n'atteint rien d'une autre fenêtre.
+   Une réserve, qui tient à un secret : `start_dragging` et
+   `internal_toggle_maximize` de Tauri acceptent le libellé d'une autre
+   fenêtre (`tauri` 2.11.5, `src/window/plugin.rs`, `get_window`). Aucune
+   commande ne renvoie donc au front le libellé d'une fenêtre, ni même le
+   sien ; une commande qui le ferait donnerait à une XSS de quoi déplacer ou
+   agrandir les autres fenêtres.
 
    **Une confirmation dessinée dans la webview ne résiste pas à un script qui
    s'y exécute** : il appelle la commande que le bouton aurait appelée. Les

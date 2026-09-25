@@ -653,7 +653,11 @@ la seconde apporte la disposition persistée, la restauration par fenêtre et
   registre tient donc `assistants : ConnectionId → WindowKey`. La première
   fenêtre qui s'en sert le prend ; une autre fenêtre ouverte sur la même
   connexion reçoit « The assistant of this connection is open in another
-  window », et la fenêtre propriétaire passe au premier plan. La règle reste
+  window ». La fenêtre propriétaire ne passe au premier plan que sur
+  l'ouverture d'une conversation, pas sur chaque refus : un script qui
+  bouclerait sur un refus volerait sinon le clavier d'une autre fenêtre. Une
+  fenêtre ne prend l'assistant que d'une connexion qu'elle tient, comme elle
+  n'ouvre de console que sur une connexion qu'elle tient. La règle reste
   plus stricte que le texte : aucune conversation n'est partagée. Elle sera
   à reconsidérer si deux assistants sur la même base, dans deux fenêtres,
   sont demandés.
