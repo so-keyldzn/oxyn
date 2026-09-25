@@ -192,10 +192,11 @@ en mémoire pour les vérifications locales. Elle ne lit ni le workspace enregis
 ni le trousseau et n'ouvre aucune base automatiquement. Les connexions choisies
 restent soumises au même command bus et au même `PolicyGate` ; l'option n'isole
 pas un serveur que l'utilisateur déciderait de contacter. `make desktop-dev`
-lance toujours l'application avec cette option. **Rien dans la fenêtre ne
-signale aujourd'hui le caractère temporaire** : l'interface GPUI le mettait dans
-le titre, `oxyn-desktop` ne le fait pas
-([IMPLEMENTATION-PLAN](IMPLEMENTATION-PLAN.md#migration-vers-linterface-tauri)).
+lance toujours l'application avec cette option. La fenêtre s'intitule alors
+`Oxyn · Temporary workspace` (`window_title`, `src/main.rs`), comme sous GPUI,
+pour qu'une session jetable ne se confonde pas avec le vrai workspace. Sur macOS
+la barre de titre est masquée (`hiddenTitle`) : le titre s'y lit dans le menu
+Fenêtre, Mission Control et VoiceOver, pas dans la fenêtre elle-même.
 
 L'aperçu d'une table utilise `Command::PreviewRelation` avec connexion, session,
 niveaux d'identifiant et limite explicites. Le `PolicyGate` décide avant la
