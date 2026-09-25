@@ -81,6 +81,30 @@ export const ChooseByKeyboard: Story = {
   },
 }
 
+/**
+ * The open list is named after its trigger, which Base UI does not do: this
+ * story guards the dated exception in `components/ui/select.tsx` (front.md),
+ * and fails if a shadcn regeneration erases it.
+ */
+export const ListIsNamedAfterItsTrigger: Story = {
+  args: { value: "medium" },
+  play: async () => {
+    await userEvent.click(
+      body().getByRole("combobox", { name: "Reasoning effort: Medium" })
+    )
+    await visible(
+      await body().findByRole("listbox", {
+        name: "Reasoning effort: Medium",
+      })
+    )
+    await userEvent.keyboard("{Escape}")
+    // Hidden once closed, but kept mounted: the accessibility tree, as axe
+    // reads it, is what must be empty.
+    await waitFor(() => expect(body().queryByRole("listbox")).toBeNull())
+    await settled()
+  },
+}
+
 /** A level the model no longer declares is shown as not chosen. */
 export const ChosenForAnotherModel: Story = {
   args: { efforts: ["low", "high"], value: "max" },

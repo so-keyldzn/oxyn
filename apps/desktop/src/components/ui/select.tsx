@@ -6,7 +6,24 @@ import { cn } from "cn"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { UnfoldMoreIcon, Tick02Icon, ArrowUp01Icon, ArrowDown01Icon } from "@hugeicons/core-free-icons"
 
-const Select = SelectPrimitive.Root
+// Oxyn exception (.claude/rules/front.md, 2026-09-25): the open list takes its trigger's name — axe aria-input-field-name.
+type SelectName = Pick<React.AriaAttributes, "aria-label" | "aria-labelledby">
+const SelectNameContext = React.createContext<{
+  name: SelectName
+  setName: (name: SelectName) => void
+} | null>(null)
+
+function Select<Value, Multiple extends boolean | undefined = false>(
+  props: SelectPrimitive.Root.Props<Value, Multiple>
+) {
+  const [name, setName] = React.useState<SelectName>({})
+  const context = React.useMemo(() => ({ name, setName }), [name])
+  return (
+    <SelectNameContext.Provider value={context}>
+      <SelectPrimitive.Root {...props} />
+    </SelectNameContext.Provider>
+  )
+}
 
 function SelectGroup({ className, ...props }: SelectPrimitive.Group.Props) {
   return (
@@ -36,6 +53,11 @@ function SelectTrigger({
 }: SelectPrimitive.Trigger.Props & {
   size?: "sm" | "default"
 }) {
+  const setName = React.useContext(SelectNameContext)?.setName
+  const { "aria-label": label, "aria-labelledby": labelledBy } = props
+  React.useEffect(() => {
+    setName?.({ "aria-label": label, "aria-labelledby": labelledBy })
+  }, [setName, label, labelledBy])
   return (
     <SelectPrimitive.Trigger
       data-slot="select-trigger"
@@ -64,12 +86,19 @@ function SelectContent({
   align = "center",
   alignOffset = 0,
   alignItemWithTrigger = true,
+  "aria-label": label,
   ...props
 }: SelectPrimitive.Popup.Props &
   Pick<
     SelectPrimitive.Positioner.Props,
     "align" | "alignOffset" | "side" | "sideOffset" | "alignItemWithTrigger"
   >) {
+  const triggerName = React.useContext(SelectNameContext)?.name
+  const listName: SelectName = label
+    ? { "aria-label": label }
+    : triggerName?.["aria-labelledby"]
+      ? { "aria-labelledby": triggerName["aria-labelledby"] }
+      : { "aria-label": triggerName?.["aria-label"] }
   return (
     <SelectPrimitive.Portal>
       <SelectPrimitive.Positioner
@@ -87,7 +116,7 @@ function SelectContent({
           {...props}
         >
           <SelectScrollUpButton />
-          <SelectPrimitive.List>{children}</SelectPrimitive.List>
+          <SelectPrimitive.List {...listName}>{children}</SelectPrimitive.List>
           <SelectScrollDownButton />
         </SelectPrimitive.Popup>
       </SelectPrimitive.Positioner>
