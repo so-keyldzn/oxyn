@@ -13,9 +13,10 @@ export interface SessionState {
    */
   sqlDraft: string
   /**
-   * Working copies chosen on the recovery screen, reopened as consoles by the
-   * next workspace — as text only: nothing connects and nothing runs
-   * (ADR-0021).
+   * Working copies chosen on the recovery screen, waiting for the shown
+   * workspace, which reopens them as **offline** consoles: nothing connects
+   * and nothing runs until the user attaches one (ADR-0021, UX-SPEC
+   * § Restauration sélective au démarrage).
    */
   restored: Array<DocumentEntry>
   /** The recovery screen was offered once this launch; never twice. */
@@ -76,8 +77,20 @@ export function setSqlDraft(sqlDraft: string) {
   session.setState((state) => ({ ...state, sqlDraft }))
 }
 
+/**
+ * Adds working copies to those waiting for a workspace. A new selection never
+ * replaces one not yet taken, and a copy already waiting is not added twice.
+ */
 export function restoreWorkingCopies(restored: Array<DocumentEntry>) {
-  session.setState((state) => ({ ...state, restored }))
+  session.setState((state) => ({
+    ...state,
+    restored: [
+      ...state.restored,
+      ...restored.filter(
+        (entry) => !state.restored.some((waiting) => waiting.id === entry.id)
+      ),
+    ],
+  }))
 }
 
 /** Hands the pending working copies to one workspace, once. */

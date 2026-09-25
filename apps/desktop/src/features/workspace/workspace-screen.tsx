@@ -355,7 +355,9 @@ export function WorkspaceScreen({
       return {
         sessions: [
           open.session,
-          ...entriesRef.current.map((entry) => entry.session.session),
+          ...entriesRef.current.flatMap((entry) =>
+            entry.session ? [entry.session.session] : []
+          ),
         ],
       }
     },
@@ -539,7 +541,7 @@ export function WorkspaceScreen({
             environment={open.environment}
             readOnly={open.readOnly}
             capabilities={
-              activeEntry?.session.capabilities ?? open.capabilities
+              activeEntry?.session?.capabilities ?? open.capabilities
             }
             execution={
               work.entries.length === 0 ? { status: "idle" } : work.summary
@@ -608,6 +610,10 @@ export function WorkspaceScreen({
               consoleKey={entry.key}
               open={open}
               session={entry.session}
+              origin={entry.origin}
+              attaching={work.attaching === entry.key}
+              onAttach={() => void work.attach(entry.key)}
+              onCancelAttach={work.cancelOpening}
               seed={entry.seed}
               initialNotice={entry.notice}
               active={visible && entry.key === active}

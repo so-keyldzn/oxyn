@@ -50,8 +50,10 @@ function connectionLabel(
 /**
  * The working copies a previous launch left open (ADR-0021).
  *
- * Choosing hands text to the next workspace, which reopens it in consoles once
- * the user has chosen a connection. Nothing connects and nothing runs here.
+ * Choosing adds the copies to those the shown workspace reopens as offline
+ * consoles — the one open now, or the next one. Attaching each to a
+ * connection is a later, separate gesture. Nothing connects and nothing runs
+ * here.
  */
 export function RecoveryScreen() {
   const navigate = useNavigate()

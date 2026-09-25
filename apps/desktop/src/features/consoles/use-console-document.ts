@@ -74,7 +74,8 @@ export function useConsoleDocument({
   connection,
 }: {
   seed: ConsoleSeed
-  connection: string
+  /** The connection the document is saved under; `null` for none. */
+  connection: string | null
 }) {
   const queryClient = useQueryClient()
   const [document, setDocument] = React.useState(seed.document)

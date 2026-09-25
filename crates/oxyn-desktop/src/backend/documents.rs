@@ -522,6 +522,134 @@ mod tests {
         }
     }
 
+    /// A saved connection the documents can be written under; nothing opens.
+    fn saved_connection(backend: &Backend, name: &str) -> oxyn_core::ConnectionId {
+        let config = oxyn_core::ConnectionConfig::new(name, oxyn_core::DriverId::sqlite());
+        backend
+            .inner
+            .executor
+            .store()
+            .connections()
+            .save(backend.inner.executor.workspace(), &config)
+            .expect("the connection is saved");
+        config.id
+    }
+
+    fn stored(backend: &Backend, document: DocumentId) -> oxyn_store::Document {
+        backend
+            .inner
+            .executor
+            .store()
+            .documents()
+            .get(document)
+            .expect("read")
+            .expect("the document is stored")
+    }
+
+    /// **An offline console writes without a session, and attaching it keeps
+    /// the document** (UX-SPEC § Restauration sélective au démarrage). The
+    /// restored copy keeps writing under the connection it was written for,
+    /// so attaching it there resumes the same document through the same
+    /// write queue: the next revision follows, with no conflict and no copy.
+    #[test]
+    fn an_offline_copy_attached_to_its_connection_keeps_its_identity() {
+        let runtime = runtime();
+        let _guard = runtime.enter();
+        let backend = Backend::open_temporary().expect("temporary backend");
+        let origin = saved_connection(&backend, "billing");
+        let document = DocumentId::new();
+        let under = |revision, text: &str| DocumentChange {
+            connection: Some(origin.to_string()),
+            ..change(document, revision, text, false)
+        };
+
+        // Written by the previous launch, then restored offline: no session
+        // is open on `origin`, and the draft still reaches the store.
+        let offline = runtime
+            .block_on(backend.save_query_document(
+                CommandId::new(),
+                document,
+                Some(origin),
+                under(1, "SELECT 1"),
+            ))
+            .expect("offline draft");
+        assert!(matches!(offline, DocumentWrite::Saved { revision: 1, .. }));
+        let named = runtime
+            .block_on(backend.save_query_document(
+                CommandId::new(),
+                document,
+                Some(origin),
+                DocumentChange {
+                    named: true,
+                    ..under(2, "SELECT 12")
+                },
+            ))
+            .expect("offline named save");
+        assert!(matches!(named, DocumentWrite::Saved { revision: 2, .. }));
+
+        // Attached: the same console goes on with the next revision.
+        let attached = runtime
+            .block_on(backend.save_query_document(
+                CommandId::new(),
+                document,
+                Some(origin),
+                under(3, "SELECT 123"),
+            ))
+            .expect("draft after attaching");
+        assert!(matches!(attached, DocumentWrite::Saved { revision: 3, .. }));
+        runtime.block_on(backend.wait_for_local_writes());
+
+        let kept = stored(&backend, document);
+        assert_eq!(kept.connection, Some(origin), "the origin is never dropped");
+        assert_eq!(kept.content, "SELECT 123");
+        assert_eq!(kept.saved_content.as_deref(), Some("SELECT 12"));
+        assert!(kept.is_open);
+    }
+
+    /// **Attached to another connection, the copy is a new document** and the
+    /// original stays as it was, still offered for recovery.
+    #[test]
+    fn a_copy_on_another_connection_leaves_the_original_untouched() {
+        let runtime = runtime();
+        let _guard = runtime.enter();
+        let backend = Backend::open_temporary().expect("temporary backend");
+        let origin = saved_connection(&backend, "billing");
+        let elsewhere = saved_connection(&backend, "analytics");
+        let original = DocumentId::new();
+        runtime
+            .block_on(backend.save_query_document(
+                CommandId::new(),
+                original,
+                Some(origin),
+                DocumentChange {
+                    connection: Some(origin.to_string()),
+                    ..change(original, 1, "SELECT 1", false)
+                },
+            ))
+            .expect("offline draft");
+
+        let copy = DocumentId::new();
+        runtime
+            .block_on(backend.save_query_document(
+                CommandId::new(),
+                copy,
+                Some(elsewhere),
+                DocumentChange {
+                    connection: Some(elsewhere.to_string()),
+                    ..change(copy, 1, "SELECT 1 -- edited on analytics", false)
+                },
+            ))
+            .expect("the copy's first draft");
+        runtime.block_on(backend.wait_for_local_writes());
+
+        let kept = stored(&backend, original);
+        assert_eq!(kept.connection, Some(origin));
+        assert_eq!(kept.content, "SELECT 1");
+        assert_eq!(kept.revision, 1);
+        assert!(kept.is_open, "the original is still offered for recovery");
+        assert_eq!(stored(&backend, copy).connection, Some(elsewhere));
+    }
+
     #[test]
     fn a_second_writer_on_a_moved_document_gets_a_conflict_and_the_store_keeps_the_first() {
         let runtime = runtime();
