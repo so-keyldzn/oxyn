@@ -492,6 +492,24 @@ Lots, dans l'ordre :
    Tenu par `context-menus.test.ts` (« never lose an entry because its surface
    left the handler out », sur toutes les surfaces) et les stories des
    surfaces, dont `Oxyn/CatalogTree` `ContextMenu`.
+
+   **Lot 3 quater — la raison d'un grisé dit où agir, fait le 2026-09-25.**
+   Les raisons génériques par surface (« Not available for this connection
+   here »…) ne laissaient aucune issue : vu des réglages, `Disconnect` était
+   grisé sans dire où déconnecter. `onTarget` exige désormais, pour chaque
+   entrée, une raison qui dit ce qui manque **et où le faire** (« Connect
+   from the start screen », « Show its workspace from the start screen, then
+   press ⌘T », « Disconnect it first, from this menu »). Les réglages
+   branchent `Disconnect` (`closeConnection`, comme l'écran d'accueil ;
+   l'écran d'accueil s'affiche si c'était le workspace montré) et `Refresh
+   catalog` (`features/connections/refresh-catalog.ts`, partagé avec l'écran
+   d'accueil). `New console` et `Duplicate` y restent grisés : le premier
+   montre un workspace, le second a besoin du formulaire de création de
+   l'écran d'accueil, que les réglages n'ont pas. Les raisons « Not available
+   yet: … » gardent leur forme : elles nomment ce qui manque à Oxyn, et aucun
+   autre endroit ne le fait. Tenu par `context-menus.test.ts` (aucune raison
+   générique, ni sur une surface sans gestionnaires, ni dans les sources) et
+   la story `Oxyn/ConnectionManager` `ContextMenu`.
 4. **Revue destructive** — `review_object_operation`, `run_object_operation`,
    qui approuve une commande retenue par `confirm_held`, donc par le dialogue
    natif d'[ADR-0037](adr/0037-dialogue-natif-pour-les-confirmations-critiques.md)

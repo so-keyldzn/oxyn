@@ -15,6 +15,7 @@ import {
   clearConnectionOffer,
   connectionOffer,
 } from "@/features/connections/connection-offer"
+import { useRefreshCatalogOf } from "@/features/connections/refresh-catalog"
 import { useTypedSecrets } from "@/features/connections/typed-secrets"
 import type { WithoutSecrets } from "@/features/connections/typed-secrets"
 import {
@@ -32,7 +33,6 @@ import { usePendingTransactions } from "@/features/workspace/pending-transaction
 import { actionSources } from "@/lib/actions/context"
 import type { ConnectionMenuActions } from "@/lib/actions/targets"
 import { BackendError, backend, newCommandId } from "@/lib/ipc/client"
-import { metadata } from "@/lib/ipc/metadata"
 import { settingsBackend } from "@/lib/ipc/settings"
 import type { ConnectionSummary } from "@/lib/ipc/settings"
 import type {
@@ -101,6 +101,7 @@ export function ConnectionScreen() {
     [workspaces]
   )
   const pendingTransactions = usePendingTransactions()
+  const refreshCatalogOf = useRefreshCatalogOf()
   const [refusal, setRefusal] = React.useState<string | null>(null)
 
   /**
@@ -348,42 +349,6 @@ export function ConnectionScreen() {
         title: "Cannot duplicate this connection",
         description: failureOf(error)?.message,
         type: "error",
-      })
-    }
-  }
-
-  const refreshCatalogOf = async (open: OpenConnection) => {
-    try {
-      const outcome = await metadata.refreshCatalog(
-        newCommandId(),
-        open.connection,
-        open.session,
-        null
-      )
-      if (outcome.type === "denied")
-        toast.add({
-          title: "Catalog not refreshed",
-          description: outcome.reason,
-          type: "error",
-        })
-      else if (outcome.type === "catalogRefreshed")
-        toast.add({
-          title: `Catalog of ${open.name} refreshed`,
-          type: "success",
-        })
-    } catch (error) {
-      toast.add({
-        title: "Catalog not refreshed",
-        description: failureOf(error)?.message,
-        type: "error",
-      })
-    } finally {
-      // The hidden workspace's tree reads it again, as after its own refresh.
-      await queryClient.invalidateQueries({
-        queryKey: ["catalog", open.connection],
-      })
-      await queryClient.invalidateQueries({
-        queryKey: ["catalog-search", open.connection],
       })
     }
   }

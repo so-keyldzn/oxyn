@@ -19,7 +19,8 @@ export const HOSTILE_NAME =
   "This name holds control characters: write the statement in a console."
 const NO_DDL = "This connection does not accept schema changes."
 const NO_TRUNCATE = "This database has no TRUNCATE statement."
-const NOT_KNOWN = "Catalog operations are not available here."
+const NOT_KNOWN =
+  "No session here to run it: do it from the object in the workspace's catalog."
 
 // Control characters (Unicode Cc), line and paragraph separators, and the
 // direction controls: shown or escaped, the name would not be the one run.

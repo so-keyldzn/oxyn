@@ -8,8 +8,26 @@ import { CONTEXT_MENUS, surfaceActions } from "./context-menus"
 import type { Surface } from "./context-menus"
 import { actionSpec } from "./manifest"
 import { behaviours } from "./registry"
+import menuBehavioursSource from "./menu-behaviours.ts?raw"
+import registrySource from "./registry.ts?raw"
+import objectOperationsSource from "@/components/oxyn/object-operations.ts?raw"
 
 const nothing = () => undefined
+
+/**
+ * A greyed entry's reason that names no way out: « Not available for this
+ * tab », « not available here ». UX-SPEC wants the reason read; it must also
+ * say where the action is done.
+ */
+const GENERIC =
+  /not available (for|in|on) this|not available here|available for this/i
+
+// Where menu reasons are written.
+const REASON_SOURCES = {
+  "menu-behaviours.ts": menuBehavioursSource,
+  "registry.ts": registrySource,
+  "object-operations.ts": objectOperationsSource,
+}
 
 function contextWith(sources: ActionSources): ActionContext {
   return { ...NO_FOCUS, platform: "mac", sources }
@@ -302,11 +320,20 @@ describe("context menus", () => {
       ).toEqual(full.map((entry) => entry.id))
       for (const entry of unwired) {
         const before = full.find((candidate) => candidate.id === entry.id)
-        if (before?.state === true)
+        if (before?.state === true) {
           expect(entry.state, `${surface}: ${entry.id}`).toHaveProperty(
             "reason"
           )
+          // What is missing, and where it is done: never a bare refusal.
+          const reason = entry.state === true ? "" : entry.state.reason
+          expect(reason, `${surface}: ${entry.id}`).not.toMatch(GENERIC)
+        }
       }
     }
+  })
+
+  it("keep no reason that leaves the user nowhere to go", () => {
+    for (const [file, text] of Object.entries(REASON_SOURCES))
+      expect(text, file).not.toMatch(GENERIC)
   })
 })
