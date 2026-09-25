@@ -21,6 +21,66 @@ fn thread_on(store: &Store, workspace: WorkspaceId, connection: ConnectionId, na
         .expect("thread saved");
 }
 
+/// The launch's prune reaches the panel: how many threads went, and the rule's
+/// own numbers. A launch that removed nothing has nothing to say.
+#[test]
+fn the_launch_prune_is_transmitted_with_its_rule() {
+    let home = tempfile::tempdir().expect("a temporary workspace");
+    let path = home.path().join("workspace.sqlite3");
+    {
+        let store = Store::open_at(&path).expect("a workspace on disk");
+        let workspace = store.workspaces().create("oxyn").expect("workspace").id;
+        // Three past the count bound: the oldest three go.
+        let over = oxyn_store::RetentionPolicy::default().max_conversations + 3;
+        for index in 0..over {
+            let conversation = Conversation::new(
+                workspace,
+                StoredDestination::provider(
+                    ProviderId::new("anthropic-1a2b3c4d").expect("provider id"),
+                    "Anthropic",
+                    "a-model",
+                ),
+                format!("Idle {index}"),
+            )
+            .on_connection(ConnectionId::new(), "billing");
+            store
+                .conversations()
+                .save(&conversation)
+                .expect("thread saved");
+        }
+    }
+
+    let runtime = runtime();
+    let _guard = runtime.enter();
+    let backend = Backend::open_at(&path).expect("the same workspace");
+    // The prune runs off the startup path: wait for it, bounded.
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+    let pruned = loop {
+        if let Some(pruned) = backend.ai_pruned_history() {
+            break pruned;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the launch prune was never transmitted"
+        );
+        runtime.block_on(tokio::time::sleep(std::time::Duration::from_millis(20)));
+    };
+    let policy = oxyn_store::RetentionPolicy::default();
+    assert_eq!(
+        pruned,
+        PrunedHistory {
+            conversations: 3,
+            max_conversations: policy.max_conversations,
+            max_age_days: policy.max_age_days,
+            max_bytes: policy.max_bytes,
+        }
+    );
+
+    let empty = Backend::open_temporary().expect("temporary backend");
+    runtime.block_on(tokio::time::sleep(std::time::Duration::from_millis(200)));
+    assert_eq!(empty.ai_pruned_history(), None);
+}
+
 /// A deleted connection's threads come back under the name they kept; a live
 /// connection's threads are not among them.
 #[test]

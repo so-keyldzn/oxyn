@@ -37,8 +37,9 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import { AssistantOrphans } from "@/components/oxyn/assistant-orphans"
 import type { OrphanThreadsState } from "@/components/oxyn/assistant-orphans"
+import { AssistantPrunedNote } from "@/components/oxyn/assistant-pruned-note"
 import type { HistoryState } from "@/features/assistant/conversation-store"
-import type { ThreadSummary } from "@/lib/ipc/ai"
+import type { PrunedHistory, ThreadSummary } from "@/lib/ipc/ai"
 import { cn } from "@/lib/utils"
 
 const UNTITLED = "Untitled conversation"
@@ -200,8 +201,11 @@ export function AssistantHistory({
   onDelete,
   onReload,
   orphans,
+  pruned = null,
 }: {
   history: HistoryState
+  /** What the launch pruned: a sober note above the list, once. */
+  pruned?: PrunedHistory | null
   /** The conversations of deleted connections, listed read-only. */
   orphans?: OrphanThreadsState
   currentId: string | null
@@ -237,6 +241,8 @@ export function AssistantHistory({
           Start a new conversation
         </Button>
       </div>
+
+      {pruned ? <AssistantPrunedNote pruned={pruned} /> : null}
 
       {history.status === "error" ? (
         <Alert variant="destructive">

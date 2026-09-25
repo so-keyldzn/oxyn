@@ -272,17 +272,23 @@ impl Backend {
                 return;
             };
             let executor = &inner.executor;
+            let policy = oxyn_store::RetentionPolicy::default();
             match executor
                 .store()
                 .conversations()
-                .prune(executor.workspace(), oxyn_store::RetentionPolicy::default())
+                .prune(executor.workspace(), policy)
             {
-                Ok(report) if !report.is_empty() => tracing::info!(
-                    conversations = report.conversations,
-                    turns = report.turns,
-                    bytes = report.bytes,
-                    "assistant history pruned to its budget"
-                ),
+                Ok(report) if !report.is_empty() => {
+                    tracing::info!(
+                        conversations = report.conversations,
+                        turns = report.turns,
+                        bytes = report.bytes,
+                        "assistant history pruned to its budget"
+                    );
+                    // Not only the log: the history panel says it
+                    // (docs/UX-SPEC.md).
+                    *inner.ai.pruned.lock() = crate::ipc::ai::PrunedHistory::of(report, policy);
+                }
                 Ok(_) => {}
                 // Counted, never quoted: a SQLite message may carry a path.
                 Err(_) => tracing::warn!("the assistant history could not be pruned"),

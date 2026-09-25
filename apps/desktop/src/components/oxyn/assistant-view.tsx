@@ -59,6 +59,7 @@ import type {
   Mention,
   ModelChoice,
   ModelCost,
+  PrunedHistory,
   ReasoningEffort,
 } from "@/lib/ipc/ai"
 import type { CatalogAddress, Environment, PrivacyTier } from "@/lib/ipc/types"
@@ -174,6 +175,8 @@ export interface AssistantViewProps {
   onReloadHistory: () => void
   /** The conversations of deleted connections, shown read-only in the history. */
   orphans?: OrphanThreadsState
+  /** What the launch pruned, said in the history list. */
+  pruned?: PrunedHistory | null
   /** The history list was just shown: what it holds from elsewhere is read again. */
   onHistoryShown?: () => void
   onSendQueued: (key: string) => void
@@ -329,6 +332,7 @@ export function AssistantView(props: AssistantViewProps) {
           onDelete={props.onDeleteThread}
           onReload={props.onReloadHistory}
           orphans={props.orphans}
+          pruned={props.pruned ?? null}
         />
       ) : (
         <MessageScrollerProvider autoScroll>

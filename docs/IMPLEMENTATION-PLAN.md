@@ -1885,9 +1885,13 @@ retarder l'ouverture. On élague au lancement plutôt qu'après chaque échange 
 budget borne des mois d'usage, pas une session, et une suppression en pleine
 conversation pourrait emporter le fil que l'utilisateur lit.
 
-**Reste ouvert :** faut-il dire à l'utilisateur qu'un fil a été élagué ?
-[UX-SPEC](UX-SPEC.md#une-conversation-reste-dans-le-workspace-pas-ce-quon-lui-a-montré)
-ne le prévoit pas. Aujourd'hui, seul un journal `info` le consigne.
+**Tranché le 2026-09-24, fait le 2026-09-25 :** l'utilisateur est prévenu.
+Le rapport de l'élagage est gardé en mémoire par le backend (`ai_pruned_history`)
+et la liste « Conversations » affiche une note qui dit combien de fils ont été
+retirés et selon quelle règle, avec les nombres de `RetentionPolicy`
+([UX-SPEC](UX-SPEC.md#une-conversation-reste-dans-le-workspace-pas-ce-quon-lui-a-montré)).
+Le journal `info` reste. Tenu par
+`the_launch_prune_is_transmitted_with_its_rule`.
 
 ## Ce qui n'a pas sa place ici
 

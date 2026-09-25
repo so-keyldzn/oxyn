@@ -270,6 +270,15 @@ export const ThreadSummary = z.object({
 })
 export type ThreadSummary = z.infer<typeof ThreadSummary>
 
+/** What the launch removed from the history, with the rule's own numbers. */
+export const PrunedHistory = z.object({
+  conversations: z.number().int().positive(),
+  maxConversations: z.number().int().nonnegative(),
+  maxAgeDays: z.number().int().nonnegative().nullable(),
+  maxBytes: z.number().int().nonnegative(),
+})
+export type PrunedHistory = z.infer<typeof PrunedHistory>
+
 /** A conversation whose connection was deleted: listed, never reopened. */
 export const OrphanThreadSummary = z.object({
   id: z.string(),
@@ -850,6 +859,9 @@ export const ai = {
 
   threads: (connection: string) =>
     call("ai_threads", z.array(ThreadSummary), { connection }),
+
+  /** What this launch's prune removed; `null` when nothing went. */
+  prunedHistory: () => call("ai_pruned_history", PrunedHistory.nullable()),
 
   /** The workspace's conversations whose connection was deleted. A read. */
   orphanThreads: () => call("ai_orphan_threads", z.array(OrphanThreadSummary)),

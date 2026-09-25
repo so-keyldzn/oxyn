@@ -87,6 +87,42 @@ export const Loading: Story = {
   },
 }
 
+/**
+ * The launch pruned threads: the list says how many and by which rule, above
+ * the threads that remain, and the orphans of deleted connections follow.
+ */
+export const PrunedAtLaunch: Story = {
+  args: {
+    pruned: {
+      conversations: 12,
+      maxConversations: 200,
+      maxAgeDays: 90,
+      maxBytes: 32 * 1024 * 1024,
+    },
+    orphans: {
+      status: "ready",
+      items: [
+        {
+          id: "o1",
+          title: "Invoices without a customer",
+          connectionName: "billing (old)",
+          updatedAtMs: Date.UTC(2026, 7, 1),
+          exchanges: 2,
+        },
+      ],
+    },
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    await expect(
+      canvas.getByText(/Oxyn removed 12 conversations when it started/)
+    ).toBeVisible()
+    await expect(
+      canvas.getByRole("button", { name: /From deleted connections/ })
+    ).toBeVisible()
+  },
+}
+
 export const NothingYet: Story = {
   args: { history: { status: "ready", items: [] }, currentId: null },
   play: async ({ canvasElement }) => {
