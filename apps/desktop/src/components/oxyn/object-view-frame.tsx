@@ -6,6 +6,7 @@ import {
   HelpCircleIcon,
 } from "@hugeicons/core-free-icons"
 
+import { DefinitionBeside } from "@/components/oxyn/definition-beside"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Kbd } from "@/components/ui/kbd"
@@ -62,6 +63,7 @@ export function ObjectViewFrame({
   panels,
   onEscape,
   gridFocusRequest = 0,
+  definitionLayout,
 }: {
   name: string
   kind: string
@@ -81,13 +83,37 @@ export function ObjectViewFrame({
    * same render: the grid is focused once its panel is drawn.
    */
   gridFocusRequest?: number
+  /**
+   * Where the definition goes. `beside` (the wide layout): it accompanies the
+   * metadata tabs instead of being one, at a width the caller keeps; otherwise
+   * DDL is a tab. Absent, DDL is always a tab.
+   */
+  definitionLayout?: {
+    beside: boolean
+    width: number
+    onWidthChange: (width: number) => void
+  }
 }) {
   const reasonId = React.useId()
+  const beside = definitionLayout?.beside ?? false
+  const tabs = beside
+    ? OBJECT_TABS.filter((candidate) => candidate.value !== "definition")
+    : OBJECT_TABS
   const dataPanel = React.useRef<HTMLDivElement>(null)
   React.useEffect(() => {
     if (gridFocusRequest === 0) return
     dataPanel.current?.querySelector<HTMLElement>('[role="grid"]')?.focus()
   }, [gridFocusRequest])
+  const contents = tabs.map((candidate) => (
+    <TabsContent
+      key={candidate.value}
+      ref={candidate.value === "data" ? dataPanel : undefined}
+      value={candidate.value}
+      className="flex min-h-0 flex-1 flex-col"
+    >
+      {panels[candidate.value]}
+    </TabsContent>
+  ))
   return (
     <Tabs
       onKeyDown={(event: React.KeyboardEvent) => {
@@ -119,7 +145,7 @@ export function ObjectViewFrame({
           aria-label={`Views of ${name}`}
           className="max-w-full overflow-x-auto"
         >
-          {OBJECT_TABS.map((candidate) =>
+          {tabs.map((candidate) =>
             candidate.value === "data" && dataUnavailable ? (
               <Tooltip key={candidate.value}>
                 {/* The trigger is the wrapper, not the tab: a disabled button
@@ -161,16 +187,19 @@ export function ObjectViewFrame({
 
       {notice}
 
-      {OBJECT_TABS.map((candidate) => (
-        <TabsContent
-          key={candidate.value}
-          ref={candidate.value === "data" ? dataPanel : undefined}
-          value={candidate.value}
-          className="flex min-h-0 flex-1 flex-col"
+      {definitionLayout ? (
+        // Drawn in both layouts: crossing 1200 px must not remount the tabs,
+        // which would drop the preview's grid and its unapplied filter.
+        <DefinitionBeside
+          definition={beside && tab !== "data" ? panels.definition : null}
+          width={definitionLayout.width}
+          onWidthChange={definitionLayout.onWidthChange}
         >
-          {panels[candidate.value]}
-        </TabsContent>
-      ))}
+          {contents}
+        </DefinitionBeside>
+      ) : (
+        contents
+      )}
     </Tabs>
   )
 }

@@ -3,6 +3,7 @@ import { useHotkeys } from "@tanstack/react-hotkeys"
 import type { Meta, StoryObj } from "@storybook/react-vite"
 import { expect, fn, userEvent, waitFor, within } from "storybook/test"
 
+import { DEFINITION_WIDTH } from "./definition-beside"
 import { FacetFrame } from "./facet-frame"
 import { invoiceColumns, invoicesDetail, syntheticPages } from "./fixtures"
 import {
@@ -59,7 +60,10 @@ function Harness({
   cancelling = false,
   onRefresh,
   onCancel,
+  wide = false,
 }: {
+  /** The layout of 1200 px and more: the definition sits beside the tabs. */
+  wide?: boolean
   name?: string
   kind?: string
   initial?: ObjectTab
@@ -79,6 +83,9 @@ function Harness({
   const idle = { status: "idle" } as const
   // `⌘2` as the workspace binds it for the object on screen.
   const [gridFocusRequest, setGridFocusRequest] = React.useState(0)
+  const [definitionWidth, setDefinitionWidth] = React.useState<number>(
+    DEFINITION_WIDTH.initial
+  )
   useHotkeys([
     {
       hotkey: "Mod+2",
@@ -98,6 +105,11 @@ function Harness({
       dataUnavailable={dataUnavailable}
       onEscape={running ? onCancel : undefined}
       gridFocusRequest={gridFocusRequest}
+      definitionLayout={{
+        beside: wide,
+        width: definitionWidth,
+        onWidthChange: setDefinitionWidth,
+      }}
       toolbar={
         tab === "data" && dataUnavailable === null ? (
           <PreviewToolbar
@@ -427,6 +439,74 @@ export const DataNotVisibleAtFirst: Story = {
     await expect(
       canvas.getByRole("button", { name: "Refresh data" })
     ).toBeEnabled()
+  },
+}
+
+const wideFrame = (Story: React.ComponentType) => (
+  <div className="h-[560px] w-[1280px] border">
+    <Story />
+  </div>
+)
+
+const widthOf = (element: HTMLElement) =>
+  Math.round(element.getBoundingClientRect().width)
+
+/**
+ * The wide layout: the definition accompanies Structure instead of being a
+ * tab, at 424 px; its handle moves by keyboard within 320–640 px, and Home
+ * restores 424 px.
+ */
+export const DefinitionBeside: Story = {
+  args: { wide: true, initial: "structure" },
+  decorators: [wideFrame],
+  play: async ({ canvas }) => {
+    await expect(canvas.queryByRole("tab", { name: "DDL" })).toBeNull()
+    const panel = canvas.getByRole("region", { name: "Definition" })
+    await expect(
+      within(panel).getByLabelText("Object definition")
+    ).toBeVisible()
+    await expect(widthOf(panel)).toBe(DEFINITION_WIDTH.initial)
+
+    const handle = canvas.getByRole("separator", {
+      name: "Resize the definition panel",
+    })
+    handle.focus()
+    await userEvent.keyboard("{ArrowLeft}")
+    await waitFor(() =>
+      expect(widthOf(panel)).toBeGreaterThan(DEFINITION_WIDTH.initial)
+    )
+    for (let step = 0; step < 12; step += 1)
+      await userEvent.keyboard("{ArrowLeft}")
+    await waitFor(() => expect(widthOf(panel)).toBe(DEFINITION_WIDTH.max))
+    for (let step = 0; step < 12; step += 1)
+      await userEvent.keyboard("{ArrowRight}")
+    await waitFor(() => expect(widthOf(panel)).toBe(DEFINITION_WIDTH.min))
+    await userEvent.keyboard("{Home}")
+    await waitFor(() => expect(widthOf(panel)).toBe(DEFINITION_WIDTH.initial))
+  },
+}
+
+/**
+ * The width is the workspace's: leaving for Data drops the panel, coming back
+ * to another metadata tab draws it again at the width it was left at.
+ */
+export const DefinitionBesideKeepsItsWidth: Story = {
+  args: { wide: true, initial: "structure" },
+  decorators: [wideFrame],
+  play: async ({ canvas }) => {
+    canvas
+      .getByRole("separator", { name: "Resize the definition panel" })
+      .focus()
+    await userEvent.keyboard("{End}")
+    const narrowed = () => canvas.getByRole("region", { name: "Definition" })
+    await waitFor(() => expect(widthOf(narrowed())).toBe(DEFINITION_WIDTH.min))
+
+    await userEvent.click(canvas.getByRole("tab", { name: "Data" }))
+    await waitFor(() =>
+      expect(canvas.queryByRole("region", { name: "Definition" })).toBeNull()
+    )
+    await userEvent.click(canvas.getByRole("tab", { name: "Indexes" }))
+    await waitFor(() => expect(widthOf(narrowed())).toBe(DEFINITION_WIDTH.min))
   },
 }
 

@@ -16,16 +16,26 @@ export function definitionSourceLabel(source: DefinitionView["source"]) {
   }
 }
 
+/**
+ * Said by the console that receives a definition kept after a failed refresh
+ * or an invalidation: the copy must not look fresher than the panel did.
+ */
+export const STALE_DEFINITION_NOTICE =
+  "This DDL may be outdated: its last refresh failed or a schema change invalidated it. Nothing was executed."
+
 /** The header actions of the DDL tab, shown once a definition is loaded. */
 export function DefinitionActions({
   definition,
+  stale,
   onCopy,
   onOpenInConsole,
 }: {
   definition: DefinitionView
+  /** The text shown may be outdated: the console says so too. */
+  stale: boolean
   onCopy: (sql: string) => void
   /** Absent when no console can be opened from here. */
-  onOpenInConsole?: (sql: string) => void
+  onOpenInConsole?: (sql: string, notice?: string) => void
 }) {
   return (
     <>
@@ -45,7 +55,12 @@ export function DefinitionActions({
         <Button
           size="sm"
           variant="outline"
-          onClick={() => onOpenInConsole(definition.sql)}
+          onClick={() =>
+            onOpenInConsole(
+              definition.sql,
+              stale ? STALE_DEFINITION_NOTICE : undefined
+            )
+          }
         >
           <HugeiconsIcon
             icon={SourceCodeIcon}

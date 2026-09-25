@@ -36,6 +36,7 @@ import {
   useReleaseSelection,
 } from "@/features/metadata/value-inspection"
 import { ExportMenu } from "@/features/workspace/export-menu"
+import { useCompact } from "@/features/workspace/use-compact"
 import { metadata } from "@/lib/ipc/metadata"
 import type { BoundValue } from "@/lib/ipc/metadata"
 import { results } from "@/lib/ipc/results"
@@ -69,6 +70,8 @@ export function ObjectView({
   onOpenRelated,
   onOpenInConsole,
   handleRef,
+  definitionWidth,
+  onDefinitionWidthChange,
 }: {
   open: OpenConnection
   node: CatalogNode
@@ -83,17 +86,29 @@ export function ObjectView({
   onOpenInConsole?: (
     sql: string,
     title: string,
-    parameters?: Array<BoundValue>,
-    /** A value is still missing: the console says so before running. */
-    needsValues?: boolean
+    options?: {
+      parameters?: Array<BoundValue>
+      /** A value is still missing: the console says so before running. */
+      needsValues?: boolean
+      /** Said by the console above the text, before anything is run. */
+      notice?: string
+    }
   ) => void
   handleRef?: React.Ref<ObjectViewHandle>
+  /** The definition panel's width, kept by the workspace (wide layout). */
+  definitionWidth: number
+  onDefinitionWidthChange: (width: number) => void
 }) {
   const dataUnavailable = previewUnavailable(open, node.holdsRecords)
   const previewable = dataUnavailable === null
-  const [tab, setTab] = React.useState<ObjectTab>(() =>
+  const compact = useCompact()
+  const [chosenTab, setTab] = React.useState<ObjectTab>(() =>
     initialObjectTab(initialTab, previewable)
   )
+  // Wide, the definition sits beside the metadata instead of being a tab: the
+  // choice is kept for the compact layout, which lists it again.
+  const tab: ObjectTab =
+    !compact && chosenTab === "definition" ? "structure" : chosenTab
   const [gridFocusRequest, setGridFocusRequest] = React.useState(0)
   React.useImperativeHandle(
     handleRef,
@@ -152,7 +167,10 @@ export function ObjectView({
       default:
         break
     }
-  }, [tab, direction, ensure])
+    // Asked once, like a tab: a window resized across 1200 px reads nothing.
+    if (!compact && tab !== "data" && !unsupportedReason(open, "definition"))
+      ensure("definition")
+  }, [tab, direction, compact, ensure])
 
   const data = facets.facets
   const state = preview.state
@@ -191,16 +209,17 @@ export function ObjectView({
           selected ? { result: selected.result, row: selected.row } : null
         )
         if (query)
-          onOpenInConsole(
-            query.sql,
-            "Related rows.sql",
-            query.parameters,
-            query.needsValues
-          )
+          onOpenInConsole(query.sql, "Related rows.sql", {
+            parameters: query.parameters,
+            needsValues: query.needsValues,
+          })
       }
     : undefined
 
   const detailLoad = facets.loads.detail
+  const definitionStale =
+    data?.definition.freshness.state === "invalidated" ||
+    facets.loads.definition.status === "error"
 
   return (
     <ObjectViewFrame
@@ -211,6 +230,11 @@ export function ObjectView({
       dataUnavailable={dataUnavailable}
       onEscape={tab === "data" && preview.running ? preview.cancel : undefined}
       gridFocusRequest={gridFocusRequest}
+      definitionLayout={{
+        beside: !compact,
+        width: definitionWidth,
+        onWidthChange: onDefinitionWidthChange,
+      }}
       toolbar={
         tab === "data" && previewable ? (
           <PreviewToolbar
@@ -435,10 +459,12 @@ export function ObjectView({
               data.definition.value ? (
                 <DefinitionActions
                   definition={data.definition.value}
+                  stale={definitionStale}
                   onCopy={(sql) => void copyToClipboard(sql, "DDL")}
                   onOpenInConsole={
                     onOpenInConsole
-                      ? (sql) => onOpenInConsole(sql, "Object DDL")
+                      ? (sql, notice) =>
+                          onOpenInConsole(sql, "Object DDL", { notice })
                       : undefined
                   }
                 />
@@ -448,10 +474,7 @@ export function ObjectView({
             {data.definition.value ? (
               <RelationDefinition
                 definition={data.definition.value}
-                stale={
-                  data.definition.freshness.state === "invalidated" ||
-                  facets.loads.definition.status === "error"
-                }
+                stale={definitionStale}
               />
             ) : null}
           </FacetFrame>

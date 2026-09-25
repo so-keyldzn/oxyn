@@ -49,17 +49,46 @@ export const Actions: Story = {
     <div className="flex gap-2 p-2">
       <DefinitionActions
         definition={args.definition}
+        stale={args.stale}
         onCopy={onCopy}
         onOpenInConsole={onOpenInConsole}
       />
     </div>
   ),
+  beforeEach: () => {
+    onCopy.mockClear()
+    onOpenInConsole.mockClear()
+  },
   play: async ({ canvas }) => {
     await userEvent.click(canvas.getByRole("button", { name: /Copy DDL/ }))
     await expect(onCopy).toHaveBeenCalledWith(invoicesDefinition.sql)
     await userEvent.click(
       canvas.getByRole("button", { name: /Open DDL in console/ })
     )
-    await expect(onOpenInConsole).toHaveBeenCalledWith(invoicesDefinition.sql)
+    // Fresh text: the console says nothing more than it would of any copy.
+    await expect(onOpenInConsole).toHaveBeenCalledWith(
+      invoicesDefinition.sql,
+      undefined
+    )
+  },
+}
+
+/**
+ * A definition kept after a failed refresh: the console that receives it says
+ * it may be outdated. Copy DDL copies the text shown, as it is.
+ */
+export const StaleActions: Story = {
+  ...Actions,
+  args: { stale: true },
+  play: async ({ canvas }) => {
+    await userEvent.click(canvas.getByRole("button", { name: /Copy DDL/ }))
+    await expect(onCopy).toHaveBeenCalledWith(invoicesDefinition.sql)
+    await userEvent.click(
+      canvas.getByRole("button", { name: /Open DDL in console/ })
+    )
+    await expect(onOpenInConsole).toHaveBeenCalledWith(
+      invoicesDefinition.sql,
+      expect.stringMatching(/may be outdated/)
+    )
   },
 }
