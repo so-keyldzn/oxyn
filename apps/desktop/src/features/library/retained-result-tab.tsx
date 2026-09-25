@@ -7,6 +7,7 @@ import {
 } from "@/components/oxyn/retained-result-view"
 import type { RetainedResultState } from "@/components/oxyn/retained-result-view"
 import { useResultDensity } from "@/features/settings/use-result-density"
+import { useReleaseOnClose } from "@/features/library/use-release-on-close"
 import { ExportMenu } from "@/features/workspace/export-menu"
 import { BackendError } from "@/lib/ipc/client"
 import { library } from "@/lib/ipc/library"
@@ -38,8 +39,11 @@ export function RetainedResultTab({
   onExportingChange?: (exporting: boolean) => void
 }) {
   const density = useResultDensity()
+  // Each tab opens the result for itself: the opening counts one reader in
+  // the backend, released by this tab alone.
+  const view = React.useId()
   const opened = useQuery({
-    queryKey: ["retained-result", connection, result],
+    queryKey: ["retained-result", connection, result, view],
     queryFn: () => library.openRetainedResult(connection, result),
     // Asked once per tab: whether rows are still retained is an answer, and a
     // refetch on focus would silently turn an open tab into « expired ».
@@ -48,6 +52,7 @@ export function RetainedResultTab({
   })
 
   const resultId = opened.data?.type === "open" ? opened.data.result : null
+  useReleaseOnClose(resultId)
   const fetchPage = React.useCallback(
     (offset: number, limit: number) =>
       resultId
