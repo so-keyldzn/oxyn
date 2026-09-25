@@ -889,6 +889,9 @@ deux versions.
 Les changements de texte et de nom sauvegardent la copie de travail localement,
 sans modifier la copie nommée et sans exécuter de SQL. Un nom de travail vide
 reste récupérable ; seul l'enregistrement d'une copie nommée exige un nom. Une
+copie neuve préremplie — depuis History, une requête enregistrée ou la
+connexion précédente — est sauvegardée comme une édition, sans attendre qu'on
+la modifie. Une
 édition hors des bornes est signalée comme non sauvegardée, et une réponse
 relative à un état antérieur ne peut pas annoncer cet état comme récupéré.
 

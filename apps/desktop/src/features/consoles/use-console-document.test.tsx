@@ -8,21 +8,28 @@ import type { ConsoleSeed } from "./use-console-document"
 import type { DocumentWrite } from "@/lib/ipc/library"
 
 interface PendingWrite {
+  document: string
   named: boolean
   text: string
   answer: (write: DocumentWrite) => void
+  fail: (error: Error) => void
 }
 
 const store = vi.hoisted(() => ({ writes: [] as Array<PendingWrite> }))
 
 vi.mock("@/lib/ipc/library", () => ({
   library: {
-    saveDocument: (_id: string, request: { named: boolean; text: string }) =>
-      new Promise<DocumentWrite>((resolve) => {
+    saveDocument: (
+      _id: string,
+      request: { document: string; named: boolean; text: string }
+    ) =>
+      new Promise<DocumentWrite>((resolve, reject) => {
         store.writes.push({
+          document: request.document,
           named: request.named,
           text: request.text,
           answer: resolve,
+          fail: reject,
         })
       }),
   },
@@ -53,11 +60,11 @@ const saved: DocumentWrite = {
   isSaved: false,
 }
 
-function open() {
+function open(from: ConsoleSeed = seed) {
   const client = new QueryClient({
     defaultOptions: { queries: { retry: false } },
   })
-  return renderHook(() => useConsoleDocument({ seed, connection: "c" }), {
+  return renderHook(() => useConsoleDocument({ seed: from, connection: "c" }), {
     wrapper: ({ children }: { children: React.ReactNode }) => (
       <QueryClientProvider client={client}>{children}</QueryClientProvider>
     ),
@@ -154,5 +161,113 @@ describe("the recovery draft notice", () => {
     expect(hook.result.current.draftNotice).toBe(
       "Recovery draft saved locally."
     )
+  })
+})
+
+/**
+ * The writes of one document. Hooks of earlier tests stay mounted, and a
+ * draft they still hold may be written during a later test.
+ */
+function writesOf(document: string) {
+  return store.writes.filter((write) => write.document === document)
+}
+
+describe("the recovery draft", () => {
+  it("writes a new copy's text before any edit", async () => {
+    const copy = open({ ...seed, document: "copy", text: "SELECT 1" })
+    let flushed: Promise<boolean> | undefined
+    await act(async () => {
+      flushed = copy.result.current.flush()
+    })
+    expect(writesOf("copy").map((write) => write.text)).toEqual(["SELECT 1"])
+    await act(async () => writesOf("copy")[0]?.answer(saved))
+    await expect(flushed).resolves.toBe(true)
+  })
+
+  it("writes a new copy's text after the typing pause, unflushed", async () => {
+    vi.useFakeTimers()
+    try {
+      open({ ...seed, document: "idle-copy", text: "SELECT 1" })
+      await act(async () => {
+        vi.advanceTimersByTime(DRAFT_IDLE_MS)
+      })
+      expect(writesOf("idle-copy").map((write) => write.text)).toEqual([
+        "SELECT 1",
+      ])
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it("does not rewrite an empty console or a resumed document", async () => {
+    const empty = open({ ...seed, document: "empty" })
+    const resumed = open({
+      ...seed,
+      document: "resumed",
+      revision: 4,
+      text: "SELECT 1",
+    })
+    await act(async () => {
+      await expect(empty.result.current.flush()).resolves.toBe(true)
+      await expect(resumed.result.current.flush()).resolves.toBe(true)
+    })
+    expect(writesOf("empty")).toHaveLength(0)
+    expect(writesOf("resumed")).toHaveLength(0)
+  })
+
+  it("sends a failed draft again once the store is back", async () => {
+    const hook = open({ ...seed, document: "retried" })
+    act(() => hook.result.current.change({ text: "SELECT 1" }))
+    let first: Promise<boolean> | undefined
+    await act(async () => {
+      first = hook.result.current.flush()
+    })
+    await act(async () => writesOf("retried")[0]?.fail(new Error("disk full")))
+    await expect(first).resolves.toBe(false)
+    expect(hook.result.current.draftNotice).toBe("Draft not saved: disk full")
+
+    let second: Promise<boolean> | undefined
+    await act(async () => {
+      second = hook.result.current.flush()
+    })
+    expect(writesOf("retried").map((write) => write.text)).toEqual([
+      "SELECT 1",
+      "SELECT 1",
+    ])
+    await act(async () => writesOf("retried")[1]?.answer(saved))
+    await expect(second).resolves.toBe(true)
+    expect(hook.result.current.draftNotice).toBe(
+      "Recovery draft saved locally."
+    )
+  })
+
+  it("lets a flush wait for the write already carrying its text", async () => {
+    const hook = open({ ...seed, document: "awaited" })
+    act(() => hook.result.current.change({ text: "SELECT 1" }))
+    await start(hook)
+    let flushed: Promise<boolean> | undefined
+    await act(async () => {
+      flushed = hook.result.current.flush()
+    })
+    expect(writesOf("awaited")).toHaveLength(1)
+    await act(async () => writesOf("awaited")[0]?.fail(new Error("disk full")))
+    await expect(flushed).resolves.toBe(false)
+  })
+
+  it("never confirms a draft frozen by a conflict", async () => {
+    const hook = open({ ...seed, document: "conflicted" })
+    act(() => hook.result.current.change({ text: "SELECT 1" }))
+    let first: Promise<boolean> | undefined
+    await act(async () => {
+      first = hook.result.current.flush()
+    })
+    await act(async () =>
+      writesOf("conflicted")[0]?.answer({ type: "conflict", message: "moved" })
+    )
+    await expect(first).resolves.toBe(false)
+    await act(async () => {
+      await expect(hook.result.current.flush()).resolves.toBe(false)
+    })
+    expect(writesOf("conflicted")).toHaveLength(1)
   })
 })

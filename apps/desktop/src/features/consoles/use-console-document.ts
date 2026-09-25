@@ -40,6 +40,11 @@ export interface ConsoleSeed {
   needsValues: boolean
 }
 
+interface Draft {
+  title: string
+  text: string
+}
+
 /** A named save or close; `cancelled` is set by `cancelWrite`, meanwhile. */
 interface Cancellable {
   id: string
@@ -98,7 +103,22 @@ export function useConsoleDocument({
   const latest = React.useRef({ document, title, text, conflict, closing })
   latest.current = { document, title, text, conflict, closing }
   const revision = React.useRef(seed.revision)
-  const lastDraft = React.useRef({ title: seed.title, text: seed.text })
+  /**
+   * The draft the store holds or is writing. `null` for a new document whose
+   * seed was never written: a copy opened from History or a saved query is
+   * recoverable before its first edit (UX-SPEC « Autosauvegarde des
+   * brouillons »).
+   */
+  const lastDraft = React.useRef<Draft | null>(
+    seed.revision === 0 && seed.text !== ""
+      ? null
+      : { title: seed.title, text: seed.text }
+  )
+  /** The draft write under way: a flush finding its text sent awaits it. */
+  const pendingDraft = React.useRef<{
+    sent: Draft
+    done: Promise<boolean>
+  } | null>(null)
   /** Numbers draft attempts, refused ones included. */
   const draftAttempt = React.useRef(0)
   /** The named save or close under way, which the user may still cancel. */
@@ -111,53 +131,75 @@ export function useConsoleDocument({
     return true
   }
 
-  const writeDraft = React.useCallback(async () => {
+  /**
+   * Resolves `false` when the text shown did not reach the store: refused,
+   * failed, or in conflict. Only an acknowledged write counts; a failed one
+   * is sent again by the next attempt.
+   */
+  const writeDraft = React.useCallback(async (): Promise<boolean> => {
     const current = latest.current
-    if (current.conflict || current.closing) return
-    if (
-      lastDraft.current.text === current.text &&
-      lastDraft.current.title === current.title
-    )
-      return
+    // In conflict the text stays in the editor only (ADR-0016); a close under
+    // way carries it itself.
+    if (current.conflict) return false
+    if (current.closing) return true
+    const last = lastDraft.current
+    if (last?.text === current.text && last.title === current.title)
+      return pendingDraft.current?.sent === last
+        ? pendingDraft.current.done
+        : true
     // Only the last draft attempt speaks: an answer to an earlier one would
     // announce a state the editor has left (UX-SPEC § Autosauvegarde).
     const attempt = ++draftAttempt.current
     if (titleTooLong(current.title)) {
       setDraftNotice(`Draft not saved: ${TITLE_TOO_LONG}`)
-      return
+      return false
     }
     revision.current += 1
     const sent = { title: current.title, text: current.text }
     lastDraft.current = sent
     setDraftNotice("Saving recovery draft…")
-    try {
-      const write = await library.saveDocument(newCommandId(), {
-        document: current.document,
-        revision: revision.current,
-        title: sent.title,
-        text: sent.text,
-        connection,
-        named: false,
-      })
-      if (write.type === "saved") void refreshLibrary(queryClient)
-      if (latest.current.document !== current.document) return
-      if (write.type === "conflict" && onConflict(write)) {
-        setDraftNotice(`Draft not saved: ${write.message}`)
-        return
+    const done = (async () => {
+      try {
+        const write = await library.saveDocument(newCommandId(), {
+          document: current.document,
+          revision: revision.current,
+          title: sent.title,
+          text: sent.text,
+          connection,
+          named: false,
+        })
+        if (write.type === "saved") void refreshLibrary(queryClient)
+        if (latest.current.document !== current.document)
+          return write.type !== "conflict"
+        if (write.type === "conflict" && onConflict(write)) {
+          setDraftNotice(`Draft not saved: ${write.message}`)
+          return false
+        }
+        if (draftAttempt.current !== attempt) return true
+        if (write.type === "saved")
+          setDraftNotice(
+            latest.current.text === sent.text &&
+              latest.current.title === sent.title
+              ? "Recovery draft saved locally."
+              : "Newer edits are not in the recovery draft yet."
+          )
+        else if (write.type === "superseded")
+          setDraftNotice("Draft replaced by a newer save of this query.")
+        return true
+      } catch (error) {
+        // Not in the store: the next attempt must send this text again.
+        if (lastDraft.current === sent) lastDraft.current = last
+        if (draftAttempt.current === attempt)
+          setDraftNotice(`Draft not saved: ${message(error)}`)
+        return false
       }
-      if (draftAttempt.current !== attempt) return
-      if (write.type === "saved")
-        setDraftNotice(
-          latest.current.text === sent.text &&
-            latest.current.title === sent.title
-            ? "Recovery draft saved locally."
-            : "Newer edits are not in the recovery draft yet."
-        )
-      else if (write.type === "superseded")
-        setDraftNotice("Draft replaced by a newer save of this query.")
-    } catch (error) {
-      if (draftAttempt.current === attempt)
-        setDraftNotice(`Draft not saved: ${message(error)}`)
+    })()
+    const pending = { sent, done }
+    pendingDraft.current = pending
+    try {
+      return await done
+    } finally {
+      if (pendingDraft.current === pending) pendingDraft.current = null
     }
   }, [connection, queryClient])
 
@@ -165,11 +207,19 @@ export function useConsoleDocument({
     wait: DRAFT_IDLE_MS,
   })
 
-  /** Writes a pending draft now: before running, closing, on blur (ADR-0024). */
+  /**
+   * Writes a pending draft now: before running, closing, on blur (ADR-0024).
+   * Resolves `false` when the text shown is not in the store.
+   */
   const flush = React.useCallback(async () => {
     debouncer.cancel()
-    await writeDraft()
+    return writeDraft()
   }, [debouncer, writeDraft])
+
+  // A seed never written is written like an edit, after the typing pause.
+  React.useEffect(() => {
+    if (lastDraft.current === null) debouncer.maybeExecute()
+  }, [])
 
   const change = (next: { text?: string; title?: string }) => {
     if (next.text !== undefined) {
