@@ -156,27 +156,32 @@ export function ErdBlock({
   // The name the backend quoted for the session's dialect, from the facets
   // the diagram was drawn from; the name as drawn when they cannot be read.
   // Never a name composed here (I-10).
-  const copyName = async (table: ErdTable) => {
-    let name =
-      table.namespace === null ? table.name : `${table.namespace}.${table.name}`
-    try {
-      const facets = await queryClient.fetchQuery({
-        queryKey: facetsKey(open.connection, table.address),
-        queryFn: () => metadata.relationFacets(open.connection, table.address),
-      })
-      name = facets.qualifiedName
-    } catch {
-      // The drawn name stays: the copy says what the diagram shows.
-    }
-    await copyToClipboard(name, "Name")
-  }
+  // Started in the click, the name read afterwards (clipboard.ts).
+  const copyName = (table: ErdTable) =>
+    void copyToClipboard(
+      queryClient
+        .fetchQuery({
+          queryKey: facetsKey(open.connection, table.address),
+          queryFn: () =>
+            metadata.relationFacets(open.connection, table.address),
+        })
+        .then(
+          (facets) => facets.qualifiedName,
+          // The drawn name stays: the copy says what the diagram shows.
+          () =>
+            table.namespace === null
+              ? table.name
+              : `${table.namespace}.${table.name}`
+        ),
+      "Name"
+    )
 
   return (
     <AssistantErd
       source={request.source}
       state={state}
       onOpenObject={onOpenObject}
-      onCopyName={(table) => void copyName(table)}
+      onCopyName={copyName}
       // A read, asked again by the user: nothing is written, nothing replays.
       onRetry={() => void erd.refetch()}
     />

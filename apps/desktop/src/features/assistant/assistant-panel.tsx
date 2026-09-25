@@ -59,11 +59,12 @@ import type {
   SampleRequest,
 } from "@/lib/ipc/ai"
 import type { OpenConnection } from "@/lib/ipc/types"
+import { writeClipboard } from "@/lib/clipboard"
 
 /** Copies, and says so only when it fails: a tick already says it worked. */
 async function copy(text: string) {
   try {
-    await navigator.clipboard.writeText(text)
+    await writeClipboard(text)
     return true
   } catch (error) {
     toast.add({

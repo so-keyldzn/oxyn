@@ -33,11 +33,11 @@ import type { CatalogAddress, OpenConnection } from "@/lib/ipc/types"
 // exercises the identifier-shaped one, the qualified name, because that is
 // the field most likely to be widened into leaking one by accident.
 //
-// Two other call sites write to `navigator.clipboard.writeText` directly,
-// bypassing `copyToClipboard`: assistant-panel.tsx:64 copies an assistant
-// message, and result-grid.tsx:409 copies selected cell values. Both copy
-// data the query returned, never a connection or session identifier — out of
-// scope for this file.
+// Three other call sites write through `writeClipboard` (src/lib/clipboard.ts)
+// without `copyToClipboard`'s toast: assistant-panel.tsx copies an assistant
+// message, result-grid.tsx the selected cell values, sql-editor.tsx the
+// selected text. They copy what the user wrote or the query returned, never
+// a connection or session identifier — out of scope for this file.
 
 // A password chosen to be unmistakable if it ever leaks into JSON.
 const SENTINEL = "s3cr3t-sentinel"

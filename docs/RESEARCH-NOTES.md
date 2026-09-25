@@ -1666,6 +1666,31 @@ documentations officielles.
   un antislash échapperait l'accent fermant. Aucun driver BigQuery n'existe
   aujourd'hui ; à corriger avant le premier.
 
+## Presse-papiers de la webview — vérification du 2026-09-25
+
+Fait sur lequel repose `writeClipboard` (`apps/desktop/src/lib/clipboard.ts`) :
+une copie dont le texte vient du backend s'écrit **dans** le geste, avec un
+`ClipboardItem` dont la valeur est une promesse, et non par `writeText` après
+un `await`.
+
+| Sujet | Fait vérifié | Source |
+|---|---|---|
+| Geste exigé | « The request to write to the clipboard must be triggered during a user gesture. » ; chaque `ClipboardItem` est initialisé avec « a mapping of MIME type to `Promise` which may resolve either to a string or a `Blob` » ; disponible depuis Safari 13.1 | WebKit, [Async Clipboard API](https://webkit.org/blog/10855/async-clipboard-api/), billet du 2020-06-23 |
+| Motif pour WebKit | « Safari (WebKit) treats user activation differently than Chromium (Blink). For Safari, run all asynchronous operations in a promise whose result you assign to the `ClipboardItem` » ; l'exemple résout un `Blob` | web.dev, [Unblocking clipboard access](https://web.dev/articles/async-clipboard) |
+| Symptôme | `writeText()` rejeté en `NotAllowedError` sous Safari faute d'activation reconnue, rapporté sous Safari 18.3 (macOS 15.3.1) ; aucune réponse d'Apple | Apple Developer Forums, [fil 772275](https://developer.apple.com/forums/thread/772275), ouvert en janvier 2025 |
+| Moteurs concernés | La cible minimale est macOS 13.0 (`minimumSystemVersion`), livré avec Safari 16, postérieur à 13.1 ; la machine de dev est en macOS 26.2, Safari 26.2 | `sw_vers` et `Info.plist` de Safari, relevés le 2026-09-25 ; tableau `mermaid` plus haut pour macOS 13 |
+
+Choix qui en découlent : la valeur de l'item est un `Blob` `text/plain`, la
+forme que les deux sources montrent ; un texte déjà connu part par
+`writeText`, dans le geste. Là où `ClipboardItem` manque, le texte est attendu
+puis écrit par `writeText`, et un `NotAllowedError` y devient un message qui
+dit que la copie est arrivée après le clic.
+
+**Non reproduit** : aucun test n'atteint le WKWebView de l'application — les
+stories tournent sous Chromium, et le WebKit de Playwright n'est pas installé
+ici. Vérification manuelle dans `make desktop-dev` : `Copy as ▸ INSERT
+template` sur une table jamais ouverte, puis coller.
+
 ## Licences — vérification du 2026-09-25
 
 Faits sur lesquels repose [ADR-0044](adr/0044-licence-gpl-et-contrat-apache.md).

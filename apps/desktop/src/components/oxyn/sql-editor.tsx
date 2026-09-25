@@ -13,6 +13,7 @@ import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu"
 import { toast } from "@/components/ui/toast"
 import { setZoneHandle } from "@/lib/actions/context"
 import type { ActionSources } from "@/lib/actions/context"
+import { writeClipboard } from "@/lib/clipboard"
 
 function dialectFor(driver: string) {
   switch (driver) {
@@ -131,9 +132,9 @@ interface MenuTarget {
  * a Copy of the editor is as quiet as its key, but a Cut that could not copy
  * must not look like it did.
  */
-async function writeClipboard(text: string) {
+async function copySelection(text: string) {
   try {
-    await navigator.clipboard.writeText(text)
+    await writeClipboard(text)
     return true
   } catch (error) {
     toast.add({
@@ -382,7 +383,7 @@ function menuSources(
       },
       actions: {
         cut: () =>
-          void writeClipboard(text()).then((copied) => {
+          void copySelection(text()).then((copied) => {
             if (!copied) return
             view.dispatch({
               changes: { from, to },
@@ -391,7 +392,7 @@ function menuSources(
             })
             view.focus()
           }),
-        copy: () => void writeClipboard(text()),
+        copy: () => void copySelection(text()),
         paste: () =>
           void navigator.clipboard.readText().then(
             (pasted) => {
