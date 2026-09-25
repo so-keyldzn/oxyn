@@ -7,6 +7,7 @@ import { AssistantEntryButton } from "@/components/oxyn/assistant-entry-button"
 import { addressKey } from "@/components/oxyn/catalog-tree"
 import type { OpenTarget } from "@/components/oxyn/catalog-tree"
 import { CloseConsoleDialog } from "@/components/oxyn/close-console-dialog"
+import { DEFINITION_WIDTH } from "@/components/oxyn/definition-beside"
 import { StatusBar } from "@/components/oxyn/status-bar"
 import { WorkspaceAside } from "@/components/oxyn/workspace-aside"
 import type { AsideItem } from "@/components/oxyn/workspace-aside"
@@ -162,6 +163,11 @@ export function WorkspaceScreen({
   const objectsRef = React.useRef(objects)
   objectsRef.current = objects
   const objectHandles = React.useRef(new Map<string, ObjectViewHandle>())
+  // One width for every object's definition, for as long as this workspace
+  // is open; not yet kept across launches (ADR-0018).
+  const [definitionWidth, setDefinitionWidth] = React.useState<number>(
+    DEFINITION_WIDTH.initial
+  )
 
   const activate = React.useCallback(
     (key: string) => {
@@ -480,16 +486,19 @@ export function WorkspaceScreen({
                 else objectHandles.current.delete(tab.key)
               }}
               onOpenRelated={(address) => openObject(relatedNode(address))}
-              onOpenInConsole={(sql, title, parameters, needsValues) =>
+              onOpenInConsole={(sql, title, options = {}) =>
                 void work.openConsole({
                   text: sql,
                   title,
                   // Bound by the driver in the console, never concatenated
                   // into the statement (I-10).
-                  parameters,
-                  needsValues,
+                  parameters: options.parameters,
+                  needsValues: options.needsValues,
+                  notice: options.notice,
                 })
               }
+              definitionWidth={definitionWidth}
+              onDefinitionWidthChange={setDefinitionWidth}
             />
           </TabsContent>
         ))}
