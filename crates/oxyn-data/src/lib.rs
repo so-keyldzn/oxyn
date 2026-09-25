@@ -57,6 +57,7 @@ pub mod buffer;
 pub mod cell;
 pub mod error;
 pub mod export;
+pub mod export_file;
 pub mod find;
 pub mod sink;
 mod spill;
@@ -69,6 +70,7 @@ pub use cell::{
 };
 pub use error::{DataError, Result};
 pub use export::{ExportOptions, ExportSummary, ensure_exportable, export, is_supported};
+pub use export_file::export_to_path;
 pub use find::{FindOutcome, find_rows};
 pub use sink::{BatchProgress, BatchSink, BatchSource, SinkOutcome};
 
