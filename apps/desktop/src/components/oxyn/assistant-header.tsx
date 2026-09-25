@@ -49,11 +49,12 @@ const REACH: Record<ProviderReach, { label: string; icon: typeof CloudIcon }> =
   }
 
 /**
- * An agent's destination is not « unresolved », waiting for a resolution
+ * An agent's destination is not « Unresolved », waiting for a resolution
  * that could come: it is unknowable — a process that sends where it wants
- * (ADR-0026). It counts as remote all the same, and is said as what it is.
+ * (ADR-0026) — and no measure will lift it. It counts as remote all the same,
+ * and gets a word of its own rather than the provider's.
  */
-const EXTERNAL_AGENT = { label: "External agent", icon: RoboticIcon }
+const EXTERNAL_AGENT = { label: "Agent-managed", icon: RoboticIcon }
 
 /** The list of models of the selected provider, while it is not there. */
 export type ModelListState =
