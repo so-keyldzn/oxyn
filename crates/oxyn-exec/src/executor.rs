@@ -1669,7 +1669,11 @@ impl Executor {
     ) -> Result<Drained> {
         let connection = slot.connection();
         let limits = request.limits.clone();
-        let cursor = slot.execute(request, ct).await?;
+        // Armed before the driver is called: `execute` waits for the session,
+        // prepares, and — SQLite — computes the whole first batch, an entire
+        // aggregate. A clock started at the drain would let that run unbounded.
+        let deadline = limits.timeout.and_then(Deadline::from_now);
+        let cursor = Self::execute_within(slot, request, ct, deadline).await?;
         let statement = cursor.handle();
         self.running.register(RunningStatement::new(
             statement,
@@ -1711,7 +1715,7 @@ impl Executor {
                 &buffer,
                 cursor,
                 ct,
-                limits.timeout,
+                deadline,
                 preview_limit.is_some(),
             )
             .await;
@@ -1728,6 +1732,38 @@ impl Executor {
             buffer,
             issue,
         })
+    }
+
+    /// Obtains the cursor, within `deadline` if there is one.
+    ///
+    /// On expiry the driver is interrupted through the execution's token —
+    /// `sqlite3_interrupt`, a cancel request — and awaited until it lets go:
+    /// dropping its future instead would leave the statement running and the
+    /// session busy (DRIVER-CONTRACT §2). A cursor that won the race is
+    /// dropped. The error is [`OxynError::Timeout`], ambiguous: a write may
+    /// have applied, and nothing here replays it (I-13).
+    async fn execute_within(
+        slot: &SessionSlot,
+        request: ExecRequest,
+        ct: &CancelToken,
+        deadline: Option<Deadline>,
+    ) -> Result<Box<dyn Cursor>> {
+        let Some(deadline) = deadline else {
+            return slot.execute(request, ct).await;
+        };
+        let execute = slot.execute(request, ct);
+        tokio::pin!(execute);
+        tokio::select! {
+            biased;
+            started = &mut execute => started,
+            () = tokio::time::sleep_until(deadline.at) => {
+                ct.cancel();
+                if let Ok(cursor) = execute.await {
+                    drop(cursor);
+                }
+                Err(OxynError::Timeout { after: deadline.after })
+            }
+        }
     }
 
     /// Publishes the session's transaction state, for a session that has one.
@@ -1804,18 +1840,20 @@ impl Executor {
         }
     }
 
-    /// Draine un curseur, sous contre-pression et sous délai.
+    /// Draine un curseur, sous contre-pression et jusqu'à l'échéance.
     ///
-    /// Le délai est appliqué **ici** et non dans `oxyn-data` : c'est
+    /// L'échéance est appliquée **ici** et non dans `oxyn-data` : c'est
     /// l'ordonnanceur qui possède le journal et le droit d'émettre l'annulation
-    /// côté serveur. Un délai posé plus bas n'abandonnerait que le futur.
+    /// côté serveur. Un délai posé plus bas n'abandonnerait que le futur. C'est
+    /// celle de toute l'exécution, armée avant `execute` : le drainage n'a que
+    /// ce qu'il en reste.
     async fn drain(
         &self,
         coords: Coordinates,
         buffer: &Arc<ResultBuffer>,
         cursor: Box<dyn Cursor>,
         ct: &CancelToken,
-        timeout: Option<Duration>,
+        deadline: Option<Deadline>,
         confirm_preview_end: bool,
     ) -> Result<SinkOutcome> {
         let sink = BatchSink::new(Arc::clone(buffer));
@@ -1840,11 +1878,12 @@ impl Executor {
             );
         };
 
-        let Some(duree) = timeout else {
+        let Some(deadline) = deadline else {
             return sink.drain_with(&mut source, ct, on_batch).await;
         };
 
-        match tokio::time::timeout(duree, sink.drain_with(&mut source, ct, on_batch)).await {
+        match tokio::time::timeout_at(deadline.at, sink.drain_with(&mut source, ct, on_batch)).await
+        {
             Ok(issue) => issue,
             Err(_) => {
                 // Le futur de drainage vient d'être abandonné, peut-être après
@@ -1853,7 +1892,9 @@ impl Executor {
                 // est déjà reçu reste lisible, et marqué tronqué.
                 buffer.mark_truncated();
                 buffer.mark_complete(BatchSource::stats(&source));
-                Err(OxynError::Timeout { after: duree })
+                Err(OxynError::Timeout {
+                    after: deadline.after,
+                })
             }
         }
     }
@@ -2468,6 +2509,24 @@ impl fmt::Debug for Executor {
             .field("pending_approvals", &self.approvals.len())
             .field("results", &self.results.read().len())
             .finish_non_exhaustive()
+    }
+}
+
+/// The one deadline of an execution: [`ExecLimits::timeout`] counted from the
+/// moment the driver is first called, not from the first batch.
+#[derive(Debug, Clone, Copy)]
+struct Deadline {
+    /// The limit, as the error reports it.
+    after: Duration,
+    at: tokio::time::Instant,
+}
+
+impl Deadline {
+    /// `None` for a limit beyond what the clock can count: unbounded in
+    /// practice, and an `Instant` addition that overflows panics.
+    fn from_now(after: Duration) -> Option<Self> {
+        let at = tokio::time::Instant::now().checked_add(after)?;
+        Some(Self { after, at })
     }
 }
 
@@ -3429,6 +3488,10 @@ mod provider_tests;
 #[cfg(test)]
 #[path = "abandon_tests.rs"]
 mod abandon_tests;
+
+#[cfg(test)]
+#[path = "timeout_tests.rs"]
+mod timeout_tests;
 
 #[cfg(test)]
 #[path = "transaction_state_tests.rs"]
