@@ -42,14 +42,14 @@ export const Populated: Story = {
 }
 
 export const ConnectionInUse: Story = {
-  args: { openConnectionId: summaries[0]!.id },
+  args: { openConnectionIds: [summaries[0]!.id] },
   play: async ({ canvas }) => {
     const remove = canvas.getByRole("button", { name: "Delete billing" })
     await expect(remove).toBeDisabled()
     // The disabled button says why, and the reason is a whole line: it was
     // cut off at 700 px when it trailed the location.
     await expect(remove).toHaveAccessibleDescription(
-      "In use: leave this connection to delete it."
+      "Open in this window: disconnect it to delete it."
     )
     await expect(
       canvas.getByRole("button", { name: "Edit billing" })
@@ -66,7 +66,7 @@ const changeEnvironment = fn()
  */
 export const ContextMenu: Story = {
   args: {
-    openConnectionId: summaries[0]!.id,
+    openConnectionIds: [summaries[0]!.id],
     menuActions: () => ({ changeEnvironment, copy: fn() }),
   },
   play: async ({ canvas, args }) => {

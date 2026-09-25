@@ -21,20 +21,18 @@ import { subscribeToShutdown } from "@/features/consoles/draft-registry"
 import { useFileDrops } from "@/features/file-drops/use-file-drops"
 import { ProviderSettings } from "@/features/assistant/provider-settings"
 import { ExitTransactionsHost } from "@/features/recovery/exit-transactions-host"
-import { openConnection, session } from "@/features/session"
+import { refreshConnection, session } from "@/features/session"
 import {
   SettingsDialog,
   openSettings,
 } from "@/features/settings/settings-dialog"
 import { useAppearance } from "@/features/settings/use-appearance"
 import { useResultFormatRefresh } from "@/features/settings/use-result-format-refresh"
-import { useAsidePanels } from "@/features/workspace/aside-panels"
 import { RouteError, RouteNotFound } from "@/features/workspace/route-failures"
 import { WorkspaceHost } from "@/features/workspace/workspace-host"
 import { platform } from "@/lib/actions/platform"
 import { suppressBrowserDefaults } from "@/lib/browser-defaults"
 import { subscribeToBackendEvents } from "@/lib/ipc/events"
-import type { OpenConnection } from "@/lib/ipc/types"
 import appCss from "../styles.css?url"
 
 export const Route = createRootRouteWithContext<{ queryClient: QueryClient }>()(
@@ -68,7 +66,7 @@ function RootComponent() {
   useAppearance()
   // Result pages already held follow a saved change of cell format.
   useResultFormatRefresh(queryClient)
-  const open = useStore(session, (state) => state.open)
+  const workspaces = useStore(session, (state) => state.workspaces)
   // Keyboard, focus zones and the macOS menu bar, for every screen (ADR-0041).
   useActionRuntime()
   // Files dropped from the system, classified by Rust (ADR-0041, point 9).
@@ -101,17 +99,20 @@ function RootComponent() {
             {client && platform === "other" ? <AppMenubarHost /> : null}
             <div className="min-h-0 flex-1">
               <Outlet />
-              {/* Above the routes: the start screen does not destroy it. */}
-              <Workspace open={open} />
+              {/* Above the routes: the start screen does not destroy them.
+                  Inside the query provider: each workspace's panels ask the
+                  backend which providers exist. */}
+              <WorkspaceHost onOpenSettings={() => openSettings()} />
             </div>
           </div>
           {/* Once, for every screen: ⌘, opens it from the start screen too.
-              An edit of the open connection hands back its new marking, which
-              the workspace takes without closing a console (I-04). */}
+              An edit of an open connection hands back its new marking, which
+              its workspace takes, shown or hidden, without closing a console
+              (I-04). */}
           <SettingsDialog
             sections={AI_SECTIONS}
-            openConnection={open}
-            onOpenConnectionChanged={openConnection}
+            openConnections={workspaces}
+            onOpenConnectionChanged={refreshConnection}
           />
           {/* An exit held by an open transaction asks here (ADR-0043). */}
           <ExitTransactionsHost />
@@ -128,17 +129,6 @@ function RootComponent() {
       />
     </QueryClientProvider>
   )
-}
-
-/**
- * The workspace and the panels of its right column.
- *
- * A component of its own because the panels ask the backend which providers
- * exist: the hook must run **inside** the query provider, not beside it.
- */
-function Workspace({ open }: { open: OpenConnection | null }) {
-  const aside = useAsidePanels(open)
-  return <WorkspaceHost aside={aside} onOpenSettings={() => openSettings()} />
 }
 
 function RootDocument({ children }: { children: React.ReactNode }) {

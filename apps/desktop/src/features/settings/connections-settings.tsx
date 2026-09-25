@@ -62,11 +62,12 @@ function messageOf(error: unknown) {
  * (I-04).
  */
 export function ConnectionsSettings({
-  openConnection,
+  openConnections,
   onOpenConnectionChanged,
   onUnsavedEditChange,
 }: {
-  openConnection: OpenConnection | null
+  /** Every connection with a workspace in the window, shown or hidden. */
+  openConnections: Array<OpenConnection>
   onOpenConnectionChanged?: (open: OpenConnection) => void
   /** Typed values of an edit that closing the panel would lose. */
   onUnsavedEditChange?: (unsaved: boolean) => void
@@ -152,7 +153,12 @@ export function ConnectionsSettings({
     setDirty(false)
     setEditing(null)
     setSecretsError(change.secretsError)
-    if (openConnection && openConnection.connection === target.id) {
+    // A hidden workspace gets it too: it would show the old tier when it
+    // comes back, and its assistant would answer under it (I-04).
+    const openConnection = openConnections.find(
+      (open) => open.connection === target.id
+    )
+    if (openConnection) {
       const marking = await settingsBackend.connectionMarking(target.id)
       onOpenConnectionChanged?.({
         ...openConnection,
@@ -207,8 +213,9 @@ export function ConnectionsSettings({
     setEditing(connection)
   }
   const startDeleting = (connection: ConnectionSummary) => {
-    // As the list's button: the connection in use is left first.
-    if (connection.id === openConnection?.connection) return
+    // As the list's button: an open connection is disconnected first.
+    if (openConnections.some((open) => open.connection === connection.id))
+      return
     remove.reset()
     setDeleting(connection)
   }
@@ -320,7 +327,7 @@ export function ConnectionsSettings({
       <ConnectionManager
         connections={connections.data}
         error={failureOf(connections.error)}
-        openConnectionId={openConnection?.connection ?? null}
+        openConnectionIds={openConnections.map((open) => open.connection)}
         onEdit={(connection) => startEditing(connection)}
         onDelete={startDeleting}
         onRetry={() => void connections.refetch()}

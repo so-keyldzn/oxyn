@@ -52,11 +52,12 @@ export function useSettingsDialog() {
  */
 export function SettingsDialog({
   sections = [],
-  openConnection = null,
+  openConnections = [],
   onOpenConnectionChanged,
 }: {
   sections?: Array<SettingsSection>
-  openConnection?: OpenConnection | null
+  /** Every connection with a workspace in the window, shown or hidden. */
+  openConnections?: Array<OpenConnection>
   onOpenConnectionChanged?: (open: OpenConnection) => void
 }) {
   const { isOpen, section } = useSettingsDialog()
@@ -100,7 +101,7 @@ export function SettingsDialog({
       onRetrySave={() => void retrySavingPreferences()}
       connections={
         <ConnectionsSettings
-          openConnection={openConnection}
+          openConnections={openConnections}
           onOpenConnectionChanged={onOpenConnectionChanged}
           onUnsavedEditChange={setUnsavedEdit}
         />

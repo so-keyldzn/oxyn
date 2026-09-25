@@ -41,6 +41,10 @@ import { RetainedResultTab } from "@/features/library/retained-result-tab"
 import { inspectObject } from "@/features/metadata/inspection"
 import { session, setSqlDraft } from "@/features/session"
 import {
+  forgetWorkspaceSessions,
+  publishWorkspaceSessions,
+} from "@/features/workspace/pending-transactions"
+import {
   changePreferences,
   preferencesStore,
 } from "@/features/settings/preferences"
@@ -391,10 +395,6 @@ export function WorkspaceScreen({
     exitRef,
     () => async () => {
       await flushAllDrafts()
-      const text = lastConsole.current
-        ? handles.current.get(lastConsole.current)?.text()
-        : undefined
-      if (text !== undefined) setSqlDraft(text)
       return {
         sessions: [
           open.session,
@@ -405,6 +405,50 @@ export function WorkspaceScreen({
       }
     },
     [open.session, handles]
+  )
+
+  // Hidden behind the start screen, the workspace offers its active text to
+  // the next **new** connection, which copies it into its first console,
+  // unrun. This console keeps it: a copy, never a move (UX-SPEC).
+  const wasVisible = React.useRef(visible)
+  React.useEffect(() => {
+    if (wasVisible.current && !visible) {
+      const text = lastConsole.current
+        ? handles.current.get(lastConsole.current)?.text()
+        : undefined
+      // Disconnected, it keeps no console: the text moves, and the next
+      // workspace does not claim an original that is gone.
+      const kept = session.state.workspaces.some(
+        (held) => held.session === open.session
+      )
+      if (text !== undefined) setSqlDraft(text, kept ? open.name : null)
+    }
+    wasVisible.current = visible
+  }, [visible, open.name, handles])
+
+  // The start screen names a hidden connection whose console holds a
+  // transaction: it reads the sessions from here (ADR-0046).
+  const heldSessions = React.useMemo(
+    () =>
+      work.entries.flatMap((entry) =>
+        entry.session
+          ? [
+              {
+                session: entry.session.session,
+                transactions:
+                  entry.session.capabilities.includes("TRANSACTIONS"),
+              },
+            ]
+          : []
+      ),
+    [work.entries]
+  )
+  React.useEffect(() => {
+    publishWorkspaceSessions(open.session, open.connection, heldSessions)
+  }, [open.session, open.connection, heldSessions])
+  React.useEffect(
+    () => () => forgetWorkspaceSessions(open.session),
+    [open.session]
   )
 
   const onConsole = active?.startsWith("console:") ?? false

@@ -173,6 +173,31 @@ export const WorkspaceLeftOpen: Story = {
   },
 }
 
+/**
+ * The window keeps eight workspaces; a ninth is refused before anything
+ * connects, and none is closed to make room (ADR-0046).
+ */
+export const TooManyOpen: Story = {
+  args: {
+    onReturnToWorkspace: fn(),
+    openIds: summaries.map((connection) => connection.id),
+    pendingTransactions: { [summaries[0]!.id]: "open" },
+    openRefusal:
+      "8 connections are open in this window. Disconnect one before opening another.",
+  },
+  play: async ({ canvas }) => {
+    await expect(
+      canvas.getByText("Cannot open another connection")
+    ).toBeVisible()
+    await expect(
+      canvas.getByText(/Disconnect one before opening another/)
+    ).toBeVisible()
+    await expect(
+      canvas.getByText(/Transaction open in a console of/)
+    ).toBeVisible()
+  },
+}
+
 export const Loading: Story = {
   args: { connections: undefined, drivers: undefined },
 }

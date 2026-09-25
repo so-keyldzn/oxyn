@@ -82,10 +82,16 @@ export interface ConnectionScreenViewProps {
   /** The saved connection being opened, by id. */
   opening: string | null
   openError?: BackendFailure | null
+  /**
+   * Connections whose workspace the window keeps, and those of them with a
+   * console holding a transaction open or unknown (ADR-0046).
+   */
+  openIds?: ReadonlyArray<string>
+  pendingTransactions?: Readonly<Record<string, "open" | "unknown">>
+  /** Why a saved connection was not opened: the window holds enough. */
+  openRefusal?: string | null
   onOpen: (connection: ConnectionSummary) => void
   onRetryOpen?: () => void
-  /** The connection whose workspace stayed open, by id. */
-  openConnectionId?: string | null
   /** The context menu of a saved connection, beyond `Connect` (= `onOpen`). */
   connectionMenu?: (connection: ConnectionSummary) => ConnectionMenuActions
 
@@ -154,9 +160,11 @@ export function ConnectionScreenView(props: ConnectionScreenViewProps) {
     onLeaveDriver,
     opening,
     openError,
+    openIds,
+    pendingTransactions,
+    openRefusal,
     onOpen,
     onRetryOpen,
-    openConnectionId,
     connectionMenu,
     submitting,
     formError,
@@ -429,13 +437,21 @@ export function ConnectionScreenView(props: ConnectionScreenViewProps) {
                       onRetry={onRetryConnections}
                       opening={submitting ? "" : opening}
                       cancelling={cancelling}
+                      openIds={openIds}
+                      pendingTransactions={pendingTransactions}
                       onOpen={onOpen}
                       onCancelOpening={onCancelOpening}
-                      openConnectionId={openConnectionId}
                       menuActions={connectionMenu}
                     />
                   </section>
                 )}
+                {openRefusal ? (
+                  <BackendErrorAlert
+                    title="Cannot open another connection"
+                    error={{ message: openRefusal, retryable: false }}
+                    nextStep="Nothing was opened. Open connections stay as they are."
+                  />
+                ) : null}
                 {openError && opening === null ? (
                   <BackendErrorAlert
                     title="Connection failed"
