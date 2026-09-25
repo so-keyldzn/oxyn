@@ -2,8 +2,8 @@
 // (docs/adr/0041-registre-d-actions-menus-et-raccourcis.md, point 1): for
 // each id of `actions.json`, when it can run and what it runs.
 //
-// Every trigger — keyboard, menu bar, native menu, button, context menu, and
-// later the palette — ends in `invoke`. The context menus' own entries are in
+// Every trigger — keyboard, menu bar, native menu, button, context menu and
+// palette — ends in `invoke`. The context menus' own entries are in
 // `menu-behaviours.ts`. An action runs what its
 // button runs, through the screen that published it: nothing here reaches the
 // backend except `request_exit`, which the button-less `File ▸ Exit` needs
@@ -15,7 +15,12 @@ import { recovery } from "@/lib/ipc/recovery"
 import { consoleAvailability } from "./behaviour"
 import type { ActionBehaviour, Availability } from "./behaviour"
 import { currentContext, zoneElement, zoneHandle } from "./context"
-import type { ActionContext } from "./context"
+import type {
+  ActionContext,
+  AppearanceActions,
+  AppearanceState,
+  OverlayActions,
+} from "./context"
 import { actionSpec, onPlatform } from "./manifest"
 import { editorClipboardBehaviours, menuBehaviours } from "./menu-behaviours"
 
@@ -25,6 +30,58 @@ export type { ActionBehaviour, Availability }
 const DIALOG_OPEN = { reason: "A dialog is open" }
 const NO_WORKSPACE = { reason: "No connection is open" }
 const NO_CONSOLE = { reason: "No console is active" }
+
+/**
+ * The export control of the result on screen: the tab panel shown, and in it
+ * the panel shown, down to the trigger (`components/oxyn/export-menu.tsx`).
+ */
+function visibleExport(): HTMLElement | null {
+  if (typeof document === "undefined") return null
+  for (const trigger of document.querySelectorAll("[data-action-export]")) {
+    if (trigger instanceof HTMLElement && trigger.closest("[hidden]") === null)
+      return trigger
+  }
+  return null
+}
+
+/** One entry of `View ▸ Text size` or `View ▸ Theme`. */
+function appearanceChoice(
+  pick: (actions: AppearanceActions) => void,
+  isCurrent: (state: AppearanceState) => boolean
+): ActionBehaviour {
+  return {
+    enabled: (context) => {
+      if (context.modal) return DIALOG_OPEN
+      return context.sources.appearance ? true : "absent"
+    },
+    run: (context) => {
+      const appearance = context.sources.appearance
+      if (appearance) pick(appearance.actions)
+    },
+    checked: (context) => {
+      const appearance = context.sources.appearance
+      return appearance ? isCurrent(appearance.state) : false
+    },
+  }
+}
+
+/** Opens one of the palette, the quick open or the shortcut sheet. */
+function overlay(
+  open: (actions: OverlayActions) => void,
+  enabled: (context: ActionContext) => Availability = () => true
+): ActionBehaviour {
+  return {
+    enabled: (context) => {
+      if (context.modal) return DIALOG_OPEN
+      if (!context.sources.overlays) return "absent"
+      return enabled(context)
+    },
+    run: (context) => {
+      const overlays = context.sources.overlays
+      if (overlays) open(overlays.actions)
+    },
+  }
+}
 
 /** Wraps a behaviour that needs the open workspace and no dialog. */
 function inWorkspace(
@@ -232,11 +289,72 @@ export const behaviours: Record<string, ActionBehaviour> = {
       zoneHandle(context, "editor")?.toggleComment ? true : "absent",
     run: (context) => zoneHandle(context, "editor")?.toggleComment?.(),
   },
-  // TODO(2026-12-31, débloqué par le lot 5 du plan « Interactions » : la
-  // feuille des raccourcis) — declared now so that the zone rule of ⌘/ is
-  // checked against Toggle comment.
-  "help.shortcuts": {
-    enabled: () => "absent",
+  // Outside the editor only: there, ⌘/ is Toggle comment (ADR-0041, point 2).
+  "help.shortcuts": overlay((actions) => actions.openShortcuts()),
+  // TODO(2026-12-31, débloqué par la commande open_external du plan
+  // « Interactions », reportée du lot 1) — Oxyn opens no external link yet.
+  "help.documentation": {
+    enabled: () => ({
+      reason: "Opening the documentation is not available yet",
+    }),
+    run: () => undefined,
+  },
+  "palette.open": overlay((actions) => actions.openPalette()),
+  // The loaded catalog only, through its bounded search. In the `app` zone,
+  // and greyed rather than absent, so that Ctrl+P never reaches the print of
+  // WebView2 — not even from a dialog (ADR-0041, point 7).
+  "object.quickOpen": overlay(
+    (actions) => actions.openQuickOpen(),
+    (context) => {
+      if (!context.sources.workspace) return NO_WORKSPACE
+      return context.sources.catalog
+        ? true
+        : { reason: "This source has no catalog to search" }
+    }
+  ),
+  // TODO(2026-12-31, débloqué par le lot 7 du plan « Interactions » : le
+  // multi-fenêtre d'ADR-0043) — one window for now.
+  "window.new": {
+    enabled: () => ({ reason: "Oxyn opens one window for now" }),
+    run: () => undefined,
+  },
+  // What the export control of the result on screen offers, from the same
+  // trigger: the formats, the save dialog and the reason of a greyed one
+  // stay there (UX-SPEC, « Ce qui est exporté est ce qui est affiché »).
+  "result.export": inWorkspace(
+    () => {
+      const trigger = visibleExport()
+      if (!trigger) return { reason: "The active tab has no result to export" }
+      const reason = trigger.getAttribute("data-action-export")
+      return reason ? { reason } : true
+    },
+    () => visibleExport()?.click()
+  ),
+  "view.textSize.compact": appearanceChoice(
+    (actions) => actions.setDensity("compact"),
+    (state) => state.density === "compact"
+  ),
+  "view.textSize.comfortable": appearanceChoice(
+    (actions) => actions.setDensity("comfortable"),
+    (state) => state.density === "comfortable"
+  ),
+  "view.theme.light": appearanceChoice(
+    (actions) => actions.setTheme("light"),
+    (state) => state.theme === "light"
+  ),
+  "view.theme.dark": appearanceChoice(
+    (actions) => actions.setTheme("dark"),
+    (state) => state.theme === "dark"
+  ),
+  "view.theme.system": appearanceChoice(
+    (actions) => actions.setTheme("system"),
+    (state) => state.theme === "system"
+  ),
+  // TODO(2026-12-31, débloqué par le lot 9 du plan « Interactions » : le
+  // formatage SQL, qui choisira un formateur par /versions) — no formatter
+  // is shipped.
+  "console.format": {
+    enabled: () => ({ reason: "SQL formatting is not available yet" }),
     run: () => undefined,
   },
   "view.sidebar": inWorkspace(
@@ -327,6 +445,15 @@ export function availability(
   if (!spec || !behaviour || !onPlatform(spec, context.platform))
     return "absent"
   return behaviour.enabled(context)
+}
+
+/** The check mark of `id`: `null` for an action that has none. */
+export function checkedOf(
+  id: string,
+  context: ActionContext = currentContext()
+): boolean | null {
+  if (!actionSpec(id)?.check) return null
+  return behaviours[id]?.checked?.(context) ?? false
 }
 
 /**

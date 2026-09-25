@@ -48,6 +48,9 @@ struct MenuSpec {
     title: String,
     #[serde(default)]
     platform: Option<Platform>,
+    /// Where a submenu sits in a menu of the bar, one level deep.
+    #[serde(default)]
+    parent: Option<PerPlatform<Placement>>,
     #[serde(default)]
     roles: Vec<RolePlacement>,
 }
@@ -123,6 +126,8 @@ struct ActionSpec {
     shortcut: Option<PerPlatform<Shortcuts>>,
     #[serde(default)]
     menu: Option<PerPlatform<Placement>>,
+    #[serde(default)]
+    check: bool,
 }
 
 /// Why the manifest cannot give a bar. Caught by this module's tests: at
@@ -133,6 +138,8 @@ pub(crate) enum ManifestError {
     Unreadable(#[from] serde_json::Error),
     #[error("action {action} is placed in menu {menu}, which the manifest does not declare")]
     UnknownMenu { action: String, menu: String },
+    #[error("submenu {submenu} is placed in {menu}, which is not a menu of the bar")]
+    UnknownParent { submenu: String, menu: String },
     #[error("action {0} is declared twice")]
     Duplicate(String),
     #[error("shortcut {shortcut} of {action} cannot be a native accelerator")]
@@ -170,6 +177,8 @@ pub(crate) struct ActionEntry {
     pub(crate) labels: Vec<String>,
     /// In `muda`'s syntax; `None` for an entry shown without a combination.
     pub(crate) accelerator: Option<String>,
+    /// Drawn with a check mark, which the front sets (`View ▸ Theme ▸ Dark`).
+    pub(crate) check: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -177,6 +186,8 @@ pub(crate) enum Entry {
     Separator,
     Role(Role),
     Action(ActionEntry),
+    /// A submenu (`View ▸ Text size`): its entries are actions and separators.
+    Submenu(Block),
 }
 
 /// One menu of the bar, in order.
@@ -233,6 +244,7 @@ fn describe_from(source: &str) -> Result<Vec<Block>, ManifestError> {
             id: action.id.clone(),
             labels: labels_of(action),
             accelerator: accelerator_of(action)?,
+            check: action.check,
         });
         placed.entry(placement.menu.as_str()).or_default().push((
             placement.group,
@@ -240,34 +252,66 @@ fn describe_from(source: &str) -> Result<Vec<Block>, ManifestError> {
             entry,
         ));
     }
+    // Submenus first: each becomes an entry of its parent, which must be a
+    // menu of the bar itself — one level deep.
+    for menu in &mac_menus {
+        let Some(parent) = menu.parent.as_ref() else {
+            continue;
+        };
+        let Some(placement) = parent.mac.as_ref() else {
+            continue;
+        };
+        if !mac_menus
+            .iter()
+            .any(|top| top.parent.is_none() && top.id == placement.menu)
+        {
+            return Err(ManifestError::UnknownParent {
+                submenu: menu.id.clone(),
+                menu: placement.menu.clone(),
+            });
+        }
+        let block = block_of(menu, placed.remove(menu.id.as_str()).unwrap_or_default());
+        if block.entries.is_empty() {
+            continue;
+        }
+        placed.entry(placement.menu.as_str()).or_default().push((
+            placement.group,
+            placement.order,
+            Entry::Submenu(block),
+        ));
+    }
     let blocks = mac_menus
         .into_iter()
-        .map(|menu| {
-            let mut entries = placed.remove(menu.id.as_str()).unwrap_or_default();
-            entries.extend(
-                menu.roles
-                    .iter()
-                    .map(|role| (role.group, role.order, Entry::Role(role.role))),
-            );
-            entries.sort_by_key(|(group, order, _)| (*group, *order));
-            let mut flat = Vec::with_capacity(entries.len());
-            let mut current = None;
-            for (group, _, entry) in entries {
-                if current.is_some_and(|previous| previous != group) {
-                    flat.push(Entry::Separator);
-                }
-                current = Some(group);
-                flat.push(entry);
-            }
-            Block {
-                id: menu.id.clone(),
-                title: menu.title.clone(),
-                entries: flat,
-            }
-        })
+        .filter(|menu| menu.parent.is_none())
+        .map(|menu| block_of(menu, placed.remove(menu.id.as_str()).unwrap_or_default()))
         .filter(|block| !block.entries.is_empty())
         .collect();
     Ok(blocks)
+}
+
+/// The entries of `menu` and its system roles, in order, a separator between
+/// two groups.
+fn block_of(menu: &MenuSpec, mut entries: Vec<(u32, u32, Entry)>) -> Block {
+    entries.extend(
+        menu.roles
+            .iter()
+            .map(|role| (role.group, role.order, Entry::Role(role.role))),
+    );
+    entries.sort_by_key(|(group, order, _)| (*group, *order));
+    let mut flat = Vec::with_capacity(entries.len());
+    let mut current = None;
+    for (group, _, entry) in entries {
+        if current.is_some_and(|previous| previous != group) {
+            flat.push(Entry::Separator);
+        }
+        current = Some(group);
+        flat.push(entry);
+    }
+    Block {
+        id: menu.id.clone(),
+        title: menu.title.clone(),
+        entries: flat,
+    }
 }
 
 fn labels_of(action: &ActionSpec) -> Vec<String> {
@@ -346,6 +390,7 @@ fn to_accelerator(shortcut: &str) -> Result<Option<String>, ()> {
 struct Known {
     labels: Vec<String>,
     accelerator: Option<String>,
+    check: bool,
 }
 
 /// One change `set_menu_state` applies, once every entry has been checked.
@@ -355,6 +400,8 @@ struct Change {
     enabled: bool,
     label: String,
     accelerator: Option<String>,
+    /// `Some` for a check entry only: a plain entry has no mark to set.
+    checked: Option<bool>,
 }
 
 /// Why `set_menu_state` refused a whole update. Not retryable: the same state
@@ -374,25 +421,40 @@ pub struct MenuBar {
     channel: Mutex<Option<Channel<MenuActivation>>>,
     known: Mutex<HashMap<String, Known>>,
     #[cfg(target_os = "macos")]
-    items: Mutex<HashMap<String, tauri::menu::MenuItem<tauri::Wry>>>,
+    items: Mutex<HashMap<String, NativeItem>>,
+}
+
+/// A native entry the front may switch.
+#[cfg(target_os = "macos")]
+enum NativeItem {
+    Plain(tauri::menu::MenuItem<tauri::Wry>),
+    Check(tauri::menu::CheckMenuItem<tauri::Wry>),
 }
 
 impl MenuBar {
     /// Remembers the action entries of `blocks` as the ones the front may switch.
     fn learn(&self, blocks: &[Block]) {
-        let mut known = self.known.lock();
-        for block in blocks {
-            for entry in &block.entries {
-                if let Entry::Action(action) = entry {
-                    known.insert(
-                        action.id.clone(),
-                        Known {
-                            labels: action.labels.clone(),
-                            accelerator: action.accelerator.clone(),
-                        },
-                    );
+        fn walk(entries: &[Entry], known: &mut HashMap<String, Known>) {
+            for entry in entries {
+                match entry {
+                    Entry::Action(action) => {
+                        known.insert(
+                            action.id.clone(),
+                            Known {
+                                labels: action.labels.clone(),
+                                accelerator: action.accelerator.clone(),
+                                check: action.check,
+                            },
+                        );
+                    }
+                    Entry::Submenu(block) => walk(&block.entries, known),
+                    Entry::Separator | Entry::Role(_) => {}
                 }
             }
+        }
+        let mut known = self.known.lock();
+        for block in blocks {
+            walk(&block.entries, &mut known);
         }
     }
 
@@ -425,6 +487,7 @@ impl MenuBar {
                     } else {
                         None
                     },
+                    checked: item.check.then(|| entry.checked.unwrap_or(false)),
                 })
             })
             .collect()
@@ -448,11 +511,18 @@ impl MenuBar {
                 };
                 // A setter that fails leaves that entry as it was; the next
                 // context change sends its state again.
-                if let Err(error) = item
-                    .set_enabled(change.enabled)
-                    .and_then(|()| item.set_text(&change.label))
-                    .and_then(|()| item.set_accelerator(change.accelerator.as_deref()))
-                {
+                let applied = match item {
+                    NativeItem::Plain(item) => item
+                        .set_enabled(change.enabled)
+                        .and_then(|()| item.set_text(&change.label))
+                        .and_then(|()| item.set_accelerator(change.accelerator.as_deref())),
+                    NativeItem::Check(item) => item
+                        .set_enabled(change.enabled)
+                        .and_then(|()| item.set_text(&change.label))
+                        .and_then(|()| item.set_accelerator(change.accelerator.as_deref()))
+                        .and_then(|()| item.set_checked(change.checked.unwrap_or(false))),
+                };
+                if let Err(error) = applied {
                     tracing::warn!(entry = %change.id, %error, "could not update a menu entry");
                 }
             }
@@ -498,7 +568,8 @@ impl MenuBar {
 pub fn application_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Menu<tauri::Wry>> {
     use tauri::Manager as _;
     use tauri::menu::{
-        AboutMetadata, IsMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu, WINDOW_SUBMENU_ID,
+        AboutMetadata, CheckMenuItem, HELP_SUBMENU_ID, IsMenuItem, Menu, MenuItem,
+        PredefinedMenuItem, Submenu, WINDOW_SUBMENU_ID,
     };
 
     let blocks = describe().unwrap_or_else(|error| {
@@ -517,21 +588,15 @@ pub fn application_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Me
         authors: app.config().bundle.publisher.clone().map(|p| vec![p]),
         ..AboutMetadata::default()
     };
-    let menu = Menu::new(app)?;
-    let mut items = HashMap::new();
-    for block in &blocks {
-        let title = if block.id == "app" {
-            package.name.clone()
-        } else {
-            block.title.clone()
-        };
-        let submenu = if block.id == "window" {
-            // Under this id, AppKit lists the open windows in it.
-            Submenu::with_id(app, WINDOW_SUBMENU_ID, title, true)?
-        } else {
-            Submenu::with_id(app, block.id.as_str(), title, true)?
-        };
-        for entry in &block.entries {
+    /// Appends `entries` to `submenu`, a nested block as a submenu of it.
+    fn fill(
+        app: &tauri::AppHandle,
+        submenu: &Submenu<tauri::Wry>,
+        entries: &[Entry],
+        about: &AboutMetadata<'_>,
+        items: &mut HashMap<String, NativeItem>,
+    ) -> tauri::Result<()> {
+        for entry in entries {
             let item: Box<dyn IsMenuItem<tauri::Wry>> = match entry {
                 Entry::Separator => Box::new(PredefinedMenuItem::separator(app)?),
                 Entry::Role(role) => Box::new(match role {
@@ -550,6 +615,19 @@ pub fn application_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Me
                     Role::Minimize => PredefinedMenuItem::minimize(app, None)?,
                     Role::Zoom => PredefinedMenuItem::maximize(app, None)?,
                 }),
+                Entry::Action(action) if action.check => {
+                    let label = action.labels.first().cloned().unwrap_or_default();
+                    let item = CheckMenuItem::with_id(
+                        app,
+                        action.id.as_str(),
+                        label,
+                        false,
+                        false,
+                        action.accelerator.as_deref(),
+                    )?;
+                    items.insert(action.id.clone(), NativeItem::Check(item.clone()));
+                    Box::new(item)
+                }
                 Entry::Action(action) => {
                     let label = action.labels.first().cloned().unwrap_or_default();
                     let item = MenuItem::with_id(
@@ -559,12 +637,38 @@ pub fn application_menu(app: &tauri::AppHandle) -> tauri::Result<tauri::menu::Me
                         action.id == QUIT,
                         action.accelerator.as_deref(),
                     )?;
-                    items.insert(action.id.clone(), item.clone());
+                    items.insert(action.id.clone(), NativeItem::Plain(item.clone()));
                     Box::new(item)
+                }
+                Entry::Submenu(block) => {
+                    let nested =
+                        Submenu::with_id(app, block.id.as_str(), block.title.as_str(), true)?;
+                    fill(app, &nested, &block.entries, about, items)?;
+                    Box::new(nested)
                 }
             };
             submenu.append(item.as_ref())?;
         }
+        Ok(())
+    }
+
+    let menu = Menu::new(app)?;
+    let mut items = HashMap::new();
+    for block in &blocks {
+        let title = if block.id == "app" {
+            package.name.clone()
+        } else {
+            block.title.clone()
+        };
+        // Under these ids, AppKit lists the open windows in Window and puts
+        // its search field in Help.
+        let id = match block.id.as_str() {
+            "window" => WINDOW_SUBMENU_ID,
+            "help" => HELP_SUBMENU_ID,
+            other => other,
+        };
+        let submenu = Submenu::with_id(app, id, title, true)?;
+        fill(app, &submenu, &block.entries, &about, &mut items)?;
         menu.append(&submenu)?;
     }
     if let Some(bar) = app.try_state::<MenuBar>() {
@@ -580,6 +684,7 @@ fn quit_entry() -> Entry {
         id: QUIT.to_owned(),
         labels: vec!["Quit Oxyn".to_owned()],
         accelerator: Some("CmdOrCtrl+Q".to_owned()),
+        check: false,
     })
 }
 
@@ -595,14 +700,28 @@ mod tests {
             .entries
     }
 
+    /// Every action entry of the bar, submenus included.
+    fn actions(blocks: &[Block]) -> Vec<&ActionEntry> {
+        fn walk<'a>(entries: &'a [Entry], found: &mut Vec<&'a ActionEntry>) {
+            for entry in entries {
+                match entry {
+                    Entry::Action(action) => found.push(action),
+                    Entry::Submenu(block) => walk(&block.entries, found),
+                    Entry::Separator | Entry::Role(_) => {}
+                }
+            }
+        }
+        let mut found = Vec::new();
+        for block in blocks {
+            walk(&block.entries, &mut found);
+        }
+        found
+    }
+
     fn action<'a>(blocks: &'a [Block], id: &str) -> &'a ActionEntry {
-        blocks
-            .iter()
-            .flat_map(|block| &block.entries)
-            .find_map(|entry| match entry {
-                Entry::Action(action) if action.id == id => Some(action),
-                _ => None,
-            })
+        actions(blocks)
+            .into_iter()
+            .find(|action| action.id == id)
             .unwrap_or_else(|| panic!("the bar has {id}"))
     }
 
@@ -610,7 +729,10 @@ mod tests {
     fn the_shipped_manifest_describes_the_macos_bar() {
         let blocks = describe().expect("the manifest shipped with the front is valid");
         let titles: Vec<&str> = blocks.iter().map(|block| block.title.as_str()).collect();
-        assert_eq!(titles, ["Oxyn", "File", "Edit", "View", "Query", "Window"]);
+        assert_eq!(
+            titles,
+            ["Oxyn", "File", "Edit", "View", "Query", "Window", "Help"]
+        );
         let quit = action(&blocks, QUIT);
         assert_eq!(quit.labels, ["Quit Oxyn"]);
         assert_eq!(quit.accelerator.as_deref(), Some("CmdOrCtrl+Q"));
@@ -631,18 +753,12 @@ mod tests {
             action(&blocks, "tab.close").accelerator.as_deref(),
             Some("CmdOrCtrl+W")
         );
-        let others: Vec<&str> = blocks
-            .iter()
-            .flat_map(|block| &block.entries)
-            .filter_map(|entry| match entry {
-                Entry::Action(action)
-                    if action.id != "tab.close"
-                        && action.accelerator.as_deref() == Some("CmdOrCtrl+W") =>
-                {
-                    Some(action.id.as_str())
-                }
-                _ => None,
+        let others: Vec<&str> = actions(&blocks)
+            .into_iter()
+            .filter(|action| {
+                action.id != "tab.close" && action.accelerator.as_deref() == Some("CmdOrCtrl+W")
             })
+            .map(|action| action.id.as_str())
             .collect();
         assert!(others.is_empty(), "⌘W is bound once: {others:?}");
     }
@@ -678,13 +794,9 @@ mod tests {
     #[test]
     fn web_only_actions_stay_out_of_the_native_bar() {
         let blocks = describe().expect("valid manifest");
-        let ids: Vec<&str> = blocks
-            .iter()
-            .flat_map(|block| &block.entries)
-            .filter_map(|entry| match entry {
-                Entry::Action(action) => Some(action.id.as_str()),
-                _ => None,
-            })
+        let ids: Vec<&str> = actions(&blocks)
+            .into_iter()
+            .map(|action| action.id.as_str())
             .collect();
         assert!(!ids.contains(&"edit.copy"), "macOS copies through its role");
     }
@@ -712,6 +824,49 @@ mod tests {
     }
 
     #[test]
+    fn text_size_and_theme_are_submenus_of_view_around_full_screen() {
+        let blocks = describe().expect("valid manifest");
+        let view = entries_of(&blocks, "view");
+        let position = |wanted: &Entry| view.iter().position(|entry| entry == wanted);
+        let submenu = |id: &str| {
+            view.iter()
+                .find_map(|entry| match entry {
+                    Entry::Submenu(block) if block.id == id => Some(block),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("View has {id}"))
+        };
+        let text_size = submenu("textSize");
+        let theme = submenu("theme");
+        assert_eq!(text_size.title, "Text size");
+        let fullscreen = position(&Entry::Role(Role::Fullscreen));
+        assert!(position(&Entry::Submenu(text_size.clone())) < fullscreen);
+        assert!(fullscreen < position(&Entry::Submenu(theme.clone())));
+        for entry in text_size.entries.iter().chain(&theme.entries) {
+            assert!(
+                matches!(entry, Entry::Action(action) if action.check),
+                "{entry:?} is a checked choice"
+            );
+        }
+    }
+
+    #[test]
+    fn a_submenu_nests_one_level_in_a_menu_of_the_bar() {
+        let source = r#"{"menus": [
+                {"id": "view", "title": "View"},
+                {"id": "size", "title": "Size",
+                 "parent": {"mac": {"menu": "view", "group": 0, "order": 0}}},
+                {"id": "deeper", "title": "Deeper",
+                 "parent": {"mac": {"menu": "size", "group": 0, "order": 0}}}],
+            "actions": [{"id": "a.b", "label": "B", "zone": "global",
+                         "menu": {"mac": {"menu": "deeper", "group": 0, "order": 0}}}]}"#;
+        assert!(matches!(
+            describe_from(source),
+            Err(ManifestError::UnknownParent { .. })
+        ));
+    }
+
+    #[test]
     fn a_shortcut_muda_cannot_read_is_refused() {
         assert_eq!(to_accelerator("Hyper+K"), Err(()));
         assert_eq!(to_accelerator("Mod+"), Err(()));
@@ -730,6 +885,7 @@ mod tests {
             enabled: true,
             variant,
             shortcut,
+            checked: None,
         }
     }
 
@@ -780,11 +936,29 @@ mod tests {
             enabled: false,
             variant: 0,
             shortcut: false,
+            checked: None,
         };
         let changes = bar.plan(&[quit]).expect("Quit is in the bar");
         let change = changes.first().expect("one change");
         assert!(change.enabled);
         assert_eq!(change.accelerator.as_deref(), Some("CmdOrCtrl+Q"));
+    }
+
+    #[test]
+    fn set_menu_state_marks_only_a_check_entry() {
+        let bar = bar();
+        let checked = |id: &str, mark: Option<bool>| {
+            bar.plan(&[MenuEntryState {
+                checked: mark,
+                ..state(id, 0, true)
+            }])
+            .expect("a known entry")
+            .first()
+            .and_then(|change| change.checked)
+        };
+        assert_eq!(checked("view.theme.dark", Some(true)), Some(true));
+        assert_eq!(checked("view.theme.dark", None), Some(false));
+        assert_eq!(checked("console.run", Some(true)), None);
     }
 
     #[test]

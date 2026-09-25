@@ -1,7 +1,12 @@
 import * as React from "react"
 import { useStore } from "@tanstack/react-store"
 
-import { loadPreferences, preferencesStore } from "./preferences"
+import {
+  changePreferencesFromView,
+  loadPreferences,
+  preferencesStore,
+} from "./preferences"
+import { useActionSource } from "@/lib/actions/context"
 import type { DensityChoice, ThemeChoice } from "@/lib/ipc/settings"
 
 const DARK_QUERY = "(prefers-color-scheme: dark)"
@@ -41,6 +46,18 @@ export function useAppearance() {
   React.useEffect(() => {
     void loadPreferences()
   }, [])
+
+  // `View ▸ Text size` and `View ▸ Theme`: the same choice as the settings
+  // and the result bar, saved the same way (UX-SPEC, « Barre de menus »).
+  useActionSource(
+    "appearance",
+    { theme, density },
+    {
+      setTheme: (choice) => void changePreferencesFromView({ theme: choice }),
+      setDensity: (choice) =>
+        void changePreferencesFromView({ readingDensity: choice }),
+    }
+  )
 
   React.useEffect(() => {
     const media = window.matchMedia(DARK_QUERY)

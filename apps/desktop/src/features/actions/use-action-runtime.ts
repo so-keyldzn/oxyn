@@ -21,6 +21,7 @@ function nativeStates(): Array<MenuEntryState> {
     enabled: entry.availability === true,
     variant: entry.variant,
     shortcut: entry.shortcut,
+    checked: entry.checked,
   }))
 }
 
@@ -39,11 +40,6 @@ export function useActionRuntime() {
         stopFocus()
       }
     }
-    void menu
-      .subscribe((activation) => void invoke(activation.id, "menu"))
-      .catch((error: unknown) =>
-        console.error(`The menu bar cannot reach this window: ${String(error)}`)
-      )
     // Sent only when it changed: the context moves on focus, tab, selection
     // or execution state, and most of those leave every entry as it was.
     let sent = ""
@@ -57,6 +53,17 @@ export function useActionRuntime() {
         console.error(`The menu bar refused its state: ${String(error)}`)
       })
     }
+    void menu
+      .subscribe((activation) => {
+        invoke(activation.id, "menu")
+        // AppKit flips a check entry's mark on click: choosing the theme
+        // already chosen changes no state here, and the mark must come back.
+        sent = ""
+        push()
+      })
+      .catch((error: unknown) =>
+        console.error(`The menu bar cannot reach this window: ${String(error)}`)
+      )
     push()
     const sources = actionSources.subscribe(push)
     const focus = focusStore.subscribe(push)

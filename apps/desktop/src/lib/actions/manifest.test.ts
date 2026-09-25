@@ -28,6 +28,24 @@ describe("the action registry", () => {
     expect(new Set(declared).size).toBe(declared.length)
   })
 
+  it("gives every check action a check mark to read, and only them", () => {
+    for (const spec of manifest.actions)
+      expect(behaviours[spec.id]?.checked !== undefined, spec.id).toBe(
+        spec.check
+      )
+  })
+
+  it("nests a submenu one level deep, in a declared menu", () => {
+    const tops = new Set(
+      manifest.menus
+        .filter((menu) => menu.parent === undefined)
+        .map((menu) => menu.id)
+    )
+    for (const menu of manifest.menus)
+      for (const placement of [menu.parent?.mac, menu.parent?.other])
+        if (placement) expect(tops.has(placement.menu), menu.id).toBe(true)
+  })
+
   it("reserves the plugin. prefix for declarative plugin actions", () => {
     expect(
       manifest.actions.filter((spec) => spec.id.startsWith("plugin."))
@@ -152,18 +170,55 @@ describe("the web bar of Windows and Linux", () => {
   it("gives each menu a distinct mnemonic, and each entry one of its label", () => {
     const letters = menus.map((menu) => menu.mnemonic)
     expect(new Set(letters).size).toBe(letters.length)
-    for (const menu of menus) {
-      const entries = menu.groups.flat()
+    // A submenu's entries are checked like a menu's: Alt then its letter.
+    const lists = menus.flatMap((menu) => [
+      { id: menu.id, groups: menu.groups },
+      ...menu.groups
+        .flat()
+        .flatMap((item) =>
+          item.kind === "submenu" ? [{ id: item.id, groups: item.groups }] : []
+        ),
+    ])
+    for (const list of lists) {
+      const entries = list.groups.flat()
       const own = entries.map((entry) => entry.mnemonic)
-      expect(new Set(own).size, menu.id).toBe(own.length)
+      expect(new Set(own).size, list.id).toBe(own.length)
       for (const entry of entries) {
+        const label = entry.kind === "submenu" ? entry.title : entry.labels[0]
         expect(entry.mnemonic, entry.id).not.toBeNull()
         expect(
-          entry.labels[0]?.toLowerCase().includes(entry.mnemonic ?? "?"),
+          label?.toLowerCase().includes(entry.mnemonic ?? "?"),
           entry.id
         ).toBe(true)
       }
     }
+  })
+
+  it("places Text size and Theme as submenus of View, with checked choices", () => {
+    const view = menus.find((menu) => menu.id === "view")
+    const submenus = view?.groups
+      .flat()
+      .flatMap((item) => (item.kind === "submenu" ? [item] : []))
+    expect(submenus?.map((submenu) => submenu.title)).toEqual([
+      "Text size",
+      "Theme",
+    ])
+    for (const submenu of submenus ?? [])
+      for (const entry of submenu.groups.flat()) expect(entry.check).toBe(true)
+  })
+
+  it("keeps Settings… in File, above Exit (arbitrated on 2026-09-25)", () => {
+    const file = menus.find((menu) => menu.id === "file")
+    const ids = file?.groups.flat().map((item) => item.id)
+    expect(ids?.slice(-2)).toEqual(["app.settings", "app.quit"])
+  })
+
+  it("has a Help menu with Documentation and Keyboard shortcuts", () => {
+    const help = menus.find((menu) => menu.id === "help")
+    expect(help?.groups.flat().map((item) => item.id)).toEqual([
+      "help.documentation",
+      "help.shortcuts",
+    ])
   })
 
   it("leaves Alt+<mnemonic> to the menus", () => {
@@ -182,6 +237,6 @@ describe("the web bar of Windows and Linux", () => {
     const file = menus.find((menu) => menu.id === "file")
     const last = file?.groups.at(-1)?.at(-1)
     expect(last?.id).toBe("app.quit")
-    expect(last?.labels[0]).toBe("Exit")
+    expect(last?.kind === "action" && last.labels[0]).toBe("Exit")
   })
 })

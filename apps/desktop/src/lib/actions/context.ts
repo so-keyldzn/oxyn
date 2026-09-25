@@ -9,6 +9,9 @@
 import * as React from "react"
 import { createStore } from "@tanstack/react-store"
 
+import type { CatalogAddress } from "@/lib/ipc/types"
+import type { DensityChoice, ThemeChoice } from "@/lib/ipc/settings"
+
 import type { Zone } from "./manifest"
 import { platform } from "./platform"
 import type { Platform } from "./shortcut"
@@ -63,6 +66,45 @@ export interface WorkspaceActions {
   reopenTab?: () => void
 }
 
+/** An object of the loaded catalog, as its search returns it. */
+export interface CatalogObject {
+  address: CatalogAddress
+  name: string
+  kind: string
+  holdsRecords: boolean
+}
+
+/**
+ * The catalog of the open workspace, when its source declares one: a
+ * key-value store has none (ADR-0003).
+ */
+export interface CatalogSourceState {
+  /** The connection whose loaded catalog ⌘P searches. */
+  connection: string
+}
+
+export interface CatalogSourceActions {
+  /** Opens an object as a click in the tree does. */
+  openObject: (object: CatalogObject) => void
+}
+
+export interface AppearanceState {
+  theme: ThemeChoice
+  density: DensityChoice
+}
+
+export interface AppearanceActions {
+  setTheme: (theme: ThemeChoice) => void
+  setDensity: (density: DensityChoice) => void
+}
+
+/** The palette, the quick open and the shortcut sheet (ADR-0041, point 7). */
+export interface OverlayActions {
+  openPalette: () => void
+  openQuickOpen: () => void
+  openShortcuts: () => void
+}
+
 export interface ConsoleState {
   /** The session declares `SQL` and the console is not closing. */
   canRun: boolean
@@ -104,6 +146,10 @@ export interface ActionSources {
   erd?: Source<ErdMenuState, ErdMenuActions>
   catalogNode?: Source<CatalogMenuState, CatalogMenuActions>
   objectOperation?: Source<ObjectOperationState, ObjectOperationActions>
+  catalog?: Source<CatalogSourceState, CatalogSourceActions>
+  /** The saved theme and reading density (ADR-0013). */
+  appearance?: Source<AppearanceState, AppearanceActions>
+  overlays?: Source<Record<string, never>, OverlayActions>
 }
 
 type SourceKey = keyof ActionSources
@@ -139,10 +185,11 @@ export function useActionSource<TKey extends SourceKey>(
   const latest = React.useRef(actions)
   latest.current = actions
   const stable = React.useMemo(() => {
-    const wrapped: Record<string, () => void> = {}
+    type Callbacks = Record<string, (...args: Array<unknown>) => void>
+    const wrapped: Callbacks = {}
     for (const name of Object.keys(latest.current)) {
-      wrapped[name] = () =>
-        (latest.current as unknown as Record<string, () => void>)[name]?.()
+      wrapped[name] = (...args) =>
+        (latest.current as unknown as Callbacks)[name]?.(...args)
     }
     return wrapped
   }, [])

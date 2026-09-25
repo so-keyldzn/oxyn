@@ -17,6 +17,7 @@ describe("the menu model", () => {
       "Edit",
       "View",
       "Query",
+      "Help",
     ])
     expect(menuBar(manifest, "mac").map((menu) => menu.title)).toEqual([
       "Oxyn",
@@ -24,6 +25,7 @@ describe("the menu model", () => {
       "Edit",
       "View",
       "Query",
+      "Help",
     ])
   })
 
@@ -60,6 +62,15 @@ describe("the menu model", () => {
       entryStates(masked, "other", context(zones), () => true)[0]?.shortcut
     expect(shortcut([])).toBe(true)
     expect(shortcut(["editor"])).toBe(false)
+  })
+
+  it("moves ⌘/ from Keyboard shortcuts when the editor has the focus", () => {
+    const sheet = (zones: Array<Zone>) =>
+      entryStates(manifest, "mac", context(zones), () => true).find(
+        (entry) => entry.id === "help.shortcuts"
+      )?.shortcut
+    expect(sheet([])).toBe(true)
+    expect(sheet(["editor"])).toBe(false)
   })
 
   it("greys an entry with its reason under a dialog", () => {
