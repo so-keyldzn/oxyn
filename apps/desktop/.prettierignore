@@ -6,6 +6,8 @@ pnpm-lock.yaml
 dist
 storybook-static
 node_modules
+# Generated at build time by script/licences-tierces, outside git.
+src/generated
 # Generated: by the TanStack Router plugin, and by `shadcn add`.
 src/routeTree.gen.ts
 src/components/ui

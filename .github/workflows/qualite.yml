@@ -213,6 +213,24 @@ jobs:
           esac
           curl -LsSf "https://get.nexte.st/latest/$platform" | tar zxf - -C "${CARGO_HOME:-$HOME/.cargo}/bin"
 
+      - name: Installer cargo-about
+        # `front-build` génère les mentions des licences tierces avec
+        # cargo-about (script/licences-tierces, ADR-0044). Sans lui, le build
+        # passe sans mentions et la génération ne serait jamais exercée ici.
+        # Binaire publié par EmbarkStudios, version et empreintes relevées le
+        # 2026-09-25 (RESEARCH-NOTES § Licences).
+        run: |
+          case "$RUNNER_OS" in
+            macOS) cible=aarch64-apple-darwin
+                   empreinte=ae72f0df0c399a1e96336f696fa55b1b28679fd725632eba8cf8e4568467cc3e ;;
+            Linux) cible=x86_64-unknown-linux-musl
+                   empreinte=9099a59e820c38a68b9d65f300662a567d56562f9a10f6aa4c7e86c17c2566af ;;
+          esac
+          archive="cargo-about-0.9.2-$cible.tar.gz"
+          curl -LsSfO "https://github.com/EmbarkStudios/cargo-about/releases/download/0.9.2/$archive"
+          echo "$empreinte  $archive" | shasum -a 256 -c -
+          tar xzf "$archive" --strip-components=1 -C "${CARGO_HOME:-$HOME/.cargo}/bin" "cargo-about-0.9.2-$cible/cargo-about"
+
       - name: make front-build rust
         # `front-build` d'abord : `oxyn-desktop` embarque `apps/desktop/dist`
         # à la compilation.

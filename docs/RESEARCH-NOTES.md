@@ -1696,3 +1696,25 @@ droit de sous-licencier (« sublicense ») est ce qui permet de relicencier ; la
 § 2 de `CLA.md` l'écrit en clair. La cession (§ 9) n'existe pas dans le modèle.
 **Ce texte n'a pas été relu par un avocat** : la relecture est à faire avec la
 cession des droits à la société.
+
+### Les mentions tierces
+
+| Fait | Valeur | Source | Vérifié le |
+|---|---|---|---|
+| `cargo-about` | **0.9.2**, publiée le 2026-08-18 ; `MIT OR Apache-2.0` ; `rust-version` 1.88.0 | [crates.io](https://crates.io/crates/cargo-about) | 2026-09-25 |
+| Binaires de `cargo-about` 0.9.2 | `aarch64-apple-darwin` : SHA-256 `ae72f0df0c399a1e96336f696fa55b1b28679fd725632eba8cf8e4568467cc3e` ; `x86_64-unknown-linux-musl` : `9099a59e820c38a68b9d65f300662a567d56562f9a10f6aa4c7e86c17c2566af`. Aucun binaire `x86_64-apple-darwin` | [release GitHub](https://github.com/EmbarkStudios/cargo-about/releases/tag/0.9.2), fichiers `.sha256` recalculés au téléchargement | 2026-09-25 |
+| `private = { ignore = true }` | existe dans la configuration de `cargo-about` comme dans celle de `cargo-deny` ; sans lui, chaque crate du workspace sous GPL fait échouer la génération (« failed to satisfy license requirements ») | exécution de `cargo about generate` | 2026-09-25 |
+| `pnpm licenses list --prod --json` | un objet `{ licence: [{ name, versions, paths, license, … }] }` ; `Unknown` quand `package.json` n'a pas de champ `license` ; fonctionne avec pnpm 11.1.2 | exécution dans `apps/desktop` | 2026-09-25 |
+
+Trois constats de la première génération, le 2026-09-25 :
+
+- 417 crates et 413 paquets npm, 297 textes distincts, 1,18 Mo de JSON. Vite
+  en fait un morceau à part, de 100 ko compressé, chargé à l'ouverture de la
+  section About ;
+- `cargo about generate` prend environ 20 s et 100 s de CPU, surtout pour
+  identifier les textes de licence. C'est pourquoi `make front-build` ne
+  régénère le fichier que si `Cargo.lock`, `pnpm-lock.yaml`, `deny.toml` ou la
+  configuration npm ont changé ;
+- onze paquets npm ne livrent aucun fichier de licence, dont
+  `@uiw/react-codemirror` et `embla-carousel`. Les mentions reprennent alors
+  l'expression SPDX déclarée.

@@ -11,7 +11,7 @@
 #
 # Voir .claude/rules/manifestes.md et .claude/checklists/fin-de-tache.md.
 
-.PHONY: qualite format lint test doc deny todo hooks socle aide front front-controles front-tests front-build rust desktop desktop-dev
+.PHONY: qualite format lint test doc deny todo hooks socle aide front front-controles front-tests front-build rust desktop desktop-dev licences-npm
 
 CARGO := cargo
 PROFIL ?= debug
@@ -30,12 +30,17 @@ FRONT := apps/desktop
 PNPM := $(shell command -v pnpm 2>/dev/null)
 TAURI := $(FRONT)/node_modules/.bin/tauri
 
+# Les licences des dépendances livrées, que l'application affiche dans
+# Settings > About (ADR-0044). Hors de git : il se régénère quand le graphe
+# Rust ou npm change, ou quand la liste des licences acceptées change.
+MENTIONS := $(FRONT)/src/generated/third-party-licenses.json
+
 aide:
 	@echo "make qualite   la porte de qualité complète"
 	@echo "make socle     vérifie le socle Claude et Codex (utilisable sans code Rust)"
 	@echo "make hooks     rejoue les tests des hooks"
 	@echo "make todo      refuse une marque de travail restant sans échéance"
-	@echo "make front     contrôle le front : format, lint, types, tests, stories, build"
+	@echo "make front     contrôle le front : licences npm, format, lint, types, tests, stories, build"
 	@echo "make rust      contrôle le Rust : format, clippy, tests, doc, dépendances"
 	@echo "make desktop-dev  lance l'application Tauri avec rechargement à chaud"
 	@echo "make desktop   construit l'application Tauri (PROFIL=release pour publier)"
@@ -48,8 +53,12 @@ aide:
 desktop-dev: $(TAURI)
 	cd crates/oxyn-desktop && ../../$(TAURI) dev -c tauri.dev.json5 -- -- --temporary-workspace
 
+# Un binaire publié embarque toujours ses mentions tierces, régénérées : sans
+# elles, il violerait les licences de ce qu'il redistribue. `--exiger` fait
+# échouer la publication si `cargo-about` manque.
 desktop: $(TAURI)
 ifeq ($(PROFIL),release)
+	@python3 script/licences-tierces generer --exiger $(MENTIONS)
 	cd crates/oxyn-desktop && ../../$(TAURI) build
 else
 	cd crates/oxyn-desktop && ../../$(TAURI) build --debug --no-bundle
@@ -118,7 +127,7 @@ doc:
 # donc `front-build` avant lui.
 front: front-controles front-tests front-build
 
-front-controles: $(TAURI)
+front-controles: $(TAURI) licences-npm
 	@python3 script/verifier-stories
 	cd $(FRONT) && pnpm exec prettier --check .
 	cd $(FRONT) && pnpm exec eslint .
@@ -130,8 +139,19 @@ front-tests: $(TAURI)
 	cd $(FRONT) && pnpm exec playwright install chromium
 	cd $(FRONT) && pnpm exec vitest run $(if $(SHARD),--shard=$(SHARD))
 
-front-build: $(TAURI)
+front-build: $(TAURI) $(MENTIONS)
 	cd $(FRONT) && pnpm build
+
+# Sans `cargo-about`, avertit sans rien écrire, comme `make deny` : le build se
+# fait, et la section About dit que les mentions manquent à ce build.
+$(MENTIONS): Cargo.lock $(FRONT)/pnpm-lock.yaml deny.toml $(FRONT)/licences-npm.toml script/licences-tierces
+	@python3 script/licences-tierces generer $@
+
+# Le pendant de `make deny` pour le front : une dépendance npm de production
+# dont la licence n'est pas acceptée par deny.toml (ou, cas propres à npm, par
+# apps/desktop/licences-npm.toml) fait échouer la porte.
+licences-npm: $(TAURI)
+	@python3 script/licences-tierces verifier-npm
 
 todo:
 	@python3 script/verifier-todo
