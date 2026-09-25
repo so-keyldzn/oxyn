@@ -24,3 +24,7 @@
 - [Requête désactivée = pending](query-desactivee-est-pending.md) — `enabled: false` reste `isPending` : « en cours » = `fetchStatus !== "idle"`
 - [Blocs charts shadcn](blocs-charts-shadcn-registre.md) — les `chart-*` de la galerie ne sont que sous new-york-v4 ; `shadcn view` échoue en base-nova
 - [Select Base UI et axe](select-base-ui-listbox-sans-nom-axe.md) — attendre la fermeture de la listbox avant la fin du play, sinon aria-input-field-name
+- [base-ui-menus-contextuels-imbriques](base-ui-menus-contextuels-imbriques.md) — Base UI ContextMenu.Trigger arrête la propagation de contextmenu — des menus imbriqués (bloc de code dans une réponse, puce dans une question) s'ouvrent au plus profond, sans code en plus
+- [menu-rend-le-focus](menu-rend-le-focus.md) — Un menu Base UI rend le focus à son déclencheur après l'animation de fermeture, par-dessus un focus donné par le handler d'une entrée
+- [pieges-context-menu-et-stories](pieges-context-menu-et-stories.md) — Pièges d'outillage Base UI ContextMenu (select-none, refus d'ouverture) et Storybook (vi absent, dialogue animé, pointer coords)
+- [story-menu-ouvert-axe](story-menu-ouvert-axe.md) — Une story qui finit avec un menu Base UI encore ouvert ou en fermeture échoue sur axe (aria-hidden-focus des focus guards)
