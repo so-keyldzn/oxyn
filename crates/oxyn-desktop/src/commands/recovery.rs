@@ -22,6 +22,14 @@ const QUIT: &str = "oxyn-quit";
 /// diagnosis starts from a silent journal.
 const JOURNAL_GRACE: Duration = Duration::from_secs(1);
 
+/// How long an exit macOS does not let Oxyn hold — the Dock's Quit, a logout —
+/// waits for local writes and the close record
+/// ([ADR-0040](../../../../docs/adr/0040-inscrire-la-fermeture-d-une-sortie-forcee.md)).
+///
+/// The main thread waits: the window is gone, and macOS ends the process as
+/// soon as it returns. Past it, the close stays unwritten.
+const FORCED_EXIT_GRACE: Duration = Duration::from_secs(2);
+
 #[tauri::command]
 pub fn recovery_status(backend: State<'_, Backend>) -> RecoveryStatus {
     backend.recovery_status()
@@ -113,12 +121,16 @@ pub fn on_run_event(app: &AppHandle, event: &RunEvent, journal: Option<&FileJour
         }
         RunEvent::Exit => {
             // The Dock's Quit, a logout: macOS ends the loop without asking.
-            // The close then stays unrecorded, and the next launch offers
-            // recovery — the cautious reading of a close nobody confirmed.
-            if !app.state::<Backend>().shutdown_finished() {
-                tracing::warn!("exiting without the ordered shutdown; the close is not recorded");
+            // The close is recorded after local writes, drafts unflushed; past
+            // the grace it stays unrecorded, and the next launch offers
+            // recovery (ADR-0040). The window is gone: these waits freeze
+            // nothing (I-05).
+            let backend = app.state::<Backend>();
+            if !backend.shutdown_finished() && !backend.close_on_forced_exit(FORCED_EXIT_GRACE) {
+                tracing::warn!(
+                    "exiting without the ordered shutdown; the close is not recorded yet"
+                );
             }
-            // The window is gone: this wait freezes nothing (I-05).
             if let Some(journal) = journal {
                 journal.flush(JOURNAL_GRACE);
             }
