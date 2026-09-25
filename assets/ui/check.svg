@@ -1,6 +1,0 @@
-<svg preserveAspectRatio="none" overflow="visible" style="display: block;" width="16" height="16" viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
-<g id="Checkbox indicator / Checked">
-<path id="Vector" d="M12 1H4C2.34315 1 1 2.34315 1 4V12C1 13.6569 2.34315 15 4 15H12C13.6569 15 15 13.6569 15 12V4C15 2.34315 13.6569 1 12 1Z" fill="#1C8D7A"/>
-<path id="Vector_2" d="M4 8L7 11L12 5" stroke="white" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
-</g>
-</svg>

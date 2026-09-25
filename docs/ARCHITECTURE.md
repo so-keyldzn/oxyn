@@ -153,17 +153,14 @@ oxyn/
 │   ├── oxyn-driver-sqlite/       # embarqué
 │   └── oxyn-driver-postgres/     # couvre aussi Redshift, TimescaleDB, pgvector
 ├── assets/
-│   ├── brand/                    # symbole, iconset, Oxyn.icns
-│   ├── fonts/                    # Geist — plus lue par aucun code depuis le retrait de GPUI
-│   └── ui/                       # glyphes Hugeicons et logo, idem — provenance et licences
-│                                 #   dans provenance.json et docs/RESEARCH-NOTES.md
+│   └── brand/                    # symbole, iconset, Oxyn.icns
 └── docs/
 ```
 
-`assets/fonts/` et `assets/ui/` étaient inclus à la compilation par `oxyn-ui`.
 Le front charge Geist par `@fontsource-variable/geist` et ses icônes par le
-paquet Hugeicons : ces deux répertoires n'ont plus de lecteur. Leur sort n'est
-pas tranché ([IMPLEMENTATION-PLAN](IMPLEMENTATION-PLAN.md#migration-vers-linterface-tauri)).
+paquet Hugeicons. `assets/fonts/` et `assets/ui/`, que seul `oxyn-ui` incluait à
+la compilation, ont été retirés le 2026-09-25 faute de lecteur ; leur provenance
+reste lisible dans git, au commit `8a1b7ff`.
 
 `oxyn-desktop` est la seule crate à dépendre à la fois d'`oxyn-ai` et
 d'`oxyn-exec` : c'est donc là, dans `backend/ai/`, que le trait `CommandSink`
