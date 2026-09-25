@@ -316,7 +316,7 @@ impl Backend {
         request.limits.read_only = config.read_only;
         // Listed as `Unknown` at the exit until it answers (ADR-0043). Held
         // for approval, it is counted again by `decide`.
-        let _running = self.inner.workbench.consoles.run_on(session);
+        let _running = self.inner.workbench.consoles.run_on(session)?;
         self.run(
             id,
             Command::Execute {

@@ -134,10 +134,43 @@ impl Backend {
             } => {
                 let moved = console_move(&connection, &session, &document, result.as_ref())?;
                 self.check_console_move(source, &moved).await?;
+                let consoles = &self.inner.workbench.consoles;
+                // The state first — reading it drains the published events —
+                // then the mark, checked and set under one lock: from here
+                // until the move ends, nothing runs on this session.
+                let state = consoles
+                    .observed(moved.session)
+                    .await
+                    .map_or(oxyn_core::TransactionState::Unknown, |(state, _)| state);
+                let _moving = consoles.begin_move(moved.session)?;
+                // A statement held for a confirmation would be decided by the
+                // window that sent it, and run in the other's transaction.
+                let held = self
+                    .inner
+                    .executor
+                    .approvals()
+                    .pending()
+                    .iter()
+                    .any(|pending| {
+                        matches!(
+                            &pending.command,
+                            oxyn_core::Command::Execute { session, .. } if *session == moved.session
+                        )
+                    });
+                if held {
+                    return Err(IpcError::invalid(
+                        "Decide on the pending confirmation before moving the console.",
+                    ));
+                }
+                // Everything that can fail comes before the transfer: past it,
+                // an error would leave the console to the target, whose release
+                // closes its session and any transaction on it.
                 let config = self.read_config(moved.connection).await?;
                 let catalog = self.catalog_session(&config, &CancelToken::new()).await?;
                 let windows = &self.inner.windows;
                 windows.claim_session(target, moved.connection, catalog);
+                let console = self.console_session(moved.session, config.read_only, state)?;
+                let open = self.workspace_of(&config, catalog, console)?;
                 windows.hand_over(
                     source,
                     target,
@@ -154,17 +187,9 @@ impl Backend {
                     self.add_reader(*id, &buffer, true);
                     windows.claim_result(target, *id, true);
                 }
-                let state = self
-                    .inner
-                    .workbench
-                    .consoles
-                    .observed(moved.session)
-                    .await
-                    .map_or(oxyn_core::TransactionState::Unknown, |(state, _)| state);
-                let console = self.console_session(moved.session, config.read_only, state)?;
-                let open = self.workspace_of(&config, catalog, console)?;
-                self.report_window_consoles(target, vec![moved.document], Some(moved.document))
-                    .await?;
+                self.inner
+                    .layouts
+                    .move_console(source, target, moved.document);
                 self.inner.handoffs.put(
                     target,
                     ConsoleHandoff::Console {
@@ -174,6 +199,9 @@ impl Backend {
                         parameters,
                     },
                 );
+                // Past the transfer, a failed write costs the next launch's
+                // layout, never the move.
+                self.save_moved(source, target).await;
                 Ok(())
             }
             HandoffRequest::Object { connection, place } => {
@@ -219,12 +247,15 @@ impl Backend {
         ) else {
             return;
         };
-        if let Err(error) = self
+        match self
             .inner
             .windows
             .hand_over(target, source, connection, session, document)
         {
-            tracing::warn!(error = %error.message, "a console could not return to its window");
+            Ok(()) => self.inner.layouts.move_console(target, source, document),
+            Err(error) => {
+                tracing::warn!(error = %error.message, "a console could not return to its window");
+            }
         }
     }
 }

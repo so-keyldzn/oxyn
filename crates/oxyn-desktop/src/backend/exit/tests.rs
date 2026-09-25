@@ -297,7 +297,7 @@ fn an_unknown_outcome_is_listed_again_and_never_replayed() {
     let mut events = bench.backend.subscribe();
     // A `COMMIT` sent and not answered: its outcome is not known.
     let consoles = &bench.backend.inner.workbench.consoles;
-    let _in_flight = consoles.run_on(bench.console);
+    let _in_flight = consoles.run_on(bench.console).expect("not moving");
     // A late event of the previous statement does not make it look settled.
     consoles.apply(Ok(oxyn_exec::ExecEvent::new(
         CommandId::new(),

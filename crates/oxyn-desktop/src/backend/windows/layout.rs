@@ -154,7 +154,7 @@ impl Layouts {
     }
 
     /// The consoles this window holds now, in tab order.
-    fn consoles(&self, key: WindowKey) -> Vec<DocumentId> {
+    pub(super) fn consoles(&self, key: WindowKey) -> Vec<DocumentId> {
         self.state
             .lock()
             .windows
@@ -205,6 +205,24 @@ impl Layouts {
         entry.layout.active_document = active;
         entry.layout.consoles = consoles;
         true
+    }
+
+    /// A console leaves `from` for `to`, in memory: the next write of each
+    /// line carries it, and neither holds it twice meanwhile.
+    pub(crate) fn move_console(&self, from: WindowKey, to: WindowKey, document: DocumentId) {
+        let mut state = self.state.lock();
+        if let Some(entry) = state.windows.get_mut(&from) {
+            entry.layout.consoles.retain(|held| *held != document);
+            if entry.layout.active_document == Some(document) {
+                entry.layout.active_document = None;
+            }
+        }
+        if let Some(entry) = state.windows.get_mut(&to)
+            && !entry.layout.consoles.contains(&document)
+        {
+            entry.layout.consoles.push(document);
+            entry.layout.active_document = Some(document);
+        }
     }
 
     /// The object tab this window shows last.
@@ -259,6 +277,16 @@ impl Backend {
             .await
         {
             tracing::warn!(error = %error.message, "a closed window's layout could not be removed");
+        }
+    }
+
+    /// Writes the lines of both windows a console moved between. A failure
+    /// costs the next launch's layout, never the move: it is logged.
+    pub(crate) async fn save_moved(&self, from: WindowKey, to: WindowKey) {
+        for window in [from, to] {
+            if let Err(error) = self.save_layout(window).await {
+                tracing::warn!(error = %error.message, "a moved console's layout could not be written");
+            }
         }
     }
 

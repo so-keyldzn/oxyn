@@ -790,7 +790,7 @@ impl Backend {
             Some(PendingCommand {
                 command: Command::Execute { session, .. },
                 ..
-            }) => Some(inner.workbench.consoles.run_on(session)),
+            }) => Some(inner.workbench.consoles.run_on(session)?),
             _ => None,
         };
         let answer = inner.ai.decisions.answer(command);
