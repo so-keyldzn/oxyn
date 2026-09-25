@@ -2,8 +2,9 @@
 // (docs/adr/0041-registre-d-actions-menus-et-raccourcis.md, point 1): for
 // each id of `actions.json`, when it can run and what it runs.
 //
-// Every trigger — keyboard, menu bar, native menu, button, and later the
-// palette and the context menus — ends in `invoke`. An action runs what its
+// Every trigger — keyboard, menu bar, native menu, button, context menu, and
+// later the palette — ends in `invoke`. The context menus' own entries are in
+// `menu-behaviours.ts`. An action runs what its
 // button runs, through the screen that published it: nothing here reaches the
 // backend except `request_exit`, which the button-less `File ▸ Exit` needs
 // (I-01). No action takes a model's output, and none approves anything on
@@ -11,46 +12,19 @@
 
 import { recovery } from "@/lib/ipc/recovery"
 
+import { consoleAvailability } from "./behaviour"
+import type { ActionBehaviour, Availability } from "./behaviour"
 import { currentContext, zoneElement, zoneHandle } from "./context"
-import type { ActionContext, ConsoleState } from "./context"
+import type { ActionContext } from "./context"
 import { actionSpec, onPlatform } from "./manifest"
+import { editorClipboardBehaviours, menuBehaviours } from "./menu-behaviours"
 
-/** `true`, a reason shown with the greyed entry, or not offered at all. */
-export type Availability = true | { reason: string } | "absent"
-
-export interface ActionBehaviour {
-  enabled: (context: ActionContext) => Availability
-  run: (context: ActionContext) => void | Promise<void>
-}
+export { consoleAvailability }
+export type { ActionBehaviour, Availability }
 
 const DIALOG_OPEN = { reason: "A dialog is open" }
 const NO_WORKSPACE = { reason: "No connection is open" }
 const NO_CONSOLE = { reason: "No console is active" }
-
-/**
- * Whether a console action can run: the one condition the toolbar buttons
- * and every other trigger share (UX-SPEC, « Barre de menus » : « grisés dans
- * les mêmes cas que leurs boutons »).
- */
-export function consoleAvailability(
-  action: "run" | "cancel" | "save",
-  state: ConsoleState
-): Availability {
-  switch (action) {
-    case "run":
-      if (state.running) return { reason: "A query is running" }
-      if (!state.canRun)
-        return { reason: "This console cannot run SQL right now" }
-      return true
-    case "cancel":
-      if (!state.running) return { reason: "Nothing is running" }
-      if (state.cancelling) return { reason: "Cancellation is under way" }
-      return true
-    case "save":
-      if (state.writing) return { reason: "A save is under way" }
-      return true
-  }
-}
 
 /** Wraps a behaviour that needs the open workspace and no dialog. */
 function inWorkspace(
@@ -112,8 +86,9 @@ function resultFindField(context: ActionContext) {
 
 /**
  * Runs an editing command of the webview on the element focused before the
- * menu opened. Windows and Linux only: macOS sends its own `copy:` and
- * `paste:` through the native Edit menu (ADR-0041, point 4).
+ * menu opened. On macOS the native Edit menu sends its own `copy:` and
+ * `paste:` (ADR-0041, point 4); this path serves the web bar and the context
+ * menus.
  */
 function editing(command: "undo" | "redo" | "cut" | "copy" | "selectAll") {
   return {
@@ -127,7 +102,28 @@ function editing(command: "undo" | "redo" | "cut" | "copy" | "selectAll") {
   } satisfies ActionBehaviour
 }
 
+/**
+ * `fallback`, unless the editor's context menu is the target: CodeMirror
+ * then cuts, copies and pastes itself, where `execCommand` would miss its
+ * model.
+ */
+function withEditorMenu(
+  action: "cut" | "copy" | "paste",
+  fallback: ActionBehaviour
+): ActionBehaviour {
+  const editor = editorClipboardBehaviours[action]
+  return {
+    enabled: (context) =>
+      context.sources.editorMenu
+        ? editor.enabled(context)
+        : fallback.enabled(context),
+    run: (context) =>
+      context.sources.editorMenu ? editor.run(context) : fallback.run(context),
+  }
+}
+
 export const behaviours: Record<string, ActionBehaviour> = {
+  ...menuBehaviours,
   "app.settings": {
     enabled: (context) => {
       if (context.modal) return DIALOG_OPEN
@@ -159,10 +155,31 @@ export const behaviours: Record<string, ActionBehaviour> = {
     (workspace) => workspace.actions.showLibrary()
   ),
   "console.save": inConsole("save", (console) => console.actions.save()),
+  // The tab a context menu names, else the active one.
   "tab.close": inWorkspace(
-    (workspace) =>
-      workspace.state.activeTab === null ? { reason: "No tab is open" } : true,
-    (workspace) => workspace.actions.closeActiveTab()
+    (workspace, context) => {
+      if (context.sources.tab)
+        return context.sources.tab.actions.close ? true : "absent"
+      return workspace.state.activeTab === null
+        ? { reason: "No tab is open" }
+        : true
+    },
+    (workspace, context) => {
+      const close = context.sources.tab?.actions.close
+      if (close) close()
+      else workspace.actions.closeActiveTab()
+    }
+  ),
+  // The last console closed comes back as it was written, never run (UX-SPEC,
+  // « Menus contextuels », Onglet).
+  "tab.reopen": inWorkspace(
+    (workspace) => {
+      if (!workspace.actions.reopenTab) return "absent"
+      return workspace.state.reopenable
+        ? true
+        : { reason: "No closed console to reopen" }
+    },
+    (workspace) => workspace.actions.reopenTab?.()
   ),
   "tab.next": inWorkspace(
     (workspace) =>
@@ -180,9 +197,9 @@ export const behaviours: Record<string, ActionBehaviour> = {
   ),
   "edit.undo": editing("undo"),
   "edit.redo": editing("redo"),
-  "edit.cut": editing("cut"),
-  "edit.copy": editing("copy"),
-  "edit.paste": {
+  "edit.cut": withEditorMenu("cut", editing("cut")),
+  "edit.copy": withEditorMenu("copy", editing("copy")),
+  "edit.paste": withEditorMenu("paste", {
     enabled: () => true,
     // `execCommand("paste")` is refused to pages by Chromium; the clipboard
     // API reads the text, which the focused field then inserts as typed.
@@ -192,7 +209,7 @@ export const behaviours: Record<string, ActionBehaviour> = {
       if (target instanceof HTMLElement) target.focus()
       document.execCommand("insertText", false, text)
     },
-  },
+  }),
   "edit.selectAll": editing("selectAll"),
   // One action, searching where the focus is (ADR-0041, point 2).
   "edit.find": {
@@ -298,7 +315,8 @@ export const behaviours: Record<string, ActionBehaviour> = {
 }
 
 /** Where an invocation came from, for the trace of an ignored one. */
-export type InvokeSource = "keyboard" | "menu" | "button" | "palette"
+export type InvokeSource =
+  "keyboard" | "menu" | "button" | "palette" | "context-menu"
 
 export function availability(
   id: string,
