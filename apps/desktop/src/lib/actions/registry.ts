@@ -6,11 +6,14 @@
 // palette — ends in `invoke`. The context menus' own entries are in
 // `menu-behaviours.ts`. An action runs what its
 // button runs, through the screen that published it: nothing here reaches the
-// backend except `request_exit`, which the button-less `File ▸ Exit` needs
-// (I-01). No action takes a model's output, and none approves anything on
+// backend except `request_exit` and `open_window`, which the button-less
+// `File ▸ Exit` and `New window` need (I-01). No action takes a model's output, and none approves anything on
 // `production`: those decisions stay with the backend's dialog (I-02, I-07).
 
+import { toast } from "@/components/ui/toast"
+import { BackendError } from "@/lib/ipc/client"
 import { recovery } from "@/lib/ipc/recovery"
+import { windows } from "@/lib/ipc/windows"
 
 import { consoleAvailability } from "./behaviour"
 import type { ActionBehaviour, Availability } from "./behaviour"
@@ -341,11 +344,20 @@ export const behaviours: Record<string, ActionBehaviour> = {
         : { reason: "This source has no catalog to search" }
     }
   ),
-  // TODO(2026-12-31, débloqué par le lot 7 du plan « Interactions » : le
-  // multi-fenêtre d'ADR-0043) — one window for now.
+  // An empty window on the connection screen, built by Rust and bounded to
+  // 16; no connection is opened for it (ADR-0043). Available from a dialog
+  // too: it acts on the application, not on this window.
   "window.new": {
-    enabled: () => ({ reason: "Oxyn opens one window for now" }),
-    run: () => undefined,
+    enabled: () => true,
+    run: () =>
+      windows.open().catch((error: unknown) => {
+        toast.add({
+          title: "No new window",
+          description:
+            error instanceof BackendError ? error.message : String(error),
+          type: "error",
+        })
+      }),
   },
   // What the export control of the result on screen offers, from the same
   // trigger: the formats, the save dialog and the reason of a greyed one

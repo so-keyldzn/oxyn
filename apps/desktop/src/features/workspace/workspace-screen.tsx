@@ -66,6 +66,7 @@ import {
   resultOpenRequests,
   takeResultOpenRequests,
 } from "@/features/workspace/result-requests"
+import { registerWorkspaceConsoles } from "@/features/windows/window-close"
 import { useCompact } from "@/features/workspace/use-compact"
 import { usePanelPreferences } from "@/features/workspace/use-panel-preferences"
 import { useActionSource } from "@/lib/actions/context"
@@ -405,6 +406,26 @@ export function WorkspaceScreen({
       }
     },
     [open.session, handles]
+  )
+
+  // The close of this window, when it is not the last, asks about every
+  // workspace's consoles in one dialog, then closes them all (ADR-0043).
+  const windowCloseRef = React.useRef({
+    costs: work.windowCloseCosts,
+    closeAll: work.closeAll,
+  })
+  windowCloseRef.current = {
+    costs: work.windowCloseCosts,
+    closeAll: work.closeAll,
+  }
+  React.useEffect(
+    () =>
+      registerWorkspaceConsoles(open.session, {
+        connection: open.name,
+        costs: () => windowCloseRef.current.costs(),
+        closeAll: () => windowCloseRef.current.closeAll(),
+      }),
+    [open.session, open.name]
   )
 
   // Hidden behind the start screen, the workspace offers its active text to

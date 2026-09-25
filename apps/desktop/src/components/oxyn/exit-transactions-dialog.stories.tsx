@@ -59,6 +59,27 @@ export const OneOpenTransaction: Story = {
 }
 
 /** Several consoles, one whose state could not be read: never « idle ». */
+/**
+ * The close of a window that is not the last (ADR-0043): the same decision,
+ * on that window's consoles alone, and it speaks of the window, not of
+ * quitting.
+ */
+export const ClosingOneWindow: Story = {
+  args: { scope: "window" },
+  play: async ({ args }) => {
+    const dialog = await screen.findByRole("alertdialog")
+    await expect(dialog).toHaveTextContent(
+      "Close this window with an open transaction?"
+    )
+    await expect(dialog).not.toHaveTextContent("Quit")
+    const cancel = await screen.findByRole("button", { name: "Cancel" })
+    await waitFor(() => expect(cancel).toHaveFocus())
+    await userEvent.keyboard("{Enter}")
+    await expect(args.onCommit).not.toHaveBeenCalled()
+    await expect(args.onCancel).toHaveBeenCalled()
+  },
+}
+
 export const SeveralWithUnknownState: Story = {
   args: { rows: [INVOICES, DRAFT] },
   play: async ({ args }) => {

@@ -639,6 +639,65 @@ fenêtre — et une fenêtre utilisable sous **1 s**, le budget de l'ouverture �
 froid. Au démarrage, ce budget de 1 s vaut pour la première fenêtre, pas pour
 l'ensemble. Aucune de ces valeurs n'est mesurée sur la webview Tauri à ce jour.
 
+### Précisions de mise en œuvre, 2026-09-25 (lot 7, première partie)
+
+Le lot 7 est livré en deux pull requests : la première rend les fenêtres
+vivantes — registre, propriété, abonnements, menu, fermeture et sortie —,
+la seconde apporte la disposition persistée, la restauration par fenêtre et
+`Open in new window`. Ce que la première a précisé, en écrivant le code :
+
+- **L'assistant appartient à une fenêtre par connexion, pas par
+  conversation.** Le code tient l'état de l'assistant par connexion
+  (`backend/ai` : conversations, agent en attente, échantillons demandés).
+  Le rendre propre à chaque fenêtre aurait refait ce module entier. Le
+  registre tient donc `assistants : ConnectionId → WindowKey`. La première
+  fenêtre qui s'en sert le prend ; une autre fenêtre ouverte sur la même
+  connexion reçoit « The assistant of this connection is open in another
+  window », et la fenêtre propriétaire passe au premier plan. La règle reste
+  plus stricte que le texte : aucune conversation n'est partagée. Elle sera
+  à reconsidérer si deux assistants sur la même base, dans deux fenêtres,
+  sont demandés.
+- **`report_action_state` est `set_menu_state`**, la commande qui existait,
+  désormais par fenêtre. Elle refusait déjà un identifiant inconnu. Le focus
+  reste à la dernière fenêtre qui l'a reçu quand l'application passe derrière
+  une autre, et ne se vide qu'à la fermeture de cette fenêtre. Sans fenêtre au
+  focus, la barre ne garde actives que `New window`, `Settings…` et
+  `Quit Oxyn`. Une action d'application, sans cible, va alors à la première
+  fenêtre.
+- **La fermeture d'une fenêtre non dernière se fait en deux temps**, dans
+  cet ordre. D'abord, ses transactions. Le dialogue d'`ExitTransactionsDialog`
+  est repris et porte `scope: window` : `Commit` et `Rollback` y rappellent
+  `close_window`, et non `request_exit`. Ensuite, s'il reste des consoles qui
+  perdraient du travail, **un seul** dialogue (`CloseWindowDialog`) les liste.
+  Il nomme la fenêtre par ses connexions, puisqu'elle n'a pas de nom, et
+  n'offre que `Cancel`, qui a le focus, et `Discard and close window`. Une
+  console à garder se sauvegarde avant, depuis la console. Sans console à
+  risque, la fenêtre se ferme sans dialogue, comme une console sans travail.
+  `shutdown_acknowledged` et `cancel_exit` servent aux deux étapes.
+  S'ajoutent `subscribe_window`, `close_window` et `confirm_window_close`,
+  sans argument, et `open_window`.
+- **Les événements d'une commande d'agent ne vont à aucune fenêtre** : aucune
+  webview ne les lisait, l'assistant suit son agent par le `Channel` de sa
+  conversation. Une décision ou un résultat qu'aucune fenêtre n'a reçu —
+  ceux d'un agent, que l'assistant affiche — revient à la première fenêtre qui
+  s'en sert. Leurs identifiants ne se devinent pas (UUID v7).
+- **Un document appartient à la fenêtre dont la console l'écrit**, dès sa
+  première sauvegarde, et seules les consoles sauvegardent. Une console
+  d'une autre fenêtre ne peut plus l'écrire, le fermer ni le supprimer. Il
+  reste à faire passer la fenêtre propriétaire au premier plan quand on
+  rouvre ce document depuis la bibliothèque d'une autre fenêtre : c'est la
+  seconde partie, avec le déplacement de console.
+- **Seule la fenêtre construite au lancement propose l'écran de reprise**
+  (`recovery_status`). Une fenêtre ouverte ensuite n'a pas vu l'arrêt qui l'a
+  précédée, et deux écrans de reprise offriraient deux fois les mêmes copies.
+- **`PreferencesChanged` relit tout, sauf la disposition** : thème, densité et
+  format des cellules suivent aussitôt. La barre latérale et l'inspecteur de
+  la fenêtre restent tels quels jusqu'à sa prochaine ouverture (§ ADR-0013,
+  ci-dessus).
+- **Une webview qui n'accuse pas réception de sa fermeture** voit ses
+  sessions fermées, donc ses transactions annulées, avec une ligne `warn` par
+  transaction. Ses documents restent ouverts.
+
 ## Conséquences
 
 * **+** Deux connexions, ou deux consoles, se regardent côte à côte, sur deux

@@ -6,10 +6,14 @@ import { consoles } from "@/lib/ipc/consoles"
 import type { OpenConnection } from "@/lib/ipc/types"
 
 /**
- * Closes what a workspace left: every session, or the whole connection.
+ * Closes what a workspace left: every session, or this window's hold on the
+ * connection.
  *
- * `reopened` is asked once the drafts are written, not before: a connection
- * reopened meanwhile has new sessions that `disconnect` would close.
+ * `disconnect` closes this window's sessions on the connection and its
+ * assistant there; the backend disconnects the connection itself only when
+ * no other window holds it (ADR-0043). `reopened` is asked once the drafts
+ * are written, not before: a connection reopened meanwhile has new sessions
+ * that `disconnect` would close.
  */
 export async function release(
   previous: OpenConnection,
@@ -29,8 +33,8 @@ export async function release(
     return
   }
   await backend.disconnect(previous.connection).catch(() => undefined)
-  // The connection is closed: its conversations go with it, and so does any
+  // The workspace is closed: its conversations go with it, and so does any
   // external agent still running for them — an agent kept alive past its
-  // connection would keep the tools and the tier it was launched under (I-04).
+  // workspace would keep the tools and the tier it was launched under (I-04).
   await closeConversation(previous.connection)
 }

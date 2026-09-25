@@ -91,6 +91,42 @@ export function loadPreferences(): Promise<void> {
   return loading
 }
 
+/**
+ * The layout of a window: another window's change of it applies here only at
+ * the next opening (ADR-0043, ADR-0013). Folding the sidebar in one window
+ * must not fold it in the others under the user's eyes.
+ */
+const LAYOUT_FIELDS = [
+  "sidebarCollapsed",
+  "inspectorOpen",
+  "inspectorWidth",
+] as const satisfies ReadonlyArray<keyof DisplayPreferences>
+
+/**
+ * Reads the preferences again: another window wrote them (ADR-0043). The
+ * display follows at once — theme, density, cell format, whose cached pages
+ * are then formatted the old way — and this window keeps its layout.
+ */
+export async function reloadPreferences(): Promise<void> {
+  const state = await settingsBackend.readPreferences().catch(() => null)
+  if (!state) return
+  preferencesStore.setState((current) => {
+    const next = { ...state.preferences }
+    for (const field of LAYOUT_FIELDS)
+      Object.assign(next, { [field]: current.preferences[field] })
+    const reformatted = FORMAT_FIELDS.some(
+      (field) => next[field] !== current.preferences[field]
+    )
+    return {
+      ...current,
+      preferences: next,
+      loaded: true,
+      loadError: null,
+      formatRevision: current.formatRevision + (reformatted ? 1 : 0),
+    }
+  })
+}
+
 // Answers can arrive out of order: only the latest request settles the status.
 let latest = 0
 

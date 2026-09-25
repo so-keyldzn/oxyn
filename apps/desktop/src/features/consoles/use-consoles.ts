@@ -52,6 +52,15 @@ export interface ConsoleEntry {
 export type SeedInput = Partial<ConsoleSeed> & { notice?: string | null }
 
 /** The seed of a new console: what `input` says, a new empty console else. */
+/** A console that would lose work if its window closed. */
+export interface WindowCloseCost {
+  title: string
+  unsaved: boolean
+  /** The stored document changed elsewhere and would be left untouched. */
+  conflict: boolean
+  running: boolean
+}
+
 export function consoleSeed(
   input: SeedInput,
   document: string,
@@ -331,6 +340,43 @@ export function useConsoles({
     })
   }
 
+  /**
+   * What closing the window would cost, console by console: those that would
+   * lose text or stop a statement (ADR-0043). A transaction is not listed
+   * here: the backend has had it resolved before the window asks.
+   */
+  const windowCloseCosts = (): Array<WindowCloseCost> =>
+    entriesRef.current.flatMap((entry) => {
+      const handle = handles.current.get(entry.key)
+      if (!handle) return []
+      const reasons = handle.closeReasons()
+      const activity = metaRef.current[entry.key]?.activity
+      const running =
+        reasons.running || activity === "saving" || activity === "closing"
+      if (!reasons.unsaved && !reasons.conflict && !running) return []
+      return [
+        {
+          title: reasons.title,
+          unsaved: reasons.unsaved,
+          conflict: reasons.conflict,
+          running,
+        },
+      ]
+    })
+
+  /**
+   * Closes every console of the workspace once its window's close is
+   * confirmed: the window's dialog was the decision, so none asks again.
+   * Unsaved text is discarded; a running statement is cancelled as `⌘W`
+   * would, and a write whose outcome turns unknown stays flagged, never
+   * replayed (I-13).
+   */
+  const closeAll = async () => {
+    for (const entry of [...entriesRef.current]) {
+      await finishClose(entry.key, true).catch(() => false)
+    }
+  }
+
   // Bumped by every decision: an answer to a decision since cancelled neither
   // closes the console nor reopens the dialog (UX-SPEC « Sauvegarde d'une
   // console »).
@@ -565,6 +611,8 @@ export function useConsoles({
     cancelOpening,
     requestClose,
     decideClose,
+    windowCloseCosts,
+    closeAll,
     /** A closed console can be brought back by ⌘⇧T. */
     reopenable: closedConsoles.length > 0,
     reopen,

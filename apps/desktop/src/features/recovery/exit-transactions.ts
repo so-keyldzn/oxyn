@@ -3,9 +3,10 @@ import { createStore } from "@tanstack/react-store"
 import { BackendError, backend, newCommandId } from "@/lib/ipc/client"
 import { consoles } from "@/lib/ipc/consoles"
 import { recovery } from "@/lib/ipc/recovery"
-import type { ExitTransaction } from "@/lib/ipc/recovery"
+import type { ExitScope, ExitTransaction } from "@/lib/ipc/recovery"
 import { results } from "@/lib/ipc/results"
 import type { TransactionState } from "@/lib/ipc/types"
+import { windows } from "@/lib/ipc/windows"
 
 // The exit held by an open transaction (ADR-0043). The backend lists the
 // transactions and says when to ask; the dialog answers with `COMMIT` or
@@ -18,6 +19,8 @@ export type ExitDecision = "commit" | "rollback"
 export interface ExitHold {
   /** As the backend listed them, last signal first to last. */
   transactions: Array<ExitTransaction>
+  /** What waits on them: the application's exit, or this window's close. */
+  scope: ExitScope
   busy: ExitDecision | null
   /** The server's message of the last failure, as it came. */
   error: string | null
@@ -76,9 +79,13 @@ export function commitBlocked(
 }
 
 /** `resolveTransactions`: the backend holds the exit on these sessions. */
-export function holdExit(transactions: Array<ExitTransaction>) {
+export function holdExit(
+  transactions: Array<ExitTransaction>,
+  scope: ExitScope = "application"
+) {
   exitHold.setState((current) => ({
     transactions,
+    scope,
     busy: null,
     error: current?.error ?? null,
     commitFailed: current?.commitFailed ?? [],
@@ -144,7 +151,9 @@ export async function resolveExit(
   update({ busy: null })
   // Cancelled meanwhile: the exit is no longer asked for.
   if (exitHold.state === null) return
-  await recovery.requestExit().catch((error: unknown) => {
+  const again =
+    exitHold.state.scope === "window" ? windows.close() : recovery.requestExit()
+  await again.catch((error: unknown) => {
     update({ error: message(error) })
   })
 }

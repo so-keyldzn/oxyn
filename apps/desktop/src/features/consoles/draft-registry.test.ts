@@ -80,12 +80,29 @@ describe("the shutdown flush", () => {
         state: "open" as const,
       },
     ]
-    backend.signal?.({ type: "resolveTransactions", transactions })
+    backend.signal?.({
+      type: "resolveTransactions",
+      transactions,
+      scope: "application",
+    })
     expect(backend.acknowledged).toBe(1)
     expect(backend.confirmed).toBe(0)
     expect(exitHold.state?.transactions).toEqual(transactions)
+    expect(exitHold.state?.scope).toBe("application")
 
     backend.signal?.({ type: "exitCancelled" })
     expect(exitHold.state).toBeNull()
+  })
+
+  it("holds the close of this window on its own transactions", () => {
+    subscribeToShutdown()
+    backend.signal?.({
+      type: "resolveTransactions",
+      transactions: [],
+      scope: "window",
+    })
+    expect(backend.acknowledged).toBe(1)
+    expect(exitHold.state?.scope).toBe("window")
+    backend.signal?.({ type: "exitCancelled" })
   })
 })
