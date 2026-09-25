@@ -42,6 +42,7 @@ import type {
   ResultPage,
   ResultWindow,
 } from "@/lib/ipc/types"
+import { writeClipboard } from "@/lib/clipboard"
 import { cn } from "@/lib/utils"
 import { useColumnOrder } from "./column-order"
 import { dropMark, moveStep, usePointerReorder } from "./pointer-drag"
@@ -491,7 +492,7 @@ export const ResultGrid = React.memo(function ResultGrid({
     items.some((item) => item.index === active.row) &&
     visibleColumns.some((column) => shown[column.index] === active.column)
 
-  const copy = async (withHeaders: boolean) => {
+  const copy = (withHeaders: boolean) => {
     if (!range) return
     const count = rangeRows(range)
     if (count > MAX_COPY_ROWS) {
@@ -499,33 +500,35 @@ export const ResultGrid = React.memo(function ResultGrid({
       if (!refused.ok) setStatus({ text: refused.reason, failed: true })
       return
     }
-    try {
-      // One bounded read for the selection, whatever is on screen: the rows
-      // copied are the rows selected, not the ones that happen to be drawn.
-      const page = asPage(await fillPage(fetchPage, range.top, count))
+    let done = ""
+    let refusal: string | null = null
+    // One bounded read for the selection, whatever is on screen: the rows
+    // copied are the rows selected, not the ones that happen to be drawn.
+    // The clipboard is written in the keystroke, the text given afterwards.
+    const text = fillPage(fetchPage, range.top, count).then((answer) => {
+      const page = asPage(answer)
       if (!page) {
-        setStatus({
-          text: "Not copied: this result is no longer available.",
-          failed: true,
-        })
-        return
+        refusal = "Not copied: this result is no longer available."
+        throw new Error(refusal)
       }
       const copied = copyText(page.rows, columns, range, withHeaders, shown)
       if (!copied.ok) {
-        setStatus({ text: copied.reason, failed: true })
-        return
+        refusal = copied.reason
+        throw new Error(refusal)
       }
-      await navigator.clipboard.writeText(copied.text)
-      setStatus({
-        text: `Copied ${copied.cells.toLocaleString("en-US")} ${copied.cells === 1 ? "value" : "values"} from ${copied.rows.toLocaleString("en-US")} ${copied.rows === 1 ? "row" : "rows"}.`,
-        failed: false,
-      })
-    } catch (error) {
-      setStatus({
-        text: `Not copied: ${error instanceof Error ? error.message : String(error)}`,
-        failed: true,
-      })
-    }
+      done = `Copied ${copied.cells.toLocaleString("en-US")} ${copied.cells === 1 ? "value" : "values"} from ${copied.rows.toLocaleString("en-US")} ${copied.rows === 1 ? "row" : "rows"}.`
+      return copied.text
+    })
+    void writeClipboard(text).then(
+      () => setStatus({ text: done, failed: false }),
+      (error: unknown) =>
+        setStatus({
+          text:
+            refusal ??
+            `Not copied: ${error instanceof Error ? error.message : String(error)}`,
+          failed: true,
+        })
+    )
   }
 
   const select = (next: GridPosition, extend: boolean) => {
@@ -590,7 +593,7 @@ export const ResultGrid = React.memo(function ResultGrid({
     const mod = hasMod(event, platform)
     if (mod && keyOf(event) === "c") {
       event.preventDefault()
-      void copy(event.shiftKey)
+      copy(event.shiftKey)
       return
     }
     if (event.key === "Enter" && active) {
@@ -700,6 +703,7 @@ export const ResultGrid = React.memo(function ResultGrid({
               shown,
               rowCount,
               range,
+              loadedCell: ({ row, column }) => rowAt(row)?.[column],
               readCell: async ({ row, column }) =>
                 rowAt(row)?.[column] ??
                 asPage(await fillPage(fetchPage, row, 1))?.rows[0]?.[column],

@@ -42,8 +42,11 @@ export interface GridMenuSource {
   /** The rows come from one known relation: `INSERT` can name it. */
   relation: boolean
   ai: GridAiLevel
-  /** Copies text the user asked for, and says whether it worked. */
-  copyText: (text: string, what: string) => void
+  /**
+   * Copies text the user asked for, and says whether it worked. Called in
+   * the click; a text still to be read is a promise (`writeClipboard`).
+   */
+  copyText: (text: string | Promise<string>, what: string) => void
   copyRows: (request: RowsCopy) => void
   /** The preview declares a filter (`PREVIEW_FILTER`); false for a query. */
   filterable: boolean
@@ -146,6 +149,8 @@ export interface GridMenuHost {
   rowCount: number
   /** The selection, in drawn positions: columns index `shown`. */
   range: GridRange | null
+  /** The cell's value if its page is loaded; `undefined` otherwise. */
+  loadedCell: (position: GridPosition) => Cell | undefined
   /** The cell's value, read from a loaded page or with one bounded read. */
   readCell: (position: GridPosition) => Promise<Cell | undefined>
   onInspect?: (position: GridPosition) => void
@@ -193,16 +198,27 @@ export function gridMenuSource(
   }
   if (target.kind === "cell") {
     const position = target.position
-    actions.copyValue = () =>
-      void host.readCell(position).then((cell) => {
-        if (cell === undefined) {
-          host.report("Not copied: this value is no longer available.")
-          return
-        }
-        const copied = valueCopy(cell)
+    actions.copyValue = () => {
+      const loaded = host.loadedCell(position)
+      if (loaded !== undefined) {
+        const copied = valueCopy(loaded)
         if (copied.ok) menu.copyText(copied.text, "Value")
         else host.report(copied.reason)
-      })
+        return
+      }
+      // Read again: the clipboard is asked in the click and given the value
+      // afterwards (`writeClipboard`), and a failure is the copy's to say.
+      menu.copyText(
+        host.readCell(position).then((cell) => {
+          if (cell === undefined)
+            throw new Error("This value is no longer available.")
+          const copied = valueCopy(cell)
+          if (!copied.ok) throw new Error(copied.reason)
+          return copied.text
+        }),
+        "Value"
+      )
+    }
     if (selection)
       actions.copyRows = (format) =>
         menu.copyRows({

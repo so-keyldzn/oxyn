@@ -36,6 +36,7 @@ function hostOf(
     shown: [0, 1, 2],
     rowCount: 120,
     range: { top: 4, bottom: 9, left: 0, right: 2 },
+    loadedCell: () => undefined,
     readCell: () => Promise.resolve("x"),
     autosize: vi.fn(),
     report: vi.fn(),
@@ -126,6 +127,52 @@ describe("gridMenuSource", () => {
       header: false,
       what: "Values of email",
     })
+  })
+
+  it("asks the clipboard in the click, before a value read again arrives", async () => {
+    const copyText = vi.fn()
+    let resolve: (cell: string) => void = () => undefined
+    const { actions } = gridMenuSource(
+      hostOf(
+        { copyText },
+        { kind: "cell", position: { row: 5, column: 1 }, anchor },
+        { readCell: () => new Promise((done) => (resolve = done)) }
+      )
+    )
+    actions.copyValue?.()
+    // WebKit refuses a write that waits for a read: the copy starts now.
+    expect(copyText).toHaveBeenCalledTimes(1)
+    const [text, what] = copyText.mock.calls[0] as [Promise<string>, string]
+    expect(what).toBe("Value")
+    resolve("ada@example.com")
+    await expect(text).resolves.toBe("ada@example.com")
+  })
+
+  it("copies a loaded value as text, in the click", () => {
+    const copyText = vi.fn()
+    const { actions } = gridMenuSource(
+      hostOf(
+        { copyText },
+        { kind: "cell", position: { row: 5, column: 1 }, anchor },
+        { loadedCell: () => "ada@example.com" }
+      )
+    )
+    actions.copyValue?.()
+    expect(copyText).toHaveBeenCalledWith("ada@example.com", "Value")
+  })
+
+  it("says a value no longer held through the copy, not beside it", async () => {
+    const copyText = vi.fn()
+    const { actions } = gridMenuSource(
+      hostOf(
+        { copyText },
+        { kind: "cell", position: { row: 5, column: 1 }, anchor },
+        { readCell: () => Promise.resolve(undefined) }
+      )
+    )
+    actions.copyValue?.()
+    const [text] = copyText.mock.calls[0] as [Promise<string>]
+    await expect(text).rejects.toThrow("This value is no longer available.")
   })
 
   it("never hides the last shown column", () => {

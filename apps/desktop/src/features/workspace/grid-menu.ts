@@ -5,7 +5,6 @@ import type {
   GridMenuSource,
   RowsCopy,
 } from "@/components/oxyn/result-grid-menu"
-import { toast } from "@/components/ui/toast"
 import type { AssistantEntry } from "@/features/assistant/availability"
 import { useAssistantAvailable } from "@/features/assistant/use-assistant-available"
 import { copyToClipboard } from "@/features/metadata/clipboard"
@@ -74,35 +73,31 @@ export function useGridMenu({
   const tier = open?.privacyTier ?? null
   return React.useMemo(() => {
     if (result === null) return undefined
-    const copyRows = async (request: RowsCopy) => {
-      try {
-        const copied = await results.copyResultRows({
-          result,
-          offset: request.offset,
-          count: request.count,
-          columns: request.columns,
-          format: request.format,
-          header: request.header,
-          connection,
-          address,
-        })
-        await copyToClipboard(copied.text, request.what)
-      } catch (error) {
-        // The backend's words: a refusal names its reason — a limit, an
-        // expired result, a relation it cannot name.
-        toast.add({
-          title: `${request.what} not copied`,
-          description: error instanceof Error ? error.message : String(error),
-          type: "error",
-        })
-      }
-    }
+    // The rows are read after the click, the clipboard written in it
+    // (clipboard.ts). A refusal of the backend names its reason — a limit,
+    // an expired result, a relation it cannot name — in the copy's toast.
+    const copyRows = (request: RowsCopy) =>
+      void copyToClipboard(
+        results
+          .copyResultRows({
+            result,
+            offset: request.offset,
+            count: request.count,
+            columns: request.columns,
+            format: request.format,
+            header: request.header,
+            connection,
+            address,
+          })
+          .then((copied) => copied.text),
+        request.what
+      )
     return {
       origin,
       relation: address !== null,
       ai: gridAiLevel(assistant, tier),
       copyText: (text, what) => void copyToClipboard(text, what),
-      copyRows: (request) => void copyRows(request),
+      copyRows,
       filterable,
       sortable,
       sort,
