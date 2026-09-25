@@ -30,19 +30,6 @@ use crate::logging::FileJournal;
 /// How long a failed start waits for its journal to reach the disk.
 const FLUSH_BEFORE_EXIT: Duration = Duration::from_secs(2);
 
-/// The window `tauri.conf.json` declares.
-const MAIN_WINDOW: &str = "main";
-
-/// The window's title. A temporary workspace keeps nothing past its exit: a
-/// window that reads like the real workspace invites work that will be lost.
-fn window_title(temporary: bool) -> &'static str {
-    if temporary {
-        "Oxyn · Temporary workspace"
-    } else {
-        "Oxyn"
-    }
-}
-
 fn main() -> Result<()> {
     let context = tauri::generate_context!();
     let journal = logging::start(&context.config().identifier);
@@ -85,22 +72,26 @@ fn main() -> Result<()> {
     let builder = tauri::Builder::default()
         .manage(menu::MenuBar::default())
         .manage(commands::recovery::ExitJournal(journal.clone()))
-        .manage(file_drop::FileDrops::default());
+        .manage(file_drop::FileDrops::default())
+        .manage(commands::windows::Temporary(temporary));
     #[cfg(target_os = "macos")]
     let builder = builder.menu(menu::application_menu);
     builder
         .plugin(tauri_plugin_dialog::init())
-        .manage(backend)
+        .manage(backend.clone())
         // One closure: a second `setup` replaces the first, it does not chain.
         .setup(move |app| {
             dialog.attach(app.handle().clone());
-            webview_guard::open_window(app, MAIN_WINDOW, window_title(temporary))?;
+            // The first window, built like every other from the template,
+            // under a label Rust chose (ADR-0043). On the main thread, where
+            // building a window does not deadlock.
+            commands::windows::build_window(app.handle(), &backend, true, temporary)?;
             Ok(())
         })
         // Files dropped from the system: classified in Rust, `dragDropEnabled`
         // left on, which is why the front's own drags use pointer events
         // (ADR-0041, point 9).
-        .on_window_event(|window, event| file_drop::on_window_event(window, event, MAIN_WINDOW))
+        .on_window_event(file_drop::on_window_event)
         // Grouped by feature. A feature module adds its block here and nowhere
         // else: a command missing from this list fails silently in the front.
         .invoke_handler(tauri::generate_handler![
@@ -161,6 +152,11 @@ fn main() -> Result<()> {
             commands::library::reconcile_history_entry,
             commands::library::list_history_connections,
             commands::library::open_retained_result,
+            // Windows: open one, its own signals, its close (ADR-0043)
+            commands::windows::open_window,
+            commands::windows::subscribe_window,
+            commands::windows::close_window,
+            commands::windows::confirm_window_close,
             // Recovery and shutdown
             commands::recovery::recovery_status,
             commands::recovery::subscribe_shutdown,
@@ -254,7 +250,7 @@ fn report_startup_failure(error: &anyhow::Error, journal: Option<&FileJournal>) 
 
 #[cfg(test)]
 mod tests {
-    use super::window_title;
+    use crate::commands::windows::window_title;
 
     #[test]
     fn a_temporary_workspace_says_so_in_the_window_title() {

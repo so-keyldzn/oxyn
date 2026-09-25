@@ -10,10 +10,13 @@
 use std::str::FromStr;
 
 use oxyn_core::{CommandId, ConnectionId, SessionId};
-use tauri::State;
 use tauri::ipc::Channel;
+use tauri::{State, Webview};
 
+use self::subscriptions::Superseded;
+use self::windows::{adopt_open, adopt_outcome, caller, outcome_waits, run_owned};
 use crate::backend::Backend;
+use crate::backend::windows::Stream;
 use crate::ipc::{
     CommandOutcome, ConnectResponse, ConnectionDraft, ConnectionTest, DriverChoice, ExecutionEvent,
     ExecutionEventKind, IpcError, OpenConnection,
@@ -45,94 +48,191 @@ pub async fn list_connections(
         .map_err(|_| IpcError::invalid("The connection list worker stopped"))?
 }
 
+/// The connection's catalog session and first console belong to the window
+/// that opened it (ADR-0043); an approval asked for it too.
 #[tauri::command]
 pub async fn connect(
+    webview: Webview,
     backend: State<'_, Backend>,
     command_id: String,
     draft: ConnectionDraft,
 ) -> Result<ConnectResponse, IpcError> {
+    let window = caller(&backend, &webview)?;
     let id = parse("command id", &command_id)?;
-    backend.connect(id, draft).await
+    let response = run_owned(
+        &backend,
+        window,
+        id,
+        backend.connect(id, draft),
+        |response| matches!(response, ConnectResponse::Approval { .. }),
+    )
+    .await?;
+    if let ConnectResponse::Open(open) = &response {
+        adopt_open(&backend, window, open);
+    }
+    Ok(response)
 }
 
 #[tauri::command]
 pub async fn test_connection(
+    webview: Webview,
     backend: State<'_, Backend>,
     command_id: String,
     draft: ConnectionDraft,
 ) -> Result<ConnectionTest, IpcError> {
+    let window = caller(&backend, &webview)?;
     let id = parse("command id", &command_id)?;
-    backend.test_connection(id, draft).await
+    run_owned(
+        &backend,
+        window,
+        id,
+        backend.test_connection(id, draft),
+        |_| false,
+    )
+    .await
 }
 
 #[tauri::command]
 pub async fn decide_connection(
+    webview: Webview,
     backend: State<'_, Backend>,
     command: String,
     approved: bool,
 ) -> Result<Option<ConnectResponse>, IpcError> {
+    let window = caller(&backend, &webview)?;
     let command = parse("command id", &command)?;
-    backend.decide_connection(command, approved).await
+    let response = run_owned(
+        &backend,
+        window,
+        command,
+        backend.decide_connection(command, approved),
+        |_| false,
+    )
+    .await?;
+    if let Some(ConnectResponse::Open(open)) = &response {
+        adopt_open(&backend, window, open);
+    }
+    Ok(response)
 }
 
 #[tauri::command]
 pub async fn reconnect(
+    webview: Webview,
     backend: State<'_, Backend>,
     command_id: String,
     connection: String,
 ) -> Result<OpenConnection, IpcError> {
+    let window = caller(&backend, &webview)?;
     let id = parse("command id", &command_id)?;
     let connection: ConnectionId = parse("connection", &connection)?;
-    backend.reconnect(id, connection).await
+    let open = run_owned(
+        &backend,
+        window,
+        id,
+        backend.reconnect(id, connection),
+        |_| false,
+    )
+    .await?;
+    adopt_open(&backend, window, &open);
+    Ok(open)
 }
 
+/// Closes **this window's** workspace on the connection: its sessions and
+/// its assistant there. The connection itself is disconnected only when no
+/// other window holds it — a window never closes what another shows
+/// (ADR-0043).
 #[tauri::command]
 pub async fn disconnect(
+    webview: Webview,
     backend: State<'_, Backend>,
     connection: String,
 ) -> Result<CommandOutcome, IpcError> {
-    backend.disconnect(parse("connection", &connection)?).await
+    let window = caller(&backend, &webview)?;
+    backend
+        .release_connection(window, parse("connection", &connection)?)
+        .await
 }
 
 #[tauri::command]
 pub async fn execute(
+    webview: Webview,
     backend: State<'_, Backend>,
     command_id: String,
     connection: String,
     session: String,
     sql: String,
 ) -> Result<CommandOutcome, IpcError> {
+    let window = caller(&backend, &webview)?;
     let id: CommandId = parse("command id", &command_id)?;
     let connection: ConnectionId = parse("connection", &connection)?;
     let session: SessionId = parse("session", &session)?;
-    backend.execute(id, connection, session, sql).await
+    backend.inner.windows.check_session(window, session)?;
+    let outcome = run_owned(
+        &backend,
+        window,
+        id,
+        backend.execute(id, connection, session, sql),
+        outcome_waits,
+    )
+    .await?;
+    adopt_outcome(&backend, window, &outcome);
+    Ok(outcome)
 }
 
+/// A decision on a command this window sent — or on an agent's, which the
+/// first window to decide takes.
 #[tauri::command]
 pub async fn decide(
+    webview: Webview,
     backend: State<'_, Backend>,
     command: String,
     approved: bool,
 ) -> Result<CommandOutcome, IpcError> {
-    backend
-        .decide(parse("command id", &command)?, approved)
-        .await
+    let window = caller(&backend, &webview)?;
+    let command = parse("command id", &command)?;
+    backend.inner.windows.check_command(window, command)?;
+    let outcome = run_owned(
+        &backend,
+        window,
+        command,
+        backend.decide(command, approved),
+        outcome_waits,
+    )
+    .await?;
+    adopt_outcome(&backend, window, &outcome);
+    Ok(outcome)
 }
 
+/// A command of another window is refused; one not dispatched yet is
+/// claimed, so that its early cancellation still reaches it.
 #[tauri::command]
-pub fn cancel(backend: State<'_, Backend>, command_id: String) -> Result<bool, IpcError> {
-    Ok(backend.cancel(parse("command id", &command_id)?))
+pub fn cancel(
+    webview: Webview,
+    backend: State<'_, Backend>,
+    command_id: String,
+) -> Result<bool, IpcError> {
+    let window = caller(&backend, &webview)?;
+    let command = parse("command id", &command_id)?;
+    backend.inner.windows.check_command(window, command)?;
+    Ok(backend.cancel(command))
 }
 
-/// Streams execution events to the front until the channel closes.
+/// Streams this window's execution events until the channel closes.
 ///
 /// One subscription per window load: a reload subscribes again, which ends
-/// the previous task at once (see [`subscriptions`]).
+/// the previous task of this window at once (see [`subscriptions`]). The
+/// events of other windows' commands never reach it: the filter is here, in
+/// Rust, not in the webview (ADR-0043).
 #[tauri::command]
-pub fn subscribe_events(backend: State<'_, Backend>, channel: Channel<ExecutionEvent>) {
-    static EVENTS: subscriptions::Stream = std::sync::OnceLock::new();
-    let mut superseded = subscriptions::supersede(&EVENTS);
+pub fn subscribe_events(
+    webview: Webview,
+    backend: State<'_, Backend>,
+    channel: Channel<ExecutionEvent>,
+) -> Result<(), IpcError> {
+    let window = caller(&backend, &webview)?;
+    let mut superseded = Superseded::start(&backend, window, Stream::Events)?;
     let mut events = backend.subscribe();
+    let backend = backend.inner().clone();
     tauri::async_runtime::spawn(async move {
         loop {
             let received = tokio::select! {
@@ -141,6 +241,9 @@ pub fn subscribe_events(backend: State<'_, Backend>, channel: Channel<ExecutionE
             };
             match received {
                 Ok(event) => {
+                    if !backend.inner.windows.route(window, &event) {
+                        continue;
+                    }
                     let Some(kind) = ExecutionEventKind::of(&event.event) else {
                         continue;
                     };
@@ -161,6 +264,7 @@ pub fn subscribe_events(backend: State<'_, Backend>, channel: Channel<ExecutionE
             }
         }
     });
+    Ok(())
 }
 
 pub mod ai;
@@ -175,3 +279,4 @@ pub mod recovery;
 pub mod results;
 pub mod settings;
 mod subscriptions;
+pub mod windows;

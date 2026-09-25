@@ -21,7 +21,8 @@ pub struct RecoveryStatus {
     pub unresolved_write: bool,
 }
 
-/// What the backend asks of the webview while the window closes.
+/// What the backend asks of a webview while the application exits or its
+/// window closes. Sent on that window's own channel, never to the others.
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum ShutdownSignal {
@@ -32,9 +33,26 @@ pub enum ShutdownSignal {
     /// at once, then let the user commit, roll back or cancel
     /// ([ADR-0043](../../../../docs/adr/0043-multi-fenetre.md)).
     #[serde(rename_all = "camelCase")]
-    ResolveTransactions { transactions: Vec<ExitTransaction> },
+    ResolveTransactions {
+        /// This window's consoles only.
+        transactions: Vec<ExitTransaction>,
+        /// What waits on them: once resolved, the webview asks again for the
+        /// exit, or for its window's close.
+        scope: ExitScope,
+    },
     /// The exit was cancelled: close the dialog, nothing was flushed.
     ExitCancelled,
+}
+
+/// What an open transaction holds
+/// ([ADR-0043](../../../../docs/adr/0043-multi-fenetre.md)).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ExitScope {
+    /// The application's exit: ⌘Q, `File ▸ Exit`, the last window's close.
+    Application,
+    /// The close of this window, which is not the last.
+    Window,
 }
 
 /// A console session whose transaction holds the exit.

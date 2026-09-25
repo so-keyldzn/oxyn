@@ -1,10 +1,14 @@
-//! The main window, built so that its webview cannot become a browser.
+//! The windows, built so that their webview cannot become a browser.
 //!
-//! Declared `"create": false` in `tauri.conf.json` and built here from that
-//! declaration, because the two guards ADR-0041 § 8 asks for — refusing a
-//! navigation away from the application and refusing a new window — are
-//! only offered on the builder. Without the second, WebView2 answers
-//! `window.open` or a `target="_blank"` link with a browser popup
+//! `tauri.conf.json` declares one window, `workspace`, with `"create": false`:
+//! a template. Every window, the first included, is built here from it under
+//! the label Rust chose (`backend/windows.rs`), so that dimensions, minimum
+//! size and title bar stay written in one place
+//! ([ADR-0043](../../../docs/adr/0043-multi-fenetre.md)). And built here
+//! because the two guards ADR-0041 § 8 asks for — refusing a navigation away
+//! from the application and refusing a new window — are only offered on the
+//! builder. Without the second, WebView2 answers `window.open` or a
+//! `target="_blank"` link with a browser popup
 //! ([UX-SPEC](../../../docs/UX-SPEC.md), « Ce qu'Oxyn ne fait pas, parce que
 //! ce n'est pas un navigateur »).
 //!
@@ -13,28 +17,37 @@
 
 use anyhow::{Context as _, Result};
 use tauri::webview::NewWindowResponse;
-use tauri::{App, Url, WebviewWindowBuilder};
+use tauri::{Manager, Runtime, Url, WebviewWindow, WebviewWindowBuilder};
 
-/// Builds the window `tauri.conf.json` declares under `label`, with its title.
+/// The window `tauri.conf.json` declares as the template of every window.
+pub(crate) const TEMPLATE: &str = "workspace";
+
+/// Builds a window from the template, under `label`, with its title.
 ///
-/// Runs in `setup`, on the main thread, where creating a window does not
-/// deadlock (the warning on `WebviewWindowBuilder::new` is about synchronous
-/// commands and event handlers).
-pub(crate) fn open_window(app: &App, label: &str, title: &str) -> Result<()> {
-    let config = app
+/// Never from a synchronous command or event handler: creating a window
+/// there deadlocks on Windows (the warning on `WebviewWindowBuilder::new`).
+/// From `setup`, on the main thread, or from an `async` command.
+pub(crate) fn open_window<R: Runtime, M: Manager<R>>(
+    manager: &M,
+    label: &str,
+    title: &str,
+) -> Result<WebviewWindow<R>> {
+    let mut config = manager
         .config()
         .app
         .windows
         .iter()
-        .find(|window| window.label == label)
-        .with_context(|| format!("tauri.conf.json declares no window {label:?}"))?;
+        .find(|window| window.label == TEMPLATE)
+        .with_context(|| format!("tauri.conf.json declares no window {TEMPLATE:?}"))?
+        .clone();
+    config.label = label.to_owned();
     let origin = app_origin(
         tauri::is_dev(),
-        app.config().build.dev_url.as_ref(),
+        manager.config().build.dev_url.as_ref(),
         config.use_https_scheme,
     )
     .context("resolving the application's own origin")?;
-    WebviewWindowBuilder::from_config(app, config)?
+    WebviewWindowBuilder::from_config(manager, &config)?
         .title(title)
         .on_navigation(move |url| {
             let allowed = same_origin(url, &origin);
@@ -58,8 +71,7 @@ pub(crate) fn open_window(app: &App, label: &str, title: &str) -> Result<()> {
             NewWindowResponse::Deny
         })
         .build()
-        .with_context(|| format!("opening the {label:?} window"))?;
-    Ok(())
+        .with_context(|| format!("opening the {label:?} window"))
 }
 
 /// The origin the application's pages are served from.
@@ -156,5 +168,35 @@ mod tests {
     #[test]
     fn development_without_a_dev_server_is_an_error() {
         assert!(app_origin(true, None, false).is_err());
+    }
+
+    /// Every window is built from one template, and the capability covers
+    /// them by a pattern with exactly the three permissions it had: none
+    /// lets a webview create a window or a webview (ADR-0043).
+    #[test]
+    fn every_window_comes_from_the_template_with_the_same_three_permissions() {
+        let config: serde_json::Value =
+            serde_json::from_str(include_str!("../tauri.conf.json")).expect("valid JSON");
+        let windows = config["app"]["windows"].as_array().expect("windows");
+        assert_eq!(
+            windows.len(),
+            1,
+            "one template, no window built by Tauri itself"
+        );
+        assert_eq!(windows[0]["label"], super::TEMPLATE);
+        assert_eq!(windows[0]["create"], false);
+
+        let capability: serde_json::Value =
+            serde_json::from_str(include_str!("../capabilities/main.json")).expect("valid JSON");
+        assert_eq!(capability["windows"], serde_json::json!(["workspace-*"]));
+        assert_eq!(
+            capability["permissions"],
+            serde_json::json!([
+                "core:window:allow-start-dragging",
+                "core:window:allow-internal-toggle-maximize",
+                "dialog:allow-open"
+            ])
+        );
+        assert!(capability.get("webviews").is_none());
     }
 }

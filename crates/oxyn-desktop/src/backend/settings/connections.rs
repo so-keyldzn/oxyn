@@ -222,6 +222,26 @@ impl Backend {
         }
     }
 
+    /// The connection a held change targets, and whether it deletes it: a
+    /// deletion approved while another window holds the connection is
+    /// refused (ADR-0043).
+    pub(crate) fn pending_change_connection(
+        &self,
+        command: CommandId,
+    ) -> Option<(ConnectionId, bool)> {
+        self.inner
+            .settings
+            .pending_changes
+            .lock()
+            .get(&command)
+            .map(|pending| {
+                (
+                    pending.origin().id,
+                    matches!(pending, PendingChange::Delete { .. }),
+                )
+            })
+    }
+
     /// Completes, or rejects, an edit or a deletion the policy held back.
     ///
     /// `None` when rejected: nothing changed.

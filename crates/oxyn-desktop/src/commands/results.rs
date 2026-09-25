@@ -4,10 +4,12 @@
 //! None of them runs a query: a result is read from its buffer, and one that
 //! retention let go is answered « expired », never recreated (ADR-0017).
 
-use tauri::State;
+use oxyn_core::ResultId;
+use tauri::{State, Webview};
 use tauri_plugin_dialog::DialogExt;
 
 use super::parse;
+use super::windows::{caller, run_owned};
 use crate::backend::Backend;
 use crate::ipc::results::{
     CopiedRows, CopyRowsRequest, CopySpec, ExportFormatChoice, FindAnswer, ResultWindow,
@@ -15,37 +17,49 @@ use crate::ipc::results::{
 };
 use crate::ipc::{CommandOutcome, IpcError, ResultColumn};
 
+/// The result `result` names, if this window reads it (ADR-0043).
+fn readable(backend: &Backend, webview: &Webview, result: &str) -> Result<ResultId, IpcError> {
+    let window = caller(backend, webview)?;
+    let result = parse("result", result)?;
+    backend.inner.windows.check_result(window, result)?;
+    Ok(result)
+}
+
 /// A window of rows through `ReadResultPage` for what spilled (ADR-0012).
 #[tauri::command]
 pub async fn read_result_page(
+    webview: Webview,
     backend: State<'_, Backend>,
     connection: String,
     result: String,
     offset: usize,
     limit: usize,
 ) -> Result<ResultWindow, IpcError> {
+    let result = readable(&backend, &webview, &result)?;
     backend
-        .read_result_page(
-            parse("connection", &connection)?,
-            parse("result", &result)?,
-            offset,
-            limit,
-        )
+        .read_result_page(parse("connection", &connection)?, result, offset, limit)
         .await
 }
 
 /// The columns of a held result, from its schema; `null` once it expired.
 #[tauri::command]
 pub async fn result_columns(
+    webview: Webview,
     backend: State<'_, Backend>,
     result: String,
 ) -> Result<Option<Vec<ResultColumn>>, IpcError> {
-    Ok(backend.result_columns(parse("result", &result)?))
+    Ok(backend.result_columns(readable(&backend, &webview, &result)?))
 }
 
 #[tauri::command]
-pub async fn forget_result(backend: State<'_, Backend>, result: String) -> Result<(), IpcError> {
-    let result = parse("result", &result)?;
+pub async fn forget_result(
+    webview: Webview,
+    backend: State<'_, Backend>,
+    result: String,
+) -> Result<(), IpcError> {
+    let window = caller(&backend, &webview)?;
+    let result = readable(&backend, &webview, &result)?;
+    backend.inner.windows.forget_result(window, result);
     // Forgetting may delete spill files.
     backend
         .on_blocking_pool(move |backend| {
@@ -70,8 +84,13 @@ pub async fn export_formats(
 /// The webview only suggests a file name. `null` when the user dismissed the
 /// dialog: nothing was written and nothing ran.
 #[tauri::command]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the names the front sends, plus the calling webview Tauri injects (ADR-0043)"
+)]
 pub async fn export_result(
     app: tauri::AppHandle,
+    webview: Webview,
     backend: State<'_, Backend>,
     command_id: String,
     connection: String,
@@ -88,9 +107,10 @@ pub async fn export_result(
             "{format} export is not written yet"
         )));
     }
+    let window = caller(&backend, &webview)?;
     let command_id = parse("command id", &command_id)?;
     let connection = parse("connection", &connection)?;
-    let result = parse("result", &result)?;
+    let result = readable(&backend, &webview, &result)?;
     let extension = format.extension();
     let file_name = suggested_file_name(&suggested_name, extension);
     let label = format.to_string();
@@ -112,10 +132,15 @@ pub async fn export_result(
     let destination = chosen
         .into_path()
         .map_err(|_| IpcError::invalid("The chosen destination is not a local file"))?;
-    backend
-        .export(command_id, connection, result, format, destination)
-        .await
-        .map(Some)
+    run_owned(
+        &backend,
+        window,
+        command_id,
+        backend.export(command_id, connection, result, format, destination),
+        |_| false,
+    )
+    .await
+    .map(Some)
 }
 
 /// Rows of a held result as text for the clipboard; runs nothing.
@@ -124,6 +149,7 @@ pub async fn export_result(
 /// pool ([I-05](../../../../CLAUDE.md#i-05)).
 #[tauri::command]
 pub async fn copy_result_rows(
+    webview: Webview,
     backend: State<'_, Backend>,
     request: CopyRowsRequest,
 ) -> Result<CopiedRows, IpcError> {
@@ -143,7 +169,7 @@ pub async fn copy_result_rows(
         .transpose()?;
     backend
         .copy_result_rows(
-            parse("result", &result)?,
+            readable(&backend, &webview, &result)?,
             connection,
             address,
             CopySpec {
@@ -160,6 +186,7 @@ pub async fn copy_result_rows(
 /// `null` when the result has expired.
 #[tauri::command]
 pub async fn find_in_result(
+    webview: Webview,
     backend: State<'_, Backend>,
     result: String,
     needle: String,
@@ -167,13 +194,19 @@ pub async fn find_in_result(
     forward: bool,
 ) -> Result<Option<FindAnswer>, IpcError> {
     backend
-        .find_in_result(parse("result", &result)?, needle, from, forward)
+        .find_in_result(
+            readable(&backend, &webview, &result)?,
+            needle,
+            from,
+            forward,
+        )
         .await
 }
 
 /// `null` when the result has expired.
 #[tauri::command]
 pub async fn find_matches_in_window(
+    webview: Webview,
     backend: State<'_, Backend>,
     result: String,
     needle: String,
@@ -181,14 +214,24 @@ pub async fn find_matches_in_window(
     limit: usize,
 ) -> Result<Option<Vec<usize>>, IpcError> {
     backend
-        .find_matches_in_window(parse("result", &result)?, needle, offset, limit)
+        .find_matches_in_window(
+            readable(&backend, &webview, &result)?,
+            needle,
+            offset,
+            limit,
+        )
         .await
 }
 
 /// One page of one value; `null` when the result has expired. Cancellable
 /// with `cancel` under the same command id.
 #[tauri::command]
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the names the front sends, plus the calling webview Tauri injects (ADR-0043)"
+)]
 pub async fn inspect_value(
+    webview: Webview,
     backend: State<'_, Backend>,
     command_id: String,
     connection: String,
@@ -197,14 +240,22 @@ pub async fn inspect_value(
     column: usize,
     offset: usize,
 ) -> Result<Option<ValuePageView>, IpcError> {
-    backend
-        .inspect_value(
-            parse("command id", &command_id)?,
+    let window = caller(&backend, &webview)?;
+    let id = parse("command id", &command_id)?;
+    let result = readable(&backend, &webview, &result)?;
+    run_owned(
+        &backend,
+        window,
+        id,
+        backend.inspect_value(
+            id,
             parse("connection", &connection)?,
-            parse("result", &result)?,
+            result,
             row,
             column,
             offset,
-        )
-        .await
+        ),
+        |_| false,
+    )
+    .await
 }

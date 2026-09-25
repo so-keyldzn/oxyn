@@ -10,6 +10,7 @@
 //! Nothing here runs a statement either: `COMMIT` and `ROLLBACK` come from the
 //! webview through `run_console`, as if typed.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -20,7 +21,8 @@ use tokio::sync::Notify;
 use tokio::sync::broadcast::{self, error::TryRecvError};
 
 use super::Backend;
-use crate::ipc::recovery::{ExitTransaction, ShutdownSignal};
+use super::windows::{Answer, WindowKey};
+use crate::ipc::recovery::{ExitScope, ExitTransaction, ShutdownSignal};
 
 /// How long the webview may take to acknowledge `ResolveTransactions`, and
 /// the listing to catch up with the executor's events.
@@ -227,10 +229,24 @@ impl Drop for RunningStatement {
 /// A missed event.
 struct Lag;
 
+/// The journal of transactions a window did not acknowledge: closing their
+/// sessions rolls them back.
+pub(crate) fn warn_unacknowledged(transactions: &[ExitTransaction]) {
+    for transaction in transactions {
+        tracing::warn!(
+            connection = %transaction.connection_name,
+            session = %transaction.session,
+            state = ?transaction.state,
+            "the webview did not acknowledge; closing the session rolls back its transaction"
+        );
+    }
+}
+
 /// Where the exit stands before the ordered shutdown.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 enum Hold {
     /// No exit asked, or the last one cancelled.
+    #[default]
     Idle,
     /// Listing the open transactions.
     Listing,
@@ -242,20 +258,13 @@ enum Hold {
     Proceeding,
 }
 
-/// The exit's state before the ordered shutdown, and the acknowledgement it
-/// waits for.
+/// The exit's state before the ordered shutdown, and the windows it asked.
+#[derive(Default)]
 pub(crate) struct ExitHold {
     hold: Mutex<Hold>,
-    acknowledged: Notify,
-}
-
-impl Default for ExitHold {
-    fn default() -> Self {
-        Self {
-            hold: Mutex::new(Hold::Idle),
-            acknowledged: Notify::new(),
-        }
-    }
+    /// The windows sent `ResolveTransactions` by the exit under way: a
+    /// `Cancel` in any of them closes the dialog in all of them.
+    asked: Mutex<Vec<WindowKey>>,
 }
 
 impl ExitHold {
@@ -272,13 +281,13 @@ impl ExitHold {
 }
 
 /// What the exit does next.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum ExitStep {
     /// Begin the ordered shutdown.
     Proceed,
-    /// The webview acknowledged the transactions to resolve: the user
-    /// decides, and the window comes to the front.
-    Asked,
+    /// These windows acknowledged the transactions to resolve: the user
+    /// decides, and they come to the front — they alone.
+    Asked(Vec<WindowKey>),
     /// Nothing to do: an exit is already being listed or asked, the
     /// shutdown has begun, or the exit was cancelled.
     Held,
@@ -298,7 +307,7 @@ impl Backend {
         self.exit_step_within(ACKNOWLEDGE_GRACE).await
     }
 
-    async fn exit_step_within(&self, grace: Duration) -> ExitStep {
+    pub(crate) async fn exit_step_within(&self, grace: Duration) -> ExitStep {
         let hold = &self.inner.workbench.exit;
         {
             let mut state = hold.hold.lock();
@@ -307,37 +316,43 @@ impl Backend {
             }
             *state = Hold::Listing;
         }
-        let open = self.open_transactions(grace).await;
+        let open = self.open_transactions(grace, None).await;
         if open.is_empty() {
             return self.proceed_from(Hold::Listing);
         }
-        let channel = self.shutdown_channel();
-        let acknowledged = hold.acknowledged.notified();
-        tokio::pin!(acknowledged);
-        acknowledged.as_mut().enable();
+        let windows = &self.inner.windows;
+        let asked: Vec<WindowKey> = open.keys().copied().collect();
+        windows.expect_answers(&asked);
         if !hold.advance(Hold::Listing, Hold::Asking) {
             return ExitStep::Held;
         }
-        let signal = ShutdownSignal::ResolveTransactions {
-            transactions: open.clone(),
-        };
-        let sent = channel.is_some_and(|channel| channel.send(signal).is_ok());
-        if sent && tokio::time::timeout(grace, acknowledged).await.is_ok() {
-            return if hold.advance(Hold::Asking, Hold::Deciding) {
-                ExitStep::Asked
-            } else {
-                ExitStep::Held
+        *hold.asked.lock() = asked;
+        // Each window is sent its own consoles, on its own channel: none
+        // learns what another holds.
+        let mut sent = Vec::new();
+        for (window, transactions) in &open {
+            let signal = ShutdownSignal::ResolveTransactions {
+                transactions: transactions.clone(),
+                scope: ExitScope::Application,
             };
+            if windows.shutdown_signal(*window, signal) {
+                sent.push(*window);
+            }
         }
-        for transaction in &open {
-            tracing::warn!(
-                connection = %transaction.connection_name,
-                session = %transaction.session,
-                state = ?transaction.state,
-                "the webview did not acknowledge the exit; closing the session rolls back its transaction"
-            );
+        let acknowledged = windows.answers(&sent, Answer::acknowledged, grace).await;
+        for (window, transactions) in &open {
+            if !acknowledged.contains(window) {
+                warn_unacknowledged(transactions);
+            }
         }
-        self.proceed_from(Hold::Asking)
+        if acknowledged.is_empty() {
+            return self.proceed_from(Hold::Asking);
+        }
+        if hold.advance(Hold::Asking, Hold::Deciding) {
+            ExitStep::Asked(acknowledged)
+        } else {
+            ExitStep::Held
+        }
     }
 
     fn proceed_from(&self, from: Hold) -> ExitStep {
@@ -348,19 +363,20 @@ impl Backend {
         }
     }
 
-    /// The webview has shown the transactions to resolve. Outside an exit
-    /// waiting for it, does nothing.
-    pub fn shutdown_acknowledged(&self) {
-        let exit = &self.inner.workbench.exit;
-        if *exit.hold.lock() == Hold::Asking {
-            exit.acknowledged.notify_waiters();
-        }
+    /// A window has shown what it was asked to resolve — the exit's
+    /// transactions, or its own close. Outside a wait for it, does nothing.
+    pub fn shutdown_acknowledged(&self, window: WindowKey) {
+        self.inner.windows.acknowledged(window);
     }
 
-    /// Abandons an exit held by an open transaction: nothing was flushed or
-    /// recorded, and the application stays as it was. Outside such an exit,
-    /// or once the ordered shutdown has begun, does nothing.
-    pub fn cancel_exit(&self) {
+    /// `Cancel` in a window's dialog. During that window's own close, the
+    /// close is abandoned; during an exit held by a transaction, the exit is
+    /// abandoned for every window, before anything is flushed or recorded.
+    /// Outside both, or once the ordered shutdown has begun, does nothing.
+    pub fn cancel_exit(&self, window: WindowKey) {
+        if self.cancel_window_close(window) {
+            return;
+        }
         {
             let mut hold = self.inner.workbench.exit.hold.lock();
             if !matches!(*hold, Hold::Listing | Hold::Asking | Hold::Deciding) {
@@ -369,20 +385,38 @@ impl Backend {
             *hold = Hold::Idle;
         }
         tracing::info!("exit cancelled with a transaction open");
-        if let Some(channel) = self.shutdown_channel() {
-            let _ = channel.send(ShutdownSignal::ExitCancelled);
+        let asked = std::mem::take(&mut *self.inner.workbench.exit.asked.lock());
+        for window in asked {
+            let _ = self
+                .inner
+                .windows
+                .shutdown_signal(window, ShutdownSignal::ExitCancelled);
         }
     }
 
     /// The console sessions whose transaction is open or not known, as the
-    /// executor last observed them, with their connection's name and marking.
+    /// executor last observed them, with their connection's name and marking,
+    /// by the window that owns them — `only` that window's when given.
     ///
     /// Read by the backend, never taken from the webview: a list it sent
-    /// could be stale, or emptied by a script.
-    async fn open_transactions(&self, grace: Duration) -> Vec<ExitTransaction> {
+    /// could be stale, or emptied by a script. A session no window claims —
+    /// opened before any window existed — is shown in the first window.
+    pub(crate) async fn open_transactions(
+        &self,
+        grace: Duration,
+        only: Option<WindowKey>,
+    ) -> BTreeMap<WindowKey, Vec<ExitTransaction>> {
         let entries = self.inner.workbench.consoles.settled(grace).await;
-        let mut open = Vec::new();
+        let windows = &self.inner.windows;
+        let first = windows.keys().first().copied();
+        let mut open: BTreeMap<WindowKey, Vec<ExitTransaction>> = BTreeMap::new();
         for entry in self.holding(entries) {
+            let Some(window) = windows.owner_of_session(entry.session).or(first) else {
+                continue;
+            };
+            if only.is_some_and(|only| only != window) {
+                continue;
+            }
             // Read again: the marking may have changed since the console
             // opened. A connection gone from the store is shown as
             // production, never the reverse (I-02).
@@ -390,7 +424,7 @@ impl Backend {
                 Ok(config) => (config.name, config.environment),
                 Err(_) => (entry.name.clone(), Environment::Production),
             };
-            open.push(ExitTransaction {
+            open.entry(window).or_default().push(ExitTransaction {
                 session: entry.session.to_string(),
                 connection: entry.connection.to_string(),
                 connection_name: name,

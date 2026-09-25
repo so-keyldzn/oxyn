@@ -8,11 +8,15 @@
 //! lock do so on the blocking pool, so that a long refresh holding the lock
 //! stalls no runtime worker either.
 
-use tauri::State;
+use oxyn_core::SessionId;
 use tauri::ipc::Channel;
+use tauri::{State, Webview};
 
 use super::parse;
+use super::subscriptions::Superseded;
+use super::windows::{adopt_outcome, caller, outcome_waits, run_owned};
 use crate::backend::Backend;
+use crate::backend::windows::Stream;
 use crate::ipc::metadata::{
     CatalogSearchHit, ObjectSqlForm, Pagination, PreviewShapeDraft, RefreshSignal,
     RelatedRowsQuery, RelatedRowsSource, RelationFacet, RelationFacets,
@@ -23,6 +27,7 @@ use crate::ipc::{CatalogAddress, CatalogNode, CommandOutcome, IpcError, Relation
 /// no filter (ADR-0020).
 #[tauri::command]
 pub async fn preview_relation(
+    webview: Webview,
     backend: State<'_, Backend>,
     command_id: String,
     connection: String,
@@ -30,12 +35,21 @@ pub async fn preview_relation(
     address: CatalogAddress,
     shape: Option<PreviewShapeDraft>,
 ) -> Result<CommandOutcome, IpcError> {
+    let window = caller(&backend, &webview)?;
     let id = parse("command id", &command_id)?;
     let connection = parse("connection", &connection)?;
-    let session = parse("session", &session)?;
-    backend
-        .preview_relation(id, connection, session, address, shape.unwrap_or_default())
-        .await
+    let session: SessionId = parse("session", &session)?;
+    backend.inner.windows.check_session(window, session)?;
+    let outcome = run_owned(
+        &backend,
+        window,
+        id,
+        backend.preview_relation(id, connection, session, address, shape.unwrap_or_default()),
+        outcome_waits,
+    )
+    .await?;
+    adopt_outcome(&backend, window, &outcome);
+    Ok(outcome)
 }
 
 #[tauri::command]
@@ -51,22 +65,31 @@ pub async fn preview_pagination(
 
 #[tauri::command]
 pub async fn refresh_catalog(
+    webview: Webview,
     backend: State<'_, Backend>,
     command_id: String,
     connection: String,
     session: String,
     address: Option<CatalogAddress>,
 ) -> Result<CommandOutcome, IpcError> {
+    let window = caller(&backend, &webview)?;
     let id = parse("command id", &command_id)?;
     let connection = parse("connection", &connection)?;
-    let session = parse("session", &session)?;
-    backend
-        .refresh_catalog(id, connection, session, address)
-        .await
+    let session: SessionId = parse("session", &session)?;
+    backend.inner.windows.check_session(window, session)?;
+    run_owned(
+        &backend,
+        window,
+        id,
+        backend.refresh_catalog(id, connection, session, address),
+        |_| false,
+    )
+    .await
 }
 
 #[tauri::command]
 pub async fn refresh_relation_facet(
+    webview: Webview,
     backend: State<'_, Backend>,
     command_id: String,
     connection: String,
@@ -74,12 +97,19 @@ pub async fn refresh_relation_facet(
     address: CatalogAddress,
     facet: RelationFacet,
 ) -> Result<CommandOutcome, IpcError> {
+    let window = caller(&backend, &webview)?;
     let id = parse("command id", &command_id)?;
     let connection = parse("connection", &connection)?;
-    let session = parse("session", &session)?;
-    backend
-        .refresh_relation_facet(id, connection, session, address, facet)
-        .await
+    let session: SessionId = parse("session", &session)?;
+    backend.inner.windows.check_session(window, session)?;
+    run_owned(
+        &backend,
+        window,
+        id,
+        backend.refresh_relation_facet(id, connection, session, address, facet),
+        |_| false,
+    )
+    .await
 }
 
 #[tauri::command]
@@ -170,13 +200,15 @@ pub async fn compose_object_sql(
 /// missed events, and reads everything visible again.
 #[tauri::command]
 pub async fn subscribe_refresh_signals(
+    webview: Webview,
     backend: State<'_, Backend>,
     channel: Channel<RefreshSignal>,
 ) -> Result<(), IpcError> {
+    let window = caller(&backend, &webview)?;
     // A reload subscribes again and ends this task (see `subscriptions`).
-    static SIGNALS: super::subscriptions::Stream = std::sync::OnceLock::new();
-    let mut superseded = super::subscriptions::supersede(&SIGNALS);
+    let mut superseded = Superseded::start(&backend, window, Stream::RefreshSignals)?;
     let mut events = backend.subscribe();
+    let backend = backend.inner().clone();
     tauri::async_runtime::spawn(async move {
         loop {
             let received = tokio::select! {
@@ -184,7 +216,18 @@ pub async fn subscribe_refresh_signals(
                 received = events.recv() => received,
             };
             let signals = match received {
-                Ok(event) => RefreshSignal::of(&event),
+                // What changed on a connection concerns the windows that
+                // hold it, and no other (ADR-0043); history is the
+                // workspace's, and every window's library shows it.
+                Ok(event) => RefreshSignal::of(&event)
+                    .into_iter()
+                    .filter(|signal| {
+                        matches!(signal, RefreshSignal::HistoryRecorded { .. })
+                            || event
+                                .connection
+                                .is_some_and(|on| backend.inner.windows.holds(window, on))
+                    })
+                    .collect(),
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(missed)) => {
                     tracing::warn!(missed, "refresh signals dropped for a slow webview");
                     vec![RefreshSignal::Lagged]

@@ -34,6 +34,7 @@ use tokio::sync::broadcast;
 use self::confirm::HostAnswer;
 pub(crate) use self::confirm::{HostConfirm, NativeDialog};
 pub(crate) use self::exit::ExitStep;
+pub(crate) use self::windows::{CloseStep, WindowKey};
 use crate::credentials::KeyringCredentials;
 use crate::ipc::{
     self, CommandOutcome, ConnectResponse, ConnectionDraft, ConnectionTest, DriverChoice, IpcError,
@@ -87,6 +88,9 @@ pub(crate) struct Inner {
     /// The review sessions of `Drop…`, `Truncate…` and `Rename…` whose
     /// command waits for a decision (ADR-0042).
     pub(crate) object_operations: object_operations::ReviewSessions,
+    /// The windows, and what each one owns: its sessions, commands, results
+    /// and assistants (ADR-0043).
+    pub(crate) windows: windows::WindowRegistry,
 }
 
 // Not derived: `Executor` and `Store` reach connection configurations, and a
@@ -265,6 +269,7 @@ impl Backend {
                 confirmations,
                 results: results::ResultsState::default(),
                 object_operations: object_operations::ReviewSessions::default(),
+                windows: windows::WindowRegistry::default(),
             }),
         };
         backend.start_heartbeat();
@@ -637,15 +642,6 @@ impl Backend {
             capabilities: ipc::capability_names(capabilities),
             console,
         })
-    }
-
-    /// Closes the sessions of a connection.
-    pub async fn disconnect(&self, connection: ConnectionId) -> Result<CommandOutcome, IpcError> {
-        // An agent's tools act on a session of this connection: none outlives
-        // the sessions it was given.
-        self.inner.ai.release_agents(connection);
-        self.run(CommandId::new(), Command::Disconnect { connection })
-            .await
     }
 
     /// Runs the SQL the user wrote, as written.
@@ -1313,3 +1309,4 @@ mod recovery;
 mod results;
 mod settings;
 mod tracking;
+pub(crate) mod windows;

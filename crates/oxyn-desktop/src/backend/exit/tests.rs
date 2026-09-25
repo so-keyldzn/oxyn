@@ -151,23 +151,27 @@ fn webview(backend: &Backend, acknowledges: bool) -> Arc<Mutex<Vec<Value>>> {
     let received = Arc::new(Mutex::new(Vec::new()));
     let log = Arc::clone(&received);
     let inner = Arc::downgrade(&backend.inner);
-    backend.subscribe_shutdown(Channel::new(move |body: InvokeResponseBody| {
-        let InvokeResponseBody::Json(json) = body else {
-            panic!("the shutdown channel sends JSON");
-        };
-        let signal: Value = serde_json::from_str(&json).expect("a JSON signal");
-        let kind = signal["type"].as_str().unwrap_or_default().to_owned();
-        log.lock().push(signal);
-        if let Some(inner) = inner.upgrade() {
-            let backend = Backend { inner };
-            match kind.as_str() {
-                "flushDrafts" => backend.shutdown_flushed(),
-                "resolveTransactions" if acknowledges => backend.shutdown_acknowledged(),
-                _ => {}
+    let window = backend.test_window();
+    backend.subscribe_shutdown(
+        window,
+        Channel::new(move |body: InvokeResponseBody| {
+            let InvokeResponseBody::Json(json) = body else {
+                panic!("the shutdown channel sends JSON");
+            };
+            let signal: Value = serde_json::from_str(&json).expect("a JSON signal");
+            let kind = signal["type"].as_str().unwrap_or_default().to_owned();
+            log.lock().push(signal);
+            if let Some(inner) = inner.upgrade() {
+                let backend = Backend { inner };
+                match kind.as_str() {
+                    "flushDrafts" => backend.shutdown_flushed(window),
+                    "resolveTransactions" if acknowledges => backend.shutdown_acknowledged(window),
+                    _ => {}
+                }
             }
-        }
-        Ok(())
-    }));
+            Ok(())
+        }),
+    );
     received
 }
 
@@ -197,7 +201,7 @@ fn an_open_transaction_holds_the_exit_and_is_named() {
     bench.ok("BEGIN");
     bench.ok("INSERT INTO parent VALUES (1)");
 
-    assert_eq!(bench.exit_step(), ExitStep::Asked);
+    assert!(matches!(bench.exit_step(), ExitStep::Asked(_)));
     assert!(
         !bench.backend.shutdown_finished(),
         "nothing flushed, nothing recorded"
@@ -222,7 +226,7 @@ fn an_open_transaction_holds_the_exit_and_is_named() {
 
     // Asked again while the dialog is open — ⌘Q again, or the dialog once
     // every session is idle — it lists again, from the backend's state.
-    assert_eq!(bench.exit_step(), ExitStep::Asked);
+    assert!(matches!(bench.exit_step(), ExitStep::Asked(_)));
     assert_eq!(
         kinds(&received),
         ["resolveTransactions", "resolveTransactions"]
@@ -236,7 +240,7 @@ fn commit_then_idle_lets_the_exit_proceed_and_the_rows_stay() {
     bench.ok("BEGIN");
     bench.ok("INSERT INTO parent VALUES (1)");
     bench.ok("INSERT INTO child VALUES (1)");
-    assert_eq!(bench.exit_step(), ExitStep::Asked);
+    assert!(matches!(bench.exit_step(), ExitStep::Asked(_)));
 
     bench.ok("COMMIT");
     assert_eq!(bench.exit_step(), ExitStep::Proceed);
@@ -250,7 +254,7 @@ fn rollback_then_idle_lets_the_exit_proceed_and_the_rows_go() {
     bench.ok("BEGIN");
     bench.ok("INSERT INTO parent VALUES (1)");
     bench.ok("INSERT INTO child VALUES (1)");
-    assert_eq!(bench.exit_step(), ExitStep::Asked);
+    assert!(matches!(bench.exit_step(), ExitStep::Asked(_)));
 
     bench.ok("ROLLBACK");
     assert_eq!(bench.exit_step(), ExitStep::Proceed);
@@ -265,7 +269,7 @@ fn a_refused_commit_keeps_the_exit_held() {
     let received = webview(&bench.backend, true);
     bench.ok("BEGIN");
     bench.ok("INSERT INTO child VALUES (42)");
-    assert_eq!(bench.exit_step(), ExitStep::Asked);
+    assert!(matches!(bench.exit_step(), ExitStep::Asked(_)));
 
     let refused = bench
         .run("COMMIT")
@@ -275,7 +279,7 @@ fn a_refused_commit_keeps_the_exit_held() {
         "the server's message reaches the dialog: {}",
         refused.message
     );
-    assert_eq!(bench.exit_step(), ExitStep::Asked);
+    assert!(matches!(bench.exit_step(), ExitStep::Asked(_)));
     let last = received.lock().last().cloned().expect("asked again");
     assert_eq!(last["transactions"][0]["state"], "open");
     assert_eq!(bench.committed_children(), 0);
@@ -304,8 +308,8 @@ fn an_unknown_outcome_is_listed_again_and_never_replayed() {
         },
     )));
 
-    assert_eq!(bench.exit_step(), ExitStep::Asked);
-    assert_eq!(bench.exit_step(), ExitStep::Asked);
+    assert!(matches!(bench.exit_step(), ExitStep::Asked(_)));
+    assert!(matches!(bench.exit_step(), ExitStep::Asked(_)));
     for signal in received.lock().iter() {
         assert_eq!(signal["transactions"][0]["state"], "unknown");
     }
@@ -359,14 +363,16 @@ fn cancel_abandons_the_exit_and_leaves_the_transaction_open() {
     let bench = bench();
     let received = webview(&bench.backend, true);
     // Outside an exit, neither command does anything.
-    bench.backend.cancel_exit();
-    bench.backend.shutdown_acknowledged();
+    bench.backend.cancel_exit(bench.backend.test_window());
+    bench
+        .backend
+        .shutdown_acknowledged(bench.backend.test_window());
     assert!(received.lock().is_empty());
 
     bench.ok("BEGIN");
     bench.ok("INSERT INTO parent VALUES (1)");
-    assert_eq!(bench.exit_step(), ExitStep::Asked);
-    bench.backend.cancel_exit();
+    assert!(matches!(bench.exit_step(), ExitStep::Asked(_)));
+    bench.backend.cancel_exit(bench.backend.test_window());
     assert_eq!(kinds(&received), ["resolveTransactions", "exitCancelled"]);
     assert!(!bench.backend.shutdown_finished());
     assert!(

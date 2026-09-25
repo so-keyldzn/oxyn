@@ -808,9 +808,12 @@ fn closing_the_connection_releases_its_agents() {
     let open = open(&runtime, &backend, Environment::Local);
     let connection: ConnectionId = open.connection.parse().expect("connection id");
     let (thread, _driver) = linked(&backend, connection);
+    // The last window that holds the connection lets it go (ADR-0043).
+    let window = backend.reserve_window(true).expect("a window");
+    backend.inner.windows.hold_connection(window, connection);
 
     runtime
-        .block_on(backend.disconnect(connection))
+        .block_on(backend.release_connection(window, connection))
         .expect("disconnects");
     assert!(!thread.has_agent_link());
 }
