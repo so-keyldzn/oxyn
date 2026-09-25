@@ -96,6 +96,8 @@ export const HistoryQuery = z.object({
   status: HistoryStatusChoice,
   before: z.number().int().nullable(),
   limit: z.number().int().nonnegative().nullable(),
+  /** Recent results: only runs carrying a result reference, maybe expired. */
+  resultsOnly: z.boolean(),
 })
 export type HistoryQuery = z.infer<typeof HistoryQuery>
 

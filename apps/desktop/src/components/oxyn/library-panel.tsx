@@ -55,7 +55,8 @@ import type {
 } from "@/lib/ipc/library"
 import { cn } from "@/lib/utils"
 
-export type LibraryView = "history" | "saved"
+/** `results` is the history of runs carrying a result reference. */
+export type LibraryView = "history" | "saved" | "results"
 
 export type LibraryState =
   | { status: "loading" }
@@ -231,17 +232,30 @@ export function LibraryPanel({
         value={[view]}
         onValueChange={(value) => {
           const next = value[0]
-          if (next === "history" || next === "saved") onViewChange(next)
+          if (next === "history" || next === "saved" || next === "results")
+            onViewChange(next)
         }}
         variant="outline"
         size="sm"
         className="w-full"
       >
+        {/* Short on screen: three full names do not fit 280 px. */}
         <ToggleGroupItem value="history" className="flex-1">
           History
         </ToggleGroupItem>
-        <ToggleGroupItem value="saved" className="flex-1">
-          Saved queries
+        <ToggleGroupItem
+          value="saved"
+          className="flex-1"
+          aria-label="Saved queries"
+        >
+          Saved
+        </ToggleGroupItem>
+        <ToggleGroupItem
+          value="results"
+          className="flex-1"
+          aria-label="Recent results"
+        >
+          Results
         </ToggleGroupItem>
       </ToggleGroup>
 
@@ -257,7 +271,7 @@ export function LibraryPanel({
         />
       </InputGroup>
 
-      {view === "history" ? (
+      {view !== "saved" ? (
         <div className="flex flex-col gap-1.5">
           <NativeSelect
             size="sm"
@@ -314,7 +328,9 @@ export function LibraryPanel({
             </NativeSelect>
           </div>
           <p className="text-xs text-muted-foreground">
-            Search query text · local history across workspaces
+            {view === "results"
+              ? "Runs that kept a result · rows are retained in memory only and may have expired"
+              : "Search query text · local history across workspaces"}
           </p>
         </div>
       ) : (
@@ -351,9 +367,11 @@ export function LibraryPanel({
             <EmptyHeader>
               <EmptyTitle>No queries match these filters.</EmptyTitle>
               <EmptyDescription>
-                {state.status === "history"
-                  ? "Queries you run appear here."
-                  : "Save a console with ⌘S to find it here."}
+                {view === "results"
+                  ? "Runs whose rows are kept for reopening appear here."
+                  : state.status === "history"
+                    ? "Queries you run appear here."
+                    : "Save a console with ⌘S to find it here."}
               </EmptyDescription>
             </EmptyHeader>
           </Empty>
@@ -423,6 +441,11 @@ export function LibraryPanel({
                       />
                       Open result
                     </Button>
+                  ) : view === "results" ? (
+                    // A result is read through the session that produced it.
+                    <span className="text-muted-foreground">
+                      Rows open from their own connection
+                    </span>
                   ) : null}
                   {row.needsInspection ? (
                     <Button
@@ -567,7 +590,7 @@ export function LibraryPanel({
         )}
       </div>
 
-      {view === "history" ? (
+      {view !== "saved" ? (
         <Alert>
           <HugeiconsIcon icon={Clock01Icon} strokeWidth={2} />
           <AlertTitle>Ambiguous writes are never replayed</AlertTitle>
