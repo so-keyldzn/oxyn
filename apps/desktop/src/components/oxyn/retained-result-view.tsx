@@ -1,3 +1,4 @@
+import type * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
   Alert02Icon,
@@ -56,6 +57,7 @@ export function RetainedResultView({
   onRetry,
   onOpenCopy,
   destination,
+  density,
 }: {
   state: RetainedResultState
   fetchPage: FetchPage
@@ -65,6 +67,8 @@ export function RetainedResultView({
   onOpenCopy?: () => void
   /** The connection that console opens on, named before the click. */
   destination: string
+  /** The text size control of the result bar. */
+  density?: React.ComponentProps<typeof ResultPanel>["density"]
 }) {
   switch (state.status) {
     case "loading":
@@ -153,6 +157,7 @@ export function RetainedResultView({
                 cancelled: false,
               }}
               fetchPage={fetchPage}
+              density={density}
             />
           </div>
         </div>

@@ -31,6 +31,7 @@ import {
   gridInspection,
   useReleaseSelection,
 } from "@/features/metadata/value-inspection"
+import { useResultDensity } from "@/features/settings/use-result-density"
 import { ExportMenu } from "@/features/workspace/export-menu"
 import { useExecution } from "@/features/workspace/use-execution"
 import { BackendError, backend, newCommandId } from "@/lib/ipc/client"
@@ -432,6 +433,7 @@ export function ConsolePanel({
     [find.answer, find.searching, find.error, onFind, onClearFind]
   )
   const editQuery = React.useCallback(() => view.current?.focus(), [])
+  const density = useResultDensity()
   const latestInspection = React.useRef(inspection)
   latestInspection.current = inspection
   const onActiveChange = React.useCallback((position: GridPosition | null) => {
@@ -448,6 +450,7 @@ export function ConsolePanel({
         onRetry={retry}
         toolbar={resultId ? findBar : undefined}
         footerActions={exportMenu}
+        density={density}
         context={{ connectionName: open.name, statement }}
         onEditQuery={editQuery}
         matches={find.matches}
@@ -464,6 +467,7 @@ export function ConsolePanel({
       resultId,
       findBar,
       exportMenu,
+      density,
       open.name,
       statement,
       editQuery,

@@ -12,6 +12,7 @@ import {
 } from "@hugeicons/core-free-icons"
 
 import { ColumnsMenu, ColumnsSubmenu } from "@/components/oxyn/columns-menu"
+import { DensityMenu } from "@/components/oxyn/density-menu"
 import { ResultFooter } from "@/components/oxyn/result-footer"
 import { ResultGrid } from "@/components/oxyn/result-grid"
 import type { FetchPage } from "@/components/oxyn/result-grid"
@@ -35,6 +36,7 @@ import {
 import { Kbd, KbdGroup } from "@/components/ui/kbd"
 import { Spinner } from "@/components/ui/spinner"
 import type { Cell, ResultColumn } from "@/lib/ipc/types"
+import type { DensityChoice } from "@/lib/ipc/settings"
 
 /**
  * The five states of a view that depends on a remote operation
@@ -106,6 +108,11 @@ interface ResultPanelProps {
    * carries only what cannot wait in a menu, such as an export's progress.
    */
   compactActions?: React.ReactNode
+  /** The text size, saved with the preferences; absent, no control is drawn. */
+  density?: {
+    value: DensityChoice
+    onChange: (density: DensityChoice) => void
+  }
   /** A quieter statement in the footer: « Total count not requested ». */
   footerNote?: React.ReactNode
   /** The connection and statement an error is about. */
@@ -127,6 +134,7 @@ export const ResultPanel = React.memo(function ResultPanel({
   toolbar,
   footerActions,
   compactActions,
+  density,
   footerNote,
   context,
   onEditQuery,
@@ -153,16 +161,20 @@ export const ResultPanel = React.memo(function ResultPanel({
     onHiddenChange: (next: ReadonlySet<number>) =>
       setHidden({ result: resultKey, columns: next }),
   })
+  // Offered where rows are drawn: it changes their height and text.
+  const densityMenu = density ? <DensityMenu {...density} /> : null
   // What the footer offers besides its own statement: `columns` is null where
-  // hiding one would change nothing on screen.
+  // no grid is drawn, so that hiding a column or resizing text changes nothing.
   const barActions = (columns: Array<ResultColumn> | null) =>
     compactActions === undefined ? (
       <>
+        {columns ? densityMenu : null}
         {columns ? <ColumnsMenu {...columnsChoice(columns)} /> : null}
         {footerActions}
       </>
     ) : (
       <>
+        {columns ? densityMenu : null}
         {footerActions}
         <DropdownMenu>
           <DropdownMenuTrigger render={<Button variant="outline" size="xs" />}>
@@ -230,7 +242,10 @@ export const ResultPanel = React.memo(function ResultPanel({
               actions={
                 // At wide width a running result offers no export yet.
                 compactActions === undefined ? (
-                  <ColumnsMenu {...columnsChoice(state.columns)} />
+                  <>
+                    {densityMenu}
+                    <ColumnsMenu {...columnsChoice(state.columns)} />
+                  </>
                 ) : (
                   barActions(state.columns)
                 )
