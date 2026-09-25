@@ -21,7 +21,21 @@ export interface PreferencesStore {
   loaded: boolean
   loadError: BackendFailure | null
   save: SaveState
+  /**
+   * Counts the saves that changed how the backend formats cells. Result pages
+   * are formatted there and cached until invalidated: a new value says the
+   * cached ones are formatted the old way.
+   */
+  formatRevision: number
 }
+
+/** The preferences the backend formats cells with (`format_options_of`). */
+const FORMAT_FIELDS = [
+  "nullText",
+  "groupThousands",
+  "binaryDisplay",
+  "cellMaxChars",
+] as const satisfies ReadonlyArray<keyof DisplayPreferences>
 
 /**
  * The domain defaults of `WorkspacePreferences`, shown only until the first
@@ -44,6 +58,7 @@ export const preferencesStore = createStore<PreferencesStore>({
   loaded: false,
   loadError: null,
   save: { status: "idle" },
+  formatRevision: 0,
 })
 
 function failureOf(error: unknown): BackendFailure {
@@ -102,6 +117,13 @@ export async function changePreferences(
   }))
   try {
     await settingsBackend.writePreferences(change)
+    // Before the superseded check: this write reached the backend whatever
+    // answers after it, so pages formatted before it are stale.
+    if (FORMAT_FIELDS.some((field) => field in change))
+      preferencesStore.setState((current) => ({
+        ...current,
+        formatRevision: current.formatRevision + 1,
+      }))
     if (request !== latest) return { status: "superseded" }
     preferencesStore.setState((current) => ({
       ...current,
