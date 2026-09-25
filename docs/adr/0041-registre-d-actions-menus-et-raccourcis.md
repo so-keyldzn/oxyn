@@ -133,7 +133,10 @@ Vérifié le 2026-09-25 dans le source des versions de `Cargo.lock` : `tauri`
 - **le manifeste**, `actions.json` — la partie statique : `id`, libellé (et ses
   variantes par zone, voir 2), zone, raccourci par plateforme (`mac`,
   `other`), place dans la barre de menus (menu, groupe, ordre, mnémonique),
-  indicateur `destructive`. Rien d'exécutable ;
+  indicateur `destructive`, indicateur `check` — un choix que la barre
+  coche, comme `View ▸ Theme ▸ Dark`. Un menu peut porter un `parent` : c'est
+  alors un sous-menu, placé dans ce menu comme une action, sur un seul
+  niveau. Rien d'exécutable ;
 - **les comportements**, `registry.ts` — pour chaque `id`, `enabled(context)`,
   qui rend `true`, une raison, ou l'absence (les cas d'absence sont ceux
   qu'UX-SPEC fixe déjà), et `run(context)`.
@@ -286,9 +289,10 @@ point 5), puis `invoke(id, "menu")`. **`menu.rs` ne construit aucune
 
 **Retour.** La commande `set_menu_state` reçoit, pour chaque élément du
 manifeste présent dans la barre : actif ou non, indice de variante de libellé,
-raccourci montré ou non. Elle n'accepte ni texte libre ni combinaison
-arbitraire — une XSS ne peut pas renommer « Quit » ni lier une touche —, et un
-`id` inconnu est une erreur non rejouable. Elle est synchrone, donc sur le
+raccourci montré ou non, et `checked` (`Option<bool>`), la coche d'un élément
+`check`, ignorée sur tout autre élément. Elle n'accepte ni texte libre ni
+combinaison arbitraire — une XSS ne peut pas renommer « Quit » ni lier une
+touche —, et un `id` inconnu est une erreur non rejouable. Elle est synchrone, donc sur le
 thread principal : elle n'y fait que des appels `set_enabled`, `set_text`,
 `set_accelerator`, sans I/O ([I-05](../../CLAUDE.md#i-05)). Le front ne l'appelle
 que sur changement du contexte (point 1).
