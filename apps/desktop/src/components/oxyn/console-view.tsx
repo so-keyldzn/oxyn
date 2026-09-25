@@ -87,6 +87,7 @@ function useConsoleFloors() {
  */
 export function ConsoleView({
   toolbar,
+  offline,
   notice,
   draftNotice,
   parameters,
@@ -94,6 +95,8 @@ export function ConsoleView({
   results,
 }: {
   toolbar: React.ReactNode
+  /** Shown while the console has no session: why it cannot run, and how to. */
+  offline?: React.ReactNode
   /** Why this console is here or what just happened. Never a bound value. */
   notice: string | null
   /** Where the recovery draft stands. */
@@ -107,6 +110,7 @@ export function ConsoleView({
   return (
     <div data-slot="console" className="flex h-full min-h-0 flex-col">
       {toolbar}
+      {offline}
       {/* Wraps rather than hides: « unsaved » is the one word a narrow window
           must not drop (docs/UX-SPEC.md, « Autosauvegarde des brouillons »). */}
       <div className="flex min-h-8 shrink-0 flex-wrap items-center gap-x-3 border-b px-3 py-1 text-xs text-muted-foreground">

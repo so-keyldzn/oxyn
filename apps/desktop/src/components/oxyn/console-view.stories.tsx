@@ -5,6 +5,7 @@ import { expect, fn, userEvent, waitFor } from "storybook/test"
 import { ConsoleToolbar } from "./console-toolbar"
 import { ConsoleView, MIN_VISIBLE_LINES } from "./console-view"
 import { invoiceColumns, syntheticPages } from "./fixtures"
+import { OfflineConsoleBar } from "./offline-console-bar"
 import { ParameterEditor } from "./parameter-editor"
 import { ResultFindBar } from "./result-find-bar"
 import { HEADER_HEIGHT } from "./result-grid"
@@ -101,6 +102,37 @@ export const Initial: Story = {
   play: async ({ canvas }) => {
     await expect(canvas.getByText("No result yet")).toBeVisible()
     await expect(canvas.getByText("Draft saved locally")).toBeVisible()
+  },
+}
+
+/**
+ * A restored working copy before any connection: the text and the name stay
+ * editable and saved locally, Run stays off, and connecting is its own button.
+ */
+export const Offline: Story = {
+  args: {
+    ...consoleParts({
+      toolbar: { canRun: false },
+      notice:
+        "Recovered offline. Choose a connection before running. Nothing was executed.",
+    }),
+    offline: (
+      <OfflineConsoleBar
+        connectionName="billing-prod"
+        sameConnection
+        attaching={false}
+        onAttach={fn()}
+        onCancel={fn()}
+      />
+    ),
+  },
+  play: async ({ canvas }) => {
+    await expect(canvas.getByText("Offline")).toBeVisible()
+    await expect(canvas.getByRole("button", { name: /^Run$/ })).toBeDisabled()
+    await expect(
+      canvas.getByRole("button", { name: "Connect to billing-prod" })
+    ).toBeEnabled()
+    await expect(canvas.getByRole("textbox", { name: /name/i })).toBeEnabled()
   },
 }
 

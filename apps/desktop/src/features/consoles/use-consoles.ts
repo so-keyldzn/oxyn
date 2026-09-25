@@ -30,7 +30,17 @@ import type { OpenConnection } from "@/lib/ipc/types"
 
 export interface ConsoleEntry {
   key: string
-  session: ConsoleSession
+  /**
+   * `null` while the console is offline: a restored working copy edits,
+   * saves and closes, but runs nothing until the user attaches it.
+   */
+  session: ConsoleSession | null
+  /**
+   * The connection the document is saved under. An offline copy keeps the
+   * one it was written for, so that attaching it there later resumes the
+   * same document rather than a copy.
+   */
+  origin: string | null
   seed: ConsoleSeed
   notice: string | null
 }
@@ -71,6 +81,8 @@ export function useConsoles({
   const [entries, setEntries] = React.useState<Array<ConsoleEntry>>([])
   const [meta, setMeta] = React.useState<Record<string, ConsoleMeta>>({})
   const [opening, setOpening] = React.useState<string | null>(null)
+  /** The offline console a session is being opened for. */
+  const [attaching, setAttaching] = React.useState<string | null>(null)
   const [notice, setNotice] = React.useState<string | null>(null)
   const [closing, setClosing] = React.useState<{
     key: string
@@ -97,13 +109,18 @@ export function useConsoles({
     setMeta((all) => ({ ...all, [key]: next }))
   }, [])
 
-  const add = async (session: ConsoleSession, input: SeedInput) => {
+  const add = async (
+    session: ConsoleSession | null,
+    input: SeedInput,
+    origin: string | null = open.connection
+  ) => {
     counter.current += 1
     const key = `console:${counter.current}`
     const document = input.document ?? (await library.newDocument())
     const entry: ConsoleEntry = {
       key,
       session,
+      origin,
       notice: input.notice ?? null,
       seed: {
         document,
@@ -123,8 +140,13 @@ export function useConsoles({
     return key
   }
 
-  /** Opens a console with its own session. One opening at a time. */
-  const openConsole = async (input: SeedInput = {}) => {
+  /**
+   * Opens a console session, then hands it to `use`. One opening at a time;
+   * a cancelled opening closes the session the server still returned.
+   */
+  const withSession = async <T>(
+    use: (session: ConsoleSession) => Promise<T> | T
+  ) => {
     if (openingRef.current) {
       setNotice(
         "Finish or cancel the current console opening before opening another query."
@@ -145,7 +167,7 @@ export function useConsoles({
         return null
       }
       setNotice(null)
-      return await add(session, input)
+      return await use(session)
     } catch (error) {
       if (openingRef.current === id) setNotice(failure(error))
       return null
@@ -154,6 +176,51 @@ export function useConsoles({
         openingRef.current = null
         setOpening(null)
       }
+    }
+  }
+
+  /** Opens a console with its own session. One opening at a time. */
+  const openConsole = (input: SeedInput = {}) =>
+    withSession((session) => add(session, input))
+
+  /**
+   * Attaches an offline console to this connection: the separate gesture
+   * UX-SPEC asks for. On the connection its document was written for, the
+   * **same** console gets a session — its editor, undo history and write
+   * queue stay. On another one, a copy opens and the original stays offline,
+   * its document untouched. Nothing runs either way.
+   */
+  const attach = async (key: string) => {
+    const entry = entriesRef.current.find((item) => item.key === key)
+    if (!entry || entry.session !== null || openingRef.current) {
+      if (openingRef.current)
+        setNotice(
+          "Finish or cancel the current console opening before connecting this query."
+        )
+      return null
+    }
+    setAttaching(key)
+    try {
+      if (entry.origin !== open.connection) {
+        const handle = handles.current.get(key)
+        return await openConsole({
+          title: meta[key]?.title ?? entry.seed.title,
+          text: handle?.text() ?? entry.seed.text,
+          fromAgent: entry.seed.fromAgent,
+          notice:
+            "Connected a new copy. The original remains saved locally. Nothing was executed.",
+        })
+      }
+      return await withSession((session) => {
+        setEntries((all) =>
+          all.map((item) => (item.key === key ? { ...item, session } : item))
+        )
+        setNotice("Recovered query connected. Nothing was executed.")
+        onActivate(key)
+        return key
+      })
+    } finally {
+      setAttaching((current) => (current === key ? null : current))
     }
   }
 
@@ -173,9 +240,10 @@ export function useConsoles({
     const closed = await handle.close(discard)
     if (!closed) return false
     // The session goes with the console; siblings and the catalog keep theirs.
-    void consoles
-      .close(open.connection, entry.session.session)
-      .catch(() => undefined)
+    if (entry.session)
+      void consoles
+        .close(open.connection, entry.session.session)
+        .catch(() => undefined)
     const rest = entriesRef.current.filter((item) => item.key !== key)
     setEntries(rest)
     setMeta(({ [key]: _gone, ...others }) => others)
@@ -277,36 +345,51 @@ export function useConsoles({
   // The first console uses the session opened with the connection, and the
   // SQL carried from the previous connection — never run.
   const started = React.useRef(false)
+  const [ready, setReady] = React.useState(false)
   React.useEffect(() => {
     if (started.current) return
     started.current = true
     void (async () => {
       await add(open.console, { text: sessionStore.state.sqlDraft })
-      // Working copies chosen on the recovery screen: text only.
+      setReady(true)
+    })()
+    // Once per workspace: the screen is keyed by the connection's session.
+  }, [])
+
+  // Working copies chosen on the recovery screen, whenever they are chosen —
+  // at startup, or from this workspace and back. Each opens offline: text
+  // only, no session, nothing run. A workspace on its way out leaves them to
+  // the next one.
+  const restored = useStore(sessionStore, (state) => state.restored.length)
+  React.useEffect(() => {
+    if (!ready || restored === 0) return
+    if (sessionStore.state.open?.session !== open.session) return
+    void (async () => {
       for (const entry of takeRestoredWorkingCopies()) {
+        const holder = entriesRef.current.find(
+          (item) => item.seed.document === entry.id
+        )
+        if (holder) {
+          onActivate(holder.key)
+          continue
+        }
         try {
           const document = await library.openDocument(entry.id)
-          if (document.connection === open.connection) {
-            await openConsole({
+          await add(
+            null,
+            {
               ...resumeSeed(document),
-              notice: "Recovered query connected. Nothing was executed.",
-            })
-          } else {
-            await openConsole({
-              title: document.title,
-              text: document.text,
-              fromAgent: document.fromAgent,
               notice:
-                "Connected a new copy. The original remains saved locally. Nothing was executed.",
-            })
-          }
+                "Recovered offline. Choose a connection before running. Nothing was executed.",
+            },
+            document.connection
+          )
         } catch (error) {
           setNotice(failure(error))
         }
       }
     })()
-    // Once per workspace: the screen is keyed by the connection's session.
-  }, [])
+  }, [ready, restored])
 
   // Text from the assistant or the inspector, dropped into a console unrun.
   const requests = useStore(consoleTextRequests)
@@ -330,6 +413,7 @@ export function useConsoles({
     entries,
     meta,
     opening: opening !== null,
+    attaching,
     notice,
     closing,
     summary,
@@ -340,6 +424,7 @@ export function useConsoles({
     /** The console text requests go to; set by the screen on each render. */
     activeRef,
     openConsole,
+    attach,
     cancelOpening,
     requestClose,
     decideClose,

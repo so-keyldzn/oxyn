@@ -12,6 +12,7 @@ import { ResultFindBar } from "@/components/oxyn/result-find-bar"
 import type { FindDirection } from "@/components/oxyn/result-find-bar"
 import type { GridPosition } from "@/components/oxyn/grid-selection"
 import { ResultPanel } from "@/components/oxyn/result-panel"
+import { OfflineConsoleBar } from "@/components/oxyn/offline-console-bar"
 import { SessionContextPicker } from "@/components/oxyn/session-context-picker"
 import type { SessionContextState } from "@/components/oxyn/session-context-picker"
 import { SqlEditor, targetOf } from "@/components/oxyn/sql-editor"
@@ -71,6 +72,9 @@ export interface ConsoleMeta {
   unsaved: boolean
 }
 
+/** An offline console declares nothing: it runs nothing. */
+const NO_CAPABILITIES: Array<string> = []
+
 /** Stable, so the inspectors are not rebuilt while the columns are unknown. */
 const NO_COLUMNS: Array<ResultColumn> = []
 
@@ -91,6 +95,10 @@ export function ConsolePanel({
   consoleKey,
   open,
   session,
+  origin,
+  attaching,
+  onAttach,
+  onCancelAttach,
   seed,
   initialNotice,
   active,
@@ -100,7 +108,14 @@ export function ConsolePanel({
 }: {
   consoleKey: string
   open: OpenConnection
-  session: ConsoleSession
+  /** `null` while offline: the console edits and saves, and runs nothing. */
+  session: ConsoleSession | null
+  /** The connection the document is saved under; kept while offline. */
+  origin: string | null
+  /** An offline console is being given a session. */
+  attaching: boolean
+  onAttach: () => void
+  onCancelAttach: () => void
   seed: ConsoleSeed
   initialNotice: string | null
   active: boolean
@@ -108,8 +123,8 @@ export function ConsolePanel({
   onSummary: (summary: ExecutionSummary) => void
   register: (key: string, handle: ConsoleHandle | null) => void
 }) {
-  const doc = useConsoleDocument({ seed, connection: open.connection })
-  const capabilities = session.capabilities
+  const doc = useConsoleDocument({ seed, connection: origin })
+  const capabilities = session?.capabilities ?? NO_CAPABILITIES
   const execution = useExecution({
     serverCancel: capabilities.includes("SERVER_SIDE_CANCEL"),
   })
@@ -204,6 +219,7 @@ export function ConsolePanel({
         return
       }
     }
+    if (!session) return
     setNotice(null)
     // Known here and nowhere else: the rows of a plan look like any others.
     setExplained(explain)
@@ -221,6 +237,7 @@ export function ConsolePanel({
     view.current ? targetOf(view.current) : { kind: "all" }
 
   const chooseContext = (next: SessionPlace) => {
+    if (!session) return
     if (contextRun.current) void backend.cancel(contextRun.current)
     const id = newCommandId()
     contextRun.current = id
@@ -494,7 +511,7 @@ export function ConsolePanel({
             cancelling={execution.cancelling}
             elapsedMs={elapsedMs}
             canRun={canRun}
-            readOnly={session.readOnly}
+            readOnly={session?.readOnly ?? false}
             target={target}
             onRun={() => void run(targetNow())}
             onRunAll={() => void run({ kind: "all" })}
@@ -538,6 +555,17 @@ export function ConsolePanel({
               ) : null
             }
           />
+        }
+        offline={
+          session === null ? (
+            <OfflineConsoleBar
+              connectionName={open.name}
+              sameConnection={origin === open.connection}
+              attaching={attaching}
+              onAttach={onAttach}
+              onCancel={onCancelAttach}
+            />
+          ) : null
         }
         notice={notice}
         draftNotice={doc.draftNotice}
