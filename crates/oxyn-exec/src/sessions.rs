@@ -30,7 +30,7 @@ use std::time::{Duration, Instant};
 
 use oxyn_core::{
     CancelToken, Capabilities, ConnectionConfig, ConnectionId, ExecRequest, OxynError, Result,
-    SessionId, StatementHandle,
+    SessionId, StatementHandle, TransactionState,
 };
 use oxyn_driver::{Credentials, Cursor, Session};
 use parking_lot::RwLock;
@@ -255,6 +255,26 @@ impl SessionSlot {
         };
         let session = guard.as_deref().ok_or_else(session_closed)?;
         Ok(session.context())
+    }
+
+    /// The transaction state once every operation already submitted has ended.
+    ///
+    /// Takes no token from the caller: an execution's own token, or its tab's,
+    /// has already fired after a Stop or a timeout, and would make every read
+    /// after one `Unknown`. The only bound is this session closing
+    /// ([ADR-0039](../../../docs/adr/0039-etat-de-transaction-d-une-session.md)).
+    /// A session closing, or closed, reports `Unknown` — never `Idle`.
+    pub async fn transaction_state(&self) -> TransactionState {
+        let token = self.closing.child();
+        let guard = tokio::select! {
+            biased;
+            _ = token.cancelled() => return TransactionState::Unknown,
+            guard = self.session.read() => guard,
+        };
+        let Some(session) = guard.as_deref() else {
+            return TransactionState::Unknown;
+        };
+        session.transaction_state(&token).await
     }
 
     /// Keeps the provider borrowed until cancellation cleanup finishes.

@@ -66,9 +66,9 @@ use std::time::{Duration, Instant};
 
 use oxyn_catalog::SharedCatalog;
 use oxyn_core::{
-    Actor, CancelToken, CatalogRefreshScope, Command, CommandId, ConnectionConfig, ConnectionId,
-    Decision, DocumentId, Environment, Event, ExecRequest, ExecStats, OxynError, PolicyGate,
-    Preview, Result, ResultId, SessionId, StatementHandle, WorkspaceId,
+    Actor, CancelToken, Capabilities, CatalogRefreshScope, Command, CommandId, ConnectionConfig,
+    ConnectionId, Decision, DocumentId, Environment, Event, ExecRequest, ExecStats, OxynError,
+    PolicyGate, Preview, Result, ResultId, SessionId, StatementHandle, WorkspaceId,
 };
 use oxyn_data::{
     BatchProgress, BatchSink, BatchSource, BufferLimits, DEFAULT_MEMORY_BUDGET, ExportOptions,
@@ -99,6 +99,9 @@ pub enum Outcome {
         connection: ConnectionId,
         /// La session ouverte.
         session: SessionId,
+        /// What the new session reports about its transaction, read here so
+        /// that nothing above the bus calls the driver for it (ADR-0039 §4).
+        transaction_state: oxyn_core::TransactionState,
     },
 
     /// Les sessions d'une connexion ont été fermées.
@@ -1310,6 +1313,10 @@ impl Executor {
         let config = self.connection_config(connection, cancel).await?;
         let session = self.open_driver_session(&config, cancel).await?;
         let slot = self.sessions.insert(SessionSlot::new(connection, session));
+        // Read, not assumed: a fresh SQLite connection is in autocommit, and
+        // the console starts `Idle` because the engine said so. Before any
+        // lock below: none may be held across this await.
+        let transaction_state = slot.transaction_state().await;
         let catalog = self
             .catalogs
             .write()
@@ -1327,6 +1334,7 @@ impl Executor {
         Ok(Outcome::Connected {
             connection,
             session: slot.id(),
+            transaction_state,
         })
     }
 
@@ -1604,7 +1612,6 @@ impl Executor {
             ));
         }
 
-        let limits = request.limits.clone();
         // Capturé avant que `request` ne soit déplacé dans `slot.execute` :
         // c'est le seul signal qu'on garde du texte exécuté (I-10).
         let intent = request.intent;
@@ -1617,107 +1624,177 @@ impl Executor {
             // at any `.await` below never reaches the cleanup written after it.
             let mut guard =
                 AbandonGuard::new(&self.running, &self.events, id, connection, ct.clone());
-            let cursor = match slot.execute(request, &ct).await {
-                Ok(cursor) => cursor,
-                Err(erreur) => {
-                    guard.settle();
-                    return Err(erreur);
-                }
-            };
-            let statement = cursor.handle();
-            self.running.register(RunningStatement::new(
-                statement,
-                id,
-                connection,
-                session,
-                slot.capabilities(),
-                ct.clone(),
-            ));
-
-            let result = ResultId::new();
-            let buffer = Arc::new(ResultBuffer::with_limits(
-                BatchSource::schema(&cursor),
-                BufferLimits::default()
-                    .with_memory_budget(self.memory_budget)
-                    .with_max_rows(preview_limit.or(limits.max_rows)),
-            ));
-            self.results.write().insert(
-                result,
-                StoredResult {
-                    connection,
-                    buffer: Arc::clone(&buffer),
-                },
-            );
-            guard.track(statement, Arc::clone(&buffer));
-
-            // Le schéma est connu avant la première ligne : la grille dessine ses
-            // colonnes pendant que les données arrivent.
-            self.events
-                .publish(id, Some(connection), Event::SchemaReady { result });
-
-            let issue = self
-                .drain(
-                    Coordinates {
-                        command: id,
-                        connection,
-                        result,
-                    },
-                    &buffer,
-                    cursor,
-                    &ct,
-                    limits.timeout,
-                    preview_limit.is_some(),
-                )
+            let run = self
+                .run_statement(&slot, id, request, &ct, preview_limit, &mut guard)
                 .await;
-
-            // Un abandon — expiration ou annulation — doit atteindre le serveur.
-            let interrompue = matches!(issue, Ok(SinkOutcome::Cancelled))
-                || matches!(issue, Err(OxynError::Timeout { .. }));
-            if interrompue {
-                self.running.cancel(&self.sessions, statement).await;
-            }
+            // The single exit of every path that reached the driver — success,
+            // drain failure, early failure of `slot.execute`, cancellation: a
+            // failure or a Stop is precisely what closes a SQLite transaction
+            // in silence (ADR-0039 §3). Read with the guard still armed, so a
+            // future dropped during this await still announces `Cancelled`;
+            // and no `.await` between `settle` and the terminal event.
+            self.publish_transaction_state(id, &slot).await;
             guard.settle();
-            self.prune_results();
-
-            match issue {
-                Ok(sink) => {
-                    let stats = buffer.stats();
-                    if sink != SinkOutcome::Cancelled && intent == oxyn_core::StatementIntent::Ddl {
-                        // Après un DDL confirmé par le serveur, pas avant : un
-                        // sink annulé peut n'avoir rien changé.
-                        self.invalidate_catalog(connection);
-                        self.events
-                            .publish(id, Some(connection), Event::CatalogUpdated);
-                    }
-                    let event = if sink == SinkOutcome::Cancelled {
-                        Event::Cancelled
-                    } else {
-                        Event::Completed {
-                            result,
-                            stats,
-                            intent,
-                        }
-                    };
-                    self.events.publish(id, Some(connection), event);
-                    Ok(Outcome::Executed {
-                        result,
-                        statement,
-                        buffer,
-                        stats,
-                        sink,
-                    })
-                }
-                Err(erreur) => {
-                    self.events
-                        .publish(id, Some(connection), Event::failed(&erreur));
-                    Err(erreur)
-                }
-            }
+            self.conclude(id, connection, intent, run)
         };
         tokio::pin!(operation);
         tokio::select! {
             result = &mut operation => result,
             _ = slot.closing_token().cancelled() => { ct.cancel(); operation.await }
+        }
+    }
+
+    /// Runs a statement up to the release of its cursor.
+    ///
+    /// `Err` is an early failure of `slot.execute`: nothing was drained, and
+    /// nothing is announced — the caller gets the error. Every other end,
+    /// failed drain and cancellation included, comes back as [`Drained`] for
+    /// [`conclude`](Self::conclude) to announce. The cursor is dropped before
+    /// this returns: SQLite keeps its connection busy while one lives, and the
+    /// transaction state read next would wait behind it.
+    async fn run_statement(
+        &self,
+        slot: &SessionSlot,
+        id: CommandId,
+        request: ExecRequest,
+        ct: &CancelToken,
+        preview_limit: Option<usize>,
+        guard: &mut AbandonGuard<'_>,
+    ) -> Result<Drained> {
+        let connection = slot.connection();
+        let limits = request.limits.clone();
+        let cursor = slot.execute(request, ct).await?;
+        let statement = cursor.handle();
+        self.running.register(RunningStatement::new(
+            statement,
+            id,
+            connection,
+            slot.id(),
+            slot.capabilities(),
+            ct.clone(),
+        ));
+
+        let result = ResultId::new();
+        let buffer = Arc::new(ResultBuffer::with_limits(
+            BatchSource::schema(&cursor),
+            BufferLimits::default()
+                .with_memory_budget(self.memory_budget)
+                .with_max_rows(preview_limit.or(limits.max_rows)),
+        ));
+        self.results.write().insert(
+            result,
+            StoredResult {
+                connection,
+                buffer: Arc::clone(&buffer),
+            },
+        );
+        guard.track(statement, Arc::clone(&buffer));
+
+        // Le schéma est connu avant la première ligne : la grille dessine ses
+        // colonnes pendant que les données arrivent.
+        self.events
+            .publish(id, Some(connection), Event::SchemaReady { result });
+
+        let issue = self
+            .drain(
+                Coordinates {
+                    command: id,
+                    connection,
+                    result,
+                },
+                &buffer,
+                cursor,
+                ct,
+                limits.timeout,
+                preview_limit.is_some(),
+            )
+            .await;
+
+        // Un abandon — expiration ou annulation — doit atteindre le serveur.
+        let interrompue = matches!(issue, Ok(SinkOutcome::Cancelled))
+            || matches!(issue, Err(OxynError::Timeout { .. }));
+        if interrompue {
+            self.running.cancel(&self.sessions, statement).await;
+        }
+        Ok(Drained {
+            result,
+            statement,
+            buffer,
+            issue,
+        })
+    }
+
+    /// Publishes the session's transaction state, for a session that has one.
+    ///
+    /// Before the terminal event, which promises nothing follows it for this
+    /// execution. The read takes no token from the execution: see
+    /// [`SessionSlot::transaction_state`].
+    async fn publish_transaction_state(&self, id: CommandId, slot: &SessionSlot) {
+        if !slot.capabilities().contains(Capabilities::TRANSACTIONS) {
+            return;
+        }
+        let state = slot.transaction_state().await;
+        self.events.publish(
+            id,
+            Some(slot.connection()),
+            Event::TransactionState {
+                session: slot.id(),
+                state,
+            },
+        );
+    }
+
+    /// Announces the end of an execution, with no `.await`: it runs after
+    /// `AbandonGuard::settle`, and an abandonment in between would announce
+    /// nothing at all.
+    fn conclude(
+        &self,
+        id: CommandId,
+        connection: ConnectionId,
+        intent: oxyn_core::StatementIntent,
+        run: Result<Drained>,
+    ) -> Result<Outcome> {
+        let Drained {
+            result,
+            statement,
+            buffer,
+            issue,
+        } = run?;
+        self.prune_results();
+
+        match issue {
+            Ok(sink) => {
+                let stats = buffer.stats();
+                if sink != SinkOutcome::Cancelled && intent == oxyn_core::StatementIntent::Ddl {
+                    // Après un DDL confirmé par le serveur, pas avant : un
+                    // sink annulé peut n'avoir rien changé.
+                    self.invalidate_catalog(connection);
+                    self.events
+                        .publish(id, Some(connection), Event::CatalogUpdated);
+                }
+                let event = if sink == SinkOutcome::Cancelled {
+                    Event::Cancelled
+                } else {
+                    Event::Completed {
+                        result,
+                        stats,
+                        intent,
+                    }
+                };
+                self.events.publish(id, Some(connection), event);
+                Ok(Outcome::Executed {
+                    result,
+                    statement,
+                    buffer,
+                    stats,
+                    sink,
+                })
+            }
+            Err(erreur) => {
+                self.events
+                    .publish(id, Some(connection), Event::failed(&erreur));
+                Err(erreur)
+            }
         }
     }
 
@@ -2383,6 +2460,15 @@ struct Coordinates {
     connection: ConnectionId,
     /// Le résultat alimenté.
     result: ResultId,
+}
+
+/// An execution that reached its cursor, cursor released, not yet announced.
+struct Drained {
+    result: ResultId,
+    statement: StatementHandle,
+    buffer: Arc<ResultBuffer>,
+    /// How the drain ended: `Err` for a failure, `Ok(Cancelled)` for a Stop.
+    issue: Result<SinkOutcome>,
 }
 
 /// Reclassifie une commande d'exécution à partir de son seul texte.
@@ -3290,6 +3376,10 @@ mod provider_tests;
 #[cfg(test)]
 #[path = "abandon_tests.rs"]
 mod abandon_tests;
+
+#[cfg(test)]
+#[path = "transaction_state_tests.rs"]
+mod transaction_state_tests;
 
 #[cfg(test)]
 #[path = "connection_tests.rs"]
