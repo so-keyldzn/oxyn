@@ -2,6 +2,7 @@ import { createStore } from "@tanstack/react-store"
 
 import type { SaveStatus } from "@/components/oxyn/appearance-settings"
 import type { BackendFailure } from "@/components/oxyn/backend-error-alert"
+import { toast } from "@/components/ui/toast"
 import { BackendError } from "@/lib/ipc/client"
 import { settingsBackend } from "@/lib/ipc/settings"
 import type {
@@ -78,13 +79,21 @@ export function loadPreferences(): Promise<void> {
 // Answers can arrive out of order: only the latest request settles the status.
 let latest = 0
 
+/** How one save ended; `superseded` when a later change answers instead. */
+export type SaveOutcome =
+  | { status: "saved" }
+  | { status: "failed"; message: string }
+  | { status: "superseded" }
+
 /**
  * Applies a change now, then saves it.
  *
  * Local first — a display setting is local (UX-SPEC « Ce qui n'est jamais
  * optimiste ») — and the save state says whether it reached the workspace.
  */
-export async function changePreferences(change: PreferencesChange) {
+export async function changePreferences(
+  change: PreferencesChange
+): Promise<SaveOutcome> {
   const request = ++latest
   preferencesStore.setState((current) => ({
     ...current,
@@ -93,21 +102,45 @@ export async function changePreferences(change: PreferencesChange) {
   }))
   try {
     await settingsBackend.writePreferences(change)
-    if (request !== latest) return
+    if (request !== latest) return { status: "superseded" }
     preferencesStore.setState((current) => ({
       ...current,
       save: { status: "saved" },
     }))
+    return { status: "saved" }
   } catch (error) {
-    if (request !== latest) return
+    if (request !== latest) return { status: "superseded" }
+    const message = failureOf(error).message
     preferencesStore.setState((current) => ({
       ...current,
-      save: { status: "failed", message: failureOf(error).message },
+      save: { status: "failed", message },
     }))
+    return { status: "failed", message }
   }
 }
 
 /** Saves what is applied again, under a new revision. */
 export function retrySavingPreferences() {
   return changePreferences({})
+}
+
+/**
+ * A change made from the workspace rather than from the settings dialog.
+ *
+ * The failure is treated as the dialog treats it — applied, said not saved,
+ * with `Save again` — but in a toast, since no save status line is on screen
+ * there. A failure never reads as saved (ADR-0013).
+ */
+export async function changePreferencesFromView(change: PreferencesChange) {
+  const outcome = await changePreferences(change)
+  if (outcome.status !== "failed") return
+  toast.add({
+    title: "Preference applied here but not saved",
+    description: outcome.message,
+    type: "warning",
+    actionProps: {
+      children: "Save again",
+      onClick: () => void changePreferencesFromView({}),
+    },
+  })
 }

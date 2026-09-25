@@ -352,7 +352,11 @@ export function WorkspaceLayout({
                     defaultSize={asideOpen ? `${width}px` : "0px"}
                     minSize={`${ASIDE_WIDTH.min}px`}
                     maxSize={`${ASIDE_WIDTH.max}px`}
-                    onResize={() => {
+                    onResize={(_size, _id, previous) => {
+                      // Not on mount: the column is then drawn from the
+                      // preference, and reporting it would save a width
+                      // change as a choice (ADR-0013).
+                      if (previous === undefined) return
                       if (asidePanel.current?.isCollapsed())
                         onAsideOpenChange?.(false)
                     }}
