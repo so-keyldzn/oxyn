@@ -230,7 +230,9 @@ ce qui le maintiendra valide.
   de qualité, par la cible `make deny` que `make qualite` appelle. Elle **avertit
   sans bloquer** quand `cargo-deny` n'est pas installé : une porte qui échoue sur
   un outil absent finit par être contournée, et c'est alors tout le contrôle qui
-  disparaît. La configuration vit dans `deny.toml` ;
+  disparaît. La configuration vit dans `deny.toml`. Toute licence qu'elle
+  accepte est compatible avec la GPLv3, la licence de l'application
+  ([ADR-0044](adr/0044-licence-gpl-et-contrat-apache.md)) ;
 - une dépendance qui n'est utilisée qu'à un seul endroit pour une seule fonction
   est un candidat à la réécriture, pas une évidence ;
 - une crate non maintenue sur une frontière externe est un risque à documenter,

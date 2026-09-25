@@ -70,4 +70,16 @@ lire est en anglais.
 
 ## Licence
 
-Apache-2.0. Voir [LICENSE-APACHE](LICENSE-APACHE).
+Copyright 2026 Nicolas Boromée.
+
+L'application est sous **GPL-3.0-or-later** ([LICENSE-GPL](LICENSE-GPL)). Les
+quatre crates qu'un driver tiers doit lier (`oxyn-core`, `oxyn-catalog`,
+`oxyn-data` et `oxyn-driver`) sont sous **Apache-2.0**
+([LICENSE-APACHE](LICENSE-APACHE)). Un auteur de driver ou de plugin choisit
+donc sa propre licence. [NOTICE](NOTICE) dit quelle licence couvre quelle
+partie, et [ADR-0044](docs/adr/0044-licence-gpl-et-contrat-apache.md) dit
+pourquoi.
+
+Tout le code de ce dépôt s'utilise sans compte ni abonnement. Ce qui se paiera,
+ce sont des services optionnels rattachés à un compte, comme l'IA hébergée ou la
+synchronisation.

@@ -52,6 +52,7 @@
     "active": true,
     "targets": "all",
     "category": "DeveloperTool",
+    "copyright": "Copyright 2026 Nicolas Boromée",
     "macOS": {
       "minimumSystemVersion": "13.0"
     },

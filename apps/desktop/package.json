@@ -1,6 +1,7 @@
 {
   "name": "@oxyn/desktop",
   "private": true,
+  "license": "GPL-3.0-or-later",
   "type": "module",
   "packageManager": "pnpm@11.1.2",
   "scripts": {
