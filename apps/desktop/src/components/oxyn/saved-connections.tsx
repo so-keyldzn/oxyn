@@ -1,9 +1,11 @@
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
+  AlertCircleIcon,
   ArrowRight01Icon,
   SearchIcon,
   DatabaseIcon,
+  HelpCircleIcon,
   LockIcon,
 } from "@hugeicons/core-free-icons"
 
@@ -19,6 +21,7 @@ import {
 import { DriverLogo } from "@/components/oxyn/driver-logo"
 import { EnvironmentBadge } from "@/components/oxyn/environment-badge"
 import { ActionMenuContent } from "@/components/oxyn/action-menu-items"
+import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu"
 import {
@@ -67,28 +70,39 @@ function matches(connection: ConnectionSummary, query: string) {
  * A right click — or ⇧F10 on a focused row — opens the row's context menu
  * (UX-SPEC « Menus contextuels »). `Connect` is the click; the other entries
  * are what `menuActions` gives for that connection, and an entry it leaves
- * out is not offered. `openConnectionId` is the connection whose workspace
- * is open: it offers `Disconnect` instead of `Connect`.
+ * out is not offered. A connection in `openIds` offers `Disconnect` instead
+ * of `Connect`.
  */
 export function SavedConnections({
   connections,
   error,
   opening,
   cancelling = false,
+  openIds = [],
+  pendingTransactions = {},
   onOpen,
   onCancelOpening,
   onRetry,
-  openConnectionId = null,
   menuActions,
 }: {
   connections: Array<ConnectionSummary> | undefined
   error?: BackendFailure | null
   opening: string | null
   cancelling?: boolean
+  /**
+   * Connections whose workspace this window keeps, connected: choosing one
+   * shows it again, nothing reconnects (ADR-0046).
+   */
+  openIds?: ReadonlyArray<string>
+  /**
+   * Retained connections with a console whose last reported transaction
+   * state is open or unknown (ADR-0039). Said in words, naming the
+   * connection: its locks are held while the user works elsewhere.
+   */
+  pendingTransactions?: Readonly<Record<string, "open" | "unknown">>
   onOpen: (connection: ConnectionSummary) => void
   onCancelOpening?: () => void
   onRetry?: () => void
-  openConnectionId?: string | null
   menuActions?: (connection: ConnectionSummary) => ConnectionMenuActions
 }) {
   const listRef = React.useRef<HTMLDivElement>(null)
@@ -200,6 +214,8 @@ export function SavedConnections({
         <ItemGroup ref={listRef} className="gap-2" onKeyDown={moveFocus}>
           {visible.map((connection, index) => {
             const isOpening = opening === connection.id
+            const isOpen = openIds.includes(connection.id)
+            const pending = pendingTransactions[connection.id]
             return (
               <div
                 role="listitem"
@@ -255,8 +271,32 @@ export function SavedConnections({
                         </>
                       ) : null}
                     </ButtonItemDescription>
+                    {isOpen && pending ? (
+                      <ButtonItemDescription
+                        data-slot="pending-transaction"
+                        data-state={pending}
+                        className="text-foreground"
+                      >
+                        <HugeiconsIcon
+                          icon={
+                            pending === "open"
+                              ? AlertCircleIcon
+                              : HelpCircleIcon
+                          }
+                          strokeWidth={2}
+                          className="me-1 inline size-3.5 align-[-0.125em]"
+                        />
+                        <span>
+                          {pending === "open"
+                            ? "Transaction open in a console of "
+                            : "Transaction state unknown in a console of "}
+                          <bdi>{connection.name}</bdi>
+                        </span>
+                      </ButtonItemDescription>
+                    ) : null}
                   </ButtonItemContent>
                   <ButtonItemActions>
+                    {isOpen ? <Badge variant="secondary">Open</Badge> : null}
                     <EnvironmentBadge environment={connection.environment} />
                     {isOpening ? (
                       <Spinner />
@@ -297,7 +337,7 @@ export function SavedConnections({
           sources={{
             connection: {
               state: {
-                open: menu.connection.id === openConnectionId,
+                open: openIds.includes(menu.connection.id),
                 busy: opening !== null,
               },
               actions: {

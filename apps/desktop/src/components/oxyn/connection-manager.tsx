@@ -37,9 +37,10 @@ import type { ConnectionSummary } from "@/lib/ipc/settings"
 /**
  * The saved connections, to edit or delete — never to open.
  *
- * The connection in use cannot be deleted from here: its workspace would be
- * left running against a configuration that no longer exists. Leaving it
- * first is one click, and says what happens.
+ * A connection open in the window — its workspace shown or hidden — cannot be
+ * deleted from here: that workspace would be left running against a
+ * configuration that no longer exists. Disconnecting it first is one click,
+ * and says what happens.
  *
  * A right click — or ⇧F10 on a focused row — opens the row's context menu:
  * `Edit…` and `Delete…` are the two buttons, the rest is what `menuActions`
@@ -49,7 +50,7 @@ import type { ConnectionSummary } from "@/lib/ipc/settings"
 export function ConnectionManager({
   connections,
   error,
-  openConnectionId = null,
+  openConnectionIds = [],
   onEdit,
   onDelete,
   onRetry,
@@ -57,7 +58,8 @@ export function ConnectionManager({
 }: {
   connections: Array<ConnectionSummary> | undefined
   error?: BackendFailure | null
-  openConnectionId?: string | null
+  /** Every connection with a workspace in the window, shown or hidden. */
+  openConnectionIds?: ReadonlyArray<string>
   onEdit: (connection: ConnectionSummary) => void
   onDelete: (connection: ConnectionSummary) => void
   onRetry?: () => void
@@ -113,7 +115,8 @@ export function ConnectionManager({
     const connection = connections[index]
     setMenu(anchor && connection ? { connection, anchor } : null)
   }
-  const menuInUse = menu !== null && menu.connection.id === openConnectionId
+  const menuInUse =
+    menu !== null && openConnectionIds.includes(menu.connection.id)
 
   return (
     <ContextMenu>
@@ -122,7 +125,7 @@ export function ConnectionManager({
       >
         <ItemGroup className="gap-2">
           {connections.map((connection, index) => {
-            const inUse = connection.id === openConnectionId
+            const inUse = openConnectionIds.includes(connection.id)
             const inUseId = `${baseId}-in-use-${index}`
             const described = connection.location
               ? `${connection.driverName} · ${connection.location}`
@@ -167,7 +170,7 @@ export function ConnectionManager({
                     // Its own line, never cut: it is the only reason given for a
                     // disabled Delete, and the button points at it.
                     <ItemDescription id={inUseId}>
-                      In use: leave this connection to delete it.
+                      Open in this window: disconnect it to delete it.
                     </ItemDescription>
                   ) : null}
                 </ItemContent>

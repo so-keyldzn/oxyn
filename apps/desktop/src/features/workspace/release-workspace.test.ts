@@ -31,13 +31,13 @@ describe("releasing a workspace", () => {
   it("closes the conversations of a connection it disconnects", async () => {
     // Without it, the external agent kept for the connection outlives it,
     // with the tools and the tier it was launched under (I-04).
-    await release(opened("c1", "s1"), opened("c2", "s2"), null)
+    await release(opened("c1", "s1"), () => false, null)
     expect(calls.disconnect).toHaveBeenCalledWith("c1")
     expect(calls.closeConversation).toHaveBeenCalledWith("c1")
   })
 
   it("keeps the conversations when the same connection is reopened", async () => {
-    await release(opened("c1", "s1"), opened("c1", "s2"), null)
+    await release(opened("c1", "s1"), () => true, null)
     expect(calls.close).toHaveBeenCalledWith("c1", "s1")
     expect(calls.disconnect).not.toHaveBeenCalled()
     expect(calls.closeConversation).not.toHaveBeenCalled()
@@ -47,7 +47,20 @@ describe("releasing a workspace", () => {
     // Otherwise the next workspace on this connection shows them as current,
     // and its Refresh reaches a closed session.
     const exit = () => Promise.resolve({ sessions: ["s1", "console1"] })
-    await release(opened("c1", "s1"), opened("c1", "s2"), exit)
+    await release(opened("c1", "s1"), () => true, exit)
     expect(calls.closeSessions).toHaveBeenCalledWith(["s1", "s1", "console1"])
+  })
+
+  it("spares a connection reopened while its drafts were being written", async () => {
+    // Asked before the drafts, the answer would be « disconnect », and the
+    // new sessions would close under the workspace just opened.
+    let reopened = false
+    const exit = () => {
+      reopened = true
+      return Promise.resolve({ sessions: ["s1"] })
+    }
+    await release(opened("c1", "s1"), () => reopened, exit)
+    expect(calls.disconnect).not.toHaveBeenCalled()
+    expect(calls.close).toHaveBeenCalledWith("c1", "s1")
   })
 })

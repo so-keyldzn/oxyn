@@ -17,10 +17,18 @@ import {
 } from "@/features/connections/connection-offer"
 import { useTypedSecrets } from "@/features/connections/typed-secrets"
 import type { WithoutSecrets } from "@/features/connections/typed-secrets"
-import { closeConnection, openConnection, session } from "@/features/session"
+import {
+  MAX_RETAINED_WORKSPACES,
+  canOpenWorkspace,
+  closeConnection,
+  openConnection,
+  session,
+  showConnection,
+} from "@/features/session"
 import { requestConnectionChange } from "@/features/settings/connections-settings"
 import type { ConnectionRequest } from "@/features/settings/connections-settings"
 import { openSettings } from "@/features/settings/settings-dialog"
+import { usePendingTransactions } from "@/features/workspace/pending-transactions"
 import { actionSources } from "@/lib/actions/context"
 import type { ConnectionMenuActions } from "@/lib/actions/targets"
 import { BackendError, backend, newCommandId } from "@/lib/ipc/client"
@@ -87,6 +95,29 @@ export function ConnectionScreen() {
   // MutationCache nor the React Query Devtools ever retain them (I-03).
   const typedSecrets = useTypedSecrets()
   const leftOpen = useStore(session, (state) => state.open)
+  const workspaces = useStore(session, (state) => state.workspaces)
+  const openIds = React.useMemo(
+    () => workspaces.map((open) => open.connection),
+    [workspaces]
+  )
+  const pendingTransactions = usePendingTransactions()
+  const [refusal, setRefusal] = React.useState<string | null>(null)
+
+  /**
+   * Refuses, before any `Connect`, a connection beyond what the window keeps.
+   * No workspace is closed to make room: that could roll back a transaction
+   * without the dialog that says so (ADR-0046).
+   */
+  const refuseBeyondLimit = () => {
+    if (canOpenWorkspace()) {
+      setRefusal(null)
+      return false
+    }
+    setRefusal(
+      `${MAX_RETAINED_WORKSPACES} connections are open in this window. Disconnect one before opening another.`
+    )
+    return true
+  }
   const drivers = useQuery({
     queryKey: ["drivers"],
     queryFn: backend.listDrivers,
@@ -149,9 +180,14 @@ export function ConnectionScreen() {
   const discardLate = (response: ConnectResponse | OpenConnection | null) => {
     const open =
       response && "type" in response ? asOpen(response) : (response ?? null)
-    // `disconnect` closes every session of the connection: never the one the
-    // workspace left open is still using.
-    if (open && open.connection !== session.state.open?.connection)
+    // `disconnect` closes every session of the connection: never those a
+    // retained workspace, shown or hidden, is still using.
+    if (
+      open &&
+      !session.state.workspaces.some(
+        (held) => held.connection === open.connection
+      )
+    )
       void backend.disconnect(open.connection).catch(() => undefined)
   }
 
@@ -229,6 +265,19 @@ export function ConnectionScreen() {
     onError: () => setApproval(null),
   })
 
+  /** A saved connection chosen, or its failed opening retried. */
+  const openSaved = (connection: ConnectionSummary) => {
+    if (!idle()) return
+    // Its workspace is still connected: shown again, nothing reopens and
+    // nothing runs (ADR-0046).
+    if (showConnection(connection.id)) {
+      setRefusal(null)
+      void navigate({ to: "/workspace" })
+      return
+    }
+    if (!refuseBeyondLimit()) reconnect.mutate(connection)
+  }
+
   const cancelOpening = () => {
     const commandId = inFlight.current
     if (!commandId || cancelled.current.has(commandId)) return
@@ -243,7 +292,9 @@ export function ConnectionScreen() {
   const connectionMenu = (
     connection: ConnectionSummary
   ): ConnectionMenuActions => {
-    const open = leftOpen?.connection === connection.id ? leftOpen : null
+    // Any retained workspace, shown or hidden (ADR-0046).
+    const open =
+      workspaces.find((held) => held.connection === connection.id) ?? null
     const settings = (intent: ConnectionRequest["intent"]) => () => {
       requestConnectionChange({ connection: connection.id, intent })
       openSettings("connections")
@@ -251,14 +302,14 @@ export function ConnectionScreen() {
     return {
       // The workspace's own `Disconnect`: its drafts are written, then its
       // sessions close (`WorkspaceHost`).
-      disconnect: open ? closeConnection : undefined,
+      disconnect: open ? () => closeConnection(connection.id) : undefined,
       // Closed, opening is the new console: a workspace starts on one.
       newConsole: open
-        ? () =>
+        ? () => {
+            showConnection(connection.id)
             openConsoleInWorkspace(() => void navigate({ to: "/workspace" }))
-        : () => {
-            if (idle()) reconnect.mutate(connection)
-          },
+          }
+        : () => openSaved(connection),
       refreshCatalog: open ? () => void refreshCatalogOf(open) : undefined,
       edit: settings("edit"),
       duplicate: () => void startDuplicate(connection),
@@ -353,6 +404,7 @@ export function ConnectionScreen() {
       driver={driver}
       duplicate={duplicate}
       onChooseDriver={(choice) => {
+        setRefusal(null)
         connect.reset()
         test.reset()
         setDuplicate(null)
@@ -360,6 +412,7 @@ export function ConnectionScreen() {
         setDriver(choice)
       }}
       onLeaveDriver={() => {
+        setRefusal(null)
         connect.reset()
         test.reset()
         setDuplicate(null)
@@ -368,18 +421,23 @@ export function ConnectionScreen() {
       }}
       opening={reconnect.isPending ? reconnect.variables.id : null}
       openError={failureOf(reconnect.error)}
-      onOpen={(connection) => {
-        if (idle()) reconnect.mutate(connection)
-      }}
+      openIds={openIds}
+      pendingTransactions={pendingTransactions}
+      openRefusal={refusal}
+      onOpen={openSaved}
       onRetryOpen={() => {
-        if (reconnect.variables) reconnect.mutate(reconnect.variables)
+        if (reconnect.variables) openSaved(reconnect.variables)
       }}
-      openConnectionId={leftOpen?.connection ?? null}
       connectionMenu={connectionMenu}
       submitting={connect.isPending || decide.isPending}
-      formError={failureOf(connect.error ?? decide.error)}
+      formError={
+        refusal !== null
+          ? { message: refusal, retryable: false }
+          : failureOf(connect.error ?? decide.error)
+      }
       onSubmit={(draft) => {
         if (connect.isPending || test.isPending) return
+        if (refuseBeyondLimit()) return
         connect.mutate(typedSecrets.hold(draft))
       }}
       testing={test.isPending}

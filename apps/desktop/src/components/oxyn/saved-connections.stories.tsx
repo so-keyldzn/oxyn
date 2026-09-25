@@ -46,6 +46,51 @@ export const List: Story = {
   },
 }
 
+/**
+ * Connections whose workspace stays connected in the window (ADR-0046). A
+ * console holding a transaction is said in words, naming the connection —
+ * its locks are held while the user works elsewhere.
+ */
+export const OpenWithPendingTransaction: Story = {
+  args: {
+    openIds: [summaries[0]!.id, summaries[1]!.id, summaries[2]!.id],
+    pendingTransactions: {
+      [summaries[0]!.id]: "open",
+      [summaries[1]!.id]: "unknown",
+    },
+  },
+  play: async ({ canvas, args }) => {
+    await expect(canvas.getAllByText("Open").length).toBe(3)
+    await expect(
+      canvas.getByRole("button", {
+        name: /Transaction open in a console of billing/,
+      })
+    ).toBeVisible()
+    await expect(
+      canvas.getByRole("button", {
+        name: /Transaction state unknown in a console of billing replica/,
+      })
+    ).toBeVisible()
+    // An idle one says nothing about transactions.
+    await expect(
+      canvas.getByRole("button", { name: /scratch/ })
+    ).not.toHaveAccessibleName(/Transaction/)
+    await userEvent.click(
+      canvas.getByRole("button", { name: /Transaction open/ })
+    )
+    await expect(args.onOpen).toHaveBeenCalledWith(summaries[0])
+  },
+}
+
+/** Only open connections carry the marker: a closed one holds nothing. */
+export const PendingIgnoredWhenNotOpen: Story = {
+  args: { pendingTransactions: { [summaries[0]!.id]: "open" } },
+  play: async ({ canvas }) => {
+    await expect(canvas.queryByText("Open")).toBeNull()
+    await expect(canvas.queryByText(/Transaction open/)).toBeNull()
+  },
+}
+
 export const KeyboardOnly: Story = {
   play: async ({ canvas, args }) => {
     const [first, second] = canvas.getAllByRole("button")
@@ -214,7 +259,7 @@ export const ContextMenuOfAClosedConnection: Story = {
  */
 export const ContextMenuOfTheOpenConnection: Story = {
   args: {
-    openConnectionId: summaries[0]!.id,
+    openIds: [summaries[0]!.id],
     menuActions: () => ({ ...menuActions, delete: undefined }),
   },
   play: async () => {

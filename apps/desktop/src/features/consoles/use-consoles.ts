@@ -447,15 +447,23 @@ export function useConsoles({
     })
   }
 
-  // The first console uses the session opened with the connection, and the
-  // SQL carried from the previous connection — never run.
+  // The first console uses the session opened with the connection, and a
+  // copy of the SQL the previous workspace showed — announced, never run.
+  // That workspace keeps its own console (UX-SPEC).
   const started = React.useRef(false)
   const [ready, setReady] = React.useState(false)
   React.useEffect(() => {
     if (started.current) return
     started.current = true
     void (async () => {
-      await add(open.console, { text: sessionStore.state.sqlDraft })
+      const { sqlDraft, sqlDraftFrom } = sessionStore.state
+      await add(open.console, {
+        text: sqlDraft,
+        notice:
+          sqlDraftFrom === null
+            ? null
+            : `Copied from ${sqlDraftFrom}, which keeps its console. Nothing was executed.`,
+      })
       setReady(true)
     })()
     // Once per workspace: the screen is keyed by the connection's session.
@@ -466,9 +474,15 @@ export function useConsoles({
   // only, no session, nothing run. A workspace on its way out leaves them to
   // the next one.
   const restored = useStore(sessionStore, (state) => state.restored.length)
+  // What reaches « the workspace » — recovered copies, text for the active
+  // console — goes to the shown one only (ADR-0046).
+  const shown = useStore(
+    sessionStore,
+    (state) => state.open?.session === open.session
+  )
   React.useEffect(() => {
     if (!ready || restored === 0) return
-    if (sessionStore.state.open?.session !== open.session) return
+    if (!shown) return
     void (async () => {
       for (const entry of takeRestoredWorkingCopies()) {
         const holder = entriesRef.current.find(
@@ -494,13 +508,16 @@ export function useConsoles({
         }
       }
     })()
-  }, [ready, restored])
+  }, [ready, restored, shown])
 
   // Text from the assistant or the inspector, dropped into a console unrun.
   const requests = useStore(consoleTextRequests)
   const activeRef = React.useRef<string | null>(null)
   React.useEffect(() => {
     if (requests.length === 0) return
+    // Every retained workspace listens; only the shown one takes the text,
+    // or it would land unseen in a hidden console (ADR-0046).
+    if (!shown) return
     for (const request of takeConsoleTextRequests()) {
       const target = activeRef.current
         ? handles.current.get(activeRef.current)
@@ -512,17 +529,17 @@ export function useConsoles({
         target.insert(request.sql, request.notice)
       }
     }
-  }, [requests])
+  }, [requests, shown])
 
   // The names the exit dialog shows for these consoles' sessions.
   React.useEffect(() => {
     const labels: Record<string, string> = {}
     for (const entry of entries) {
       if (!entry.session) continue
-      const shown = meta[entry.key]
+      const drawn = meta[entry.key]
       labels[entry.session.session] = tabTitle({
-        title: shown?.title ?? entry.seed.title,
-        fromAgent: shown?.fromAgent ?? entry.seed.fromAgent,
+        title: drawn?.title ?? entry.seed.title,
+        fromAgent: drawn?.fromAgent ?? entry.seed.fromAgent,
       })
     }
     publishConsoleLabels([], labels)
