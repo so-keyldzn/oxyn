@@ -222,6 +222,12 @@ impl PostgresVariant {
 // TODO(phase 1) : épingler une connexion par session pour ouvrir TRANSACTIONS et
 // SAVEPOINTS, et implémenter `COPY` pour BULK_LOAD. Débloque : l'édition de
 // données avec prévisualisation du DML (IMPLEMENTATION-PLAN, phase 1).
+// Piège à l'épinglage : `oxyn-exec` borne toute lecture de production à la
+// lecture seule (issue #11). Dans une transaction déjà ouverte, `BEGIN READ
+// ONLY` n'est qu'un avertissement, et le `ROLLBACK` de clôture annulerait la
+// transaction de l'utilisateur. La borne doit y laisser la transaction intacte
+// — piste à éprouver : `SAVEPOINT` puis `SET TRANSACTION READ ONLY` —, sinon
+// l'exécution est refusée (DRIVER-CONTRACT §5).
 #[must_use]
 pub fn base_capabilities() -> Capabilities {
     Capabilities::SCHEMAS

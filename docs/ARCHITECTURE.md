@@ -747,6 +747,13 @@ Quatre règles gouvernent cette table, et leur **ordre** compte :
    l'approbation avec **son** motif, parce que « `DELETE` sans `WHERE` » se lit mieux
    que « écriture par un agent ».
 
+Un complément, hors de la table :
+
+* **Une lecture de production part en lecture seule.** Le gate l'autorise sans
+  confirmation ; `oxyn-exec` pose alors `limits.read_only`, à l'envoi comme à
+  l'approbation, pour qu'une fonction qui écrit derrière un `SELECT` soit
+  refusée par le serveur.
+
 `PolicyGate::authorize(&self, actor, cmd, env)` ne reçoit ni le drapeau `read_only`
 ni le nom de la connexion : `DefaultPolicy` tient donc un registre interne des faits
 de connexion, alimenté par `register`/`forget`. Passer un contexte plutôt qu'un simple

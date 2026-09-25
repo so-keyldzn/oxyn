@@ -110,6 +110,24 @@ l'interface porte un marqueur permanent. Voir [I-02](../CLAUDE.md#i-02). Cette
 confirmation est un dialogue natif et non un bouton de la webview
 ([Surface d'entrée](#surface-dentrée), point 5).
 
+Une **lecture** passe sans confirmation, et c'est ce qui la rend dangereuse : un
+`SELECT` qui appelle une fonction `VOLATILE`, ou qui lit une vue qui le fait,
+écrit, et aucune analyse du texte ne peut le voir. Sur une connexion
+`production`, `oxyn-exec` borne donc toute exécution classée lecture à la
+lecture seule, quelles que soient les bornes demandées par l'appelant, et le
+driver fait refuser l'écriture par le serveur (PostgreSQL : transaction
+`READ ONLY` ; SQLite : `sqlite3_stmt_readonly`). Une telle fonction ne s'appelle
+en production que sous une forme que la classification ne lit pas comme une
+lecture — `CALL`, un bloc `DO` —, donc après la confirmation qui nomme la
+connexion. La borne ne confine pas tout : une transaction `READ ONLY` de
+PostgreSQL écrit encore dans une table temporaire, et ne retient rien de ce qui
+sort de la transaction — `dblink_exec` vers une autre connexion,
+`pg_terminate_backend`, `set_config`, les verrous consultatifs.
+
+**Panne concrète :** `SELECT public.audit_touch()` dans une console de
+production, où la fonction insère une ligne : l'écriture partait sans
+confirmation, classée comme une lecture.
+
 Pour un `Actor::Agent`, une connexion `production` est en **lecture seule
 stricte** — ce n'est pas une confirmation renforcée, c'est un refus
 ([ADR-0004](adr/0004-command-bus.md#politique-par-défaut)). La différence

@@ -128,6 +128,22 @@ rend `Unknown` : c'est la réponse honnête d'une session qui ne sait pas.
 alors que la transaction est encore ouverte — ou l'inverse — et la console se
 ferme sans prévenir en jetant des écritures non validées.
 
+**Une session qui déclare `TRANSACTIONS` tient `limits.read_only` sans toucher à
+la transaction ouverte.** `oxyn-exec` borne toute lecture de production à la
+lecture seule ([SECURITY](SECURITY.md#marquage-des-connexions)). Hors
+transaction, une transaction `READ ONLY` ouverte et refermée par le driver
+suffit. Dans une transaction de l'utilisateur, elle ne vaut rien : PostgreSQL
+répond à un `BEGIN` imbriqué par un simple avertissement, et le `ROLLBACK` de
+clôture annulerait les écritures de l'utilisateur. La borne doit alors passer
+par un mécanisme qui laisse la transaction intacte — un point de sauvegarde et
+`SET TRANSACTION READ ONLY` sont la piste, à éprouver contre le serveur avant
+d'y compter — ou par un refus de l'exécution. SQLite la
+tient par `sqlite3_stmt_readonly`, qui ne touche pas à la transaction.
+
+**Panne concrète :** un `SELECT` dans une console de production où une
+transaction est ouverte, et les `INSERT` confirmés juste avant disparaissent
+sans message.
+
 Corollaire pour un driver non-SQL : une requête porte un `QueryLanguage`
 explicite. Le SQL est un cas parmi d'autres, pas le défaut auquel les autres se
 ramènent.
