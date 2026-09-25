@@ -6,6 +6,10 @@
 session abandonnée une fois constatée, et sur les chemins de fermeture qui
 inscrivent `closed_at`.
 
+**Précisé par :** [ADR-0040](0040-inscrire-la-fermeture-d-une-sortie-forcee.md),
+qui inscrit la fermeture du Quit du Dock et de la fermeture de session dans
+`RunEvent::Exit`, et reprend l'alternative écartée ici.
+
 ## Contexte
 
 L'application installée affichait l'écran de reprise — « Oxyn did not close

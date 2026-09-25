@@ -225,6 +225,39 @@ impl Backend {
             .swap(true, Ordering::SeqCst)
     }
 
+    /// Records the close of an exit nothing could hold, waiting at most `grace`.
+    ///
+    /// macOS ends the loop on `terminate:` — the Dock's Quit, a logout —
+    /// without an `ExitRequested`: the webview can no longer be asked to flush,
+    /// its replies needing the main thread this runs on. Its drafts are written
+    /// at the latest 250 ms after the last key (ADR-0024), which is what the
+    /// ordered shutdown already accepts from a webview that does not answer
+    /// (ADR-0040). Local writes are still waited for: the close is never
+    /// written over them.
+    ///
+    /// Blocks the calling thread for at most `grace`. Returns whether the
+    /// close was recorded by then. Past `grace` the task is not cancelled: it
+    /// may still record the close, always after the writes, if the process
+    /// lives long enough. An ordered shutdown already under way is not waited
+    /// for: the process ends with it, and whatever it recorded stands.
+    pub(crate) fn close_on_forced_exit(&self, grace: Duration) -> bool {
+        if !self.begin_shutdown() {
+            return self.inner.workbench.local.closed.load(Ordering::SeqCst);
+        }
+        let (done, finished) = std::sync::mpsc::sync_channel(1);
+        let backend = self.clone();
+        tauri::async_runtime::spawn(async move {
+            backend.close_session_after_local_writes().await;
+            let _ = done.send(());
+        });
+        if finished.recv_timeout(grace).is_err() {
+            tracing::warn!(
+                "local writes still pending at a forced exit; the close is not recorded yet"
+            );
+        }
+        self.inner.workbench.local.closed.load(Ordering::SeqCst)
+    }
+
     /// Whether the close has been handled, recorded or given up.
     pub(crate) fn shutdown_finished(&self) -> bool {
         self.inner.workbench.local.closed.load(Ordering::SeqCst)
@@ -346,6 +379,64 @@ mod tests {
 
         let next = Backend::assemble(store, secrets).expect("relaunch");
         assert!(!next.recovery_status().abnormal);
+    }
+
+    /// The Dock's Quit: macOS ends the loop without `ExitRequested`, and the
+    /// close is recorded from `RunEvent::Exit` (ADR-0040).
+    #[test]
+    fn a_forced_exit_records_the_close_and_is_not_offered_recovery() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("a test runtime starts");
+        let _guard = runtime.enter();
+        let store = Arc::new(Store::open_in_memory().expect("in-memory store"));
+        let secrets = Arc::new(oxyn_secrets::MemorySecretStore::new());
+
+        let first = Backend::assemble(Arc::clone(&store), secrets.clone()).expect("launch");
+        assert!(first.close_on_forced_exit(Duration::from_secs(10)));
+        exit_and_age(&store, first);
+
+        let next = Backend::assemble(store, secrets).expect("relaunch");
+        assert!(!next.recovery_status().abnormal);
+    }
+
+    /// A write still running when macOS ends the process: the close is never
+    /// written over it, and the wait does not outlast its grace.
+    #[test]
+    fn a_forced_exit_over_a_pending_write_is_bounded_and_leaves_the_close_unwritten() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("a test runtime starts");
+        let _guard = runtime.enter();
+        let store = Arc::new(Store::open_in_memory().expect("in-memory store"));
+        let secrets = Arc::new(oxyn_secrets::MemorySecretStore::new());
+
+        let first = Backend::assemble(Arc::clone(&store), secrets.clone()).expect("launch");
+        let write = first
+            .local_write(&Command::WriteDocument {
+                workspace: first.inner.executor.workspace(),
+                document: oxyn_core::DocumentId::new(),
+                text: String::new(),
+            })
+            .expect("a document write is a local write");
+        let grace = Duration::from_millis(100);
+        let started = std::time::Instant::now();
+        assert!(!first.close_on_forced_exit(grace));
+        assert!(
+            started.elapsed() < grace + Duration::from_secs(5),
+            "the main thread waits for the grace, not for the write"
+        );
+        // The process ends with the write still running.
+        exit_and_age(&store, first);
+
+        let next = Backend::assemble(store, secrets).expect("relaunch");
+        assert!(
+            next.recovery_status().abnormal,
+            "a close nobody could confirm offers recovery"
+        );
+        drop(write);
     }
 
     /// The case recovery exists for: a process killed without its close.
