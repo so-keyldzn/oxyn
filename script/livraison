@@ -1,19 +1,35 @@
 #!/usr/bin/env python3
-"""Le geste du workflow de livraison qui crée la release GitHub.
+"""Les deux gestes du workflow de livraison qui touchent une release GitHub.
 
-`.github/workflows/livraison.yml` promet en tête que le tag porte la version de
-`crates/oxyn-desktop/tauri.conf.json`. Écrite en shell dans le workflow, la
-promesse n'était pas vérifiée, et rien ne pouvait le tester sans pousser un
-tag. Elle vit donc ici, testée par `script/test_livraison.py`.
+`.github/workflows/livraison.yml` promet deux choses en tête : les paquets ne
+vont que dans une release en BROUILLON, et le tag porte la version de
+`crates/oxyn-desktop/tauri.conf.json`. Écrites en shell dans le workflow, ni
+l'une ni l'autre n'était vérifiée, et rien ne pouvait le tester sans pousser un
+tag. Elles vivent donc ici, testées par `script/test_livraison.py`.
 
     livraison brouillon <tag> <dépôt>            vérifie le tag, puis crée ou
                                                  retrouve le brouillon
+    livraison deposer <tag> <dépôt> <fichier>…   dépose chaque fichier dans le
+                                                 brouillon, un par un
 
 **Le tag.** Il vaut exactement `v` suivi de la version configurée, suffixe de
 préversion compris : `0.1.0-rc.1` ⇔ `v0.1.0-rc.1`. Rien n'est corrigé en
 silence — ni le tag, ni la version : un écart est une erreur humaine, et c'est
 à l'humain de dire lequel des deux est juste. Une version à suffixe crée un
 brouillon marqué préversion.
+
+**Le brouillon.** Une release déjà publiée est refusée, au premier job comme
+avant chaque fichier : un humain peut la publier pendant les builds, qui durent
+une heure. Le statut est relu juste avant chaque envoi, et encore après. `gh`
+n'offre pas d'envoi conditionnel : une publication tombée pendant l'envoi
+lui-même reçoit ce seul fichier en plus — aucun n'est retiré ni remplacé — et
+le job échoue en le disant, sans rien déposer d'autre.
+
+**Un fichier déjà présent** fait échouer le dépôt, sans rien toucher. Aucun
+`--clobber` : il supprime l'ancien fichier avant d'envoyer le nouveau, et un
+envoi qui échoue — ou une publication tombée entre la vérification et l'envoi —
+laisse une release publique sans son paquet. Remplacer un paquet d'un brouillon
+est une décision : la supprimer du brouillon à la main, puis relancer le job.
 
 `gh` est lu dans `$GH` s'il est défini — c'est ce qui permet aux tests de le
 simuler.
@@ -68,9 +84,42 @@ def verifier_tag(tag: str, config: Path) -> bool:
     return "-" in version.split("+", 1)[0]
 
 
+def lire_release(tag: str, depot: str) -> dict | None:
+    """La release du tag, ou None si elle n'existe pas encore."""
+    vue = gh("release", "view", tag, "--repo", depot, "--json", "isDraft,assets")
+    if vue.returncode != 0:
+        if "release not found" in vue.stderr:
+            return None
+        raise Refus(f"lecture de la release {tag} impossible : {vue.stderr.strip()}")
+    try:
+        release = json.loads(vue.stdout)
+    except ValueError as erreur:
+        raise Refus(f"réponse illisible de gh release view : {erreur}") from erreur
+    if not isinstance(release, dict) or not isinstance(release.get("isDraft"), bool):
+        raise Refus("gh release view ne dit pas si la release est un brouillon")
+    return release
+
+
+def exiger_brouillon(tag: str, depot: str) -> dict:
+    release = lire_release(tag, depot)
+    if release is None:
+        raise Refus(f"aucune release {tag} : le job brouillon ne l'a pas créée")
+    if not release["isDraft"]:
+        raise Refus(
+            f"la release {tag} est publiée : aucun paquet n'y est déposé. "
+            "Une release publiée ne se complète pas par ce workflow."
+        )
+    return release
+
+
+def exiger_brouillon_apres_envoi(tag: str, depot: str) -> bool:
+    release = lire_release(tag, depot)
+    return release is not None and release["isDraft"]
+
+
 def brouillon(tag: str, depot: str, config: Path) -> None:
     preversion = verifier_tag(tag, config)
-    if gh("release", "view", tag, "--repo", depot).returncode != 0:
+    if lire_release(tag, depot) is None:
         # `--verify-tag` : la release ne s'attache qu'à un tag qui existe déjà
         # sur le dépôt, jamais à un tag que gh créerait lui-même.
         options = ["--draft", "--verify-tag", "--generate-notes", "--title", f"Oxyn {tag}"]
@@ -79,7 +128,33 @@ def brouillon(tag: str, depot: str, config: Path) -> None:
         creation = gh("release", "create", tag, "--repo", depot, *options)
         if creation.returncode != 0:
             raise Refus(f"création du brouillon {tag} impossible : {creation.stderr.strip()}")
+    exiger_brouillon(tag, depot)
     print(f"Brouillon {tag} prêt.")
+
+
+def deposer(tag: str, depot: str, fichiers: list[Path], config: Path) -> None:
+    verifier_tag(tag, config)
+    if not fichiers:
+        raise Refus("aucun fichier à déposer")
+    for fichier in fichiers:
+        release = exiger_brouillon(tag, depot)
+        presents = {a.get("name") for a in release.get("assets") or [] if isinstance(a, dict)}
+        if fichier.name in presents:
+            raise Refus(
+                f"{fichier.name} est déjà dans le brouillon {tag} : il n'est pas remplacé. "
+                "Le supprimer du brouillon, puis relancer le job."
+            )
+        envoi = gh("release", "upload", tag, str(fichier), "--repo", depot)
+        if envoi.returncode != 0:
+            raise Refus(f"envoi de {fichier.name} impossible : {envoi.stderr.strip()}")
+        # Retirer le fichier serait une écriture de plus sur une release
+        # publique : on s'arrête et on le dit.
+        if not exiger_brouillon_apres_envoi(tag, depot):
+            raise Refus(
+                f"la release {tag} a été publiée pendant l'envoi de {fichier.name}, "
+                "qui y a été ajouté ; rien d'autre n'est déposé. Vérifier la release."
+            )
+        print(f"{fichier.name} déposé dans le brouillon {tag}.")
 
 
 def main(args: list[str]) -> int:
@@ -88,6 +163,8 @@ def main(args: list[str]) -> int:
         match args:
             case ["brouillon", tag, depot]:
                 brouillon(tag, depot, config)
+            case ["deposer", tag, depot, *fichiers]:
+                deposer(tag, depot, [Path(f) for f in fichiers], config)
             case _:
                 print(__doc__, file=sys.stderr)
                 return 2

@@ -2,7 +2,11 @@
 # paquets dans une release GitHub en BROUILLON.
 #
 # Rien n'est publié automatiquement : la release reste un brouillon jusqu'à ce
-# qu'un humain la relise et la publie.
+# qu'un humain la relise et la publie. Une release publiée ne reçoit rien : une
+# relance, ou une publication tombée pendant les builds, fait échouer le dépôt
+# sans toucher à ses fichiers. Seule une publication pendant l'envoi d'un
+# fichier peut encore recevoir ce fichier-là, et le job échoue en le disant.
+# Un fichier déjà présent dans le brouillon n'est jamais remplacé.
 #
 # Le tag vaut exactement `v` suivi de la version de
 # `crates/oxyn-desktop/tauri.conf.json`, suffixe de préversion compris
@@ -10,7 +14,7 @@
 # sinon le workflow échoue avant de créer le brouillon, et rien n'est corrigé
 # automatiquement. C'est cette version que les paquets portent dans leur nom.
 #
-# Cette règle est appliquée et testée par `script/livraison`.
+# Ces deux règles sont appliquées et testées par `script/livraison`.
 #
 # Les paquets ne sont PAS signés : macOS demande au premier lancement un clic
 # droit, puis « Ouvrir ». La signature et la notarisation demandent un compte
@@ -122,4 +126,4 @@ jobs:
             find . -path ./node_modules -prune -o -type d -name bundle -print
             exit 1
           fi
-          gh release upload "$GITHUB_REF_NAME" "${fichiers[@]}" --repo "$GITHUB_REPOSITORY" --clobber
+          python3 script/livraison deposer "$GITHUB_REF_NAME" "$GITHUB_REPOSITORY" "${fichiers[@]}"
