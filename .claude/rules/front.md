@@ -112,6 +112,22 @@ story **par état** : initial, en cours, peuplé, vide, erreur
 Chromium et y passe axe en mode `error` : une violation d'accessibilité fait échouer
 la porte.
 
+`make front` refuse un composant qu'aucune story ne rend (`script/verifier-stories`).
+La règle qu'il applique :
+
+- **un composant** est un fichier `.tsx` de `src/components/oxyn`, hors
+  `*.stories.tsx` et `*.test.tsx`. Ce qui ne rend rien — modèle, fixtures,
+  mesure, utilitaire — s'écrit en `.ts` et n'est pas concerné : l'extension est
+  la frontière, et un `.tsx` sans JSX n'a pas lieu d'être ;
+- **il est couvert** si un `*.stories.tsx` du même répertoire l'importe
+  (`./<nom>` ou `@/components/oxyn/<nom>`) : ses propres stories d'ordinaire, ou celles de la vue qui
+  le rend directement (`result-chart.stories.tsx` pour `assistant-result-chart`) ;
+- **sinon, il est exempté par nom** dans `EXEMPTS` du script, et seulement dans
+  deux cas : une pièce qui n'a de sens qu'à l'intérieur de son parent (greffon
+  Lexical, tracé d'un graphique), dont l'exemption nomme la story qui la rend ;
+  ou une story en attente, dont l'exemption porte un `TODO` daté qui dit ce qui
+  la débloque. Une exemption qui ne sert plus fait échouer le contrôle.
+
 Les comportements qui protègent l'utilisateur s'écrivent en `play`, pas en
 commentaire : `Cancel` focalisé dans une approbation, Entrée qui n'approuve pas, un
 identifiant de connexion jamais rendu.

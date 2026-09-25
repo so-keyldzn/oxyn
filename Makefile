@@ -119,6 +119,7 @@ doc:
 front: front-controles front-tests front-build
 
 front-controles: $(TAURI)
+	@python3 script/verifier-stories
 	cd $(FRONT) && pnpm exec prettier --check .
 	cd $(FRONT) && pnpm exec eslint .
 	cd $(FRONT) && pnpm exec tsc --noEmit
