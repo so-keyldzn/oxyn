@@ -89,6 +89,8 @@ const meta = {
     hasNext: true,
     onPrevious: fn(),
     onNext: fn(),
+    searching: false,
+    onCancel: fn(),
     onRefresh: fn(),
     currentConnection: CURRENT,
     currentConnectionName: "billing replica",
@@ -280,11 +282,61 @@ export const Empty: Story = {
   args: { state: { status: "history", entries: [] }, hasNext: false },
 }
 
+/** A malformed request fails the same way again: no retry, the next step. */
 export const Failed: Story = {
   args: {
     state: {
       status: "error",
-      message: "local list limit must be 1..=200 and search at most 1024 bytes",
+      error: {
+        message:
+          "local list limit must be 1..=200 and search at most 1024 bytes",
+        retryable: false,
+      },
     },
+  },
+  play: async ({ canvas, args }) => {
+    await expect(canvas.getByText(/local list limit/)).toBeVisible()
+    await expect(
+      canvas.getByText("Change the search or the filters, then refresh.")
+    ).toBeVisible()
+    await expect(canvas.queryByRole("button", { name: "Try again" })).toBeNull()
+    await expect(args.onRefresh).not.toHaveBeenCalled()
+  },
+}
+
+/** A transient failure says so, and offers the retry as the user's click. */
+export const FailedRetryable: Story = {
+  args: {
+    state: {
+      status: "error",
+      error: { message: "database is locked", retryable: true },
+    },
+  },
+  play: async ({ canvas, args }) => {
+    await expect(canvas.getByText(/This error is transient/)).toBeVisible()
+    await userEvent.click(canvas.getByRole("button", { name: "Try again" }))
+    await expect(args.onRefresh).toHaveBeenCalledTimes(1)
+  },
+}
+
+/** A read in flight can be stopped; the refresh comes back afterwards. */
+export const Searching: Story = {
+  args: { state: { status: "loading" }, searching: true },
+  play: async ({ canvas, args }) => {
+    await expect(canvas.queryByRole("button", { name: /Refresh/ })).toBeNull()
+    await userEvent.click(canvas.getByRole("button", { name: "Cancel search" }))
+    await expect(args.onCancel).toHaveBeenCalledTimes(1)
+  },
+}
+
+/** A cancelled search is not an empty result: it claims no match. */
+export const Cancelled: Story = {
+  args: { state: { status: "cancelled" }, hasNext: false },
+  play: async ({ canvas }) => {
+    await expect(canvas.getByText("Search cancelled")).toBeVisible()
+    await expect(
+      canvas.queryByText("No queries match these filters.")
+    ).toBeNull()
+    await expect(canvas.getByRole("button", { name: /Refresh/ })).toBeEnabled()
   },
 }

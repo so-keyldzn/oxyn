@@ -4,6 +4,7 @@ import {
   Alert02Icon,
   ArrowLeft01Icon,
   ArrowRight01Icon,
+  Cancel01Icon,
   CheckmarkCircle02Icon,
   Clock01Icon,
   Copy01Icon,
@@ -14,6 +15,8 @@ import {
   TableIcon,
 } from "@hugeicons/core-free-icons"
 
+import { BackendErrorAlert } from "@/components/oxyn/backend-error-alert"
+import type { BackendFailure } from "@/components/oxyn/backend-error-alert"
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -56,7 +59,9 @@ export type LibraryView = "history" | "saved"
 
 export type LibraryState =
   | { status: "loading" }
-  | { status: "error"; message: string }
+  | { status: "error"; error: BackendFailure }
+  /** The user stopped the read: not an empty list, nothing matched or not. */
+  | { status: "cancelled" }
   | { status: "history"; entries: Array<HistoryRow> }
   | { status: "saved"; entries: Array<DocumentEntry> }
 
@@ -163,6 +168,8 @@ export function LibraryPanel({
   hasNext,
   onPrevious,
   onNext,
+  searching,
+  onCancel,
   onRefresh,
   currentConnection,
   currentConnectionName,
@@ -187,6 +194,9 @@ export function LibraryPanel({
   hasNext: boolean
   onPrevious: () => void
   onNext: () => void
+  /** A read is in flight: the refresh becomes its cancellation. */
+  searching: boolean
+  onCancel: () => void
   onRefresh: () => void
   /** The connection of this workspace: only its queries can be resumed. */
   currentConnection: string
@@ -321,9 +331,21 @@ export function LibraryPanel({
             <Skeleton className="h-12" />
           </div>
         ) : state.status === "error" ? (
-          <Alert variant="destructive">
-            <AlertDescription>{state.message}</AlertDescription>
-          </Alert>
+          <BackendErrorAlert
+            title="The library could not be read."
+            error={state.error}
+            onRetry={onRefresh}
+            nextStep="Change the search or the filters, then refresh."
+          />
+        ) : state.status === "cancelled" ? (
+          <Empty className="p-4">
+            <EmptyHeader>
+              <EmptyTitle>Search cancelled</EmptyTitle>
+              <EmptyDescription>
+                Nothing is listed until you refresh or change the search.
+              </EmptyDescription>
+            </EmptyHeader>
+          </Empty>
         ) : state.entries.length === 0 ? (
           <Empty className="p-4">
             <EmptyHeader>
@@ -514,19 +536,35 @@ export function LibraryPanel({
         >
           <HugeiconsIcon icon={ArrowRight01Icon} strokeWidth={2} />
         </Button>
-        <Button
-          size="sm"
-          variant="ghost"
-          className="ml-auto"
-          onClick={onRefresh}
-        >
-          <HugeiconsIcon
-            icon={RefreshIcon}
-            strokeWidth={2}
-            data-icon="inline-start"
-          />
-          Refresh
-        </Button>
+        {searching ? (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="ml-auto"
+            onClick={onCancel}
+          >
+            <HugeiconsIcon
+              icon={Cancel01Icon}
+              strokeWidth={2}
+              data-icon="inline-start"
+            />
+            Cancel search
+          </Button>
+        ) : (
+          <Button
+            size="sm"
+            variant="ghost"
+            className="ml-auto"
+            onClick={onRefresh}
+          >
+            <HugeiconsIcon
+              icon={RefreshIcon}
+              strokeWidth={2}
+              data-icon="inline-start"
+            />
+            Refresh
+          </Button>
+        )}
       </div>
 
       {view === "history" ? (
