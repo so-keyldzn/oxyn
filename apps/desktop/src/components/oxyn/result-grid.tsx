@@ -69,6 +69,12 @@ export type PageAnswer = ResultWindow
 
 export type FetchPage = (offset: number, limit: number) => Promise<PageAnswer>
 
+/**
+ * First element of every page query key. The backend formats the cells, and a
+ * page is kept until invalidated: a change of format invalidates by this key.
+ */
+export const RESULT_PAGE_QUERY = "result-page"
+
 function isExpired(answer: PageAnswer | undefined): boolean {
   return answer?.type === "expired"
 }
@@ -373,7 +379,13 @@ export const ResultGrid = React.memo(function ResultGrid({
       const offset = page * pageSize
       const holds = Math.min(pageSize, Math.max(0, rowCount - offset))
       return {
-        queryKey: ["result-page", resultKey, pageSize, page, holds] as const,
+        queryKey: [
+          RESULT_PAGE_QUERY,
+          resultKey,
+          pageSize,
+          page,
+          holds,
+        ] as const,
         queryFn: () => fillPage(fetchPage, offset, holds),
         staleTime: Number.POSITIVE_INFINITY,
         // A result page is cheap to ask again and expensive to keep: pages

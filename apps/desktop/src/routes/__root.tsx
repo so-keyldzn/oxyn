@@ -22,6 +22,7 @@ import {
   openSettings,
 } from "@/features/settings/settings-dialog"
 import { useAppearance } from "@/features/settings/use-appearance"
+import { useResultFormatRefresh } from "@/features/settings/use-result-format-refresh"
 import { useAsidePanels } from "@/features/workspace/aside-panels"
 import { RouteError, RouteNotFound } from "@/features/workspace/route-failures"
 import { WorkspaceHost } from "@/features/workspace/workspace-host"
@@ -57,6 +58,8 @@ function RootComponent() {
   const { queryClient } = Route.useRouteContext()
   // The saved theme and reading density, applied to <html> (ADR-0013).
   useAppearance()
+  // Result pages already held follow a saved change of cell format.
+  useResultFormatRefresh(queryClient)
   const open = useStore(session, (state) => state.open)
 
   React.useEffect(() => {
