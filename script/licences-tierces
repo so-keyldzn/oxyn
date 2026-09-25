@@ -214,9 +214,12 @@ def mentions_rust() -> list[dict[str, object]]:
     qu'on construit, sans les dépendances de build ni de développement."""
     cible = _cible_hote()
     # `--frozen` rend le résultat identique en ligne et hors ligne ; il suppose
-    # les sources présentes, ce qu'assure ce `fetch`.
+    # les sources présentes, ce qu'assure ce `fetch`. Toutes les cibles : le
+    # `cargo metadata` que lance `cargo about` résout le graphe de chaque
+    # plateforme du lockfile, et un runner au cache vide échouait sur une
+    # crate d'Android.
     subprocess.run(
-        ["cargo", "fetch", "--locked", "--target", cible, "--manifest-path", str(MANIFESTE_APP)],
+        ["cargo", "fetch", "--locked", "--manifest-path", str(MANIFESTE_APP)],
         cwd=RACINE,
         check=True,
     )
