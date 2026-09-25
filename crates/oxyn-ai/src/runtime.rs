@@ -1209,6 +1209,59 @@ async fn settle_sample(
     }
 }
 
+/// Un `io::Write` qui ne garde rien : il mesure une sérialisation.
+struct ByteCount(usize);
+
+impl std::io::Write for ByteCount {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        self.0 = self.0.saturating_add(buf.len());
+        Ok(buf.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+/// Compte un événement du flux dans le budget de la génération.
+///
+/// Seul ce que le tour retient compte : le texte, le refus, le raisonnement,
+/// et chaque appel ou bloc de raisonnement complet. Les fragments d'arguments
+/// comptent aussi, puisqu'ils sont montrés au fil du flux.
+fn charge(
+    budget: &mut oxyn_llm::GenerationBudget,
+    event: &ChatEvent,
+) -> Result<(), oxyn_llm::BudgetExceeded> {
+    match event {
+        ChatEvent::TextDelta(texte) | ChatEvent::RefusalDelta(texte) => budget.charge(texte.len()),
+        ChatEvent::ReasoningDelta { text, .. } => budget.charge(text.len()),
+        ChatEvent::ToolCallDelta { arguments, .. } => budget.charge(arguments.len()),
+        // Le nom n'arrive qu'ici : sans ce compte, un fournisseur tiers
+        // pourrait l'allonger sans limite.
+        ChatEvent::ToolCallStarted { index, name, .. } => {
+            budget.charge_tool_name(*index, 0, name.len())
+        }
+        ChatEvent::ToolCallComplete(call) => {
+            // Mesuré sans être recopié : l'écriture ne fait que compter.
+            let mut compteur = ByteCount(0);
+            let taille = serde_json::to_writer(&mut compteur, &call.arguments)
+                .map_or(usize::MAX, |()| compteur.0);
+            let index = u32::try_from(budget.tool_calls()).unwrap_or(u32::MAX);
+            budget.check_tool_arguments(index, taille)?;
+            budget.open_tool_call()
+        }
+        ChatEvent::ReasoningComplete { block, .. } => {
+            budget.open_block()?;
+            match block {
+                // Un bloc chiffré arrive d'un coup, sans fragments comptés.
+                ReasoningBlock::Redacted { data } => budget.charge(data.len()),
+                _ => Ok(()),
+            }
+        }
+        _ => Ok(()),
+    }
+}
+
 impl AgentRuntime {
     /// Un aller-retour avec le modèle.
     async fn one_turn(
@@ -1231,6 +1284,11 @@ impl AgentRuntime {
         let mut refusal = String::new();
         let mut stop = StopReason::Unspecified;
         let mut failure: Option<String> = None;
+        // Les fournisseurs d'`oxyn-llm` bornent déjà leur flux ; ce compte-ci
+        // vaut pour tout `LlmProvider`, et c'est ici que le texte et les refus
+        // s'accumulent. Mêmes limites, même type : deux jeux de plafonds
+        // divergeraient.
+        let mut budget = oxyn_llm::GenerationBudget::new();
 
         // Pas de `select!` sur l'annulation : le futur abandonné pourrait l'être
         // après avoir consommé des octets, laissant le décodeur désynchronisé.
@@ -1238,6 +1296,13 @@ impl AgentRuntime {
         // émet `Done { Cancelled }` — le relire ici ne fait que raccourcir
         // l'attente.
         while let Some(event) = stream.next().await {
+            // Compté avant d'être accumulé ou montré. Au dépassement, le flux
+            // est abandonné — la connexion se ferme — et le tour est une
+            // coupure : rien de ce qu'il a proposé ne s'exécute, et le
+            // fournisseur a peut-être facturé ce qu'on n'a pas lu (I-13).
+            if let Err(limite) = charge(&mut budget, &event) {
+                return Err(AiError::Interrupted(limite.to_string()));
+            }
             match event {
                 ChatEvent::TextDelta(delta) => {
                     // Notifié avant d'être accumulé : c'est ce qui fait que la
@@ -2670,9 +2735,7 @@ mod tests {
 
     #[tokio::test]
     async fn une_erreur_diffusee_par_un_fournisseur_compatible_openai_ne_cite_pas_la_cle() {
-        let trame = format!(
-            "data: {{\"error\":{{\"message\":\"invalid key {SENTINELLE}\"}}}}\n\n"
-        );
+        let trame = format!("data: {{\"error\":{{\"message\":\"invalid key {SENTINELLE}\"}}}}\n\n");
         let origine = served_once(flux_d_erreur(&trame)).await;
         let fournisseur = oxyn_llm::OpenAiCompatibleProvider::new(
             oxyn_llm::ProviderId::openrouter(),
@@ -2689,8 +2752,74 @@ mod tests {
             "event: error\ndata: {{\"type\":\"error\",\"error\":{{\"type\":\"api_error\",\"message\":\"echo {SENTINELLE}\"}}}}\n\n"
         );
         let origine = served_once(flux_d_erreur(&trame)).await;
-        let fournisseur = oxyn_llm::AnthropicProvider::with_base_url(SENTINELLE, &origine)
-            .expect("fournisseur");
+        let fournisseur =
+            oxyn_llm::AnthropicProvider::with_base_url(SENTINELLE, &origine).expect("fournisseur");
         erreur_du_fournisseur(Arc::new(fournisseur)).await;
+    }
+
+    /// Un tour dont le fournisseur dépasse un budget s'arrête en coupure, et
+    /// n'exécute rien de ce qu'il avait proposé avant.
+    fn depasse(tour: Vec<ChatEvent>, limite: usize) {
+        let fournisseur = FournisseurScripte::new(vec![tour]);
+        let moteur = runtime(fournisseur, Reach::Local);
+        let bus = BusFactice::succes();
+        let mut session = session(PrivacyTier::Metadata);
+        let erreur = block_on(moteur.run(&mut session, &bus, &(), &CancelToken::new()))
+            .expect_err("le budget arrête le tour");
+        assert!(
+            matches!(&erreur, AiError::Interrupted(message) if message.contains(&limite.to_string())),
+            "{erreur}"
+        );
+        assert!(
+            erreur.class() == Some(ErrorClass::Ambiguous),
+            "le fournisseur a peut-être facturé ce qui n'a pas été lu"
+        );
+        assert!(bus.commandes().is_empty(), "rien ne s'exécute");
+    }
+
+    #[test]
+    fn un_texte_qui_depasse_le_budget_en_plusieurs_fragments_arrete_le_tour() {
+        let morceau = "x".repeat(1024 * 1024);
+        let mut tour = vec![appel_outil()];
+        tour.extend((0..9).map(|_| ChatEvent::TextDelta(morceau.clone())));
+        tour.push(fin_outils());
+        depasse(tour, oxyn_llm::budget::MAX_GENERATION_BYTES);
+    }
+
+    #[test]
+    fn un_refus_qui_depasse_le_budget_arrete_le_tour() {
+        let morceau = "r".repeat(1024 * 1024);
+        let mut tour: Vec<ChatEvent> = (0..9)
+            .map(|_| ChatEvent::RefusalDelta(morceau.clone()))
+            .collect();
+        tour.push(ChatEvent::Done {
+            stop_reason: StopReason::Refusal,
+        });
+        depasse(tour, oxyn_llm::budget::MAX_GENERATION_BYTES);
+    }
+
+    #[test]
+    fn trop_d_appels_d_outils_arretent_le_tour_sans_en_executer_aucun() {
+        let mut tour: Vec<ChatEvent> = (0..=oxyn_llm::budget::MAX_TOOL_CALLS)
+            .map(|_| appel_outil())
+            .collect();
+        tour.push(fin_outils());
+        depasse(tour, oxyn_llm::budget::MAX_TOOL_CALLS);
+    }
+
+    #[test]
+    fn un_appel_livre_d_un_bloc_au_dela_de_son_budget_arrete_le_tour() {
+        // Un fournisseur tiers qui n'envoie aucun fragment : seul l'appel
+        // complet porte la taille.
+        let enorme = "x".repeat(oxyn_llm::budget::MAX_TOOL_ARGUMENTS_BYTES);
+        let tour = vec![
+            ChatEvent::ToolCallComplete(ToolCall::new(
+                "call_1",
+                EXECUTE_QUERY,
+                json!({ "statement": enorme }),
+            )),
+            fin_outils(),
+        ];
+        depasse(tour, oxyn_llm::budget::MAX_TOOL_ARGUMENTS_BYTES);
     }
 }

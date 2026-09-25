@@ -93,6 +93,7 @@
 //! ```
 
 pub mod anthropic;
+pub mod budget;
 pub mod error;
 pub mod gemini;
 pub mod openai_compatible;
@@ -127,6 +128,7 @@ mod stream;
 pub use oxyn_core::CancelToken;
 
 pub use anthropic::AnthropicProvider;
+pub use budget::{BudgetExceeded, GenerationBudget};
 pub use error::LlmError;
 pub use gemini::GeminiProvider;
 pub use openai_compatible::{AuthStyle, OpenAiCompatibleProvider};

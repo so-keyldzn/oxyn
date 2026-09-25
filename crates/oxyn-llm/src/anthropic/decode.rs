@@ -45,10 +45,19 @@
 //! 2. **seul `content_block_stop` clôt un bloc.** Un appel d'outil dont le JSON
 //!    se lit par chance n'est pas un appel que le modèle a fini d'écrire : il
 //!    est jeté, jamais proposé.
+//!
+//! # Tout ce qui s'accumule est compté
+//!
+//! Chaque bloc ouvert, chaque fragment de texte, de raisonnement, de
+//! signature ou d'arguments passe par un [`GenerationBudget`] **avant** d'être
+//! retenu ou émis. Un bloc ouvert sans jamais être fermé coûte lui aussi : il
+//! porte un état jusqu'à sa fermeture. Au premier dépassement, la génération
+//! s'arrête : voir [`crate::budget`].
 
 use std::collections::BTreeMap;
 
 use super::wire::{ContentBlock, Envelope, WireError};
+use crate::budget::{BudgetExceeded, GenerationBudget};
 use crate::error::classify_json_error;
 use crate::reasoning::ReasoningBlock;
 use crate::sse::SseFrame;
@@ -91,6 +100,7 @@ enum PartialBlock {
 #[derive(Debug, Default)]
 pub(crate) struct MessageDecoder {
     blocks: BTreeMap<u32, PartialBlock>,
+    budget: GenerationBudget,
     stop: Option<StopReason>,
     done: bool,
     errors: usize,
@@ -137,10 +147,20 @@ impl MessageDecoder {
             }
         };
 
-        match trame.r#type.as_deref() {
-            Some("message_start") => self.on_message_start(&trame, out),
+        let compte = match trame.r#type.as_deref() {
             Some("content_block_start") => self.on_block_start(&trame, out),
             Some("content_block_delta") => self.on_block_delta(&trame, out),
+            _ => Ok(()),
+        };
+        if let Err(limite) = compte {
+            self.exceed(limite, out);
+            return;
+        }
+
+        match trame.r#type.as_deref() {
+            Some("message_start") => self.on_message_start(&trame, out),
+            // Traités au-dessus, où leur coût est compté.
+            Some("content_block_start" | "content_block_delta") => {}
             Some("content_block_stop") => self.on_block_stop(&trame, out),
             Some("message_delta") => self.on_message_delta(&trame, out),
             Some("message_stop") => self.on_message_stop(out),
@@ -177,13 +197,34 @@ impl MessageDecoder {
     }
 
     /// `content_block_start` : un bloc s'ouvre, son type est donné.
-    fn on_block_start(&mut self, trame: &Envelope, out: &mut Vec<ChatEvent>) {
+    ///
+    /// # Erreurs
+    /// Le budget que ce bloc dépasserait ; il n'est alors pas ouvert.
+    fn on_block_start(
+        &mut self,
+        trame: &Envelope,
+        out: &mut Vec<ChatEvent>,
+    ) -> Result<(), BudgetExceeded> {
         let Some(index) = trame.index else {
-            return;
+            return Ok(());
         };
         let Some(bloc) = trame.content_block.as_ref() else {
-            return;
+            return Ok(());
         };
+        let longueur = |champ: &Option<String>| champ.as_ref().map_or(0, String::len);
+        if bloc.r#type.as_deref() == Some("tool_use") {
+            self.budget.open_tool_call()?;
+            self.budget
+                .charge_tool_name(index, 0, longueur(&bloc.name))?;
+            self.budget.charge(longueur(&bloc.id))?;
+        } else {
+            self.budget.open_block()?;
+            self.budget.charge(
+                longueur(&bloc.thinking)
+                    .saturating_add(longueur(&bloc.signature))
+                    .saturating_add(longueur(&bloc.data)),
+            )?;
+        }
 
         let partiel = match bloc.r#type.as_deref() {
             Some("text") => PartialBlock::Text,
@@ -216,6 +257,7 @@ impl MessageDecoder {
         };
         self.blocks.insert(index, partiel);
         Self::note_unused(bloc);
+        Ok(())
     }
 
     /// Accepte sans rien faire un bloc dont on n'exploite pas les champs.
@@ -226,21 +268,30 @@ impl MessageDecoder {
     const fn note_unused(_bloc: &ContentBlock) {}
 
     /// `content_block_delta` : un fragment arrive pour un bloc ouvert.
-    fn on_block_delta(&mut self, trame: &Envelope, out: &mut Vec<ChatEvent>) {
+    ///
+    /// # Erreurs
+    /// Le budget que ce fragment dépasserait ; rien n'en est alors retenu.
+    fn on_block_delta(
+        &mut self,
+        trame: &Envelope,
+        out: &mut Vec<ChatEvent>,
+    ) -> Result<(), BudgetExceeded> {
         let (Some(index), Some(delta)) = (trame.index, trame.delta.as_ref()) else {
-            return;
+            return Ok(());
         };
         // Un delta qui vise un bloc jamais ouvert s'ignore : inventer le bloc
         // reviendrait à inventer son type, donc le sens de ce qu'on accumule.
         let Some(bloc) = self.blocks.get_mut(&index) else {
-            return;
+            return Ok(());
         };
+        let budget = &mut self.budget;
 
         match (delta.r#type.as_deref(), bloc) {
             (Some("text_delta"), PartialBlock::Text) => {
                 if let Some(texte) = delta.text.clone()
                     && !texte.is_empty()
                 {
+                    budget.charge(texte.len())?;
                     out.push(ChatEvent::TextDelta(texte));
                 }
             }
@@ -248,6 +299,7 @@ impl MessageDecoder {
                 if let Some(fragment) = delta.partial_json.clone()
                     && !fragment.is_empty()
                 {
+                    budget.charge_tool_arguments(index, arguments.len(), fragment.len())?;
                     arguments.push_str(&fragment);
                     out.push(ChatEvent::ToolCallDelta {
                         index,
@@ -259,6 +311,7 @@ impl MessageDecoder {
                 if let Some(fragment) = delta.thinking.clone()
                     && !fragment.is_empty()
                 {
+                    budget.charge(fragment.len())?;
                     text.push_str(&fragment);
                     out.push(ChatEvent::ReasoningDelta {
                         index,
@@ -271,6 +324,7 @@ impl MessageDecoder {
                 // bloc. Elle ne s'émet pas : elle n'a de sens qu'au tour
                 // suivant, et elle ne s'affiche jamais.
                 if let Some(valeur) = delta.signature.clone() {
+                    budget.charge(valeur.len())?;
                     *signature = Some(valeur);
                 }
             }
@@ -278,6 +332,7 @@ impl MessageDecoder {
             // incohérence du serveur, pas une donnée à sauver.
             _ => {}
         }
+        Ok(())
     }
 
     /// `content_block_stop` : le bloc est complet.
@@ -365,6 +420,19 @@ impl MessageDecoder {
         // appel d'outil à moitié reçu n'est pas une proposition d'action.
         self.blocks.clear();
         self.stop = Some(StopReason::ProviderError);
+        self.emit_done(out);
+    }
+
+    /// Arrête la génération sur un budget dépassé.
+    ///
+    /// L'erreur nomme la limite ; les blocs ouverts sont **jetés** — un appel
+    /// d'outil coupé n'est pas une proposition d'action — et la fin est une
+    /// coupure : le fournisseur a peut-être continué, et facturé, ce qu'on a
+    /// cessé de lire (I-13).
+    fn exceed(&mut self, limite: BudgetExceeded, out: &mut Vec<ChatEvent>) {
+        out.push(ChatEvent::Error(limite.to_string()));
+        self.discard_open_blocks(out);
+        self.stop = Some(StopReason::Interrupted);
         self.emit_done(out);
     }
 
@@ -1279,3 +1347,6 @@ mod tests {
         assert_eq!(sorties.len(), apres, "{sorties:?}");
     }
 }
+
+#[cfg(test)]
+mod budget_tests;

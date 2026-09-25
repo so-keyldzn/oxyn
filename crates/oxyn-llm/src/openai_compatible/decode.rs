@@ -39,10 +39,19 @@
 //!   sont **jetés**. Un mandataire qui ferme proprement en pleine génération ne
 //!   produit aucune erreur de transport, et des arguments qui se lisent par
 //!   chance ne sont pas des arguments que le modèle a fini d'écrire.
+//!
+//! # Tout ce qui s'accumule est compté
+//!
+//! Texte, refus, identifiants, noms et arguments d'outils passent par un
+//! [`GenerationBudget`] **avant** d'être accumulés ou émis — y compris le nom
+//! d'un appel déjà annoncé, que certains serveurs continuent de fragmenter sans
+//! que rien ne soit émis. Au premier dépassement, la génération s'arrête : voir
+//! [`crate::budget`].
 
 use std::collections::BTreeMap;
 
 use super::wire::{self, ChatChunk, DeltaToolCall};
+use crate::budget::{BudgetExceeded, GenerationBudget};
 use crate::sse::SseFrame;
 use crate::stream::EventDecoder;
 use crate::types::{ChatEvent, StopReason};
@@ -70,6 +79,7 @@ struct PartialCall {
 #[derive(Debug, Default)]
 pub(crate) struct ChunkDecoder {
     calls: BTreeMap<u32, PartialCall>,
+    budget: GenerationBudget,
     stop: Option<StopReason>,
     done: bool,
     errors: usize,
@@ -148,21 +158,9 @@ impl ChunkDecoder {
         }
 
         for choix in chunk.choices {
-            if let Some(texte) = choix.delta.content
-                && !texte.is_empty()
-            {
-                out.push(ChatEvent::TextDelta(texte));
-            }
-            // Un refus est une réponse, pas une erreur : la requête a abouti et
-            // le modèle a dit qu'il ne répondrait pas. Le confondre avec du
-            // texte le ferait présenter comme une réponse.
-            if let Some(refus) = choix.delta.refusal
-                && !refus.is_empty()
-            {
-                out.push(ChatEvent::RefusalDelta(refus));
-            }
-            for appel in choix.delta.tool_calls {
-                self.accumulate(appel, out);
+            if let Err(limite) = self.on_delta(choix.delta, out) {
+                self.exceed(limite, out);
+                return;
             }
             if let Some(raison) = choix.finish_reason {
                 // La génération est finie ; le flux, pas forcément.
@@ -170,6 +168,46 @@ impl ChunkDecoder {
                 self.flush_calls(out);
             }
         }
+    }
+
+    /// Émet le contenu d'un fragment de choix, compté avant de l'être.
+    fn on_delta(
+        &mut self,
+        delta: wire::Delta,
+        out: &mut Vec<ChatEvent>,
+    ) -> Result<(), BudgetExceeded> {
+        if let Some(texte) = delta.content
+            && !texte.is_empty()
+        {
+            self.budget.charge(texte.len())?;
+            out.push(ChatEvent::TextDelta(texte));
+        }
+        // Un refus est une réponse, pas une erreur : la requête a abouti et le
+        // modèle a dit qu'il ne répondrait pas. Le confondre avec du texte le
+        // ferait présenter comme une réponse.
+        if let Some(refus) = delta.refusal
+            && !refus.is_empty()
+        {
+            self.budget.charge(refus.len())?;
+            out.push(ChatEvent::RefusalDelta(refus));
+        }
+        for appel in delta.tool_calls {
+            self.accumulate(appel, out)?;
+        }
+        Ok(())
+    }
+
+    /// Arrête la génération sur un budget dépassé.
+    ///
+    /// L'erreur nomme la limite ; les appels en cours sont **jetés** — un
+    /// appel coupé n'est pas une proposition d'action — et la fin est une
+    /// coupure : le fournisseur a peut-être continué, et facturé, ce qu'on a
+    /// cessé de lire (I-13).
+    fn exceed(&mut self, limite: BudgetExceeded, out: &mut Vec<ChatEvent>) {
+        out.push(ChatEvent::Error(limite.to_string()));
+        self.discard_calls(out);
+        self.stop = Some(StopReason::Interrupted);
+        self.emit_done(out);
     }
 
     /// Signale la fermeture du flux par le serveur, sans `[DONE]`.
@@ -229,13 +267,26 @@ impl ChunkDecoder {
     }
 
     /// Range un fragment d'appel d'outil et émet ce qui est devenu certain.
-    fn accumulate(&mut self, brut: DeltaToolCall, out: &mut Vec<ChatEvent>) {
+    ///
+    /// # Erreurs
+    /// Le budget que ce fragment dépasserait ; rien n'en est alors retenu.
+    fn accumulate(
+        &mut self,
+        brut: DeltaToolCall,
+        out: &mut Vec<ChatEvent>,
+    ) -> Result<(), BudgetExceeded> {
         let index = brut.index;
+        if !self.calls.contains_key(&index) {
+            // Un index neuf est un appel neuf : c'est lui que le plafond du
+            // nombre d'appels compte, avant que l'état n'existe.
+            self.budget.open_tool_call()?;
+        }
         let entree = self.calls.entry(index).or_default();
 
         if let Some(id) = brut.id.filter(|valeur| !valeur.is_empty())
             && entree.id.is_none()
         {
+            self.budget.charge(id.len())?;
             entree.id = Some(id);
         }
 
@@ -244,9 +295,16 @@ impl ChunkDecoder {
             if let Some(nom) = fonction.name.filter(|valeur| !valeur.is_empty()) {
                 // Concaténation et non affectation : quelques serveurs
                 // fragmentent aussi le nom.
+                self.budget
+                    .charge_tool_name(index, entree.name.len(), nom.len())?;
                 entree.name.push_str(&nom);
             }
             if let Some(arguments) = fonction.arguments.filter(|valeur| !valeur.is_empty()) {
+                self.budget.charge_tool_arguments(
+                    index,
+                    entree.arguments.len(),
+                    arguments.len(),
+                )?;
                 entree.arguments.push_str(&arguments);
                 fragment = Some(arguments);
             }
@@ -263,6 +321,7 @@ impl ChunkDecoder {
         if let Some(arguments) = fragment {
             out.push(ChatEvent::ToolCallDelta { index, arguments });
         }
+        Ok(())
     }
 
     /// Jette les appels d'outils sans annonce de fin, en le signalant.
@@ -726,3 +785,6 @@ mod tests {
         assert_eq!(sorties.len(), apres, "{sorties:?}");
     }
 }
+
+#[cfg(test)]
+mod budget_tests;
