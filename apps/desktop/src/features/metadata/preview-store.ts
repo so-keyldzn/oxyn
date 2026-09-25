@@ -162,7 +162,15 @@ export function createPreviewStore(effects: PreviewEffects) {
   return {
     store,
 
-    /** Creates the entry if needed and marks one more view showing it. */
+    /**
+     * Creates the entry if needed and marks one more view showing it.
+     *
+     * An entry read on another session — the connection was closed and
+     * opened again — is read on this one instead: what it held came from a
+     * closed session, so it is released rather than shown as current, and a
+     * late answer from there finds the read replaced. The shape in force is
+     * kept, like after a write.
+     */
     attach(
       key: string,
       target: {
@@ -172,26 +180,60 @@ export function createPreviewStore(effects: PreviewEffects) {
         serverCancel: boolean
       }
     ) {
+      const existing = store.state[key]
+      if (existing && existing.session !== target.session) {
+        if (existing.running) effects.cancel(existing.running)
+        const result = resultOf(existing)
+        if (result) effects.forgetResult(result)
+      }
       store.setState((all) => {
         const entry = all[key]
+        if (entry?.session === target.session)
+          return {
+            ...all,
+            [key]: { ...entry, views: entry.views + 1, shownAt: effects.now() },
+          }
+        const applied = entry?.applied ?? PLAIN_SHAPE
         return {
           ...all,
-          [key]: entry
-            ? { ...entry, views: entry.views + 1, shownAt: effects.now() }
-            : {
-                ...target,
-                running: null,
-                cancelling: false,
-                startedAt: null,
-                state: { status: "initial" },
-                applied: PLAIN_SHAPE,
-                requested: PLAIN_SHAPE,
-                approvalRefused: false,
-                stale: false,
-                views: 1,
-                shownAt: effects.now(),
-              },
+          [key]: {
+            ...target,
+            running: null,
+            cancelling: false,
+            startedAt: null,
+            state: { status: "initial" },
+            applied,
+            requested: applied,
+            approvalRefused: false,
+            stale: false,
+            views: (entry?.views ?? 0) + 1,
+            shownAt: effects.now(),
+          },
         }
+      })
+    },
+
+    /**
+     * `sessions` are closing: their previews go, with what they held, and a
+     * read in flight is cancelled. Even a preview still shown goes: nothing
+     * may read on a closed session, and its view, hidden until the workspace
+     * is replaced, attaches again on the next one.
+     */
+    closeSessions(sessions: ReadonlyArray<string>) {
+      const closing = new Set(sessions)
+      const gone = Object.entries(store.state).filter(([, entry]) =>
+        closing.has(entry.session)
+      )
+      if (gone.length === 0) return
+      for (const [, entry] of gone) {
+        if (entry.running) effects.cancel(entry.running)
+        const result = resultOf(entry)
+        if (result) effects.forgetResult(result)
+      }
+      store.setState((all) => {
+        const next = { ...all }
+        for (const [key] of gone) delete next[key]
+        return next
       })
     },
 

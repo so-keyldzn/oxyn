@@ -100,8 +100,9 @@ export function usePreview({
   // with the shape in force. Never after an error, which a new read would hide.
   React.useEffect(() => {
     if (!entry || !visible || entry.running) return
+    // The shape in force: plain on a first visit, kept across a reconnection.
     if (entry.state.status === "initial" && !entry.approvalRefused)
-      read(PLAIN_SHAPE)
+      read(entry.applied)
     else if (entry.stale && entry.state.status !== "error") read(entry.applied)
   }, [entry?.state.status, entry?.stale, entry?.running, visible])
 
