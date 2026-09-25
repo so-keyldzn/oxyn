@@ -6,8 +6,11 @@
 //! nothing here writes the store directly ([I-01](../../../../CLAUDE.md#i-01)).
 
 mod connections;
+mod location;
 mod preferences;
 
+#[cfg(test)]
+mod location_tests;
 #[cfg(test)]
 mod tests;
 

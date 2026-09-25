@@ -23,6 +23,7 @@ import {
 import { RelationIndexes } from "@/components/oxyn/relation-indexes"
 import { IncomingKeys, OutgoingKeys } from "@/components/oxyn/relation-keys"
 import { RelationStructure } from "@/components/oxyn/relation-structure"
+import { RestoredObjectNotice } from "@/components/oxyn/restored-object-notice"
 import { ResultPanel } from "@/components/oxyn/result-panel"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu"
@@ -41,7 +42,10 @@ import {
 } from "@/features/metadata/value-inspection"
 import { useResultDensity } from "@/features/settings/use-result-density"
 import { useResultExport } from "@/features/workspace/export-menu"
+import { sectionOf, tabOf } from "@/features/workspace/object-location"
+import type { RelationDirection } from "@/features/workspace/object-location"
 import { useCompact } from "@/features/workspace/use-compact"
+import type { SectionChoice } from "@/lib/ipc/location"
 import { metadata } from "@/lib/ipc/metadata"
 import type { BoundValue } from "@/lib/ipc/metadata"
 import { results } from "@/lib/ipc/results"
@@ -72,6 +76,8 @@ export function ObjectView({
   open,
   node,
   initialTab,
+  restored,
+  onPlaceChange,
   onInspectRow,
   onOpenRelated,
   onOpenInConsole,
@@ -82,6 +88,13 @@ export function ObjectView({
   open: OpenConnection
   node: CatalogNode
   initialTab?: OpenTarget
+  /**
+   * The sub-view saved in the last session. The tab opens on it and reads
+   * nothing — rows or metadata — until the user asks.
+   */
+  restored?: SectionChoice
+  /** The sub-view shown, each time it changes: saved for the next launch. */
+  onPlaceChange?: (section: SectionChoice) => void
   /** Shows the selected row's inspector, overlaid at compact width. */
   onInspectRow?: () => void
   /** Selects another relation, as a click in the explorer would. */
@@ -110,27 +123,35 @@ export function ObjectView({
   const dataUnavailable = previewUnavailable(open, node.holdsRecords)
   const previewable = dataUnavailable === null
   const compact = useCompact()
+  const restoredAt = restored ? tabOf(restored) : null
   const [chosenTab, setTab] = React.useState<ObjectTab>(() =>
-    initialObjectTab(initialTab, previewable)
+    restoredAt && !(restoredAt.tab === "data" && !previewable)
+      ? restoredAt.tab
+      : initialObjectTab(initialTab, previewable)
   )
   // Wide, the definition sits beside the metadata instead of being a tab: the
   // choice is kept for the compact layout, which lists it again.
   const tab: ObjectTab =
     !compact && chosenTab === "definition" ? "structure" : chosenTab
+  // A restored tab waits for a gesture: choosing a view, Refresh, Read it now.
+  const [held, setHeld] = React.useState(restored !== undefined)
   const [gridFocusRequest, setGridFocusRequest] = React.useState(0)
   React.useImperativeHandle(
     handleRef,
     () => ({
       focusPreview: () => {
         if (!previewable) return
+        setHeld(false)
         setTab("data")
         setGridFocusRequest((count) => count + 1)
       },
     }),
     [previewable]
   )
-  const [direction, setDirection] = React.useState<"outgoing" | "incoming">(
-    () => (unsupportedReason(open, "incoming") ? "outgoing" : "incoming")
+  const [direction, setDirection] = React.useState<RelationDirection>(
+    () =>
+      restoredAt?.direction ??
+      (unsupportedReason(open, "incoming") ? "outgoing" : "incoming")
   )
   const source = `preview:${open.connection}:${addressKey(node.address)}`
   const facets = useRelationFacets(open, node.address)
@@ -138,8 +159,25 @@ export function ObjectView({
     open,
     address: node.address,
     enabled: previewable,
-    visible: tab === "data",
+    visible: tab === "data" && !held,
   })
+
+  const placeChange = React.useRef(onPlaceChange)
+  placeChange.current = onPlaceChange
+  // Held, the saved place is left as it was: only a gesture moves it.
+  React.useEffect(() => {
+    // The tab chosen, not the one drawn: wide, a chosen DDL shows Structure
+    // beside the definition, and is still DDL once narrowed.
+    if (!held) placeChange.current?.(sectionOf(chosenTab, direction))
+  }, [held, chosenTab, direction])
+  const chooseTab = (next: ObjectTab) => {
+    setHeld(false)
+    setTab(next)
+  }
+  const chooseDirection = (next: RelationDirection) => {
+    setHeld(false)
+    setDirection(next)
+  }
 
   React.useEffect(() => {
     inspectObject({ connection: open.connection, address: node.address })
@@ -156,6 +194,7 @@ export function ObjectView({
 
   const { ensure } = facets
   React.useEffect(() => {
+    if (held) return
     switch (tab) {
       case "structure":
       case "indexes":
@@ -178,7 +217,7 @@ export function ObjectView({
     // Asked once, like a tab: a window resized across 1200 px reads nothing.
     if (!compact && tab !== "data" && !unsupportedReason(open, "definition"))
       ensure("definition")
-  }, [tab, direction, compact, ensure])
+  }, [held, tab, direction, compact, ensure])
 
   const data = facets.facets
   const state = preview.state
@@ -228,6 +267,13 @@ export function ObjectView({
   const definitionStale =
     data?.definition.freshness.state === "invalidated" ||
     facets.loads.definition.status === "error"
+  // Restored, then read again from the server, and the relation was not
+  // there: said, and its place kept (docs/UX-SPEC.md).
+  const vanished =
+    restored !== undefined &&
+    !held &&
+    data?.detail.freshness.state === "fetched" &&
+    data.detail.value === null
 
   const density = useResultDensity()
   const exporter = useResultExport({
@@ -263,7 +309,7 @@ export function ObjectView({
       name={node.name}
       kind={data?.kind ?? node.kind}
       tab={tab}
-      onTabChange={setTab}
+      onTabChange={chooseTab}
       compact={compact}
       dataUnavailable={dataUnavailable}
       onEscape={tab === "data" && preview.running ? preview.cancel : undefined}
@@ -278,23 +324,37 @@ export function ObjectView({
           <PreviewToolbar
             running={preview.running}
             cancelling={preview.cancelling}
-            onRefresh={preview.refresh}
+            onRefresh={() => {
+              setHeld(false)
+              preview.refresh()
+            }}
             onCancel={preview.cancel}
           />
         ) : null
       }
       notice={
-        facets.error ? (
-          <Alert
-            variant="destructive"
-            className="rounded-none border-x-0 border-t-0"
-          >
-            <AlertTitle>The catalog cache could not be read</AlertTitle>
-            <AlertDescription className="font-mono text-xs text-foreground">
-              {facets.error}
-            </AlertDescription>
-          </Alert>
-        ) : null
+        <>
+          {held ? (
+            <RestoredObjectNotice
+              state="held"
+              name={node.name}
+              onRead={() => setHeld(false)}
+            />
+          ) : vanished ? (
+            <RestoredObjectNotice state="vanished" name={node.name} />
+          ) : null}
+          {facets.error ? (
+            <Alert
+              variant="destructive"
+              className="rounded-none border-x-0 border-t-0"
+            >
+              <AlertTitle>The catalog cache could not be read</AlertTitle>
+              <AlertDescription className="font-mono text-xs text-foreground">
+                {facets.error}
+              </AlertDescription>
+            </Alert>
+          ) : null}
+        </>
       }
       panels={{
         data: previewable ? (
@@ -438,7 +498,7 @@ export function ObjectView({
         relations: (
           <RelationsPanel
             direction={direction}
-            onDirectionChange={setDirection}
+            onDirectionChange={chooseDirection}
           >
             {data && direction === "outgoing" ? (
               <FacetFrame
