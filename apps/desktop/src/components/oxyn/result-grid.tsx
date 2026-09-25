@@ -13,6 +13,15 @@ import {
   rangeRows,
 } from "@/components/oxyn/grid-selection"
 import type { GridPosition } from "@/components/oxyn/grid-selection"
+import {
+  GridMenuRoot,
+  GridMenuTrigger,
+  menuTargetOf,
+} from "@/components/oxyn/result-grid-menu"
+import type {
+  GridMenu,
+  GridMenuTarget,
+} from "@/components/oxyn/result-grid-menu"
 import { platform } from "@/lib/actions/platform"
 import { hasMod, keyOf } from "@/lib/actions/shortcut"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -217,6 +226,8 @@ interface ResultGridProps {
   onActiveChange?: (active: GridPosition | null, cell: Cell | undefined) => void
   /** Enter or a double click on a cell: open its full value. */
   onInspect?: (position: GridPosition) => void
+  /** The context menus of a cell and of a header; absent, none opens. */
+  menu?: GridMenu
   "aria-label"?: string
 }
 
@@ -290,6 +301,7 @@ export const ResultGrid = React.memo(function ResultGrid({
   reveal,
   onActiveChange,
   onInspect,
+  menu,
   "aria-label": ariaLabel = "Result rows",
 }: ResultGridProps) {
   const baseId = React.useId()
@@ -300,6 +312,9 @@ export const ResultGrid = React.memo(function ResultGrid({
     text: string
     failed: boolean
   } | null>(null)
+  const [menuTarget, setMenuTarget] = React.useState<GridMenuTarget | null>(
+    null
+  )
   const range = rangeOf(anchor, active)
   // Pages are sized on the result's width, not on what is shown: hiding a
   // column must not ask the backend again for pages already held.
@@ -335,6 +350,7 @@ export const ResultGrid = React.memo(function ResultGrid({
     setAnchor(null)
     setActive(null)
     setStatus(null)
+    setMenuTarget(null)
   }
   const { rowHeight, charWidth } = useGridMetrics(scrollRef)
   const autoWidth = (column: number) => {
@@ -561,6 +577,21 @@ export const ResultGrid = React.memo(function ResultGrid({
     select(next, event.shiftKey)
   }
 
+  // A right click outside the selection moves it to the cell, as a click
+  // would; inside, it acts on the whole selection.
+  const onContextMenu = (event: React.MouseEvent<HTMLDivElement>) => {
+    if (!(event.target instanceof Element)) return
+    const target = menuTargetOf(event.target, active)
+    if (
+      target?.kind === "cell" &&
+      !inRange(range, target.position.row, target.position.column)
+    ) {
+      setAnchor(target.position)
+      setActive(target.position)
+    }
+    setMenuTarget(target)
+  }
+
   const resize = (column: number, width: number | null) =>
     setResized((current) => {
       const next = { ...current }
@@ -594,8 +625,29 @@ export const ResultGrid = React.memo(function ResultGrid({
   const tabbableHandle = active?.column ?? firstShown
 
   return (
-    <div className={cn("flex h-full min-h-0 flex-col", className)}>
-      <div
+    <GridMenuRoot
+      enabled={menu !== undefined}
+      host={
+        menu && menuTarget
+          ? {
+              menu,
+              target: menuTarget,
+              columns,
+              shown,
+              rowCount,
+              range,
+              readCell: async ({ row, column }) =>
+                rowAt(row)?.[column] ??
+                asPage(await fillPage(fetchPage, row, 1))?.rows[0]?.[column],
+              onInspect,
+              autosize: (column) => resize(column, null),
+              report: (text) => setStatus({ text, failed: true }),
+            }
+          : null
+      }
+      className={cn("flex h-full min-h-0 flex-col", className)}
+    >
+      <GridMenuTrigger
         ref={scrollRef}
         role="grid"
         aria-label={ariaLabel}
@@ -609,6 +661,7 @@ export const ResultGrid = React.memo(function ResultGrid({
         }
         tabIndex={0}
         onKeyDown={onKeyDown}
+        onContextMenu={onContextMenu}
         className="relative min-h-0 flex-1 overflow-auto bg-background font-mono text-[length:var(--reading-text)] outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
       >
         <div
@@ -645,6 +698,7 @@ export const ResultGrid = React.memo(function ResultGrid({
                   key={virtual.key}
                   role="columnheader"
                   aria-colindex={virtual.index + 2}
+                  data-column={index}
                   title={`${column.name} · ${column.dataType}`}
                   className={cn(
                     "absolute top-0 flex h-full min-w-0 flex-col justify-center border-r border-grid-line px-2 leading-3",
@@ -741,9 +795,13 @@ export const ResultGrid = React.memo(function ResultGrid({
                       role="gridcell"
                       aria-colindex={virtual.index + 2}
                       aria-selected={selected}
-                      onMouseDown={(event) =>
+                      data-row={item.index}
+                      data-column={column}
+                      onMouseDown={(event) => {
+                        // A right click keeps the selection it lands in.
+                        if (event.button === 2 && selected) return
                         select({ row: item.index, column }, event.shiftKey)
-                      }
+                      }}
                       onDoubleClick={() =>
                         onInspect?.({ row: item.index, column })
                       }
@@ -777,7 +835,7 @@ export const ResultGrid = React.memo(function ResultGrid({
             )
           })}
         </div>
-      </div>
+      </GridMenuTrigger>
 
       {failedPage ? (
         <Alert
@@ -815,7 +873,7 @@ export const ResultGrid = React.memo(function ResultGrid({
       >
         {status?.text}
       </p>
-    </div>
+    </GridMenuRoot>
   )
 })
 

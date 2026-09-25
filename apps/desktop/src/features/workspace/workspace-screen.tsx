@@ -12,8 +12,12 @@ import { WorkspaceAside } from "@/components/oxyn/workspace-aside"
 import type { AsideItem } from "@/components/oxyn/workspace-aside"
 import { WorkspaceLayout } from "@/components/oxyn/workspace-layout"
 import type { LeftView } from "@/components/oxyn/workspace-layout"
+import { RenameConsoleDialog } from "@/components/oxyn/rename-console-dialog"
 import { WorkspaceTabs, tabPanelValue } from "@/components/oxyn/workspace-tabs"
-import type { WorkspaceTabItem } from "@/components/oxyn/workspace-tabs"
+import type {
+  TabMenuTarget,
+  WorkspaceTabItem,
+} from "@/components/oxyn/workspace-tabs"
 import { Button } from "@/components/ui/button"
 import {
   Empty,
@@ -178,6 +182,9 @@ export function WorkspaceScreen({
     () => new Set()
   )
   const [active, setActive] = React.useState<string | null>(null)
+  // The tab shown, as a series of closes reads it between two awaits.
+  const activeRef = React.useRef(active)
+  activeRef.current = active
   const lastConsole = React.useRef<string | null>(null)
   const objectsRef = React.useRef(objects)
   objectsRef.current = objects
@@ -300,11 +307,13 @@ export function WorkspaceScreen({
     // `openResult` only sets state: the requests are the trigger.
   }, [resultRequests, open.connection])
 
-  const closeTab = (key: string) => {
-    if (key.startsWith("console:")) {
-      work.requestClose(key)
-      return
-    }
+  /**
+   * Closes the tab `key`. Resolves `false` when a console's close was
+   * cancelled or refused — what ends a series of closes — and `true`
+   * otherwise, a result kept for its export included: the series goes on.
+   */
+  const closeTab = async (key: string): Promise<boolean> => {
+    if (key.startsWith("console:")) return work.requestClose(key)
     // Closing would unmount the export and cancel its write (UX-SPEC
     // § Résultats conservés): the user ends or cancels it first.
     if (exporting.has(key)) {
@@ -314,20 +323,48 @@ export function WorkspaceScreen({
         description: "Finish or cancel the export before closing this result.",
         type: "warning",
       })
-      return
+      return true
     }
     if (key.startsWith("object:")) {
       const remaining = objectsRef.current.filter((tab) => tab.key !== key)
+      objectsRef.current = remaining
       sections.current.delete(key)
       keepPlace(remaining[remaining.length - 1])
     }
     setObjects((current) => current.filter((tab) => tab.key !== key))
     setRetained((current) => current.filter((tab) => tab.key !== key))
-    if (active !== key) return
-    const fallback = lastConsole.current ?? work.entries[0]?.key ?? null
+    if (activeRef.current !== key) return true
+    // A console closed by the same series is no fallback.
+    const live = (candidate: string | null | undefined) =>
+      candidate && work.handles.current.has(candidate) ? candidate : null
+    const fallback =
+      live(lastConsole.current) ??
+      live(work.entries.find((entry) => live(entry.key))?.key)
     if (fallback) activate(fallback)
     else setActive(null)
+    activeRef.current = fallback
+    return true
   }
+
+  // `Close others`, `Close to the right`, `Close all`: one tab at a time,
+  // each console asking as it would alone; Cancel ends the series there
+  // (UX-SPEC, « Menus contextuels », Onglet). One series at a time.
+  const closing = React.useRef(false)
+  const closeSeries = async (keys: ReadonlyArray<string>) => {
+    if (closing.current) return
+    closing.current = true
+    try {
+      for (const key of keys) if (!(await closeTab(key))) return
+    } finally {
+      closing.current = false
+    }
+  }
+
+  // The console whose name `Rename…` is changing.
+  const [renaming, setRenaming] = React.useState<{
+    key: string
+    title: string
+  } | null>(null)
 
   const focusConsole = () => {
     const key = lastConsole.current ?? work.entries[0]?.key
@@ -388,13 +425,15 @@ export function WorkspaceScreen({
             active !== null && objects.some((tab) => tab.key === active),
           hasAside: aside.length > 0,
           hasAssistant,
+          reopenable: work.reopenable,
         }
       : null,
     {
       openConsole: () => void work.openConsole(),
       closeActiveTab: () => {
-        if (active) closeTab(active)
+        if (active) void closeTab(active)
       },
+      reopenTab: () => void work.reopen(),
       nextTab: () => cycleTab(1),
       previousTab: () => cycleTab(-1),
       showCatalog: () => setLeftView("catalog"),
@@ -439,6 +478,44 @@ export function WorkspaceScreen({
       exporting: exporting.has(tab.key),
     })),
   ]
+  // The target of a tab's context menu: the same functions as the tab's
+  // cross, ⌘W, the console's « Query name » field and the library switch
+  // (I-01).
+  const tabMenu = (key: string): TabMenuTarget => {
+    const index = tabs.findIndex((tab) => tab.key === key)
+    const others = tabs.filter((tab) => tab.key !== key).map((tab) => tab.key)
+    const right = index < 0 ? [] : tabs.slice(index + 1).map((tab) => tab.key)
+    const handle = work.handles.current.get(key)
+    const isConsole = handle !== undefined
+    const title = work.meta[key]?.title
+    return {
+      state: {
+        console: isConsole,
+        count: tabs.length,
+        toTheRight: right.length,
+        saved: handle?.closeReasons().hasSavedCopy ?? false,
+      },
+      actions: {
+        close: () => void closeTab(key),
+        closeOthers: () => void closeSeries(others),
+        closeRight: () => void closeSeries(right),
+        closeAll: () => void closeSeries(tabs.map((tab) => tab.key)),
+        // Offered on every tab, so that an object's menu says why it
+        // cannot: the registry greys them on `console`.
+        duplicate: () => {
+          if (isConsole) void work.duplicate(key)
+        },
+        rename: () => {
+          if (isConsole) setRenaming({ key, title: title ?? "" })
+        },
+        // TODO(2026-12-31, débloqué par une sélection d'entrée exposée par
+        // la bibliothèque) — the library opens; it cannot yet be told which
+        // saved query to show.
+        revealInLibrary: isConsole ? () => setLeftView("library") : undefined,
+      },
+    }
+  }
+
   const activeObject = objects.find((tab) => tab.key === active)
   const activeEntry = work.entries.find(
     (entry) => entry.key === lastConsole.current
@@ -456,6 +533,9 @@ export function WorkspaceScreen({
               }
               onSelect={(node) => openObject(node)}
               onOpen={(node, target) => openObject(node, target)}
+              onNewConsole={(place) =>
+                void work.openConsole({ context: place })
+              }
               onLeave={onSwitchConnection}
             />
           ) : (
@@ -496,9 +576,10 @@ export function WorkspaceScreen({
             tabs={tabs}
             active={active}
             opening={work.opening}
-            onClose={closeTab}
+            onClose={(key) => void closeTab(key)}
             onNewConsole={() => void work.openConsole()}
             onCancelOpening={work.cancelOpening}
+            menuFor={tabMenu}
           />
         }
         aiEntry={
@@ -689,6 +770,14 @@ export function WorkspaceScreen({
         onCancel={() => void work.decideClose("cancel")}
         onSave={() => void work.decideClose("save")}
         onDiscard={() => void work.decideClose("discard")}
+      />
+      <RenameConsoleDialog
+        title={visible ? (renaming?.title ?? null) : null}
+        onCancel={() => setRenaming(null)}
+        onRename={(title) => {
+          if (renaming) work.handles.current.get(renaming.key)?.rename(title)
+          setRenaming(null)
+        }}
       />
     </>
   )

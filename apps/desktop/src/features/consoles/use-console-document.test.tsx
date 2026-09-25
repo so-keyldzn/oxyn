@@ -51,6 +51,7 @@ const seed: ConsoleSeed = {
   fromAgent: false,
   parameters: [],
   needsValues: false,
+  context: null,
 }
 
 const saved: DocumentWrite = {

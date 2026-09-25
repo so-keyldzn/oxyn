@@ -145,6 +145,52 @@ export const HideAColumn: Story = {
   },
 }
 
+/**
+ * `Hide` in a header's context menu is the same choice as `Columns`
+ * (docs/UX-SPEC.md, « Menus contextuels »): the header goes, and the footer
+ * counts it.
+ */
+export const HideFromTheHeaderMenu: Story = {
+  args: {
+    state: {
+      status: "populated",
+      result: "panel-hide-from-menu",
+      columns: invoiceColumns,
+      rows: 250_000,
+      complete: true,
+      truncated: false,
+      cancelled: false,
+    },
+    gridMenu: {
+      origin: "query",
+      relation: false,
+      ai: { kind: "none" },
+      copyText: fn(),
+      copyRows: fn(),
+      filterable: false,
+      sortable: false,
+    },
+  },
+  play: async ({ canvas }) => {
+    const body = within(document.body)
+    const grid = canvas.getByRole("grid")
+    await userEvent.pointer({
+      keys: "[MouseRight]",
+      target: within(grid).getByRole("columnheader", { name: /^customer/ }),
+    })
+    await userEvent.click(await body.findByRole("menuitem", { name: /^Hide/ }))
+    await waitFor(() => expect(body.queryByRole("menu")).toBeNull())
+    await waitFor(() =>
+      expect(
+        within(grid).queryByRole("columnheader", { name: /^customer/ })
+      ).toBeNull()
+    )
+    await expect(
+      canvas.getByRole("button", { name: "Columns 6/7" })
+    ).toBeInTheDocument()
+  },
+}
+
 export const Truncated: Story = {
   args: {
     state: {

@@ -21,6 +21,8 @@ import type { CatalogNode, OpenConnection } from "@/lib/ipc/types"
 interface Target {
   node: CatalogNode
   operation: OperationKind
+  /** The column renamed, for `Rename…` from the Structure tab. */
+  column: string | null
 }
 
 function messageOf(caught: unknown) {
@@ -30,7 +32,8 @@ function messageOf(caught: unknown) {
 function operationOf(
   kind: OperationKind,
   cascade: boolean,
-  newName: string
+  newName: string,
+  column: string | null
 ): ObjectOperation {
   switch (kind) {
     case "drop":
@@ -38,12 +41,13 @@ function operationOf(
     case "truncate":
       return { kind, cascade }
     case "rename":
-      return { kind, column: null, newName }
+      return { kind, column, newName }
   }
 }
 
 /**
- * `Drop…`, `Truncate…` and `Rename…` from the catalog: the review, then — when
+ * `Drop…`, `Truncate…` and `Rename…` from the catalog, and `Rename…` of a
+ * column from the Structure tab: the review, then — when
  * the gate holds the statement — `ApprovalDialog` in the same place, never a
  * second modal on top (ADR-0042).
  *
@@ -124,8 +128,12 @@ export function useObjectOperation(
   )
 
   const start = React.useCallback(
-    (node: CatalogNode, operation: OperationKind) => {
-      const current = { node, operation }
+    (
+      node: CatalogNode,
+      operation: OperationKind,
+      column: string | null = null
+    ) => {
+      const current = { node, operation, column }
       setTarget(current)
       // Unticked at every opening, and never remembered (ADR-0042).
       setCascade(false)
@@ -134,7 +142,7 @@ export function useObjectOperation(
       setProblem(null)
       setDependents({ kind: "read" })
       setPhase({ kind: "idle" })
-      void compose(current, operationOf(operation, false, ""), true)
+      void compose(current, operationOf(operation, false, "", column), true)
     },
     [compose]
   )
@@ -233,6 +241,7 @@ export function useObjectOperation(
       <ObjectOperationReviewDialog
         open={approval === null}
         operation={target.operation}
+        column={target.column}
         review={review}
         problem={problem}
         newName={newName}
@@ -240,7 +249,7 @@ export function useObjectOperation(
           setNewName(name)
           void compose(
             target,
-            operationOf(target.operation, cascade, name),
+            operationOf(target.operation, cascade, name, target.column),
             false
           )
         }}
@@ -249,7 +258,7 @@ export function useObjectOperation(
           setCascade(checked)
           void compose(
             target,
-            operationOf(target.operation, checked, newName),
+            operationOf(target.operation, checked, newName, target.column),
             false
           )
         }}

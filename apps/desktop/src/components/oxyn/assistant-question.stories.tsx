@@ -285,3 +285,37 @@ export const MentionAlignmentLight: Story = {
   ...MentionAlignment,
   globals: { theme: "light" },
 }
+
+/** `Edit question` from the context menu opens the same editor as the button. */
+export const EditedFromTheContextMenu: Story = {
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    const page = within(document.body)
+    await userEvent.pointer({
+      keys: "[MouseRight]",
+      target: canvas.getByText("How many active clients?"),
+    })
+    await userEvent.click(
+      await page.findByRole("menuitem", { name: "Edit question" })
+    )
+    const field = canvas.getByRole("textbox", { name: "Edit your question" })
+    await waitFor(() => expect(field).toHaveFocus())
+  },
+}
+
+/** While an answer runs, the entry is greyed and says why, as the button. */
+export const ContextMenuWhileAnAnswerRuns: Story = {
+  args: { busy: true },
+  play: async ({ canvasElement }) => {
+    const page = within(document.body)
+    await userEvent.pointer({
+      keys: "[MouseRight]",
+      target: within(canvasElement).getByText("How many active clients?"),
+    })
+    const edit = await page.findByRole("menuitem", { name: /Edit question/ })
+    await expect(edit).toHaveAttribute("aria-disabled", "true")
+    await expect(edit).toHaveTextContent("An answer is being written")
+    await userEvent.keyboard("{Escape}")
+    await waitFor(() => expect(page.queryByRole("menu")).toBeNull())
+  },
+}

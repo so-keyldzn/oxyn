@@ -14,7 +14,10 @@ import type { PendingApproval } from "@/components/oxyn/approval-dialog"
 import { BackendErrorAlert } from "@/components/oxyn/backend-error-alert"
 import type { BackendFailure } from "@/components/oxyn/backend-error-alert"
 import { ConnectionForm } from "@/components/oxyn/connection-form"
-import type { FormValues } from "@/components/oxyn/connection-form"
+import type {
+  ConnectionPrefill,
+  FormValues,
+} from "@/components/oxyn/connection-form"
 import { DriverChoices } from "@/components/oxyn/driver-choices"
 import { DiscardChangesDialog } from "@/components/oxyn/discard-changes-dialog"
 import { SavedConnections } from "@/components/oxyn/saved-connections"
@@ -50,6 +53,7 @@ import type {
 } from "@/lib/ipc/types"
 import { cn } from "@/lib/utils"
 import { useActionSource } from "@/lib/actions/context"
+import type { ConnectionMenuActions } from "@/lib/actions/targets"
 
 export type PendingConnectionApproval = PendingApproval & {
   name: string
@@ -67,6 +71,11 @@ export interface ConnectionScreenViewProps {
 
   /** The database type whose form is shown, if one was chosen. */
   driver: DriverChoice | null
+  /**
+   * The form copies a saved connection (`Duplicate`): the name of the source
+   * and the form's starting values, never a secret.
+   */
+  duplicate?: { of: string; prefill: ConnectionPrefill } | null
   onChooseDriver: (driver: DriverChoice) => void
   onLeaveDriver: () => void
 
@@ -75,6 +84,10 @@ export interface ConnectionScreenViewProps {
   openError?: BackendFailure | null
   onOpen: (connection: ConnectionSummary) => void
   onRetryOpen?: () => void
+  /** The connection whose workspace stayed open, by id. */
+  openConnectionId?: string | null
+  /** The context menu of a saved connection, beyond `Connect` (= `onOpen`). */
+  connectionMenu?: (connection: ConnectionSummary) => ConnectionMenuActions
 
   /** A new connection being created and opened. */
   submitting: boolean
@@ -131,12 +144,15 @@ export function ConnectionScreenView(props: ConnectionScreenViewProps) {
     driversError,
     onRetryDrivers,
     driver,
+    duplicate = null,
     onChooseDriver,
     onLeaveDriver,
     opening,
     openError,
     onOpen,
     onRetryOpen,
+    openConnectionId,
+    connectionMenu,
     submitting,
     formError,
     onSubmit,
@@ -332,7 +348,17 @@ export function ConnectionScreenView(props: ConnectionScreenViewProps) {
                   <CardTitle id="new-connection-title">
                     New {driver.displayName} connection
                   </CardTitle>
-                  <CardDescription>{driver.family}</CardDescription>
+                  <CardDescription>
+                    {duplicate ? (
+                      <>
+                        A copy of <bdi>{duplicate.of}</bdi>. Its secrets are not
+                        copied: type them again. Nothing is saved until you
+                        connect.
+                      </>
+                    ) : (
+                      driver.family
+                    )}
+                  </CardDescription>
                 </CardHeader>
                 <CardContent className="flex flex-col gap-6">
                   <DraftStatusBar
@@ -344,6 +370,7 @@ export function ConnectionScreenView(props: ConnectionScreenViewProps) {
                   />
                   <ConnectionForm
                     key={driver.id}
+                    prefill={duplicate?.prefill}
                     driver={driver}
                     submitting={submitting}
                     testing={testing}
@@ -397,6 +424,8 @@ export function ConnectionScreenView(props: ConnectionScreenViewProps) {
                       cancelling={cancelling}
                       onOpen={onOpen}
                       onCancelOpening={onCancelOpening}
+                      openConnectionId={openConnectionId}
+                      menuActions={connectionMenu}
                     />
                   </section>
                 )}

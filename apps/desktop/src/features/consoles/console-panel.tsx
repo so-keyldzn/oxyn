@@ -1,5 +1,9 @@
 import * as React from "react"
-import { keepPreviousData, useQuery } from "@tanstack/react-query"
+import {
+  keepPreviousData,
+  useQuery,
+  useQueryClient,
+} from "@tanstack/react-query"
 import { useStore } from "@tanstack/react-store"
 import type { EditorView } from "@codemirror/view"
 
@@ -16,7 +20,7 @@ import { OfflineConsoleBar } from "@/components/oxyn/offline-console-bar"
 import { SessionContextPicker } from "@/components/oxyn/session-context-picker"
 import type { SessionContextState } from "@/components/oxyn/session-context-picker"
 import { SqlEditor, targetOf } from "@/components/oxyn/sql-editor"
-import type { EditorTarget } from "@/components/oxyn/sql-editor"
+import type { EditorTarget, SqlEditorMenu } from "@/components/oxyn/sql-editor"
 import type { ExecutionSummary } from "@/components/oxyn/status-bar"
 import { transactionNotice } from "@/features/consoles/console-model"
 import type {
@@ -24,6 +28,7 @@ import type {
   ConsoleActivity,
 } from "@/features/consoles/console-model"
 import { registerDraftFlush } from "@/features/consoles/draft-registry"
+import { loadedObject, nameAt } from "@/features/consoles/object-under-cursor"
 import { useConsoleDocument } from "@/features/consoles/use-console-document"
 import type { ConsoleSeed } from "@/features/consoles/use-console-document"
 import { releaseResult } from "@/features/metadata/inspection"
@@ -35,6 +40,8 @@ import {
 } from "@/features/metadata/value-inspection"
 import { useResultDensity } from "@/features/settings/use-result-density"
 import { ExportMenu } from "@/features/workspace/export-menu"
+import { useGridMenu } from "@/features/workspace/grid-menu"
+import { openObject } from "@/features/workspace/object-requests"
 import { useExecution } from "@/features/workspace/use-execution"
 import { useActionSource } from "@/lib/actions/context"
 import { BackendError, backend, newCommandId } from "@/lib/ipc/client"
@@ -47,7 +54,7 @@ import type {
 } from "@/lib/ipc/consoles"
 import { catalogVersion, transactionStates } from "@/lib/ipc/events"
 import { results } from "@/lib/ipc/results"
-import type { OpenConnection, ResultColumn } from "@/lib/ipc/types"
+import type { CatalogNode, OpenConnection, ResultColumn } from "@/lib/ipc/types"
 
 /** What the workspace may ask of a console it does not render itself. */
 export interface ConsoleHandle {
@@ -64,6 +71,8 @@ export interface ConsoleHandle {
   cancelWrite: () => void
   /** Puts text at the cursor, replacing the selection. Never runs it. */
   insert: (sql: string, notice: string | null) => void
+  /** Names the query as its « Query name » field would; nothing is saved. */
+  rename: (title: string) => void
   focus: () => void
 }
 
@@ -294,6 +303,18 @@ export function ConsolePanel({
     )
   }
 
+  // A console opened « on this schema » asks for it once its session is
+  // open, by the picker's own path: the bar shows what the session reports,
+  // a refusal is said as the picker says it, and nothing else runs.
+  const seededContext = React.useRef(seed.context)
+  React.useEffect(() => {
+    const wanted = seededContext.current
+    if (!wanted || !session || !withContext) return
+    seededContext.current = null
+    chooseContext(wanted)
+    // Once, when the session is there: a later render asks nothing again.
+  }, [session, withContext])
+
   const activity: ConsoleActivity = doc.closing
     ? "closing"
     : doc.saving
@@ -368,6 +389,9 @@ export function ConsolePanel({
           latest.current.doc.change({ text: latest.current.doc.text + sql })
         }
         setNotice(why ?? "Text placed in this console. Nothing was executed.")
+      },
+      rename: (title) => {
+        if (!latest.current.doc.closing) latest.current.doc.change({ title })
       },
       focus: () => view.current?.focus(),
     }
@@ -463,6 +487,14 @@ export function ConsolePanel({
       }),
     [source, open, resultId, resultColumns]
   )
+  // The SQL the user wrote: its rows are copied, never filtered or sorted.
+  const gridMenu = useGridMenu({
+    open,
+    connection: open.connection,
+    result: resultId,
+    origin: "query",
+    address: null,
+  })
   const statement = doc.text
   const findBar = React.useMemo(
     () => (
@@ -501,11 +533,13 @@ export function ConsolePanel({
         reveal={find.reveal}
         onInspect={inspection.onInspect}
         onActiveChange={onActiveChange}
+        gridMenu={gridMenu}
         plan={explained}
       />
     ),
     [
       explained,
+      gridMenu,
       state,
       fetchPage,
       cancel,
@@ -524,6 +558,24 @@ export function ConsolePanel({
     ]
   )
   const elapsedMs = useElapsed(active ? execution.startedAt : null)
+
+  // The editor's context menu: the scopes of ⌘↵ made explicit, run by the
+  // same function as the Run button, and the object a name opens — resolved
+  // against the tree the sidebar already read, then opened as a click in the
+  // catalog would (UX-SPEC, « Menus contextuels »).
+  const queryClient = useQueryClient()
+  const editorMenu: SqlEditorMenu = {
+    onRun: (runTarget) => void run(runTarget),
+    objectAt: (text, offset) => {
+      const parts = nameAt(text, offset)
+      const tree = queryClient.getQueryData<Array<CatalogNode>>([
+        "catalog",
+        open.connection,
+      ])
+      const address = parts && tree ? loadedObject(tree, parts) : null
+      return address ? () => openObject(open.connection, address) : null
+    },
+  }
 
   // The active console is what Query's entries, ⌘↵, ⌘⇧↵, ⌘S and the
   // palette run: the same functions as its buttons (ADR-0041, I-01).
@@ -640,6 +692,7 @@ export function ConsolePanel({
             onEditor={(editor) => {
               view.current = editor
             }}
+            menu={editorMenu}
             autoFocus={active}
           />
         }

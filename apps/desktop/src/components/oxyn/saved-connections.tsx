@@ -18,7 +18,9 @@ import {
 } from "@/components/oxyn/button-item"
 import { DriverLogo } from "@/components/oxyn/driver-logo"
 import { EnvironmentBadge } from "@/components/oxyn/environment-badge"
+import { ActionMenuContent } from "@/components/oxyn/action-menu-items"
 import { Button } from "@/components/ui/button"
+import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu"
 import {
   Empty,
   EmptyContent,
@@ -32,6 +34,7 @@ import { InputGroup, InputGroupAddon } from "@/components/ui/input-group"
 import { Kbd } from "@/components/ui/kbd"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
+import type { ConnectionMenuActions } from "@/lib/actions/targets"
 import type { ConnectionSummary } from "@/lib/ipc/settings"
 import { InputGroupTextInput } from "./text-field"
 
@@ -60,6 +63,12 @@ function matches(connection: ConnectionSummary, query: string) {
  *
  * Past five, a filter (name, driver, location) sits above the list and only
  * five rows show until « Show all ». The one opening always stays in view.
+ *
+ * A right click — or ⇧F10 on a focused row — opens the row's context menu
+ * (UX-SPEC « Menus contextuels »). `Connect` is the click; the other entries
+ * are what `menuActions` gives for that connection, and an entry it leaves
+ * out is not offered. `openConnectionId` is the connection whose workspace
+ * is open: it offers `Disconnect` instead of `Connect`.
  */
 export function SavedConnections({
   connections,
@@ -69,6 +78,8 @@ export function SavedConnections({
   onOpen,
   onCancelOpening,
   onRetry,
+  openConnectionId = null,
+  menuActions,
 }: {
   connections: Array<ConnectionSummary> | undefined
   error?: BackendFailure | null
@@ -77,8 +88,14 @@ export function SavedConnections({
   onOpen: (connection: ConnectionSummary) => void
   onCancelOpening?: () => void
   onRetry?: () => void
+  openConnectionId?: string | null
+  menuActions?: (connection: ConnectionSummary) => ConnectionMenuActions
 }) {
   const listRef = React.useRef<HTMLDivElement>(null)
+  const [menu, setMenu] = React.useState<{
+    connection: ConnectionSummary
+    anchor: Element
+  } | null>(null)
   const [query, setQuery] = React.useState("")
   const [expanded, setExpanded] = React.useState(false)
 
@@ -162,97 +179,136 @@ export function SavedConnections({
     }
   }
 
+  // The row under the pointer, or the focused one for ⇧F10: both reach here
+  // as a `contextmenu` event on an element inside the row. Anywhere else —
+  // the gap between two rows — there is no target, and no entry.
+  const pickTarget = (event: React.MouseEvent) => {
+    const anchor = event.target instanceof Element ? event.target : null
+    // By position among the rows drawn: the connection's id never reaches
+    // the DOM (I-03).
+    const row = anchor?.closest("[data-connection-row]")
+    const index = row ? Number(row.getAttribute("data-connection-row")) : -1
+    const connection = visible[index]
+    setMenu(anchor && connection ? { connection, anchor } : null)
+  }
+
   const list = (
-    <ItemGroup ref={listRef} className="gap-2" onKeyDown={moveFocus}>
-      {visible.map((connection) => {
-        const isOpening = opening === connection.id
-        return (
-          <div
-            role="listitem"
-            key={connection.id}
-            className="flex items-center gap-2"
-          >
-            <Item
-              variant="outline"
-              render={
-                <button
-                  type="button"
-                  data-connection-button
-                  disabled={opening !== null}
-                  aria-busy={isOpening || undefined}
-                  onClick={() => onOpen(connection)}
-                />
-              }
-              className="min-w-0 flex-1 text-left"
-            >
-              <ButtonItemMedia>
-                <DriverLogo driver={connection.driver} className="size-4" />
-              </ButtonItemMedia>
-              <ButtonItemContent className="min-w-0">
-                <ButtonItemTitle className="w-full min-w-0">
-                  <bdi className="truncate" title={connection.name}>
-                    {connection.name}
-                  </bdi>
-                  {connection.readOnly ? (
-                    <HugeiconsIcon
-                      icon={LockIcon}
-                      strokeWidth={2}
-                      className="size-3.5 shrink-0 text-muted-foreground"
-                      aria-label="Read only"
-                    />
-                  ) : null}
-                </ButtonItemTitle>
-                {/* The title sits on the line that is cut, so hovering any
-                    part of it — driver included — reads the whole line. */}
-                <ButtonItemDescription
-                  className="truncate"
-                  title={
-                    connection.location
-                      ? `${connection.driverName} · ${connection.location}`
-                      : connection.driverName
-                  }
-                >
-                  {connection.driverName}
-                  {connection.location ? (
-                    <>
-                      {" · "}
-                      <bdi>{connection.location}</bdi>
-                    </>
-                  ) : null}
-                </ButtonItemDescription>
-              </ButtonItemContent>
-              <ButtonItemActions>
-                <EnvironmentBadge environment={connection.environment} />
-                {isOpening ? (
-                  <Spinner />
-                ) : (
-                  <HugeiconsIcon
-                    icon={ArrowRight01Icon}
-                    strokeWidth={2}
-                    className="size-4 text-muted-foreground"
-                  />
-                )}
-              </ButtonItemActions>
-            </Item>
-            {isOpening && onCancelOpening ? (
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={onCancelOpening}
-                disabled={cancelling}
-                aria-label={`Cancel opening ${connection.name}`}
-                // `Kbd` draws the key; the name says what the button does, so
-                // the shortcut has to be declared rather than read from it.
-                aria-keyshortcuts="Escape"
+    <ContextMenu>
+      <ContextMenuTrigger
+        render={<div className="contents" onContextMenu={pickTarget} />}
+      >
+        <ItemGroup ref={listRef} className="gap-2" onKeyDown={moveFocus}>
+          {visible.map((connection, index) => {
+            const isOpening = opening === connection.id
+            return (
+              <div
+                role="listitem"
+                key={connection.id}
+                data-connection-row={index}
+                className="flex items-center gap-2"
               >
-                {cancelling ? "Cancelling…" : "Cancel"}
-                {cancelling ? null : <Kbd>Esc</Kbd>}
-              </Button>
-            ) : null}
-          </div>
-        )
-      })}
-    </ItemGroup>
+                <Item
+                  variant="outline"
+                  render={
+                    <button
+                      type="button"
+                      data-connection-button
+                      disabled={opening !== null}
+                      aria-busy={isOpening || undefined}
+                      onClick={() => onOpen(connection)}
+                    />
+                  }
+                  className="min-w-0 flex-1 text-left"
+                >
+                  <ButtonItemMedia>
+                    <DriverLogo driver={connection.driver} className="size-4" />
+                  </ButtonItemMedia>
+                  <ButtonItemContent className="min-w-0">
+                    <ButtonItemTitle className="w-full min-w-0">
+                      <bdi className="truncate" title={connection.name}>
+                        {connection.name}
+                      </bdi>
+                      {connection.readOnly ? (
+                        <HugeiconsIcon
+                          icon={LockIcon}
+                          strokeWidth={2}
+                          className="size-3.5 shrink-0 text-muted-foreground"
+                          aria-label="Read only"
+                        />
+                      ) : null}
+                    </ButtonItemTitle>
+                    {/* The title sits on the line that is cut, so hovering any
+                    part of it — driver included — reads the whole line. */}
+                    <ButtonItemDescription
+                      className="truncate"
+                      title={
+                        connection.location
+                          ? `${connection.driverName} · ${connection.location}`
+                          : connection.driverName
+                      }
+                    >
+                      {connection.driverName}
+                      {connection.location ? (
+                        <>
+                          {" · "}
+                          <bdi>{connection.location}</bdi>
+                        </>
+                      ) : null}
+                    </ButtonItemDescription>
+                  </ButtonItemContent>
+                  <ButtonItemActions>
+                    <EnvironmentBadge environment={connection.environment} />
+                    {isOpening ? (
+                      <Spinner />
+                    ) : (
+                      <HugeiconsIcon
+                        icon={ArrowRight01Icon}
+                        strokeWidth={2}
+                        className="size-4 text-muted-foreground"
+                      />
+                    )}
+                  </ButtonItemActions>
+                </Item>
+                {isOpening && onCancelOpening ? (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={onCancelOpening}
+                    disabled={cancelling}
+                    aria-label={`Cancel opening ${connection.name}`}
+                    // `Kbd` draws the key; the name says what the button does, so
+                    // the shortcut has to be declared rather than read from it.
+                    aria-keyshortcuts="Escape"
+                  >
+                    {cancelling ? "Cancelling…" : "Cancel"}
+                    {cancelling ? null : <Kbd>Esc</Kbd>}
+                  </Button>
+                ) : null}
+              </div>
+            )
+          })}
+        </ItemGroup>
+      </ContextMenuTrigger>
+      {menu ? (
+        <ActionMenuContent
+          surface="connection"
+          anchor={menu.anchor}
+          title={menu.connection.name}
+          sources={{
+            connection: {
+              state: {
+                open: menu.connection.id === openConnectionId,
+                busy: opening !== null,
+              },
+              actions: {
+                connect: () => onOpen(menu.connection),
+                ...menuActions?.(menu.connection),
+              },
+            },
+          }}
+        />
+      ) : null}
+    </ContextMenu>
   )
 
   if (!long) return list

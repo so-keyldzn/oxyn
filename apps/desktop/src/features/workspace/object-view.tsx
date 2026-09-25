@@ -22,6 +22,7 @@ import {
 } from "@/components/oxyn/relation-definition"
 import { RelationIndexes } from "@/components/oxyn/relation-indexes"
 import { IncomingKeys, OutgoingKeys } from "@/components/oxyn/relation-keys"
+import { operationOffer } from "@/components/oxyn/object-operations"
 import { RelationStructure } from "@/components/oxyn/relation-structure"
 import { RestoredObjectNotice } from "@/components/oxyn/restored-object-notice"
 import { ResultPanel } from "@/components/oxyn/result-panel"
@@ -33,6 +34,7 @@ import {
 } from "@/features/metadata/capabilities"
 import { copyToClipboard } from "@/features/metadata/clipboard"
 import { inspectObject, inspection } from "@/features/metadata/inspection"
+import { useObjectOperation } from "@/features/metadata/object-operation-flow"
 import { usePreview } from "@/features/metadata/use-preview"
 import { useRelationFacets } from "@/features/metadata/use-relation-facets"
 import {
@@ -42,6 +44,7 @@ import {
 } from "@/features/metadata/value-inspection"
 import { useResultDensity } from "@/features/settings/use-result-density"
 import { useResultExport } from "@/features/workspace/export-menu"
+import { useGridMenu } from "@/features/workspace/grid-menu"
 import { sectionOf, tabOf } from "@/features/workspace/object-location"
 import type { RelationDirection } from "@/features/workspace/object-location"
 import { useCompact } from "@/features/workspace/use-compact"
@@ -130,6 +133,8 @@ export function ObjectView({
   const dataUnavailable = previewUnavailable(open, node.holdsRecords)
   const previewable = dataUnavailable === null
   const compact = useCompact()
+  // `Rename…` of a column, from the Structure tab's menu (ADR-0042).
+  const columnOperation = useObjectOperation(open, () => undefined)
   const restoredAt = restored ? tabOf(restored) : null
   const [chosenTab, setTab] = React.useState<ObjectTab>(() =>
     restoredAt && !(restoredAt.tab === "data" && !previewable)
@@ -283,6 +288,23 @@ export function ObjectView({
     data.detail.value === null
 
   const density = useResultDensity()
+  const filterRef = React.useRef<HTMLInputElement>(null)
+  const { applySort } = preview
+  const gridMenu = useGridMenu({
+    open,
+    connection: open.connection,
+    result: shownResult,
+    origin: "preview",
+    address: node.address,
+    filterable: open.capabilities.includes("PREVIEW_FILTER"),
+    sortable: open.capabilities.includes("PREVIEW_SORT"),
+    sort: React.useCallback(
+      (column: string, descending: boolean) =>
+        applySort([{ column, descending }]),
+      [applySort]
+    ),
+    filter: React.useCallback(() => filterRef.current?.focus(), []),
+  })
   const exporter = useResultExport({
     connection: open.connection,
     result,
@@ -381,6 +403,7 @@ export function ObjectView({
               onPage={preview.page}
               onCancel={preview.cancel}
               onLoadColumns={() => void facets.refresh("detail")}
+              filterRef={filterRef}
             />
             {preview.approvalRefused ? (
               <Alert className="rounded-none border-x-0 border-t-0 py-2">
@@ -401,6 +424,7 @@ export function ObjectView({
                 context={{ connectionName: open.name, statement: null }}
                 footerNote="Preview · total row count not requested"
                 density={density}
+                gridMenu={gridMenu}
                 // Compact: the export sits in `Actions`, and the footer shows
                 // only a running export's progress and its Cancel.
                 footerActions={
@@ -450,7 +474,16 @@ export function ObjectView({
             onRefresh={() => void facets.refresh("detail")}
             onCancel={() => facets.cancel("detail")}
           >
-            <RelationStructure detail={data.detail.value} />
+            <RelationStructure
+              detail={data.detail.value}
+              renameColumn={{
+                offer: operationOffer("rename", node, open.capabilities),
+                onRename: (column) =>
+                  columnOperation.start(node, "rename", column),
+              }}
+            />
+            {/* Modal while open: no tab change can unmount it mid-review. */}
+            {columnOperation.element}
           </FacetFrame>
         ) : (
           <RelationStructure

@@ -10,8 +10,11 @@ import { usePinToQuestion } from "@/features/assistant/object-pin"
 import { copyToClipboard } from "@/features/metadata/clipboard"
 import { useObjectOperation } from "@/features/metadata/object-operation-flow"
 import { useRefreshSignal } from "@/features/metadata/refresh-signals"
+import { facetsKey } from "@/features/metadata/use-relation-facets"
 import { hasCapability } from "@/features/session"
+import type { CopyAsForm } from "@/lib/actions/targets"
 import { BackendError, backend, newCommandId } from "@/lib/ipc/client"
+import type { SessionPlace } from "@/lib/ipc/consoles"
 import { metadata } from "@/lib/ipc/metadata"
 import type {
   CatalogAddress,
@@ -20,6 +23,14 @@ import type {
 } from "@/lib/ipc/types"
 
 const CATALOG_CAPABILITIES = ["SCHEMAS", "TABLES", "VIEWS", "ROUTINES"]
+
+/** What the clipboard's toast calls each form of `Copy as ▸`. */
+const COPIED_AS: Record<CopyAsForm, string> = {
+  quotedName: "Quoted name",
+  selectAll: "SELECT *",
+  insertTemplate: "INSERT template",
+  ddl: "DDL",
+}
 
 function findNode(nodes: Array<CatalogNode>, key: string): CatalogNode | null {
   for (const node of nodes) {
@@ -52,6 +63,7 @@ export function CatalogSidebar({
   selected,
   onSelect,
   onOpen,
+  onNewConsole,
   onLeave,
 }: {
   open: OpenConnection
@@ -59,6 +71,11 @@ export function CatalogSidebar({
   onSelect: (node: CatalogNode) => void
   /** Opens a relation on a given tab; without it, the menu selects the node. */
   onOpen?: (node: CatalogNode, target: OpenTarget) => void
+  /**
+   * Opens a console whose session context is `place`, running nothing.
+   * Offered only on a session that declares `SESSION_CONTEXT`.
+   */
+  onNewConsole?: (place: SessionPlace) => void
   onLeave: () => void
 }) {
   const queryClient = useQueryClient()
@@ -221,6 +238,63 @@ export function CatalogSidebar({
     }
   }
 
+  // The definition the object view's DDL tab reads, by the same facet: read
+  // once if never read, and written back under that tab's key.
+  const definitionOf = async (node: CatalogNode) => {
+    const key = facetsKey(open.connection, node.address)
+    const cached = await queryClient.fetchQuery({
+      queryKey: key,
+      queryFn: () => metadata.relationFacets(open.connection, node.address),
+    })
+    if (cached.definition.freshness.state === "fetched")
+      return cached.definition.value
+    const outcome = await metadata.refreshRelationFacet(
+      newCommandId(),
+      open.connection,
+      open.session,
+      node.address,
+      "definition"
+    )
+    switch (outcome.type) {
+      case "cancelled":
+        throw new Error("Reading the definition was cancelled.")
+      case "denied":
+        throw new Error(outcome.reason)
+      case "needsApproval":
+        // A metadata read waits for nobody: refused, and said.
+        void backend.decide(outcome.command, false)
+        throw new Error(
+          "The connection policy requires an approval for this metadata read."
+        )
+      default:
+    }
+    const read = await metadata.relationFacets(open.connection, node.address)
+    queryClient.setQueryData(key, read)
+    return read.definition.value
+  }
+
+  // Every form but DDL is composed by the backend, identifiers quoted by the
+  // driver (I-10); nothing runs, the text goes to the clipboard.
+  const copyAs = async (node: CatalogNode, form: CopyAsForm) => {
+    try {
+      if (form === "ddl") {
+        const definition = await definitionOf(node)
+        if (definition === null)
+          throw new Error("No definition was reported for this object.")
+        await copyToClipboard(definition.sql, COPIED_AS.ddl)
+        return
+      }
+      const sql = await metadata.composeObjectSql(
+        open.connection,
+        node.address,
+        form
+      )
+      await copyToClipboard(sql, COPIED_AS[form])
+    } catch (caught) {
+      setProblem(problemOf(caught))
+    }
+  }
+
   const cancelRefresh = () => {
     if (!rootCommand || cancelling) return
     setCancelling(true)
@@ -265,6 +339,19 @@ export function CatalogSidebar({
           capabilities: open.capabilities,
           onOperation: operation.start,
         }}
+        copyAs={{
+          definition: hasCapability(open, "OBJECT_DEFINITION"),
+          onCopy: (node, form) => void copyAs(node, form),
+        }}
+        onNewConsole={
+          onNewConsole && hasCapability(open, "SESSION_CONTEXT")
+            ? (node) =>
+                onNewConsole({
+                  catalog: node.address.catalog,
+                  namespace: node.address.namespace,
+                })
+            : undefined
+        }
         onLeave={onLeave}
       />
       <SidebarRail />

@@ -3,11 +3,16 @@ import CodeMirror from "@uiw/react-codemirror"
 import { PostgreSQL, SQLite, StandardSQL, sql } from "@codemirror/lang-sql"
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language"
 import { Prec } from "@codemirror/state"
+import type { EditorSelection } from "@codemirror/state"
 import { EditorView, keymap, runScopeHandlers } from "@codemirror/view"
 import { tags } from "@lezer/highlight"
+import { ActionMenuContent } from "./action-menu-items"
 import { TEXT_FIELD_DOM_ATTRIBUTES } from "./text-field"
 
+import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu"
+import { toast } from "@/components/ui/toast"
 import { setZoneHandle } from "@/lib/actions/context"
+import type { ActionSources } from "@/lib/actions/context"
 
 function dialectFor(driver: string) {
   switch (driver) {
@@ -103,6 +108,43 @@ function runModBinding(view: EditorView, key: string, code: string) {
   )
 }
 
+/** What the console adds to the editor's context menu. */
+export interface SqlEditorMenu {
+  /** Runs one scope of ⌘↵ — the menu's `Run selection` and `Run statement`. */
+  onRun?: (target: EditorTarget) => void
+  /**
+   * What opens the loaded object named at `offset` of `text`, or null when
+   * the catalog already read names none there.
+   */
+  objectAt?: (text: string, offset: number) => (() => void) | null
+}
+
+/** The right-clicked place, as the menu reads it while open. */
+interface MenuTarget {
+  anchor: Element | null
+  selection: { from: number; to: number; head: number }
+  openObject: (() => void) | null
+}
+
+/**
+ * Writes `text` to the clipboard, and says so only when it failed: a Cut or
+ * a Copy of the editor is as quiet as its key, but a Cut that could not copy
+ * must not look like it did.
+ */
+async function writeClipboard(text: string) {
+  try {
+    await navigator.clipboard.writeText(text)
+    return true
+  } catch (error) {
+    toast.add({
+      title: "Text not copied",
+      description: error instanceof Error ? error.message : String(error),
+      type: "error",
+    })
+    return false
+  }
+}
+
 /**
  * The SQL console editor.
  *
@@ -125,6 +167,7 @@ export function SqlEditor({
   onTargetChange,
   onBlur,
   onEditor,
+  menu,
   autoFocus = false,
 }: {
   value: string
@@ -138,6 +181,7 @@ export function SqlEditor({
   onBlur?: () => void
   /** The CodeMirror view, to focus it or put text in it. */
   onEditor?: (view: EditorView) => void
+  menu?: SqlEditorMenu
   autoFocus?: boolean
 }) {
   // Handlers change every render; the keymap is built once and reads the
@@ -161,10 +205,38 @@ export function SqlEditor({
     if (!element || !view) return
     setZoneHandle(element, {
       find: () => runModBinding(view, "f", "KeyF"),
-      toggleComment: () => runModBinding(view, "/", "Slash"),
+      // A read-only text is not commented: the entry is not offered there.
+      toggleComment: readOnly
+        ? undefined
+        : () => runModBinding(view, "/", "Slash"),
     })
     return () => setZoneHandle(element, null)
-  }, [view])
+  }, [view, readOnly])
+
+  // The selection when the right button went down: the platform may move
+  // it on the way to the menu (WebKit selects the word under the pointer).
+  const pressed = React.useRef<EditorSelection | null>(null)
+  const [target, setTarget] = React.useState<MenuTarget | null>(null)
+  const onContextMenu = (event: React.MouseEvent) => {
+    if (!view) return
+    const kept = pressed.current
+    pressed.current = null
+    if (kept && !kept.eq(view.state.selection))
+      view.dispatch({ selection: kept })
+    const range = view.state.selection.main
+    // A menu opened from the keyboard (⇧F10, the menu key) is about the
+    // caret; one opened by the pointer, about the word pointed at.
+    const offset =
+      event.button === 2
+        ? (view.posAtCoords({ x: event.clientX, y: event.clientY }) ??
+          range.head)
+        : range.head
+    setTarget({
+      anchor: event.target instanceof Element ? event.target : null,
+      selection: { from: range.from, to: range.to, head: range.head },
+      openObject: menu?.objectAt?.(view.state.doc.toString(), offset) ?? null,
+    })
+  }
 
   const extensions = React.useMemo(
     () => [
@@ -192,6 +264,15 @@ export function SqlEditor({
           )
       }),
       EditorView.domEventHandlers({
+        // The right button neither moves the caret nor takes the focus: the
+        // menu acts on the selection the user made.
+        mousedown: (event, editor) => {
+          pressed.current = null
+          if (event.button !== 2) return false
+          pressed.current = editor.state.selection
+          event.preventDefault()
+          return true
+        },
         blur: () => {
           handlers.current.onBlur?.()
           return false
@@ -214,36 +295,113 @@ export function SqlEditor({
     [driver]
   )
 
+  const sources =
+    target && view ? menuSources(view, target, readOnly, menu) : {}
+
   return (
-    <div
-      ref={zone}
-      data-action-zone="editor"
-      // A read-only view runs nothing: the registry's Run reads this.
-      data-read-only={readOnly || undefined}
-      className="h-full min-h-0"
-    >
-      <CodeMirror
-        value={value}
-        onChange={onChange}
-        extensions={extensions}
-        theme="none"
-        height="100%"
-        autoFocus={autoFocus}
-        readOnly={readOnly}
-        onCreateEditor={(created) => {
-          setView(created)
-          onEditor?.(created)
-        }}
-        className="h-full min-h-0 overflow-hidden"
-        basicSetup={{
-          lineNumbers: true,
-          highlightActiveLine: true,
-          foldGutter: false,
-          autocompletion: true,
-          bracketMatching: true,
-          closeBrackets: true,
-        }}
-      />
-    </div>
+    <ContextMenu>
+      <ContextMenuTrigger
+        // The trigger's `select-none` would reach the text through the
+        // editor's wrapper.
+        className="select-text"
+        render={
+          <div
+            ref={zone}
+            data-action-zone="editor"
+            // A read-only view runs nothing: the registry's Run reads this.
+            data-read-only={readOnly || undefined}
+            onContextMenu={onContextMenu}
+            className="h-full min-h-0"
+          />
+        }
+      >
+        <CodeMirror
+          value={value}
+          onChange={onChange}
+          extensions={extensions}
+          theme="none"
+          height="100%"
+          autoFocus={autoFocus}
+          readOnly={readOnly}
+          onCreateEditor={(created) => {
+            setView(created)
+            onEditor?.(created)
+          }}
+          className="h-full min-h-0 overflow-hidden"
+          basicSetup={{
+            lineNumbers: true,
+            highlightActiveLine: true,
+            foldGutter: false,
+            autocompletion: true,
+            bracketMatching: true,
+            closeBrackets: true,
+          }}
+        />
+      </ContextMenuTrigger>
+      {target ? (
+        <ActionMenuContent
+          surface="editor"
+          anchor={target.anchor}
+          sources={sources}
+        />
+      ) : null}
+    </ContextMenu>
   )
+}
+
+/** The `editorMenu` target of a right click, acting on `view` (ADR-0041 § 6). */
+function menuSources(
+  view: EditorView,
+  target: MenuTarget,
+  readOnly: boolean,
+  menu: SqlEditorMenu | undefined
+): ActionSources {
+  const { from, to, head } = target.selection
+  const text = () => view.state.sliceDoc(from, to)
+  const run = menu?.onRun
+  return {
+    editorMenu: {
+      state: {
+        readOnly,
+        selection: from !== to,
+        objectUnderCursor: target.openObject !== null,
+      },
+      actions: {
+        cut: () =>
+          void writeClipboard(text()).then((copied) => {
+            if (!copied) return
+            view.dispatch({
+              changes: { from, to },
+              selection: { anchor: from },
+              userEvent: "delete.cut",
+            })
+            view.focus()
+          }),
+        copy: () => void writeClipboard(text()),
+        paste: () =>
+          void navigator.clipboard.readText().then(
+            (pasted) => {
+              view.dispatch(view.state.replaceSelection(pasted), {
+                userEvent: "input.paste",
+              })
+              view.focus()
+            },
+            (error: unknown) =>
+              toast.add({
+                title: "Nothing pasted",
+                description:
+                  error instanceof Error ? error.message : String(error),
+                type: "error",
+              })
+          ),
+        runSelection: run
+          ? () => run({ kind: "selection", start: from, end: to })
+          : undefined,
+        runStatement: run
+          ? () => run({ kind: "statement", cursor: head })
+          : undefined,
+        openObject: target.openObject ?? undefined,
+      },
+    },
+  }
 }

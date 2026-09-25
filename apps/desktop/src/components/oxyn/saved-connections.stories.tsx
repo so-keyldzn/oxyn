@@ -1,6 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/react-vite"
-import { expect, fn, userEvent, waitFor } from "storybook/test"
+import { expect, fn, userEvent, waitFor, within } from "storybook/test"
 
+import { connectionText } from "@/features/connections/copy-connection"
 import {
   homonyms,
   hostileNames,
@@ -153,6 +154,132 @@ export const ManyConnections: Story = {
       canvas.getByRole("button", { name: "Show all 23 connections" })
     )
     await expect(canvas.getAllByRole("listitem")).toHaveLength(23)
+  },
+}
+
+async function openMenuOn(name: string) {
+  const row = within(document.body).getByText(name)
+  await userEvent.pointer({ keys: "[MouseRight]", target: row })
+  const page = within(document.body)
+  await page.findByRole("menu")
+  return page
+}
+
+async function closeMenu(page: ReturnType<typeof within>) {
+  await userEvent.keyboard("{Escape}")
+  await waitFor(() => expect(page.queryByRole("menu")).toBeNull())
+}
+
+const menuActions = {
+  newConsole: fn(),
+  refreshCatalog: fn(),
+  edit: fn(),
+  changeEnvironment: fn(),
+  copy: fn(),
+  delete: fn(),
+  disconnect: fn(),
+  duplicate: fn(),
+}
+
+/**
+ * The menu of a closed connection: `Connect` is the click, `Refresh catalog`
+ * says what it needs, `Duplicate` is the host's.
+ */
+export const ContextMenuOfAClosedConnection: Story = {
+  args: {
+    menuActions: () => ({ ...menuActions, disconnect: undefined }),
+  },
+  play: async ({ args }) => {
+    const page = await openMenuOn("billing replica")
+    await expect(
+      page.queryByRole("menuitem", { name: "Disconnect" })
+    ).toBeNull()
+    const refresh = page.getByRole("menuitem", { name: /Refresh catalog/ })
+    await expect(refresh).toHaveAttribute("aria-disabled", "true")
+    await expect(refresh).toHaveTextContent("Connect to read its catalog")
+    await userEvent.click(page.getByRole("menuitem", { name: "Duplicate" }))
+    await expect(menuActions.duplicate).toHaveBeenCalled()
+    await waitFor(() => expect(page.queryByRole("menu")).toBeNull())
+
+    const again = await openMenuOn("billing replica")
+    await userEvent.click(again.getByRole("menuitem", { name: "Connect" }))
+    await expect(args.onOpen).toHaveBeenCalledWith(summaries[1])
+    await waitFor(() => expect(again.queryByRole("menu")).toBeNull())
+  },
+}
+
+/**
+ * The connection whose workspace stayed open: `Disconnect` rather than
+ * `Connect`, its catalog refreshable, and no `Delete…` until it is left.
+ */
+export const ContextMenuOfTheOpenConnection: Story = {
+  args: {
+    openConnectionId: summaries[0]!.id,
+    menuActions: () => ({ ...menuActions, delete: undefined }),
+  },
+  play: async () => {
+    const page = await openMenuOn("billing")
+    await expect(page.queryByRole("menuitem", { name: "Connect" })).toBeNull()
+    await expect(page.queryByRole("menuitem", { name: /Delete/ })).toBeNull()
+    await expect(
+      page.getByRole("menuitem", { name: "Refresh catalog" })
+    ).not.toHaveAttribute("aria-disabled", "true")
+    await userEvent.click(page.getByRole("menuitem", { name: "Disconnect" }))
+    await expect(menuActions.disconnect).toHaveBeenCalled()
+    await waitFor(() => expect(page.queryByRole("menu")).toBeNull())
+  },
+}
+
+/** While a connection opens, what would open, close or delete one waits. */
+export const ContextMenuWhileOpening: Story = {
+  args: {
+    opening: summaries[0]!.id,
+    menuActions: () => ({ ...menuActions, disconnect: undefined }),
+  },
+  play: async () => {
+    // The rows are disabled buttons, which a right click does not reach: the
+    // opening row's Cancel is what remains to point at.
+    const page = within(document.body)
+    await userEvent.pointer({
+      keys: "[MouseRight]",
+      target: page.getByRole("button", { name: /Cancel opening/ }),
+    })
+    await page.findByRole("menu")
+    const connect = page.getByRole("menuitem", { name: /^Connect/ })
+    await expect(connect).toHaveAttribute("aria-disabled", "true")
+    await expect(connect).toHaveTextContent("The connection is busy")
+    await expect(
+      page.getByRole("menuitem", { name: "Edit…" })
+    ).not.toHaveAttribute("aria-disabled", "true")
+    await closeMenu(page)
+  },
+}
+
+const copied = fn()
+
+/**
+ * `Copy connection` carries what the list shows — never a secret, its
+ * reference or the connection's id (I-03). The text is the application's
+ * own, composed by `connectionText`.
+ */
+export const CopyConnectionCarriesNoSecret: Story = {
+  args: {
+    menuActions: (connection) => ({
+      copy: () => copied(connectionText(connection)),
+    }),
+  },
+  play: async () => {
+    const page = await openMenuOn("billing")
+    await userEvent.click(
+      page.getByRole("menuitem", { name: "Copy connection" })
+    )
+    await expect(copied).toHaveBeenCalledOnce()
+    const text = String(copied.mock.calls[0]![0])
+    await expect(text).toContain("Name: billing")
+    await expect(text).toContain("Location: db.internal:5432 / billing")
+    await expect(text).not.toContain(summaries[0]!.id)
+    await expect(text).not.toMatch(/password|secret/i)
+    await waitFor(() => expect(page.queryByRole("menu")).toBeNull())
   },
 }
 

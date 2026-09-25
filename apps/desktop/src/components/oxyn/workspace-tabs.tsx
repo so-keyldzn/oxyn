@@ -11,7 +11,9 @@ import {
   ViewIcon,
 } from "@hugeicons/core-free-icons"
 
+import { ActionMenuContent } from "@/components/oxyn/action-menu-items"
 import { Button } from "@/components/ui/button"
+import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu"
 import { Kbd, KbdGroup } from "@/components/ui/kbd"
 import { Spinner } from "@/components/ui/spinner"
 import { TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -23,7 +25,11 @@ import {
 import { tabState, tabTitle } from "@/features/consoles/console-model"
 import type { ConsoleTabInfo } from "@/features/consoles/console-model"
 import { cn } from "@/lib/utils"
+import type { ActionSources } from "@/lib/actions/context"
 import { actionKeys, ariaKeys } from "@/lib/actions/manifest"
+
+/** The `tab` target of a tab's context menu: its state and what it runs. */
+export type TabMenuTarget = NonNullable<ActionSources["tab"]>
 
 export type WorkspaceTabItem =
   | ({ kind: "console" } & ConsoleTabInfo)
@@ -70,6 +76,10 @@ export function tabPanelValue(key: string) {
  * by ARIA. A tab may own no button, so closing is Delete or Backspace on the
  * focused tab, ⌘W, a middle click, or the mouse-only cross. A result being
  * exported offers none of them until the export ends.
+ *
+ * A right click on a tab — or ⇧F10 and the menu key on the focused one —
+ * opens the registry's `tab` menu for **that** tab, given by `menuFor`
+ * (UX-SPEC, « Menus contextuels »). The strip around the tabs has no menu.
  */
 export function WorkspaceTabs({
   tabs,
@@ -78,6 +88,7 @@ export function WorkspaceTabs({
   onClose,
   onNewConsole,
   onCancelOpening,
+  menuFor,
 }: {
   tabs: Array<WorkspaceTabItem>
   /** The tab the `Tabs` root shows; the strip scrolls to keep it in sight. */
@@ -87,7 +98,17 @@ export function WorkspaceTabs({
   onClose: (key: string) => void
   onNewConsole: () => void
   onCancelOpening: () => void
+  /** The menu target of the tab `key`; without it, tabs have no menu. */
+  menuFor?: (key: string) => TabMenuTarget
 }) {
+  // The tab right-clicked, and the element that stands for the focus while
+  // its menu is open. Read through a ref by `onOpenChange`, which Base UI
+  // calls in the same event, before the state is committed.
+  const [menu, setMenu] = React.useState<{
+    key: string
+    anchor: Element
+  } | null>(null)
+  const pointed = React.useRef<string | null>(null)
   const strip = React.useRef<HTMLDivElement>(null)
   // ⌘T with a full strip activates a tab the user cannot see: the new console
   // is off to the right, and nothing says the strip scrolls. Follow it.
@@ -98,84 +119,112 @@ export function WorkspaceTabs({
     tab?.scrollIntoView({ block: "nearest", inline: "nearest" })
   }, [active, tabs.length])
 
+  const [menuOpen, setMenuOpen] = React.useState(false)
+
   return (
     <div className="flex min-w-0 items-center gap-1">
-      <TabsList
-        ref={strip}
-        variant="line"
-        aria-label="Workspace tabs"
-        // The strip fills the 48 px bar rather than sitting at the 32 px the
-        // list defaults to: `variant="line"` draws the active tab's underline
-        // 5 px *below* the trigger, and `overflow-x-auto` — which makes the
-        // vertical axis scrollable too — clips it out of sight otherwise.
-        // The default carries the `horizontal` variant, so the override must.
-        className="min-w-0 [scrollbar-width:none] justify-start overflow-x-auto group-data-horizontal/tabs:h-12"
+      <ContextMenu
+        open={menuOpen}
+        onOpenChange={(next) => {
+          // Only a tab has a menu: the strip's empty end offers nothing.
+          const key = pointed.current
+          pointed.current = null
+          if (next && (key === null || !menuFor)) return
+          setMenuOpen(next)
+        }}
       >
-        {tabs.map((tab) => {
-          const title = tab.kind === "console" ? tabTitle(tab) : tab.title
-          const state = stateOf(tab)
-          const closable = state !== "exporting"
-          const close = () => {
-            if (closable) onClose(tab.key)
+        <ContextMenuTrigger
+          render={
+            <TabsList
+              ref={strip}
+              variant="line"
+              aria-label="Workspace tabs"
+              // The strip fills the 48 px bar rather than sitting at the 32 px the
+              // list defaults to: `variant="line"` draws the active tab's underline
+              // 5 px *below* the trigger, and `overflow-x-auto` — which makes the
+              // vertical axis scrollable too — clips it out of sight otherwise.
+              // The default carries the `horizontal` variant, so the override must.
+              className="min-w-0 [scrollbar-width:none] justify-start overflow-x-auto group-data-horizontal/tabs:h-12"
+            />
           }
-          return (
-            <TabsTrigger
-              key={tab.key}
-              value={tabPanelValue(tab.key)}
-              aria-keyshortcuts={closable ? "Delete" : undefined}
-              title={
-                closable
-                  ? title
-                  : `${title} — finish or cancel the export to close`
-              }
-              onKeyDown={(event) => {
-                if (event.key === "Delete" || event.key === "Backspace") {
-                  event.preventDefault()
-                  close()
+        >
+          {tabs.map((tab) => {
+            const title = tab.kind === "console" ? tabTitle(tab) : tab.title
+            const state = stateOf(tab)
+            const closable = state !== "exporting"
+            const close = () => {
+              if (closable) onClose(tab.key)
+            }
+            return (
+              <TabsTrigger
+                key={tab.key}
+                value={tabPanelValue(tab.key)}
+                aria-keyshortcuts={closable ? "Delete" : undefined}
+                title={
+                  closable
+                    ? title
+                    : `${title} — finish or cancel the export to close`
                 }
-              }}
-              onAuxClick={(event) => {
-                if (event.button === 1) {
-                  event.preventDefault()
-                  close()
-                }
-              }}
-              className="group/tab h-8 max-w-56 flex-none gap-1.5 pr-1 text-[length:var(--reading-text)]"
-            >
-              <HugeiconsIcon icon={iconOf(tab)} strokeWidth={2} />
-              <span dir="auto" className="min-w-0 truncate">
-                {title}
-              </span>
-              {state ? (
-                <span className="shrink-0 text-[length:var(--reading-caption)] font-normal text-muted-foreground">
-                  · {STATE_LABEL[state]}
-                </span>
-              ) : null}
-              {closable ? (
-                <span
-                  aria-hidden
-                  data-slot="tab-close"
-                  onMouseDown={(event) => event.preventDefault()}
-                  onClick={(event) => {
-                    event.stopPropagation()
+                onKeyDown={(event) => {
+                  if (event.key === "Delete" || event.key === "Backspace") {
+                    event.preventDefault()
                     close()
-                  }}
-                  className={cn(
-                    "flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-sm opacity-60 hover:bg-muted hover:opacity-100",
-                    "group-data-active/tab:opacity-100"
-                  )}
-                >
-                  <HugeiconsIcon
-                    icon={Cancel01Icon}
-                    strokeWidth={2}
-                    className="size-3"
-                  />
+                  }
+                }}
+                onAuxClick={(event) => {
+                  if (event.button === 1) {
+                    event.preventDefault()
+                    close()
+                  }
+                }}
+                onContextMenu={(event) => {
+                  pointed.current = tab.key
+                  setMenu({ key: tab.key, anchor: event.currentTarget })
+                }}
+                className="group/tab h-8 max-w-56 flex-none gap-1.5 pr-1 text-[length:var(--reading-text)]"
+              >
+                <HugeiconsIcon icon={iconOf(tab)} strokeWidth={2} />
+                <span dir="auto" className="min-w-0 truncate">
+                  {title}
                 </span>
-              ) : null}
-            </TabsTrigger>
-          )
-        })}
-      </TabsList>
+                {state ? (
+                  <span className="shrink-0 text-[length:var(--reading-caption)] font-normal text-muted-foreground">
+                    · {STATE_LABEL[state]}
+                  </span>
+                ) : null}
+                {closable ? (
+                  <span
+                    aria-hidden
+                    data-slot="tab-close"
+                    onMouseDown={(event) => event.preventDefault()}
+                    onClick={(event) => {
+                      event.stopPropagation()
+                      close()
+                    }}
+                    className={cn(
+                      "flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-sm opacity-60 hover:bg-muted hover:opacity-100",
+                      "group-data-active/tab:opacity-100"
+                    )}
+                  >
+                    <HugeiconsIcon
+                      icon={Cancel01Icon}
+                      strokeWidth={2}
+                      className="size-3"
+                    />
+                  </span>
+                ) : null}
+              </TabsTrigger>
+            )
+          })}
+        </ContextMenuTrigger>
+        {menu && menuFor ? (
+          <ActionMenuContent
+            surface="tab"
+            anchor={menu.anchor}
+            sources={{ tab: menuFor(menu.key) }}
+          />
+        ) : null}
+      </ContextMenu>
       {opening ? (
         <Button size="sm" variant="ghost" onClick={onCancelOpening}>
           <Spinner data-icon="inline-start" />

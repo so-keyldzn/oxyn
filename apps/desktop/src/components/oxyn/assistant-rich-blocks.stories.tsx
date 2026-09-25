@@ -191,3 +191,55 @@ export const MermaidStreaming: Story = {
     await expect(canvas.queryByText("Drawing the diagram…")).toBeNull()
   },
 }
+
+const PROPOSED = "SELECT count(*) FROM clients WHERE active;"
+
+async function openCodeMenu(canvasElement: HTMLElement) {
+  await userEvent.pointer({
+    keys: "[MouseRight]",
+    target: within(canvasElement).getByLabelText("Proposed SQL"),
+  })
+  const page = within(document.body)
+  await page.findByRole("menu")
+  return page
+}
+
+/**
+ * The context menu of a proposed statement holds `Copy code` and `Open in
+ * console`, and nothing else: a proposal is never run by being made (I-07).
+ */
+export const CodeBlockMenuNeverRuns: Story = {
+  args: { text: `\`\`\`sql\n${PROPOSED}\n\`\`\`` },
+  play: async ({ canvasElement, args }) => {
+    const page = await openCodeMenu(canvasElement)
+    await expect(
+      page.getAllByRole("menuitem").map((item) => item.textContent.trim())
+    ).toEqual(["Copy code", "Open in console"])
+    await userEvent.click(
+      page.getByRole("menuitem", { name: "Open in console" })
+    )
+    await expect(args.onOpenSql).toHaveBeenCalledWith(PROPOSED)
+    await waitFor(() => expect(page.queryByRole("menu")).toBeNull())
+  },
+}
+
+/**
+ * Where the button cannot open the statement — its provenance cannot be
+ * recorded —, the menu does not offer it either: only `Copy code` remains.
+ */
+export const CodeBlockMenuWithoutProvenance: Story = {
+  args: {
+    text: `\`\`\`sql\n${PROPOSED}\n\`\`\``,
+    openSqlDisabledReason:
+      "This answer cannot be opened in a console: Oxyn cannot record where it came from.",
+  },
+  play: async ({ canvasElement, args }) => {
+    const page = await openCodeMenu(canvasElement)
+    await expect(
+      page.getAllByRole("menuitem").map((item) => item.textContent.trim())
+    ).toEqual(["Copy code"])
+    await userEvent.click(page.getByRole("menuitem", { name: "Copy code" }))
+    await expect(args.onCopy).toHaveBeenCalledWith(PROPOSED)
+    await waitFor(() => expect(page.queryByRole("menu")).toBeNull())
+  },
+}

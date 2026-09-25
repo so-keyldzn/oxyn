@@ -44,33 +44,49 @@ export interface FormValues {
   values: Record<string, string>
 }
 
+/**
+ * What a new connection starts from when it copies another (`Duplicate`):
+ * its name and its declared non-secret parameters. Never a secret, and
+ * neither the environment nor the privacy tier — a copy is a new connection,
+ * and starts as every new one does.
+ */
+export interface ConnectionPrefill {
+  name: string
+  readOnly: boolean
+  values: Record<string, string>
+}
+
 function initialValues(
   driver: DriverChoice,
-  existing: ConnectionDetails | undefined
+  existing: ConnectionDetails | undefined,
+  prefill: ConnectionPrefill | undefined
 ): FormValues {
   const values: Record<string, string> = {}
+  const copied = existing?.values ?? prefill?.values
   for (const field of driver.fields) {
     if (field.secret) {
       // Never pre-filled: a stored secret is not read back into the webview
-      // (I-03). Empty means « keep what the keyring holds ».
+      // (I-03). Empty means « keep what the keyring holds » when editing, and
+      // « type it » for a copy.
       values[field.key] = ""
-    } else if (existing) {
+    } else if (copied) {
       values[field.key] =
-        existing.values[field.key] ??
-        (field.kind.type === "bool" ? "false" : "")
+        copied[field.key] ?? (field.kind.type === "bool" ? "false" : "")
     } else {
       values[field.key] =
         field.default ?? (field.kind.type === "bool" ? "false" : "")
     }
   }
   return {
-    name: existing?.name ?? "",
-    // Every new connection starts as production until changed explicitly
-    // (I-02, docs/UX-SPEC.md « Navigation du premier workspace »).
+    name: existing?.name ?? prefill?.name ?? "",
+    // Every new connection starts as production until changed explicitly —
+    // a copy of a staging one included (I-02, docs/UX-SPEC.md « Navigation
+    // du premier workspace »).
     environment: existing?.environment ?? "production",
-    // ADR-0006's default, never Sampled.
+    // ADR-0006's default, never Sampled: the tier belongs to the connection,
+    // and a copy is another one (I-04).
     privacyTier: existing?.privacyTier ?? "metadata",
-    readOnly: existing?.readOnly ?? false,
+    readOnly: existing?.readOnly ?? prefill?.readOnly ?? false,
     values,
   }
 }
@@ -162,6 +178,8 @@ export function missingFields(
  * non-secret values are shown, its secrets are not, and a secret left empty
  * is kept — until a parameter changes: the stored secret would then reach a
  * destination it was not typed for, so it is forgotten and asked again.
+ * With `prefill`, it creates a copy: the parameters are there, the secrets
+ * are typed, and nothing is saved until the user connects.
  *
  * While `submitting`, the only live action is `onAbort` (Esc), which cancels
  * the opening on the server side (docs/UX-SPEC.md « Annulation »). The submit
@@ -182,6 +200,7 @@ export function missingFields(
 export function ConnectionForm({
   driver,
   existing,
+  prefill,
   submitting = false,
   testing = false,
   aborting = false,
@@ -197,6 +216,8 @@ export function ConnectionForm({
 }: {
   driver: DriverChoice
   existing?: ConnectionDetails
+  /** A new connection's starting values; ignored with `existing`. */
+  prefill?: ConnectionPrefill
   submitting?: boolean
   /** A test of the current values is in flight. */
   testing?: boolean
@@ -215,7 +236,7 @@ export function ConnectionForm({
   const editing = existing !== undefined
   const busy = submitting || testing
   const form = useForm({
-    defaultValues: initialValues(driver, existing),
+    defaultValues: initialValues(driver, existing, prefill),
     onSubmit: ({ value }) => onSubmit(draftFrom(driver, value)),
   })
   const values = useStore(form.store, (state) => state.values)

@@ -11,7 +11,9 @@ import { BackendErrorAlert } from "@/components/oxyn/backend-error-alert"
 import type { BackendFailure } from "@/components/oxyn/backend-error-alert"
 import { EnvironmentBadge } from "@/components/oxyn/environment-badge"
 import { PrivacyTierBadge } from "@/components/oxyn/privacy-tier"
+import { ActionMenuContent } from "@/components/oxyn/action-menu-items"
 import { Button } from "@/components/ui/button"
+import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu"
 import {
   Empty,
   EmptyDescription,
@@ -29,6 +31,7 @@ import {
   ItemTitle,
 } from "@/components/ui/item"
 import { Skeleton } from "@/components/ui/skeleton"
+import type { ConnectionMenuActions } from "@/lib/actions/targets"
 import type { ConnectionSummary } from "@/lib/ipc/settings"
 
 /**
@@ -37,6 +40,11 @@ import type { ConnectionSummary } from "@/lib/ipc/settings"
  * The connection in use cannot be deleted from here: its workspace would be
  * left running against a configuration that no longer exists. Leaving it
  * first is one click, and says what happens.
+ *
+ * A right click — or ⇧F10 on a focused row — opens the row's context menu:
+ * `Edit…` and `Delete…` are the two buttons, the rest is what `menuActions`
+ * gives. Nothing opens or closes a connection from here, so `Connect`,
+ * `Disconnect`, `New console` and `Refresh catalog` are not offered.
  */
 export function ConnectionManager({
   connections,
@@ -45,6 +53,7 @@ export function ConnectionManager({
   onEdit,
   onDelete,
   onRetry,
+  menuActions,
 }: {
   connections: Array<ConnectionSummary> | undefined
   error?: BackendFailure | null
@@ -52,8 +61,13 @@ export function ConnectionManager({
   onEdit: (connection: ConnectionSummary) => void
   onDelete: (connection: ConnectionSummary) => void
   onRetry?: () => void
+  menuActions?: (connection: ConnectionSummary) => ConnectionMenuActions
 }) {
   const baseId = React.useId()
+  const [menu, setMenu] = React.useState<{
+    connection: ConnectionSummary
+    anchor: Element
+  } | null>(null)
   if (error) {
     return (
       <BackendErrorAlert
@@ -91,80 +105,119 @@ export function ConnectionManager({
     )
   }
 
+  // By position, as drawn: the connection's id never reaches the DOM (I-03).
+  const pickTarget = (event: React.MouseEvent) => {
+    const anchor = event.target instanceof Element ? event.target : null
+    const row = anchor?.closest("[data-connection-row]")
+    const index = row ? Number(row.getAttribute("data-connection-row")) : -1
+    const connection = connections[index]
+    setMenu(anchor && connection ? { connection, anchor } : null)
+  }
+  const menuInUse = menu !== null && menu.connection.id === openConnectionId
+
   return (
-    <ItemGroup className="gap-2">
-      {connections.map((connection, index) => {
-        const inUse = connection.id === openConnectionId
-        const inUseId = `${baseId}-in-use-${index}`
-        const described = connection.location
-          ? `${connection.driverName} · ${connection.location}`
-          : connection.driverName
-        return (
-          <Item key={connection.id} variant="outline" role="listitem">
-            <ItemMedia variant="icon">
-              <HugeiconsIcon icon={DatabaseIcon} strokeWidth={2} />
-            </ItemMedia>
-            {/* A real basis, not `flex-1`'s zero: the item wraps its actions
+    <ContextMenu>
+      <ContextMenuTrigger
+        render={<div className="contents" onContextMenu={pickTarget} />}
+      >
+        <ItemGroup className="gap-2">
+          {connections.map((connection, index) => {
+            const inUse = connection.id === openConnectionId
+            const inUseId = `${baseId}-in-use-${index}`
+            const described = connection.location
+              ? `${connection.driverName} · ${connection.location}`
+              : connection.driverName
+            return (
+              <Item
+                key={connection.id}
+                variant="outline"
+                role="listitem"
+                data-connection-row={index}
+              >
+                <ItemMedia variant="icon">
+                  <HugeiconsIcon icon={DatabaseIcon} strokeWidth={2} />
+                </ItemMedia>
+                {/* A real basis, not `flex-1`'s zero: the item wraps its actions
                 onto a second line once the name has less than 10 rem, rather
                 than pushing them past a 420 px window. */}
-            <ItemContent className="min-w-0 basis-40">
-              <ItemTitle className="w-full min-w-0">
-                <bdi className="truncate" title={connection.name}>
-                  {connection.name}
-                </bdi>
-                {connection.readOnly ? (
-                  <HugeiconsIcon
-                    icon={LockIcon}
-                    strokeWidth={2}
-                    className="size-3.5 text-muted-foreground"
-                    aria-label="Read only"
-                  />
-                ) : null}
-              </ItemTitle>
-              <ItemDescription className="truncate" title={described}>
-                {connection.driverName}
-                {connection.location ? (
-                  <>
-                    {" · "}
-                    <bdi>{connection.location}</bdi>
-                  </>
-                ) : null}
-              </ItemDescription>
-              {inUse ? (
-                // Its own line, never cut: it is the only reason given for a
-                // disabled Delete, and the button points at it.
-                <ItemDescription id={inUseId}>
-                  In use: leave this connection to delete it.
-                </ItemDescription>
-              ) : null}
-            </ItemContent>
-            {/* Once on a line of their own, the badges and buttons wrap
+                <ItemContent className="min-w-0 basis-40">
+                  <ItemTitle className="w-full min-w-0">
+                    <bdi className="truncate" title={connection.name}>
+                      {connection.name}
+                    </bdi>
+                    {connection.readOnly ? (
+                      <HugeiconsIcon
+                        icon={LockIcon}
+                        strokeWidth={2}
+                        className="size-3.5 text-muted-foreground"
+                        aria-label="Read only"
+                      />
+                    ) : null}
+                  </ItemTitle>
+                  <ItemDescription className="truncate" title={described}>
+                    {connection.driverName}
+                    {connection.location ? (
+                      <>
+                        {" · "}
+                        <bdi>{connection.location}</bdi>
+                      </>
+                    ) : null}
+                  </ItemDescription>
+                  {inUse ? (
+                    // Its own line, never cut: it is the only reason given for a
+                    // disabled Delete, and the button points at it.
+                    <ItemDescription id={inUseId}>
+                      In use: leave this connection to delete it.
+                    </ItemDescription>
+                  ) : null}
+                </ItemContent>
+                {/* Once on a line of their own, the badges and buttons wrap
                 rather than drawing past a 320 px dialog. */}
-            <ItemActions className="ms-auto min-w-0 flex-wrap justify-end">
-              <EnvironmentBadge environment={connection.environment} />
-              <PrivacyTierBadge tier={connection.privacyTier} />
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label={`Edit ${connection.name}`}
-                onClick={() => onEdit(connection)}
-              >
-                <HugeiconsIcon icon={Edit02Icon} strokeWidth={2} />
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon-sm"
-                aria-label={`Delete ${connection.name}`}
-                aria-describedby={inUse ? inUseId : undefined}
-                disabled={inUse}
-                onClick={() => onDelete(connection)}
-              >
-                <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} />
-              </Button>
-            </ItemActions>
-          </Item>
-        )
-      })}
-    </ItemGroup>
+                <ItemActions className="ms-auto min-w-0 flex-wrap justify-end">
+                  <EnvironmentBadge environment={connection.environment} />
+                  <PrivacyTierBadge tier={connection.privacyTier} />
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={`Edit ${connection.name}`}
+                    onClick={() => onEdit(connection)}
+                  >
+                    <HugeiconsIcon icon={Edit02Icon} strokeWidth={2} />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="icon-sm"
+                    aria-label={`Delete ${connection.name}`}
+                    aria-describedby={inUse ? inUseId : undefined}
+                    disabled={inUse}
+                    onClick={() => onDelete(connection)}
+                  >
+                    <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} />
+                  </Button>
+                </ItemActions>
+              </Item>
+            )
+          })}
+        </ItemGroup>
+      </ContextMenuTrigger>
+      {menu ? (
+        <ActionMenuContent
+          surface="connection"
+          anchor={menu.anchor}
+          title={menu.connection.name}
+          sources={{
+            connection: {
+              state: { open: menuInUse, busy: false },
+              actions: {
+                ...menuActions?.(menu.connection),
+                edit: () => onEdit(menu.connection),
+                // As the button: the connection in use is left first.
+                delete: menuInUse ? undefined : () => onDelete(menu.connection),
+              },
+            },
+          }}
+        />
+      ) : null}
+    </ContextMenu>
   )
 }

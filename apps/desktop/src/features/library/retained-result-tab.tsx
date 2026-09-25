@@ -1,14 +1,17 @@
 import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
+import { useStore } from "@tanstack/react-store"
 
 import {
   RetainedResultView,
   retainedExportable,
 } from "@/components/oxyn/retained-result-view"
 import type { RetainedResultState } from "@/components/oxyn/retained-result-view"
+import { session } from "@/features/session"
 import { useResultDensity } from "@/features/settings/use-result-density"
 import { useReleaseOnClose } from "@/features/library/use-release-on-close"
 import { ExportMenu } from "@/features/workspace/export-menu"
+import { useGridMenu } from "@/features/workspace/grid-menu"
 import { BackendError } from "@/lib/ipc/client"
 import { library } from "@/lib/ipc/library"
 import { results } from "@/lib/ipc/results"
@@ -60,6 +63,19 @@ export function RetainedResultTab({
         : Promise.reject(new Error("No result")),
     [connection, resultId]
   )
+  // The AI level is the workspace's connection's, which the result belongs
+  // to; any other connection is not known here, and offers nothing (I-04).
+  const open = useStore(session, (state) =>
+    state.open?.connection === connection ? state.open : null
+  )
+  // A retained result is a query's rows: copied, never filtered or sorted.
+  const gridMenu = useGridMenu({
+    open,
+    connection,
+    result: resultId,
+    origin: "query",
+    address: null,
+  })
 
   const state: RetainedResultState = opened.isPending
     ? { status: "loading" }
@@ -90,6 +106,7 @@ export function RetainedResultTab({
       onOpenCopy={onOpenCopy}
       destination={connectionName}
       density={density}
+      gridMenu={gridMenu}
       footerActions={
         state.status === "open" ? (
           <ExportMenu

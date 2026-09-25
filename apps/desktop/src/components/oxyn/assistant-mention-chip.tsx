@@ -7,6 +7,8 @@ import {
   TableIcon,
 } from "@hugeicons/core-free-icons"
 
+import { ActionMenuContent } from "@/components/oxyn/action-menu-items"
+import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu"
 import type { Mention } from "@/lib/ipc/ai"
 import { cn } from "@/lib/utils"
 
@@ -127,18 +129,35 @@ export function MentionChip({
 
   if (onOpen)
     return (
-      <button
-        type="button"
-        data-slot="assistant-mention"
-        aria-label={`Open ${word.toLowerCase()} ${label}`}
-        className={cn(
-          CHIP,
-          "cursor-pointer outline-none hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
-        )}
-        onClick={onOpen}
-      >
-        {content}
-      </button>
+      // Its own menu, `Open object`: a right click on the chip is not one on
+      // the question around it.
+      <ContextMenu>
+        <ContextMenuTrigger
+          render={
+            <button
+              type="button"
+              data-slot="assistant-mention"
+              aria-label={`Open ${word.toLowerCase()} ${label}`}
+              className={cn(
+                CHIP,
+                "cursor-pointer outline-none hover:bg-accent hover:text-accent-foreground focus-visible:ring-2 focus-visible:ring-ring/50"
+              )}
+              onClick={onOpen}
+            />
+          }
+        >
+          {content}
+        </ContextMenuTrigger>
+        <ActionMenuContent
+          surface="assistantMention"
+          sources={{
+            assistant: {
+              state: { answering: false },
+              actions: { openObject: onOpen },
+            },
+          }}
+        />
+      </ContextMenu>
     )
 
   return (

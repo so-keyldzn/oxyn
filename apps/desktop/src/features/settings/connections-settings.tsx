@@ -1,5 +1,6 @@
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { createStore, useStore } from "@tanstack/react-store"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Alert02Icon } from "@hugeicons/core-free-icons"
 
@@ -13,6 +14,7 @@ import { BackendErrorAlert } from "@/components/oxyn/backend-error-alert"
 import type { BackendFailure } from "@/components/oxyn/backend-error-alert"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Skeleton } from "@/components/ui/skeleton"
+import { copyConnection } from "@/features/connections/copy-connection"
 import { useTypedSecrets } from "@/features/connections/typed-secrets"
 import { LIBRARY_QUERY_KEY } from "@/features/library/library-refresh"
 import type { WithoutSecrets } from "@/features/connections/typed-secrets"
@@ -20,6 +22,25 @@ import { BackendError, backend, newCommandId } from "@/lib/ipc/client"
 import { settingsBackend } from "@/lib/ipc/settings"
 import type { ConnectionChange, ConnectionSummary } from "@/lib/ipc/settings"
 import type { ConnectionDraft, OpenConnection } from "@/lib/ipc/types"
+
+/** What another screen asks of this panel for one saved connection. */
+export interface ConnectionRequest {
+  connection: string
+  /** `environment` is an edit that starts on the environment choice. */
+  intent: "edit" | "environment" | "delete"
+}
+
+const connectionRequest = createStore<ConnectionRequest | null>(null)
+
+/**
+ * Asks this panel to edit or delete a connection, through its own form and
+ * dialogs — a change of environment still meets ADR-0037's native dialog.
+ * The caller opens the settings on `connections`; the panel takes the
+ * request once the list is read, and drops it if the connection is gone.
+ */
+export function requestConnectionChange(request: ConnectionRequest) {
+  connectionRequest.setState(() => request)
+}
 
 function failureOf(error: unknown): BackendFailure | null {
   if (!error) return null
@@ -68,6 +89,8 @@ export function ConnectionsSettings({
   const [secretsError, setSecretsError] = React.useState<string | null>(null)
   const [dirty, setDirty] = React.useState(false)
   const [confirmingCancel, setConfirmingCancel] = React.useState(false)
+  const [focusEnvironment, setFocusEnvironment] = React.useState(false)
+  const formRef = React.useRef<HTMLDivElement>(null)
   const unsaved = editing !== null && dirty
 
   React.useEffect(() => {
@@ -177,11 +200,56 @@ export function ConnectionsSettings({
     onError: () => setReview(null),
   })
 
+  const startEditing = (connection: ConnectionSummary, environment = false) => {
+    setSecretsError(null)
+    update.reset()
+    setFocusEnvironment(environment)
+    setEditing(connection)
+  }
+  const startDeleting = (connection: ConnectionSummary) => {
+    // As the list's button: the connection in use is left first.
+    if (connection.id === openConnection?.connection) return
+    remove.reset()
+    setDeleting(connection)
+  }
+
+  // A request from another screen — the start screen's context menu — goes
+  // through the same form and dialogs as a click here. An edit with typed
+  // values is never replaced by it.
+  const request = useStore(connectionRequest)
+  React.useEffect(() => {
+    if (request === null || connections.data === undefined) return
+    connectionRequest.setState(() => null)
+    const target = connections.data.find(
+      (connection) => connection.id === request.connection
+    )
+    if (!target || unsaved || review !== null) return
+    if (request.intent === "delete") startDeleting(target)
+    else startEditing(target, request.intent === "environment")
+    // Only the request and the list: the closures are fresh each render.
+  }, [request, connections.data])
+
+  // `Change environment…` lands on the chosen environment rather than on the
+  // name, which the form focuses first.
+  const formReady = details.data !== undefined && drivers.data !== undefined
+  React.useEffect(() => {
+    if (!focusEnvironment || !formReady) return
+    const frame = requestAnimationFrame(() => {
+      const chosen = formRef.current?.querySelector<HTMLElement>(
+        '[data-slot="environment-picker"] [role="radio"][aria-checked="true"]'
+      )
+      chosen?.focus()
+      chosen?.scrollIntoView({ block: "center" })
+      setFocusEnvironment(false)
+    })
+    return () => cancelAnimationFrame(frame)
+  }, [focusEnvironment, formReady])
+
   if (editing) {
     const driver = drivers.data?.find((choice) => choice.id === editing.driver)
     const failure = failureOf(details.error ?? drivers.error)
     return (
-      <div className="flex flex-col gap-4">
+      <div ref={formRef} className="flex flex-col gap-4">
         <h3 className="truncate font-medium">
           Edit <bdi title={editing.name}>{editing.name}</bdi>
         </h3>
@@ -253,16 +321,13 @@ export function ConnectionsSettings({
         connections={connections.data}
         error={failureOf(connections.error)}
         openConnectionId={openConnection?.connection ?? null}
-        onEdit={(connection) => {
-          setSecretsError(null)
-          update.reset()
-          setEditing(connection)
-        }}
-        onDelete={(connection) => {
-          remove.reset()
-          setDeleting(connection)
-        }}
+        onEdit={(connection) => startEditing(connection)}
+        onDelete={startDeleting}
         onRetry={() => void connections.refetch()}
+        menuActions={(connection) => ({
+          changeEnvironment: () => startEditing(connection, true),
+          copy: () => void copyConnection(connection),
+        })}
       />
       <DeleteConnectionDialog
         connection={review ? null : deleting}

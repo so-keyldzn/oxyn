@@ -6,7 +6,7 @@ import type { SaveState } from "@/components/oxyn/console-toolbar"
 import { saveNotice, titleTooLong } from "@/features/consoles/console-model"
 import { refreshLibrary } from "@/features/library/library-refresh"
 import { backend, newCommandId } from "@/lib/ipc/client"
-import type { ParameterInput } from "@/lib/ipc/consoles"
+import type { ParameterInput, SessionPlace } from "@/lib/ipc/consoles"
 import { library } from "@/lib/ipc/library"
 import type { DocumentWrite } from "@/lib/ipc/library"
 
@@ -38,6 +38,12 @@ export interface ConsoleSeed {
   parameters: Array<ParameterInput>
   /** A value is still missing: the console says so before anything runs. */
   needsValues: boolean
+  /**
+   * Where the session should resolve unqualified names — `New console on
+   * this schema`. Asked once the session is open, by the context picker's
+   * path; the text is untouched and nothing runs (ADR-0019).
+   */
+  context: SessionPlace | null
 }
 
 interface Draft {

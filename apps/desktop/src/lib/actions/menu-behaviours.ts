@@ -17,6 +17,7 @@ import type { ActionContext, ActionSources } from "./context"
 import type {
   CopyAsForm,
   CopyRowsFormat,
+  GridMenuActions,
   GridMenuState,
   OperationKind,
 } from "./targets"
@@ -124,15 +125,35 @@ function valueFilter(): ActionBehaviour {
   }
 }
 
-function sort(descending: boolean): ActionBehaviour {
-  return onTarget(
-    "grid",
-    (source) => {
-      const apply = source.actions.sort
-      return apply ? () => apply(descending) : undefined
+/**
+ * An entry that shapes a preview's SQL. On a console's result it is greyed
+ * whether or not the surface could act — the reason is the SQL, not the
+ * surface —; on a preview it needs the source's declaration and a handler.
+ */
+function previewEntry(
+  declared: "filterable" | "sortable",
+  pick: (actions: GridMenuActions) => (() => void) | undefined
+): ActionBehaviour {
+  return {
+    enabled: (context) => {
+      const grid = context.sources.grid
+      if (!grid) return "absent"
+      const shape = previewShape(grid.state, declared)
+      if (shape !== true) return shape
+      return pick(grid.actions) ? true : "absent"
     },
-    (state) => previewShape(state, "sortable")
-  )
+    run: (context) => {
+      const grid = context.sources.grid
+      if (grid) pick(grid.actions)?.()
+    },
+  }
+}
+
+function sort(descending: boolean): ActionBehaviour {
+  return previewEntry("sortable", (actions) => {
+    const apply = actions.sort
+    return apply ? () => apply(descending) : undefined
+  })
 }
 
 function copyAs(form: CopyAsForm): ActionBehaviour {
@@ -281,11 +302,7 @@ export const menuBehaviours: Record<string, ActionBehaviour> = {
     },
     run: (context) => context.sources.grid?.actions.sendToAssistant?.(),
   },
-  "column.filter": onTarget(
-    "grid",
-    (source) => source.actions.filter,
-    (state) => previewShape(state, "filterable")
-  ),
+  "column.filter": previewEntry("filterable", (actions) => actions.filter),
   "column.hide": onTarget("grid", (source) => source.actions.hideColumn),
   "column.freeze": notYet(
     "grid",
@@ -322,14 +339,22 @@ export const menuBehaviours: Record<string, ActionBehaviour> = {
         ? true
         : { reason: "No loaded object is named under the cursor" }
   ),
-  "editor.askAssistant": onTarget(
-    "editorMenu",
-    (source) => source.actions.askAssistant,
-    (state, context) => {
-      if (!context.sources.workspace?.state.hasAssistant) return "absent"
-      return state.selection ? true : { reason: "Nothing is selected" }
-    }
-  ),
+  // Absent only without an AI destination (UX-SPEC); an editor whose host
+  // cannot hand text to the composer greys it with what is missing.
+  "editor.askAssistant": {
+    enabled: (context) => {
+      const editor = context.sources.editorMenu
+      if (!editor || !context.sources.workspace?.state.hasAssistant)
+        return "absent"
+      if (!editor.actions.askAssistant)
+        return {
+          reason:
+            "Not available yet: the assistant's composer cannot receive text",
+        }
+      return editor.state.selection ? true : { reason: "Nothing is selected" }
+    },
+    run: (context) => context.sources.editorMenu?.actions.askAssistant?.(),
+  },
 
   "connection.connect": onTarget(
     "connection",
@@ -384,10 +409,14 @@ export const menuBehaviours: Record<string, ActionBehaviour> = {
     "libraryEntry",
     (source) => source.actions.duplicate
   ),
-  "library.reveal": notYet(
-    "libraryEntry",
-    "Not available yet: Oxyn cannot open the file manager"
-  ),
+  // Only a saved query is a file to reveal; a history row has none.
+  "library.reveal": {
+    enabled: (context) =>
+      context.sources.libraryEntry?.state.file
+        ? { reason: "Not available yet: Oxyn cannot open the file manager" }
+        : "absent",
+    run: () => undefined,
+  },
   "library.copyPath": onTarget(
     "libraryEntry",
     (source) => source.actions.copyPath

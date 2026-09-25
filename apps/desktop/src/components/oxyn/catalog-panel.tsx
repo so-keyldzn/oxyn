@@ -10,6 +10,7 @@ import {
 
 import { CatalogTree } from "@/components/oxyn/catalog-tree"
 import type {
+  CopyAs,
   ObjectOperations,
   OpenTarget,
   PinToQuestion,
@@ -79,6 +80,8 @@ export function CatalogPanel({
   onRefreshLevel,
   pin,
   operations,
+  copyAs,
+  onNewConsole,
   onLeave,
 }: {
   connectionName: string
@@ -116,6 +119,10 @@ export function CatalogPanel({
   pin?: PinToQuestion
   /** `Drop…`, `Truncate…`, `Rename…`, by capability (ADR-0042). */
   operations?: ObjectOperations
+  /** `Copy as ▸`, composed by the backend (I-10). */
+  copyAs?: CopyAs
+  /** `New console on this schema`, where a console's context can be one. */
+  onNewConsole?: (node: CatalogNode) => void
   onLeave: () => void
 }) {
   const { setOpen } = useSidebar()
@@ -265,6 +272,8 @@ export function CatalogPanel({
                     onRefresh={onRefreshLevel}
                     pin={pin}
                     operations={operations}
+                    copyAs={copyAs}
+                    onNewConsole={onNewConsole}
                   />
                 )}
               </>

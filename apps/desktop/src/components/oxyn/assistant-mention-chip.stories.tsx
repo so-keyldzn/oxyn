@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite"
-import { expect, fn, userEvent, within } from "storybook/test"
+import { expect, fn, userEvent, waitFor, within } from "storybook/test"
 
 import { MentionChip } from "./assistant-mention-chip"
 import type { MentionKind } from "./assistant-mention-chip"
@@ -93,5 +93,26 @@ export const LongName: Story = {
     await expect(canvasElement.scrollWidth).toBeLessThanOrEqual(
       canvasElement.clientWidth
     )
+  },
+}
+
+/** Its own context menu: `Open object`, the button's action, and nothing else. */
+export const ContextMenuInTheThread: Story = {
+  args: { kind: "table", label: "orders", onOpen: fn() },
+  play: async ({ canvasElement, args }) => {
+    const page = within(document.body)
+    await userEvent.pointer({
+      keys: "[MouseRight]",
+      target: within(canvasElement).getByRole("button", {
+        name: "Open table orders",
+      }),
+    })
+    await page.findByRole("menu")
+    await expect(
+      page.getAllByRole("menuitem").map((item) => item.textContent.trim())
+    ).toEqual(["Open object"])
+    await userEvent.click(page.getByRole("menuitem", { name: "Open object" }))
+    await expect(args.onOpen).toHaveBeenCalledOnce()
+    await waitFor(() => expect(page.queryByRole("menu")).toBeNull())
   },
 }
