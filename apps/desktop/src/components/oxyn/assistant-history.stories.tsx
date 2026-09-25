@@ -2,6 +2,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite"
 import { expect, fn, userEvent, waitFor, within } from "storybook/test"
 
 import { AssistantHistory } from "./assistant-history"
+import { expectContainedInFrame, openFrame } from "./frame-overflow"
 import type { ThreadSummary } from "@/lib/ipc/ai"
 
 const items: Array<ThreadSummary> = [
@@ -144,6 +145,41 @@ export const DeletionNamesTheConversation: Story = {
       dialog.getByRole("button", { name: "Delete conversation" })
     )
     await expect(args.onDelete).toHaveBeenCalledWith("3")
+  },
+}
+
+/**
+ * A long title with nothing to break on, and a long refusal: the deletion
+ * dialog keeps them inside its frame.
+ */
+export const DeletionOfALongTitleStaysInTheFrame: Story = {
+  args: {
+    history: {
+      status: "ready",
+      items: [
+        {
+          ...items[0]!,
+          title:
+            "slowest_queries_of_the_week_on_analytics_warehouse_production_eu_west_3",
+        },
+      ],
+    },
+    onDelete: fn(async () => {
+      throw new Error(
+        "store: the thread file workspaces/analytics-warehouse-production/threads/3.jsonl is read-only"
+      )
+    }),
+  },
+  play: async ({ canvasElement }) => {
+    await userEvent.click(
+      within(canvasElement).getByRole("button", { name: /^Delete slowest/ })
+    )
+    const dialog = within(document.body)
+    await userEvent.click(
+      await dialog.findByRole("button", { name: "Delete conversation" })
+    )
+    await dialog.findByRole("alert")
+    await expectContainedInFrame(await openFrame("alert-dialog-content"))
   },
 }
 

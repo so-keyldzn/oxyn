@@ -52,6 +52,10 @@ export function CloseConsoleDialog({
       }}
     >
       <AlertDialogContent
+        // Three actions side by side need more than the base width, which is
+        // keyed on `data-size`; and a grid track sized by its content would
+        // let a long file name widen the dialog past its frame.
+        className="grid-cols-1 data-[size=default]:sm:max-w-md"
         initialFocus={cancelRef}
         onKeyDown={(event) => {
           if (
@@ -63,13 +67,18 @@ export function CloseConsoleDialog({
         }}
       >
         <AlertDialogHeader>
-          <AlertDialogTitle>Close {reasons?.title}?</AlertDialogTitle>
+          <AlertDialogTitle className="wrap-anywhere">
+            Close {reasons?.title}?
+          </AlertDialogTitle>
           <AlertDialogDescription>
             {reasons ? closeMessage(reasons) : null}
           </AlertDialogDescription>
         </AlertDialogHeader>
         {notice ? (
-          <p className="text-xs text-muted-foreground" role="status">
+          <p
+            className="text-xs wrap-anywhere text-muted-foreground"
+            role="status"
+          >
             {notice}
           </p>
         ) : null}

@@ -1,6 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/react-vite"
 import { expect, fn, userEvent, waitFor, within } from "storybook/test"
 
+import { expectContainedInFrame, openFrame } from "./frame-overflow"
 import { ValuePageDialog } from "./value-page-dialog"
 
 const firstPage = {
@@ -127,6 +128,36 @@ export const Expired: Story = {
   play: async () => {
     await shown(dialog.findByText(/never runs the query again/))
   },
+}
+
+/**
+ * Long names and a value and an error with nothing to break on: the header,
+ * the value and the footer stay inside the frame, and nothing scrolls sideways.
+ */
+export const LongContentStaysInTheFrame: Story = {
+  args: {
+    connectionName: "analytics_warehouse_production_eu_west_3_read_replica",
+    column: "shipping_address_line_two_including_building_and_floor_details",
+    state: {
+      status: "page",
+      page: { ...firstPage, text: "x".repeat(4_000) },
+    },
+  },
+  play: async () => {
+    await expectContainedInFrame(await openFrame("dialog-content"))
+  },
+}
+
+/** The same with an error message that has nothing to break on. */
+export const LongErrorStaysInTheFrame: Story = {
+  args: {
+    ...LongContentStaysInTheFrame.args,
+    state: {
+      status: "error",
+      message: `spill: /Users/analyst/Library/Caches/oxyn/${"result_batch_".repeat(12)}.arrow could not be read`,
+    },
+  },
+  play: LongContentStaysInTheFrame.play,
 }
 
 export const Failed: Story = {

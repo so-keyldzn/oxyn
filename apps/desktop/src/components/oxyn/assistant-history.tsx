@@ -303,9 +303,11 @@ export function AssistantHistory({
       </p>
 
       <AlertDialog open={removalOpen} onOpenChange={setRemovalOpen}>
-        <AlertDialogContent>
+        {/* A grid track sized by its content would let a long title widen
+            the dialog past its frame. */}
+        <AlertDialogContent className="grid-cols-1">
           <AlertDialogHeader>
-            <AlertDialogTitle>
+            <AlertDialogTitle className="wrap-anywhere">
               Delete “{removing?.title || UNTITLED}”?
             </AlertDialogTitle>
             <AlertDialogDescription>
@@ -316,7 +318,7 @@ export function AssistantHistory({
           {deleteError ? (
             <p
               role="alert"
-              className="text-sm text-destructive"
+              className="text-sm wrap-anywhere text-destructive"
               data-selectable
             >
               {deleteError}

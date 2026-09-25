@@ -8,6 +8,8 @@ import {
   remoteProvider,
   unresolvedProvider,
 } from "./assistant-fixtures"
+import { expectContainedInFrame, openFrame } from "./frame-overflow"
+import type { DestinationOption } from "@/features/assistant/availability"
 
 const meta = {
   title: "Oxyn/Assistant/Header",
@@ -37,6 +39,53 @@ const meta = {
 
 export default meta
 type Story = StoryObj<typeof meta>
+
+const LONG_MODEL =
+  "arn:aws:bedrock:eu-west-3:123456789012:inference-profile/eu.anthropic.claude-sonnet-analytics-team-staging-v2:0"
+
+const LONG_DESTINATIONS: Array<DestinationOption> = [
+  {
+    ...destinations[0]!,
+    label: "Work account — the analytics team's Bedrock gateway in eu-west-3",
+    model: LONG_MODEL,
+  },
+  {
+    ...destinations[1]!,
+    label: "codex_analytics_team_staging_workspace_agent_with_a_long_name",
+    usable: false,
+    reason:
+      "Not found on PATH: /Users/analyst/.local/share/agents/codex_analytics_team_staging/bin/codex",
+  },
+]
+
+/**
+ * Long provider, agent and model names: the header's row keeps its selects
+ * inside, and each select's list stays inside its own frame.
+ */
+export const LongNamesStayInTheirFrames: Story = {
+  args: {
+    destinations: LONG_DESTINATIONS,
+    selected: LONG_DESTINATIONS[0]!,
+    model: LONG_MODEL,
+  },
+  play: async ({ canvasElement }) => {
+    const header = canvasElement.querySelector("header")
+    await expect(header).not.toBeNull()
+    await expectContainedInFrame(header as HTMLElement)
+
+    const canvas = within(canvasElement)
+    await userEvent.click(canvas.getByRole("combobox", { name: "Who answers" }))
+    await expectContainedInFrame(await openFrame("select-content"))
+    await userEvent.keyboard("{Escape}")
+    await waitFor(() =>
+      expect(within(document.body).queryByRole("listbox")).toBeNull()
+    )
+
+    await userEvent.click(canvas.getByRole("combobox", { name: "Model" }))
+    await expectContainedInFrame(await openFrame("select-content"))
+    await userEvent.keyboard("{Escape}")
+  },
+}
 
 export const MetadataToCloud: Story = {
   play: async ({ canvasElement }) => {

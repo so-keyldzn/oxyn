@@ -3,6 +3,7 @@ import { expect, fn, userEvent, waitFor, within } from "storybook/test"
 
 import { DeclarationRemovalDialog } from "./declaration-removal-dialog"
 import { externalAgent, remoteProvider } from "./assistant-fixtures"
+import { expectContainedInFrame, openFrame } from "./frame-overflow"
 
 const meta = {
   title: "Oxyn/Settings/DeclarationRemovalDialog",
@@ -19,6 +20,22 @@ export default meta
 type Story = StoryObj<typeof meta>
 
 export const Closed: Story = { args: { removal: null } }
+
+/** A label with nothing to break on stays inside the frame. */
+export const LongContentStaysInTheFrame: Story = {
+  args: {
+    removal: {
+      kind: "agent",
+      agent: {
+        ...externalAgent,
+        label: "codex_analytics_team_staging_workspace_agent_with_a_long_name",
+      },
+    },
+  },
+  play: async () => {
+    await expectContainedInFrame(await openFrame("alert-dialog-content"))
+  },
+}
 
 export const RemovingAProvider: Story = {
   play: async ({ args }) => {

@@ -6,6 +6,10 @@ import { SettingsDialogView } from "./settings-dialog-view"
 import { DEFAULT_PREFERENCES } from "./preferences"
 import { summaries } from "@/components/oxyn/connection-fixtures"
 import { ConnectionManager } from "@/components/oxyn/connection-manager"
+import {
+  expectContainedInFrame,
+  openFrame,
+} from "@/components/oxyn/frame-overflow"
 
 const meta = {
   title: "Screens/SettingsDialog",
@@ -68,6 +72,46 @@ export const InjectedSection: Story = {
     })
     await waitFor(() => expect(tab).toBeVisible())
   },
+}
+
+/**
+ * Long connection names and locations, and a section with a long label: the
+ * tabs, the list and the section stay inside the frame. In a compact window
+ * the tabs become a row that scrolls sideways — by design, and only there.
+ */
+export const LongContentStaysInTheFrame: Story = {
+  args: {
+    section: "connections",
+    sections: [
+      {
+        id: "ai",
+        label: "AI providers and external agents",
+        content: <p className="text-sm">No provider declared.</p>,
+      },
+    ],
+    connections: (
+      <ConnectionManager
+        connections={summaries.map((summary) => ({
+          ...summary,
+          name: `${summary.name}_analytics_warehouse_production_eu_west_3_read_replica`,
+          location: `${summary.location}/analytics_warehouse_production_eu_west_3.cluster_ro`,
+        }))}
+        onEdit={() => undefined}
+        onDelete={() => undefined}
+      />
+    ),
+  },
+  play: async () => {
+    await expectContainedInFrame(await openFrame("dialog-content"), {
+      scrollsSideways: ['[data-slot="tabs-list"]'],
+    })
+  },
+}
+
+/** The same, in a compact window. */
+export const LongContentStaysInTheFrameWhenCompact: Story = {
+  ...LongContentStaysInTheFrame,
+  globals: { viewport: { value: "mobile1" } },
 }
 
 export const UnknownSectionFallsBack: Story = {

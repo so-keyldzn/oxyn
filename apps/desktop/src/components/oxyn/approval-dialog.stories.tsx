@@ -2,6 +2,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite"
 import { expect, fn, userEvent, waitFor, within } from "storybook/test"
 
 import { ApprovalDialog } from "./approval-dialog"
+import { expectContainedInFrame, openFrame } from "./frame-overflow"
 
 const meta = {
   title: "Oxyn/ApprovalDialog",
@@ -123,6 +124,39 @@ export const HostileConnectionName: Story = {
       expect.stringContaining("Run on prod")
     )
   },
+}
+
+/**
+ * Long names everywhere — the agent, the connection, a statement line with no
+ * space to break on: the header, the statement and the footer stay inside the
+ * dialog's frame, at the window's default width.
+ */
+export const LongContentStaysInTheFrame: Story = {
+  args: {
+    actor: {
+      kind: "agent",
+      name: "Codex — the agent of the analytics team's staging workspace",
+    },
+    connectionName: "analytics_warehouse_production_eu_west_3_read_replica",
+    approval: {
+      command: "018f0000-0000-7000-8000-00000000c0e1",
+      reason: "Writes on a production connection need a review.",
+      preview: {
+        statement: `UPDATE reporting_warehouse_2026.customer_orders_with_shipping_details SET ${"shipping_address_line_two_".repeat(8)}= NULL;`,
+        connection: "analytics_warehouse_production_eu_west_3_read_replica",
+        estimatedRows: 12_345_678,
+      },
+    },
+  },
+  play: async () => {
+    await expectContainedInFrame(await openFrame("alert-dialog-content"))
+  },
+}
+
+/** The same, in a compact window: the footer stacks, Cancel first. */
+export const LongContentStaysInTheFrameWhenCompact: Story = {
+  ...LongContentStaysInTheFrame,
+  globals: { viewport: { value: "mobile1" } },
 }
 
 export const LongStatement: Story = {

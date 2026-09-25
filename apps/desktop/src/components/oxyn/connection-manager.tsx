@@ -138,7 +138,9 @@ export function ConnectionManager({
                 </ItemDescription>
               ) : null}
             </ItemContent>
-            <ItemActions className="ms-auto shrink-0">
+            {/* Once on a line of their own, the badges and buttons wrap
+                rather than drawing past a 320 px dialog. */}
+            <ItemActions className="ms-auto min-w-0 flex-wrap justify-end">
               <EnvironmentBadge environment={connection.environment} />
               <PrivacyTierBadge tier={connection.privacyTier} />
               <Button

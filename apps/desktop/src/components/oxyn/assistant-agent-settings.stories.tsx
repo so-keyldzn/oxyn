@@ -6,6 +6,7 @@ import { AssistantAgentSettings } from "./assistant-agent-settings"
 import { AssistantView } from "./assistant-view"
 import panel from "./assistant-view.stories"
 import { assistantState, destinations } from "./assistant-fixtures"
+import { expectContainedInFrame, openFrame } from "./frame-overflow"
 import { NEW_THREAD } from "@/features/assistant/thread"
 import { Button } from "@/components/ui/button"
 import type { AgentSettings } from "@/features/assistant/transcript"
@@ -483,6 +484,45 @@ export const LongNames: Story = {
     await expect(
       screen.getByRole("combobox", { name: "Mode: وضع التخطيط المفصل" })
     ).toBeVisible()
+  },
+}
+
+const UNBROKEN = "claude_sonnet_analytics_team_staging_inference_profile_v2"
+
+/**
+ * Long choices once the list is open: each one is cut with an ellipsis inside
+ * the list's frame, never drawn past it.
+ */
+export const LongChoicesStayInTheList: Story = {
+  args: {
+    settings: {
+      modes: [],
+      currentMode: null,
+      options: [
+        select(
+          "model",
+          "Model",
+          "model",
+          [
+            choice("long", UNBROKEN, `${UNBROKEN} — ${LONG}`),
+            choice("rtl", "وضع التخطيط المفصل", "يخطط قبل التنفيذ"),
+            SONNET,
+          ],
+          SONNET.id
+        ),
+      ],
+    },
+  },
+  play: async () => {
+    const screen = body()
+    const model = screen.getByRole("combobox", { name: "Model: Sonnet" })
+    model.focus()
+    await userEvent.keyboard("{ArrowDown}")
+    await visible(await screen.findByRole("listbox"))
+    await expectContainedInFrame(await openFrame("select-content"))
+    await userEvent.keyboard("{Escape}")
+    await waitFor(() => expect(screen.queryByRole("listbox")).toBeNull())
+    await settled()
   },
 }
 

@@ -488,7 +488,9 @@ export function LibraryPanel({
           if (!open) setDeleting(null)
         }}
       >
-        <AlertDialogContent initialFocus={cancelRef}>
+        {/* A grid track sized by its content would let a long title widen
+            the dialog past its frame. */}
+        <AlertDialogContent initialFocus={cancelRef} className="grid-cols-1">
           <AlertDialogHeader>
             <AlertDialogTitle className="wrap-anywhere">
               Delete{" "}
@@ -523,7 +525,7 @@ export function LibraryPanel({
           if (!open) setReconciling(null)
         }}
       >
-        <AlertDialogContent initialFocus={keepRef}>
+        <AlertDialogContent initialFocus={keepRef} className="grid-cols-1">
           <AlertDialogHeader>
             <AlertDialogTitle className="wrap-anywhere">
               Mark this write on{" "}

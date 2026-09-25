@@ -35,9 +35,13 @@ export function DiscardChangesDialog({
         if (!next) onKeep()
       }}
     >
-      <AlertDialogContent initialFocus={keepRef}>
+      {/* A grid track sized by its content would let a long subject widen
+          the dialog past its frame. */}
+      <AlertDialogContent initialFocus={keepRef} className="grid-cols-1">
         <AlertDialogHeader>
-          <AlertDialogTitle>Discard {what}?</AlertDialogTitle>
+          <AlertDialogTitle className="wrap-anywhere">
+            Discard {what}?
+          </AlertDialogTitle>
           <AlertDialogDescription>
             The details you typed are not saved anywhere and will be lost.
           </AlertDialogDescription>

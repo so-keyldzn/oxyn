@@ -4,6 +4,7 @@ import { expect, fn, userEvent, waitFor, within } from "storybook/test"
 
 import { AssistantSampleApproval } from "./assistant-sample-approval"
 import type { SampleRequest } from "./assistant-sample-approval"
+import { expectContainedInFrame, openFrame } from "./frame-overflow"
 import { Button } from "@/components/ui/button"
 import type { RelationField } from "@/lib/ipc/types"
 
@@ -505,6 +506,60 @@ export const ManyAndHostileColumns: Story = {
     })
     await expect(list.scrollWidth).toBeLessThanOrEqual(list.clientWidth)
   },
+}
+
+const LONG_REQUEST: SampleRequest = {
+  ...REQUEST,
+  id: "ask-long",
+  requestedBy: "Codex — the agent of the analytics team's staging workspace",
+  destination: "Codex — the agent of the analytics team's staging workspace",
+  reach: "unresolved",
+  source: "reporting_warehouse_2026.customer_orders_with_shipping_details",
+  fields: [
+    field(
+      "shipping_address_line_two_including_building_and_floor_details",
+      "character varying(255)",
+      { comment: "Free text typed by the customer at checkout, never checked" }
+    ),
+    field("aVeryLongCamelCaseColumnNameWithoutAnyUnderscoreToBreakOn", "text"),
+    ...Array.from({ length: 30 }, (_, index) =>
+      field(`order_line_attribute_${index}`, "numeric(12,2)")
+    ),
+  ],
+}
+
+/** Tick every offered box, one gesture each, as the screen requires. */
+async function tickAll() {
+  for (const box of await body().findAllByRole("checkbox")) {
+    await userEvent.click(box)
+  }
+}
+
+/**
+ * Long names everywhere, every column ticked, at the window's default width:
+ * the list, the counter and the action stay inside the dialog's frame. The
+ * label that names what leaves and where wraps rather than pushing the frame —
+ * it is the last screen before the values leave, so it is never cut either.
+ */
+export const LongContentStaysInTheFrame: Story = {
+  args: {
+    request: LONG_REQUEST,
+    connectionName: "analytics_warehouse_production_eu_west_3_read_replica",
+  },
+  play: async () => {
+    await tickAll()
+    const send = await body().findByRole("button", {
+      name: /Send 32 of 32 columns to Codex .* · to an unresolved address/,
+    })
+    await expect(send).toBeEnabled()
+    await expectContainedInFrame(await openFrame("alert-dialog-content"))
+  },
+}
+
+/** The same, in a compact window: the footer stacks, Cancel first. */
+export const LongContentStaysInTheFrameWhenCompact: Story = {
+  ...LongContentStaysInTheFrame,
+  globals: { viewport: { value: "mobile1" } },
 }
 
 /**

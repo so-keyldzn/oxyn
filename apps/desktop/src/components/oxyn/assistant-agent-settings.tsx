@@ -99,7 +99,9 @@ function WithReason({
 
 function ChoiceText({ choice }: { choice: AgentChoice }) {
   return (
-    <span className="flex max-w-72 min-w-0 flex-col">
+    // `max-w-64` leaves room, inside a `max-w-80` list, for the item's own
+    // padding and check mark: the item's text does not shrink below this.
+    <span className="flex max-w-64 min-w-0 flex-col">
       <span dir="auto" className="truncate" title={choice.name}>
         {choice.name}
       </span>
@@ -169,7 +171,12 @@ function ChoiceSelect({
           )}
         </SelectValue>
       </SelectTrigger>
-      <SelectContent alignItemWithTrigger={false} className="max-w-80">
+      {/* As wide as its choices, not as the trigger: the trigger is cut at
+          10 rem, and a list that narrow would cut every choice with it. */}
+      <SelectContent
+        alignItemWithTrigger={false}
+        className="w-auto max-w-80 min-w-(--anchor-width)"
+      >
         <SelectGroup>
           {choices.map((choice) => (
             <SelectItem key={choice.id} value={choice.id}>
