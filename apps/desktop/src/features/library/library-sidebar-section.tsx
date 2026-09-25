@@ -16,7 +16,7 @@ import type {
   LibraryState,
   LibraryView,
 } from "@/components/oxyn/library-panel"
-import { BackendError, newCommandId } from "@/lib/ipc/client"
+import { BackendError, backend, newCommandId } from "@/lib/ipc/client"
 import { settingsBackend } from "@/lib/ipc/settings"
 import { library } from "@/lib/ipc/library"
 import type {
@@ -29,10 +29,6 @@ import type { OpenConnection } from "@/lib/ipc/types"
 
 /** Every library query starts with this key: a run invalidates it. */
 export const LIBRARY_QUERY_KEY = ["library"] as const
-
-function failure(error: unknown) {
-  return error instanceof BackendError ? error.message : String(error)
-}
 
 /** `retryable` comes from the backend; anything else is not worth retrying. */
 function backendFailure(error: unknown): BackendFailure {
@@ -73,42 +69,68 @@ export function LibrarySidebarSection({
   const [cursors, setCursors] = React.useState<Array<string | number | null>>([
     null,
   ])
-  const [actionError, setActionError] = React.useState<string | null>(null)
+  const [actionError, setActionError] = React.useState<BackendFailure | null>(
+    null
+  )
+  // The read the user cancelled stays cancelled until they ask again: an
+  // empty list there would claim that nothing matched (UX-SPEC l.410-411).
+  const [cancelled, setCancelled] = React.useState(false)
+  // The command of the read in flight, which `backend.cancel` stops in SQLite.
+  const reading = React.useRef<string | null>(null)
   const cursor = cursors[cursors.length - 1] ?? null
 
-  const resetPages = () => setCursors([null])
+  const resetPages = () => {
+    setCursors([null])
+    setCancelled(false)
+  }
 
+  const track = async <T,>(read: (commandId: string) => Promise<T>) => {
+    const id = newCommandId()
+    reading.current = id
+    try {
+      return await read(id)
+    } finally {
+      if (reading.current === id) reading.current = null
+    }
+  }
+
+  const historyKey = [
+    ...LIBRARY_QUERY_KEY,
+    "history",
+    debouncedSearch,
+    filters,
+    cursor,
+  ]
   const history = useQuery({
-    queryKey: [
-      ...LIBRARY_QUERY_KEY,
-      "history",
-      debouncedSearch,
-      filters,
-      cursor,
-    ],
+    queryKey: historyKey,
     queryFn: () =>
-      library.readHistory(newCommandId(), {
-        connection: filters.connection === "" ? null : filters.connection,
-        search: debouncedSearch,
-        days: filters.days,
-        status: filters.status,
-        before: typeof cursor === "number" ? cursor : null,
-        limit: null,
-      }),
+      track((id) =>
+        library.readHistory(id, {
+          connection: filters.connection === "" ? null : filters.connection,
+          search: debouncedSearch,
+          days: filters.days,
+          status: filters.status,
+          before: typeof cursor === "number" ? cursor : null,
+          limit: null,
+        })
+      ),
     enabled: view === "history",
     placeholderData: keepPreviousData,
   })
 
+  const savedKey = [...LIBRARY_QUERY_KEY, "saved", debouncedSearch, cursor]
   const saved = useQuery({
-    queryKey: [...LIBRARY_QUERY_KEY, "saved", debouncedSearch, cursor],
+    queryKey: savedKey,
     queryFn: () =>
-      library.listDocuments(newCommandId(), {
-        savedOnly: true,
-        openOnly: false,
-        search: debouncedSearch,
-        before: typeof cursor === "string" ? cursor : null,
-        limit: null,
-      }),
+      track((id) =>
+        library.listDocuments(id, {
+          savedOnly: true,
+          openOnly: false,
+          search: debouncedSearch,
+          before: typeof cursor === "string" ? cursor : null,
+          limit: null,
+        })
+      ),
     enabled: view === "saved",
     placeholderData: keepPreviousData,
   })
@@ -172,22 +194,35 @@ export function LibrarySidebarSection({
 
   const current = view === "history" ? history : saved
   const state: LibraryState = actionError
-    ? { status: "error", message: actionError }
-    : current.isPending
-      ? { status: "loading" }
-      : current.isError
-        ? { status: "error", message: failure(current.error) }
-        : view === "history"
-          ? { status: "history", entries: history.data?.entries ?? [] }
-          : { status: "saved", entries: saved.data?.entries ?? [] }
+    ? { status: "error", error: actionError }
+    : cancelled
+      ? { status: "cancelled" }
+      : current.isPending
+        ? { status: "loading" }
+        : current.isError
+          ? { status: "error", error: backendFailure(current.error) }
+          : view === "history"
+            ? { status: "history", entries: history.data?.entries ?? [] }
+            : { status: "saved", entries: saved.data?.entries ?? [] }
   const next = view === "history" ? history.data?.next : saved.data?.next
+
+  const cancel = () => {
+    const id = reading.current
+    if (id) void backend.cancel(id).catch(() => undefined)
+    setCancelled(true)
+    // Drops the answer too: a read that finished anyway does not replace
+    // « cancelled » with a list.
+    void queryClient.cancelQueries({
+      queryKey: view === "history" ? historyKey : savedKey,
+    })
+  }
 
   const guard = async (action: () => Promise<void>) => {
     setActionError(null)
     try {
       await action()
     } catch (error) {
-      setActionError(failure(error))
+      setActionError(backendFailure(error))
     }
   }
 
@@ -228,13 +263,20 @@ export function LibrarySidebarSection({
         state={state}
         hasPrevious={cursors.length > 1}
         hasNext={next !== null && next !== undefined}
-        onPrevious={() => setCursors((all) => all.slice(0, -1))}
+        onPrevious={() => {
+          setCancelled(false)
+          setCursors((all) => all.slice(0, -1))
+        }}
         onNext={() => {
+          setCancelled(false)
           if (next !== null && next !== undefined)
             setCursors((all) => [...all, next])
         }}
+        searching={current.isFetching && !cancelled}
+        onCancel={cancel}
         onRefresh={() => {
           setActionError(null)
+          setCancelled(false)
           void queryClient.invalidateQueries({ queryKey: LIBRARY_QUERY_KEY })
         }}
         currentConnection={open.connection}
