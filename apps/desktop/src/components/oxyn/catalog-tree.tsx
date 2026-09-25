@@ -25,6 +25,11 @@ import {
 import { InputGroup, InputGroupAddon } from "@/components/ui/input-group"
 import { Spinner } from "@/components/ui/spinner"
 import { Toggle } from "@/components/ui/toggle"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import type { ActionSources } from "@/lib/actions/context"
 import type { CopyAsForm } from "@/lib/actions/targets"
 import type { CatalogSearchHit } from "@/lib/ipc/metadata"
@@ -294,6 +299,12 @@ export function staleExpanded(
 /** A tree row: dense, as the sidebar menu rows. */
 const ROW_HEIGHT = 28
 
+/**
+ * How long the pointer rests on a row before its name shows in full: a hint
+ * for a truncated name, not something to flash while sweeping the tree.
+ */
+const HINT_DELAY_MS = 600
+
 /** How long typed letters accumulate into one typeahead prefix. */
 const TYPEAHEAD_MS = 500
 
@@ -424,6 +435,7 @@ export function CatalogTree({
 
   const [menuNode, setMenuNode] = React.useState<CatalogNode | null>(null)
   const [menuAnchor, setMenuAnchor] = React.useState<Element | null>(null)
+  const [menuOpen, setMenuOpen] = React.useState(false)
   const listRef = React.useRef<HTMLDivElement>(null)
   const onQuery = search?.onQuery
   const baseId = React.useId()
@@ -698,7 +710,7 @@ export function CatalogTree({
           </p>
         )
       ) : (
-        <ContextMenu>
+        <ContextMenu onOpenChange={setMenuOpen}>
           <ContextMenuTrigger
             render={
               <div
@@ -748,105 +760,122 @@ export function CatalogTree({
                 )
                 const isFocused = item.index === focus
                 const isSelected = selected === row.key
+                const hint = row.placeholder
+                  ? PLACEHOLDER[row.placeholder].title
+                  : row.node.comment
+                    ? `${row.node.name} — ${row.node.comment}`
+                    : row.node.name
+                // What the hint adds to the row's own text is its description.
+                const description = row.placeholder
+                  ? PLACEHOLDER[row.placeholder].title
+                  : row.node.comment
+                const hintId = description
+                  ? `${idFor(row.key)}-hint`
+                  : undefined
                 return (
-                  <div
-                    key={row.key}
-                    id={idFor(row.key)}
-                    role="treeitem"
-                    data-index={item.index}
-                    data-focused={isFocused || undefined}
-                    aria-level={row.depth + 1}
-                    aria-posinset={row.posInSet}
-                    aria-setsize={row.setSize}
-                    aria-expanded={row.expandable ? row.expanded : undefined}
-                    aria-selected={isSelected}
-                    aria-busy={isLoading || undefined}
-                    data-dragging={
-                      nameDrag.dragged?.node === row.node || undefined
-                    }
-                    onPointerDown={(event) => {
-                      if (insertable(row)) nameDrag.start(event, row.node)
-                    }}
-                    onClick={() => {
-                      setFocusKey(row.key)
-                      activate(row)
-                    }}
-                    onContextMenu={(event) => {
-                      setFocusKey(row.key)
-                      setMenuNode(row.node)
-                      setMenuAnchor(event.currentTarget)
-                    }}
-                    title={
-                      row.placeholder
-                        ? PLACEHOLDER[row.placeholder].title
-                        : row.node.comment
-                          ? `${row.node.name} — ${row.node.comment}`
-                          : row.node.name
-                    }
-                    className={cn(
-                      "absolute inset-x-0 top-0 flex items-center gap-1.5 rounded-md pr-2 text-[length:var(--reading-text)] text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
-                      row.placeholder && "text-muted-foreground",
-                      isSelected &&
-                        "bg-sidebar-accent font-medium text-sidebar-accent-foreground",
-                      // The ring sits on the row, and only while the tree has
-                      // keyboard focus: one ring, never two.
-                      isFocused &&
-                        "group-focus-visible/tree:ring-2 group-focus-visible/tree:ring-ring group-focus-visible/tree:ring-inset",
-                      "data-dragging:opacity-60"
-                    )}
-                    style={{
-                      height: ROW_HEIGHT,
-                      transform: `translateY(${item.start}px)`,
-                      paddingInlineStart: 4 + row.depth * 14,
-                    }}
-                  >
-                    {row.placeholder ? (
-                      <span className="min-w-0 truncate ps-5.5 text-[length:var(--reading-caption)]">
-                        {isLoading
-                          ? "Reading…"
-                          : PLACEHOLDER[row.placeholder].label}
-                      </span>
-                    ) : (
-                      <>
-                        <span className="flex size-4 shrink-0 items-center justify-center text-muted-foreground">
-                          {row.expandable ? (
-                            isLoading ? (
-                              <Spinner aria-hidden className="size-3" />
-                            ) : (
-                              <HugeiconsIcon
-                                icon={ArrowRight01Icon}
-                                strokeWidth={2}
-                                className={cn(
-                                  "size-3.5 motion-safe:transition-transform rtl:-scale-x-100",
-                                  row.expanded && "rotate-90 rtl:-rotate-90"
-                                )}
-                              />
-                            )
-                          ) : null}
+                  // Not a `title`: the system's tooltip stays over a context
+                  // menu opened under it; this one is closed by the menu.
+                  <Tooltip key={row.key} disabled={menuOpen}>
+                    <TooltipTrigger
+                      delay={HINT_DELAY_MS}
+                      render={<div />}
+                      id={idFor(row.key)}
+                      role="treeitem"
+                      data-index={item.index}
+                      data-focused={isFocused || undefined}
+                      aria-level={row.depth + 1}
+                      aria-posinset={row.posInSet}
+                      aria-setsize={row.setSize}
+                      aria-expanded={row.expandable ? row.expanded : undefined}
+                      aria-selected={isSelected}
+                      aria-busy={isLoading || undefined}
+                      data-dragging={
+                        nameDrag.dragged?.node === row.node || undefined
+                      }
+                      onPointerDown={(event) => {
+                        if (insertable(row)) nameDrag.start(event, row.node)
+                      }}
+                      onClick={() => {
+                        setFocusKey(row.key)
+                        activate(row)
+                      }}
+                      onContextMenu={(event) => {
+                        setFocusKey(row.key)
+                        setMenuNode(row.node)
+                        setMenuAnchor(event.currentTarget)
+                      }}
+                      aria-describedby={hintId}
+                      className={cn(
+                        "absolute inset-x-0 top-0 flex items-center gap-1.5 rounded-md pr-2 text-[length:var(--reading-text)] text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground",
+                        row.placeholder && "text-muted-foreground",
+                        isSelected &&
+                          "bg-sidebar-accent font-medium text-sidebar-accent-foreground",
+                        // The ring sits on the row, and only while the tree has
+                        // keyboard focus: one ring, never two.
+                        isFocused &&
+                          "group-focus-visible/tree:ring-2 group-focus-visible/tree:ring-ring group-focus-visible/tree:ring-inset",
+                        "data-dragging:opacity-60"
+                      )}
+                      style={{
+                        height: ROW_HEIGHT,
+                        transform: `translateY(${item.start}px)`,
+                        paddingInlineStart: 4 + row.depth * 14,
+                      }}
+                    >
+                      {row.placeholder ? (
+                        <span className="min-w-0 truncate ps-5.5 text-[length:var(--reading-caption)]">
+                          {isLoading
+                            ? "Reading…"
+                            : PLACEHOLDER[row.placeholder].label}
                         </span>
-                        <HugeiconsIcon
-                          icon={iconFor(row.node.kind)}
-                          strokeWidth={1.8}
-                          className="size-4 shrink-0 text-muted-foreground"
-                        />
-                        <span dir="auto" className="min-w-0 truncate">
-                          {row.node.name}
-                        </span>
-                        {row.node.stale ? (
-                          <Badge
-                            variant="outline"
-                            className="ms-auto h-4 shrink-0 px-1 text-[length:var(--reading-caption)] text-warning"
-                          >
-                            stale
-                          </Badge>
-                        ) : row.node.system ? (
-                          <span className="ms-auto shrink-0 text-[length:var(--reading-caption)] text-muted-foreground">
-                            system
+                      ) : (
+                        <>
+                          <span className="flex size-4 shrink-0 items-center justify-center text-muted-foreground">
+                            {row.expandable ? (
+                              isLoading ? (
+                                <Spinner aria-hidden className="size-3" />
+                              ) : (
+                                <HugeiconsIcon
+                                  icon={ArrowRight01Icon}
+                                  strokeWidth={2}
+                                  className={cn(
+                                    "size-3.5 motion-safe:transition-transform rtl:-scale-x-100",
+                                    row.expanded && "rotate-90 rtl:-rotate-90"
+                                  )}
+                                />
+                              )
+                            ) : null}
                           </span>
-                        ) : null}
-                      </>
-                    )}
-                  </div>
+                          <HugeiconsIcon
+                            icon={iconFor(row.node.kind)}
+                            strokeWidth={1.8}
+                            className="size-4 shrink-0 text-muted-foreground"
+                          />
+                          <span dir="auto" className="min-w-0 truncate">
+                            {row.node.name}
+                          </span>
+                          {row.node.stale ? (
+                            <Badge
+                              variant="outline"
+                              className="ms-auto h-4 shrink-0 px-1 text-[length:var(--reading-caption)] text-warning"
+                            >
+                              stale
+                            </Badge>
+                          ) : row.node.system ? (
+                            <span className="ms-auto shrink-0 text-[length:var(--reading-caption)] text-muted-foreground">
+                              system
+                            </span>
+                          ) : null}
+                        </>
+                      )}
+                      {hintId ? (
+                        <span id={hintId} hidden>
+                          {description}
+                        </span>
+                      ) : null}
+                    </TooltipTrigger>
+                    <TooltipContent side="right">{hint}</TooltipContent>
+                  </Tooltip>
                 )
               })}
             </div>

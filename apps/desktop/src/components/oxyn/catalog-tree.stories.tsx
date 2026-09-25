@@ -413,6 +413,86 @@ export const CopyAs: Story = {
 }
 
 /**
+ * Two relations of the same kind offer the same menu: what an entry depends
+ * on is the tree's handlers and the node's kind, never which sibling was
+ * right-clicked or whether its level was read.
+ */
+export const SiblingTablesShareTheirMenu: Story = {
+  args: {
+    onOpen: fn(),
+    onCopyName: fn(),
+    onRefresh: fn(),
+    copyAs: { definition: true, onCopy: fn() },
+    operations: {
+      capabilities: ["SQL", "DDL", "TRUNCATE"],
+      onOperation: fn(),
+    },
+  },
+  play: async ({ canvas }) => {
+    await userEvent.click(canvas.getByText("public"))
+    const body = within(document.body)
+    const entriesOf = async (name: string) => {
+      await userEvent.pointer({
+        keys: "[MouseRight]",
+        target: canvas.getByText(name),
+      })
+      await body.findByRole("menuitem", { name: "Copy qualified name" })
+      const entries = body
+        .getAllByRole("menuitem")
+        .map((item) => item.textContent)
+      await userEvent.keyboard("{Escape}")
+      await waitFor(() => expect(body.queryByRole("menu")).toBeNull())
+      return entries
+    }
+    const customers = await entriesOf("customers")
+    await expect(customers).toEqual([
+      "Open data",
+      "View structure",
+      "View DDL",
+      "Copy qualified name",
+      "Copy as",
+      "Collapse all",
+      "Rename…",
+      "Truncate…",
+      "Drop…",
+    ])
+    await expect(await entriesOf("invoices")).toEqual(customers)
+  },
+}
+
+/** The hint of the row under the pointer, wherever it renders. */
+function rowHint() {
+  return document.querySelector('[data-slot="tooltip-content"]')
+}
+
+/**
+ * A row's full name shows when the pointer rests on it, and closes when its
+ * context menu opens: a hint left over the menu hides its first entries.
+ */
+export const HintClosesOnMenu: Story = {
+  args: { onOpen: fn(), onCopyName: fn() },
+  play: async ({ canvas }) => {
+    await userEvent.click(canvas.getByText("public"))
+    const row = canvas.getByText("invoices")
+    await userEvent.hover(row)
+    await waitFor(() => expect(rowHint()).toHaveTextContent("invoices"), {
+      timeout: 2000,
+    })
+
+    await userEvent.pointer({ keys: "[MouseRight]", target: row })
+    const menu = within(document.body)
+    await menu.findByRole("menuitem", { name: "Copy qualified name" })
+    await waitFor(() => expect(rowHint()).toBeNull())
+    // Resting on the row while the menu is open does not bring it back.
+    await userEvent.hover(row)
+    await new Promise((resolve) => window.setTimeout(resolve, 800))
+    await expect(rowHint()).toBeNull()
+    await userEvent.keyboard("{Escape}")
+    await waitFor(() => expect(menu.queryByRole("menu")).toBeNull())
+  },
+}
+
+/**
  * On a schema, where a console's session context can be one: `New console on
  * this schema` hands the schema over, and nothing runs. It is absent from a
  * table's menu.
@@ -551,9 +631,13 @@ export const UnusualNames: Story = {
     await expect(canvas.getByText(HOSTILE)).toBeVisible()
     const arabic = canvas.getByText("العملاء")
     await expect(arabic).toHaveAttribute("dir", "auto")
-    await expect(arabic.closest("[role=treeitem]")).toHaveAttribute(
-      "title",
-      "العملاء — جدول العملاء"
+    // The comment is the row's description, and its hint on hover.
+    const row = arabic.closest("[role=treeitem]")
+    await expect(row).toHaveAccessibleDescription("جدول العملاء")
+    if (row) await userEvent.hover(row)
+    await waitFor(
+      () => expect(rowHint()).toHaveTextContent("العملاء — جدول العملاء"),
+      { timeout: 2000 }
     )
     await expect(canvas.getByText("a.b")).toBeVisible()
   },
