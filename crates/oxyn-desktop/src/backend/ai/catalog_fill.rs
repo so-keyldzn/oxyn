@@ -46,7 +46,7 @@ use std::time::Duration;
 
 use oxyn_ai::context::wanted_relations;
 use oxyn_ai::{ContextPolicy, Mention};
-use oxyn_catalog::{CatalogCache, CatalogPath, CatalogScope, Freshness, SharedCatalog};
+use oxyn_catalog::{CatalogCache, CatalogPath, CatalogScope, Freshness, Relation, SharedCatalog};
 use oxyn_core::{Actor, CancelToken, Capabilities, Command, ConnectionId};
 use oxyn_exec::{DispatchReport, ExecutorSink};
 use tokio::time::Instant;
@@ -175,7 +175,9 @@ pub(super) struct CatalogFill<'a> {
 
 enum Step {
     Done,
-    Failed,
+    /// What went wrong, in words the user can read: the server's own, or
+    /// the gate's.
+    Failed(String),
     Stopped(Stop),
 }
 
@@ -261,7 +263,7 @@ impl CatalogFill<'_> {
             match self.read(command, cancel, deadline).await {
                 Step::Done if describing => filled.described += 1,
                 Step::Done => filled.listed += 1,
-                Step::Failed => filled.failed += 1,
+                Step::Failed(_) => filled.failed += 1,
                 Step::Stopped(stop) => {
                     filled.stopped = Some(stop);
                     break;
@@ -306,14 +308,53 @@ impl CatalogFill<'_> {
             DispatchReport::AwaitingApproval { command, .. } => {
                 let _withdrawn = self.sink.executor().reject(command);
                 tracing::warn!("a catalog read for the assistant was held for approval");
-                Step::Failed
+                Step::Failed("the read was held for approval, and withdrawn".to_owned())
             }
             // The server's words are not logged: they may name its objects.
-            DispatchReport::Failed { class, .. } => {
+            DispatchReport::Failed { class, error, .. } => {
                 tracing::debug!(?class, "a catalog read for the assistant failed");
-                Step::Failed
+                Step::Failed(error)
             }
-            _ => Step::Failed,
+            DispatchReport::Denied { reason, .. } => Step::Failed(reason),
+            _ => Step::Failed("the read did not complete".to_owned()),
+        }
+    }
+
+    /// Reads the columns of the one relation at `path`, whatever the cache
+    /// holds of its schema — the read « View structure » submits — and
+    /// returns them as the cache now holds them.
+    ///
+    /// For what needs the columns of a relation the user or an agent named:
+    /// the tree may never have described it, or evicted it since. Bounded by
+    /// [`FILL_DEADLINE`], like a completion.
+    ///
+    /// # Errors
+    /// Why the columns could not be read, in words the user can read.
+    pub(super) async fn describe(
+        &self,
+        path: &CatalogPath,
+        cancel: &CancelToken,
+    ) -> Result<Relation, String> {
+        let command = {
+            let cache = self.catalog.read();
+            let capabilities = cache
+                .server_info()
+                .map_or(Capabilities::empty(), |server| server.capabilities);
+            crate::catalog::refresh_command(self.connection, Some(path), capabilities)
+        };
+        match self
+            .read(command, cancel, Instant::now() + FILL_DEADLINE)
+            .await
+        {
+            Step::Done => self.catalog.read().relation(path).cloned().ok_or_else(|| {
+                "the server described it, then it left the catalog; try again".to_owned()
+            }),
+            Step::Failed(reason) => Err(reason),
+            Step::Stopped(Stop::Deadline) => Err(format!(
+                "the server did not describe it within {} seconds",
+                FILL_DEADLINE.as_secs()
+            )),
+            Step::Stopped(Stop::Cancelled) => Err("the read was cancelled".to_owned()),
         }
     }
 }

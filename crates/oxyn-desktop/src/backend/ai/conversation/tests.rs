@@ -2929,6 +2929,10 @@ mod approved_samples {
     /// ADR-0036: the structure a question needs is read by Oxyn, whatever
     /// the tree shows — on a fixture whose explorer was never expanded.
     mod catalog_reads;
+
+    /// A sample of a relation whose columns were never read: Oxyn reads
+    /// them, for the user's offer and for an agent's request alike.
+    mod columns_on_demand;
 }
 
 /// A write an agent proposes waits, inside its call, for the user's decision.

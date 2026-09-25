@@ -577,3 +577,51 @@ fn listings_stop_at_their_bound_and_the_rest_waits_for_the_next_question() {
         "a follow-up lists nothing"
     );
 }
+
+#[test]
+fn a_relation_never_expanded_is_described_by_one_read_of_the_bus() {
+    let shop = shop(Environment::Production);
+    let _guard = shop.runtime.enter();
+    let path = CatalogPath::for_relation(None, Some("main"), "customers").expect("a path");
+    assert!(shop.catalog().read().relation(&path).is_none());
+
+    let sink = shop.human();
+    let relation = shop
+        .runtime
+        .block_on(
+            shop.fill(&sink, Actor::Human)
+                .describe(&path, &CancelToken::new()),
+        )
+        .expect("described");
+    assert_eq!(
+        relation
+            .fields
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect::<Vec<_>>(),
+        ["id", "email"]
+    );
+    assert!(shop.catalog().read().relation(&path).is_some(), "cached");
+    let reads = shop.reads();
+    assert_eq!(reads.len(), 1, "{reads:?}");
+    assert_eq!(reads[0].command_kind, "RefreshCatalogScope");
+    assert_eq!(reads[0].actor_kind, ActorKind::Human);
+    assert_eq!(reads[0].decision, PolicyOutcome::Allowed);
+}
+
+#[test]
+fn a_relation_the_server_does_not_know_says_so() {
+    let shop = shop(Environment::Local);
+    let _guard = shop.runtime.enter();
+    let path = CatalogPath::for_relation(None, Some("main"), "gone").expect("a path");
+    let sink = shop.human();
+    let refused = shop
+        .runtime
+        .block_on(
+            shop.fill(&sink, Actor::Human)
+                .describe(&path, &CancelToken::new()),
+        )
+        .expect_err("nothing to describe");
+    assert!(refused.contains("does not exist"), "{refused}");
+    assert!(shop.catalog().read().relation(&path).is_none());
+}

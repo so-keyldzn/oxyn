@@ -1329,11 +1329,12 @@ impl Backend {
     /// — the sample enters either prompt through the `ContextBuilder`
     /// ([ADR-0034](../../../../../docs/adr/0034-echantillon-pour-toute-destination.md)).
     /// The grant it issues is checked again, tier first, when the question
-    /// presents it.
+    /// presents it. Columns the cache does not hold are read first — a
+    /// metadata read, no row.
     ///
     /// # Errors
-    /// Another tier, an unknown destination, a relation absent from the
-    /// catalog.
+    /// Another tier, an unknown destination, columns the server would not
+    /// describe.
     pub async fn ai_request_sample(
         &self,
         connection: ConnectionId,
@@ -1370,16 +1371,36 @@ impl Backend {
         };
         let reach = recipient.reach;
         let path = address.to_path()?;
-        let relation = self
+        let catalog = self
             .inner
             .executor
             .catalog(connection)
-            .and_then(|catalog| catalog.read().relation(&path).cloned())
-            .ok_or_else(|| {
-                IpcError::invalid(
-                    "This relation is not in the catalog yet: open it in the explorer first.",
-                )
-            })?;
+            .ok_or_else(|| IpcError::invalid("This connection has no catalog cache"))?;
+        let cached = catalog.read().relation(&path).cloned();
+        let relation = match cached {
+            Some(relation) => relation,
+            // The tree loads levels on demand, and evicts them: a relation
+            // the user sees may have no columns in the cache. They are read
+            // here as « View structure » reads them — the user's gesture,
+            // through the bus — never left for the user to go and open.
+            None => {
+                let sink = ExecutorSink::new(Arc::clone(&self.inner.executor));
+                let fill = CatalogFill {
+                    sink: &sink,
+                    actor: Actor::Human,
+                    connection,
+                    catalog,
+                };
+                fill.describe(&path, &CancelToken::new())
+                    .await
+                    .map_err(|reason| {
+                        IpcError::invalid(format!(
+                            "The columns of {path} could not be read: {reason}. \
+                             Nothing was offered."
+                        ))
+                    })?
+            }
+        };
         // TODO(2026-12-31, column classification declared by a driver): leave
         // out the columns a driver classifies as secret; owned by ia-tauri.
         // None declares one yet, and no filter pretends to: the screen names
@@ -1810,7 +1831,7 @@ impl Run<'_> {
                 } else {
                     let catalog = self.inner.executor.catalog(connection.id).ok_or_else(|| {
                         setup(
-                            "This connection has no catalog to work from yet: open its explorer first.",
+                            "This connection is not open: its catalog cannot be read. Connect to it, then ask again.",
                         )
                     })?;
                     let context = {
@@ -1855,7 +1876,7 @@ impl Run<'_> {
                 // needs would bypass both the gate and the bus.
                 let catalog = self.inner.executor.catalog(connection.id).ok_or_else(|| {
                     setup(
-                        "This connection has no catalog to work from yet: open its explorer first.",
+                        "This connection is not open: its catalog cannot be read. Connect to it, then ask again.",
                     )
                 })?;
                 if let Some(sample) = &sample {
