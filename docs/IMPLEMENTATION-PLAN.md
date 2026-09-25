@@ -448,8 +448,8 @@ Lots, dans l'ordre :
    (ADR-0043).
 8. **Transaction ouverte à la sortie** — étape avant l'arrêt ordonné,
    `ShutdownSignal::ResolveTransactions`, `shutdown_acknowledged`,
-   `cancel_exit`, journal de la sortie forcée (ADR-0043). **Ce qui le
-   débloque** : l'acceptation et la mise en œuvre d'ADR-0039.
+   `cancel_exit`, journal de la sortie forcée (ADR-0043). **Fait pour une
+   fenêtre**, voir ci-dessous.
 
 **Lot 4 fait le 2026-09-25.** `backend/object_operations.rs` compose, revoit et
 soumet ; `review_object_operation` et `run_object_operation` sont les deux
@@ -486,6 +486,38 @@ Les drapeaux `TRUNCATE`, `TRANSACTIONAL_DDL` et `RESTRICT_DEPENDENTS` (bits 44
   fenêtre ne rejette pas encore l'approbation en attente. Cela relève du lot 7.
   D'ici là, la session de revue se ferme à l'échéance de l'approbation, par le
   balayage d'une seconde du backend.
+
+**Lot 8 fait le 2026-09-25, pour une fenêtre.** ADR-0039 est accepté et mis en
+œuvre. `backend/exit.rs` tient les sessions de console et le dernier état
+constaté de chacune, et l'étape `exit_step` précède `begin_shutdown` sur tous
+les chemins ordonnés (`⌘Q`, fermeture de la fenêtre, `request_exit`,
+`ExitRequested`). `shutdown_acknowledged` et `cancel_exit` sont les deux
+commandes sans argument ; `ExitTransactionsDialog` est le dialogue, avec ses
+stories ; `features/recovery/exit-transactions.ts` envoie `COMMIT` ou
+`ROLLBACK` par `run_console`. Les tests de `backend/exit/tests.rs` couvrent
+l'absence de transaction, la sortie retenue, `Commit` et `Rollback` puis la
+sortie, le `COMMIT` refusé (clé étrangère différée de SQLite), l'issue inconnue
+jamais rejouée, la webview muette et le Quit du Dock. Écarts et restes :
+
+- **l'état lu est celui que l'exécuteur a publié**, et non une lecture par
+  `Session::transaction_state` depuis le pont : ADR-0043 est précisé en ce
+  sens (appel au driver hors du bus, I-01) ;
+- le signal porte la session, pas le document : la fenêtre nomme la console
+  d'après ses onglets (`features/consoles/console-labels.ts`), et le journal
+  nomme la connexion et la session ;
+- seul SQLite déclare `TRANSACTIONS` : PostgreSQL ne le fera qu'avec
+  l'épinglage d'une connexion par session (`variant.rs`, phase 1). Ce jour-là,
+  le piège noté dans DRIVER-CONTRACT vaut aussi ici : un `COMMIT` de
+  production est une lecture bornée à la lecture seule, et la borne ne doit
+  pas toucher la transaction qu'il valide ;
+- **ce que le lot 7 devra étendre** : la liste porte sur toutes les consoles,
+  pas sur celles d'une fenêtre ; le canal d'arrêt est unique
+  (`LocalWork::shutdown`), donc le signal, l'accusé et `ExitCancelled` ne
+  visent qu'une webview ; l'état de l'étape (`ExitHold`) est global, ce qui
+  convient à un `Cancel` qui abandonne la sortie pour toutes, mais la
+  fermeture d'une fenêtre qui n'est pas la dernière doit porter sur ses seules
+  sessions et ne pas passer par `begin_shutdown` ; la mise au premier plan
+  vise toutes les fenêtres, et devra viser celles qui ont une transaction.
 
 Écarts relevés en rédigeant, non tranchés, re-vérifiés sur `origin/main` le
 2026-09-25 :
