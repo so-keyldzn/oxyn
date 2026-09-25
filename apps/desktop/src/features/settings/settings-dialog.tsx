@@ -3,6 +3,7 @@ import { useHotkey } from "@tanstack/react-hotkeys"
 import { useDebouncedCallback } from "@tanstack/react-pacer"
 import { createStore, useStore } from "@tanstack/react-store"
 
+import { AboutSection } from "@/features/settings/about-section"
 import { ConnectionsSettings } from "@/features/settings/connections-settings"
 import {
   changePreferences,
@@ -106,7 +107,10 @@ export function SettingsDialog({
           onUnsavedEditChange={setUnsavedEdit}
         />
       }
-      sections={sections}
+      sections={[
+        ...sections,
+        { id: "about", label: "About", content: <AboutSection /> },
+      ]}
       unsavedEdit={unsavedEdit}
     />
   )

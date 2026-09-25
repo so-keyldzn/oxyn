@@ -233,6 +233,9 @@ ce qui le maintiendra valide.
   disparaît. La configuration vit dans `deny.toml`. Toute licence qu'elle
   accepte est compatible avec la GPLv3, la licence de l'application
   ([ADR-0044](adr/0044-licence-gpl-et-contrat-apache.md)) ;
+- les dépendances npm de production d'`apps/desktop` passent le même contrôle,
+  par `make licences-npm`, que `make front-controles` appelle. La liste est
+  celle de `deny.toml`, complétée pour npm par `apps/desktop/licences-npm.toml` ;
 - une dépendance qui n'est utilisée qu'à un seul endroit pour une seule fonction
   est un candidat à la réécriture, pas une évidence ;
 - une crate non maintenue sur une frontière externe est un risque à documenter,

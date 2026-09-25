@@ -1,0 +1,43 @@
+# Ce que `make licences-npm` accepte en plus de la liste `allow` de deny.toml,
+# pour les dépendances npm de production d'apps/desktop.
+#
+# La liste de deny.toml reste la règle : une licence n'y entre que compatible
+# avec la GPLv3 (ADR-0044). Ce fichier ne porte que ce qui est propre à npm.
+# Le verdict de la FSF sur chaque licence est dans RESEARCH-NOTES § Licences.
+
+# Deux licences de code sans condition, que le graphe Rust ne contient pas.
+# FSF : `0BSD` (#Zero-BSD) et `Unlicense` (#Unlicense) sont compatibles.
+allow = ["0BSD", "Unlicense"]
+
+# Une licence acceptée pour un paquet, et pour lui seul : elle ne convient
+# pas à du code.
+
+[[exceptions]]
+name = "@fontsource-variable/geist"
+allow = ["OFL-1.1"]
+# Une police. FSF (#SILOFL) : licence libre pour polices, sa seule exigence
+# inhabituelle est « inoffensive ».
+
+[[exceptions]]
+name = "@fontsource-variable/geist-mono"
+allow = ["OFL-1.1"]
+
+[[exceptions]]
+name = "caniuse-lite"
+allow = ["CC-BY-4.0"]
+# Des données de compatibilité des navigateurs. FSF (#ccby) : compatible avec
+# toutes les versions de la GPL.
+
+[[exceptions]]
+name = "argparse"
+allow = ["Python-2.0"]
+# Un portage de l'argparse de Python. FSF (#Python) : compatible.
+
+# Un paquet qui ne déclare pas sa licence. La valeur vient de son fichier de
+# licence, relu à cette version : une montée demande de le relire.
+
+[[clarify]]
+name = "khroma"
+version = "2.1.0"
+license = "MIT"
+# `package.json` sans champ `license` ; le fichier `license` est le texte MIT.

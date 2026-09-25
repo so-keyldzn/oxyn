@@ -205,4 +205,5 @@ qu'elle n'en oublie aucun :
 | `.claude/verifier_socle.py` | `tauri*` hors d'`oxyn-desktop`, `gpui` où que ce soit, un manifeste hors du workspace ([I-08](#i-08)) |
 | `make front` | un composant sans story passante, une violation d'accessibilité, un type ou un lint faux dans `apps/desktop` |
 | `script/verifier-todo` | une marque de travail restant sans échéance |
+| `script/licences-tierces` | une dépendance npm livrée sous une licence que `deny.toml` n'accepte pas |
 | [renovate.json5](renovate.json5) | une version recopiée de mémoire ([I-12](#i-12)) |

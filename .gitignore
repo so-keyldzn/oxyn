@@ -30,3 +30,6 @@ __pycache__/
 /criterion/
 *.perf
 *.trace
+
+# Mentions des licences tierces, générées au build (script/licences-tierces)
+/apps/desktop/src/generated/

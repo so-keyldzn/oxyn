@@ -1,0 +1,343 @@
+#!/usr/bin/env python3
+"""Les licences des dépendances que l'application livre.
+
+Deux sous-commandes, parce qu'elles lisent la même chose :
+
+    licences-tierces verifier-npm
+        refuse une dépendance npm de production dont la licence n'est pas
+        acceptée. C'est `make licences-npm`, le pendant de `make deny` pour le
+        front ; `make qualite` l'appelle.
+
+    licences-tierces generer [--exiger] <sortie.json>
+        écrit les mentions des dépendances Rust d'`oxyn-desktop` (par
+        `cargo-about`) et des dépendances npm de production d'`apps/desktop`.
+        L'application les affiche dans Settings > About (ADR-0044).
+
+La liste des licences acceptées est **celle de `deny.toml`**, et ce script
+n'en tient pas une seconde : une licence y est acceptée parce qu'elle est
+compatible avec la GPLv3, et ce verdict ne doit se prendre qu'à un endroit.
+`apps/desktop/licences-npm.toml` n'ajoute que ce qui est propre à npm, chaque
+ligne avec sa raison.
+
+Seules les dépendances de **production** comptent (`pnpm licenses list
+--prod`) : un outil de build ou de test n'est pas distribué avec l'application.
+
+`cargo-about` absent, `generer` avertit sans rien écrire, comme `make deny`
+sans `cargo-deny` : une porte qui échoue sur un outil optionnel finit
+contournée. Avec `--exiger`, que passe un build de publication, il échoue :
+un binaire distribué sans ses mentions viole les licences qu'il embarque.
+"""
+
+from __future__ import annotations
+
+import json
+import re
+import shutil
+import subprocess
+import sys
+import tempfile
+import tomllib
+from dataclasses import dataclass
+from pathlib import Path
+
+RACINE = Path(__file__).resolve().parents[1]
+FRONT = RACINE / "apps" / "desktop"
+DENY = RACINE / "deny.toml"
+CONFIG_NPM = FRONT / "licences-npm.toml"
+MANIFESTE_APP = RACINE / "crates" / "oxyn-desktop" / "Cargo.toml"
+
+# La version relevée au registre et datée dans RESEARCH-NOTES (I-12). Une autre
+# version produirait peut-être le même fichier ; rien ne le garantit, et un
+# écart de mentions ne se voit à aucun test.
+VERSION_CARGO_ABOUT = "0.9.2"
+
+# Un fichier de licence, quel que soit l'usage du paquet : `LICENSE`,
+# `license.md`, `LICENCE-MIT`, `COPYING`, `NOTICE`…
+MOTIF_FICHIER_LICENCE = re.compile(r"^(licen[cs]e|copying|notice)([-._].*)?$", re.IGNORECASE)
+
+
+# --- Expressions SPDX ----------------------------------------------------------
+
+
+def _jetons(expression: str) -> list[str]:
+    return re.findall(r"\(|\)|[^\s()]+", expression)
+
+
+def acceptee(expression: str, permises: set[str]) -> bool:
+    """Vrai si une des alternatives de l'expression n'utilise que des licences
+    permises. `A OR B` : l'une suffit ; `A AND B` : il faut les deux ;
+    `A WITH E` est un terme à part entière, comme dans `deny.toml`."""
+    jetons = _jetons(expression)
+    position = 0
+
+    def terme() -> bool:
+        nonlocal position
+        if position >= len(jetons):
+            raise ValueError(expression)
+        jeton = jetons[position]
+        position += 1
+        if jeton == "(":
+            valeur = ou()
+            if position >= len(jetons) or jetons[position] != ")":
+                raise ValueError(expression)
+            position += 1
+            return valeur
+        if position + 1 < len(jetons) and jetons[position] == "WITH":
+            jeton = f"{jeton} WITH {jetons[position + 1]}"
+            position += 2
+        return jeton in permises
+
+    def et() -> bool:
+        nonlocal position
+        valeur = terme()
+        while position < len(jetons) and jetons[position] == "AND":
+            position += 1
+            valeur = terme() and valeur
+        return valeur
+
+    def ou() -> bool:
+        nonlocal position
+        valeur = et()
+        while position < len(jetons) and jetons[position] == "OR":
+            position += 1
+            valeur = et() or valeur
+        return valeur
+
+    try:
+        valeur = ou()
+    except ValueError:
+        return False
+    return valeur and position == len(jetons)
+
+
+# --- Ce qui est accepté ----------------------------------------------------------
+
+
+def licences_de_deny() -> set[str]:
+    return set(tomllib.loads(DENY.read_text(encoding="utf-8"))["licenses"]["allow"])
+
+
+@dataclass
+class ConfigNpm:
+    permises: set[str]
+    exceptions: dict[str, set[str]]
+    # (nom, version) → licence : le paquet ne déclare pas la sienne, ou la
+    # déclare mal. Épinglé à une version : une montée demande de relire.
+    precisions: dict[tuple[str, str], str]
+
+
+def lire_config_npm() -> ConfigNpm:
+    brut = tomllib.loads(CONFIG_NPM.read_text(encoding="utf-8"))
+    return ConfigNpm(
+        permises=licences_de_deny() | set(brut.get("allow", [])),
+        exceptions={e["name"]: set(e["allow"]) for e in brut.get("exceptions", [])},
+        precisions={(c["name"], c["version"]): c["license"] for c in brut.get("clarify", [])},
+    )
+
+
+# --- Les dépendances npm ------------------------------------------------------
+
+
+@dataclass
+class PaquetNpm:
+    nom: str
+    version: str
+    licence: str
+    chemin: Path
+
+
+def paquets_npm() -> list[PaquetNpm]:
+    sortie = subprocess.run(
+        ["pnpm", "licenses", "list", "--prod", "--json"],
+        cwd=FRONT,
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    paquets: list[PaquetNpm] = []
+    for licence, entrees in json.loads(sortie).items():
+        for entree in entrees:
+            for version, chemin in zip(entree["versions"], entree["paths"], strict=True):
+                paquets.append(PaquetNpm(entree["name"], version, licence, Path(chemin)))
+    return sorted(paquets, key=lambda p: (p.nom, p.version))
+
+
+def verifier_npm() -> int:
+    config = lire_config_npm()
+    paquets = paquets_npm()
+    refus: list[str] = []
+    utilisees: set[object] = set()
+    for paquet in paquets:
+        cle = (paquet.nom, paquet.version)
+        licence = config.precisions.get(cle, paquet.licence)
+        if cle in config.precisions:
+            utilisees.add(cle)
+        permises = config.permises | config.exceptions.get(paquet.nom, set())
+        if paquet.nom in config.exceptions:
+            utilisees.add(paquet.nom)
+        if not acceptee(licence, permises):
+            refus.append(f"  {paquet.nom}@{paquet.version} : « {licence} »")
+
+    perimees = [f"  exception {n}" for n in config.exceptions if n not in utilisees]
+    perimees += [f"  clarify {n}@{v}" for (n, v) in config.precisions if (n, v) not in utilisees]
+
+    if refus:
+        print("Licences npm refusées (dépendances de production d'apps/desktop) :")
+        print("\n".join(refus))
+        print(
+            "\nUne licence s'accepte dans deny.toml, après avoir vérifié qu'elle est\n"
+            "compatible avec la GPLv3 (ADR-0044) ; une exception propre à un paquet,\n"
+            "ou une licence mal déclarée, dans apps/desktop/licences-npm.toml."
+        )
+    if perimees:
+        print("Entrées de apps/desktop/licences-npm.toml qui ne servent plus :")
+        print("\n".join(perimees))
+    if refus or perimees:
+        return 1
+    print(f"Licences npm : {len(paquets)} paquets de production, tous acceptés.")
+    return 0
+
+
+# --- Les mentions -------------------------------------------------------------
+
+
+def _cible_hote() -> str:
+    sortie = subprocess.run(["rustc", "-vV"], check=True, capture_output=True, text=True).stdout
+    for ligne in sortie.splitlines():
+        if ligne.startswith("host: "):
+            return ligne.removeprefix("host: ")
+    raise SystemExit("rustc -vV n'indique pas la cible hôte")
+
+
+def mentions_rust() -> list[dict[str, object]]:
+    """Les dépendances d'`oxyn-desktop` pour la cible hôte, celle du binaire
+    qu'on construit, sans les dépendances de build ni de développement."""
+    cible = _cible_hote()
+    # `--frozen` rend le résultat identique en ligne et hors ligne ; il suppose
+    # les sources présentes, ce qu'assure ce `fetch`.
+    subprocess.run(
+        ["cargo", "fetch", "--locked", "--target", cible, "--manifest-path", str(MANIFESTE_APP)],
+        cwd=RACINE,
+        check=True,
+    )
+    with tempfile.TemporaryDirectory() as dossier:
+        config = Path(dossier) / "about.toml"
+        config.write_text(
+            "accepted = " + json.dumps(sorted(licences_de_deny())) + "\n"
+            "ignore-build-dependencies = true\n"
+            "ignore-dev-dependencies = true\n"
+            # Nos crates sous GPL, `publish = false` : même exemption que
+            # dans deny.toml, et pour la même raison.
+            "private = { ignore = true }\n",
+            encoding="utf-8",
+        )
+        sortie = Path(dossier) / "rust.json"
+        subprocess.run(
+            [
+                "cargo", "about", "generate", "--format", "json", "--frozen", "--fail",
+                "-c", str(config), "-m", str(MANIFESTE_APP), "--target", cible,
+                "-o", str(sortie),
+            ],
+            cwd=RACINE,
+            check=True,
+        )
+        brut = json.loads(sortie.read_text(encoding="utf-8"))
+
+    mentions: list[dict[str, object]] = []
+    for licence in brut["licenses"]:
+        # Les crates du workspace n'ont pas de `source` : ce sont les nôtres, et
+        # NOTICE dit leur licence.
+        paquets = sorted(
+            {
+                (u["crate"]["name"], u["crate"]["version"])
+                for u in licence["used_by"]
+                if u["crate"].get("source")
+            }
+        )
+        if paquets:
+            mentions.append(
+                {
+                    "license": licence["id"],
+                    "name": licence["name"],
+                    "text": licence["text"].strip("\n"),
+                    "packages": [
+                        {"ecosystem": "cargo", "name": n, "version": v} for n, v in paquets
+                    ],
+                }
+            )
+    return mentions
+
+
+def _texte_de_licence(dossier: Path) -> str | None:
+    if not dossier.is_dir():
+        return None
+    fichiers = sorted(f for f in dossier.iterdir() if f.is_file() and MOTIF_FICHIER_LICENCE.match(f.name))
+    textes = [f.read_text(encoding="utf-8", errors="replace").strip("\n") for f in fichiers]
+    return "\n\n".join(textes) or None
+
+
+def mentions_npm() -> list[dict[str, object]]:
+    config = lire_config_npm()
+    groupes: dict[tuple[str, str], list[PaquetNpm]] = {}
+    for paquet in paquets_npm():
+        licence = config.precisions.get((paquet.nom, paquet.version), paquet.licence)
+        # Sans fichier, reste l'expression déclarée : c'est ce que le paquet
+        # publie de sa licence, et le taire serait pire.
+        texte = _texte_de_licence(paquet.chemin) or f"Licensed under {licence}. The package ships no license file."
+        groupes.setdefault((licence, texte), []).append(paquet)
+    return [
+        {
+            "license": licence,
+            "name": licence,
+            "text": texte,
+            "packages": [
+                {"ecosystem": "npm", "name": p.nom, "version": p.version} for p in paquets
+            ],
+        }
+        for (licence, texte), paquets in groupes.items()
+    ]
+
+
+def generer(sortie: Path, exiger: bool) -> int:
+    outil = shutil.which("cargo-about")
+    version = (
+        subprocess.run(["cargo", "about", "--version"], capture_output=True, text=True).stdout.split()[-1:]
+        if outil
+        else []
+    )
+    if version != [VERSION_CARGO_ABOUT]:
+        trouvee = version[0] if version else "absent"
+        print(
+            f"cargo-about {VERSION_CARGO_ABOUT} requis ({trouvee}) : les mentions des "
+            "licences tierces n'ont PAS été générées."
+        )
+        print(f"  Pour l'installer : cargo install --locked cargo-about@{VERSION_CARGO_ABOUT}")
+        return 1 if exiger else 0
+
+    mentions = mentions_rust() + mentions_npm()
+    mentions.sort(key=lambda m: (str(m["license"]).lower(), m["packages"][0]["name"]))  # type: ignore[index]
+    sortie.parent.mkdir(parents=True, exist_ok=True)
+    sortie.write_text(
+        json.dumps({"version": 1, "notices": mentions}, ensure_ascii=False, indent=1) + "\n",
+        encoding="utf-8",
+    )
+    paquets = sum(len(m["packages"]) for m in mentions)  # type: ignore[arg-type]
+    print(f"Mentions tierces : {paquets} paquets, {len(mentions)} textes → {sortie.relative_to(RACINE)}")
+    return 0
+
+
+def principal(arguments: list[str]) -> int:
+    if arguments == ["verifier-npm"]:
+        return verifier_npm()
+    if arguments[:1] == ["generer"]:
+        reste = arguments[1:]
+        exiger = "--exiger" in reste
+        chemins = [a for a in reste if a != "--exiger"]
+        if len(chemins) == 1:
+            return generer((RACINE / chemins[0]).resolve(), exiger)
+    print(__doc__)
+    return 2
+
+
+if __name__ == "__main__":
+    sys.exit(principal(sys.argv[1:]))
