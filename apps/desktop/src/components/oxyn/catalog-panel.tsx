@@ -8,6 +8,7 @@ import {
   Logout03Icon,
 } from "@hugeicons/core-free-icons"
 
+import type { NameTransfer } from "@/components/oxyn/catalog-name-drag"
 import { CatalogTree } from "@/components/oxyn/catalog-tree"
 import type {
   CopyAs,
@@ -82,6 +83,7 @@ export function CatalogPanel({
   operations,
   copyAs,
   onNewConsole,
+  nameTransfer,
   onLeave,
 }: {
   connectionName: string
@@ -123,6 +125,8 @@ export function CatalogPanel({
   copyAs?: CopyAs
   /** `New console on this schema`, where a console's context can be one. */
   onNewConsole?: (node: CatalogNode) => void
+  /** A relation's quoted name, dragged to the editor or sent by ⌥↵. */
+  nameTransfer?: NameTransfer
   onLeave: () => void
 }) {
   const { setOpen } = useSidebar()
@@ -274,6 +278,7 @@ export function CatalogPanel({
                     operations={operations}
                     copyAs={copyAs}
                     onNewConsole={onNewConsole}
+                    nameTransfer={nameTransfer}
                   />
                 )}
               </>

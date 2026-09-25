@@ -48,8 +48,14 @@ const anchor = {} as Element
 describe("selectionCopy", () => {
   it("copies the selected rows and the shown columns in the range", () => {
     expect(
-      selectionCopy({ top: 3, bottom: 7, left: 1, right: 4 }, [0, 1, 3, 4, 6])
+      selectionCopy({ top: 3, bottom: 7, left: 1, right: 3 }, [0, 1, 3, 4, 6])
     ).toEqual({ offset: 3, count: 5, columns: [1, 3, 4] })
+  })
+
+  it("takes moved columns where they are drawn", () => {
+    expect(
+      selectionCopy({ top: 0, bottom: 0, left: 0, right: 1 }, [2, 0, 1])
+    ).toEqual({ offset: 0, count: 1, columns: [2, 0] })
   })
 })
 

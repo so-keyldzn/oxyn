@@ -41,6 +41,25 @@ describe("hidden columns", () => {
   })
 })
 
+describe("moved columns", () => {
+  it("are drawn in the order moved to, still by Arrow index", () => {
+    expect(shownColumns(4, undefined, [2, 0, 3, 1])).toEqual([2, 0, 3, 1])
+    expect(shownColumns(4, new Set([0]), [2, 0, 3, 1])).toEqual([2, 3, 1])
+    // An order for another width of result is not applied to this one.
+    expect(shownColumns(3, undefined, [1, 0])).toEqual([0, 1, 2])
+  })
+
+  it("step in the order drawn", () => {
+    const shown = [2, 0, 3]
+    expect(stepColumn(shown, 2, 1)).toBe(0)
+    expect(stepColumn(shown, 0, 1)).toBe(3)
+    expect(stepColumn(shown, 3, -1)).toBe(0)
+    expect(stepColumn(shown, 2, -1)).toBe(2)
+    // Hidden column 1: the shown one of the next index, 2, is a step right.
+    expect(stepColumn(shown, 1, 0)).toBe(2)
+  })
+})
+
 describe("pagesFor", () => {
   it("asks only for the pages the viewport touches", () => {
     expect(pagesFor(0, 40)).toEqual([0])

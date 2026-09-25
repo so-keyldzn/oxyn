@@ -26,7 +26,8 @@ describe("grid selection", () => {
       rows,
       columns,
       { top: 0, bottom: 1, left: 0, right: 1 },
-      true
+      true,
+      [0, 1]
     )
     expect(copied).toEqual({
       ok: true,
@@ -41,12 +42,29 @@ describe("grid selection", () => {
     const copied = copyText(
       rows,
       columns,
-      { top: 0, bottom: 0, left: 0, right: 1 },
+      { top: 0, bottom: 0, left: 0, right: 0 },
       true,
-      new Set([1])
+      [0]
     )
     // The hidden value is truncated: it is not even looked at.
     expect(copied).toEqual({ ok: true, text: "id\n1", rows: 1, cells: 1 })
+  })
+
+  it("copies moved columns where they stand, by their own index", () => {
+    const rows: Array<Array<Cell>> = [["1", "first"]]
+    const copied = copyText(
+      rows,
+      columns,
+      { top: 0, bottom: 0, left: 0, right: 1 },
+      true,
+      [1, 0]
+    )
+    expect(copied).toEqual({
+      ok: true,
+      text: "note\tid\nfirst\t1",
+      rows: 1,
+      cells: 2,
+    })
   })
 
   it("refuses a truncated value rather than pasting half of it", () => {
@@ -57,7 +75,8 @@ describe("grid selection", () => {
       rows,
       columns,
       { top: 0, bottom: 0, left: 0, right: 1 },
-      false
+      false,
+      [0, 1]
     )
     expect(copied.ok).toBe(false)
     if (!copied.ok) expect(copied.reason).toMatch(/truncated/)
@@ -68,7 +87,8 @@ describe("grid selection", () => {
       [],
       columns,
       { top: 0, bottom: MAX_COPY_ROWS, left: 0, right: 0 },
-      false
+      false,
+      [0]
     )
     expect(copied.ok).toBe(false)
   })
@@ -79,7 +99,8 @@ describe("grid selection", () => {
       [[hostile, "x"]],
       columns,
       { top: 0, bottom: 0, left: 0, right: 0 },
-      false
+      false,
+      [0, 1]
     )
     expect(copied).toMatchObject({
       ok: true,

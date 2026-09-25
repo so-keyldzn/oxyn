@@ -14,14 +14,16 @@ import { recovery } from "@/lib/ipc/recovery"
 
 import { consoleAvailability } from "./behaviour"
 import type { ActionBehaviour, Availability } from "./behaviour"
-import { currentContext, zoneElement, zoneHandle } from "./context"
+import { currentContext, itemHandle, zoneElement, zoneHandle } from "./context"
 import type {
   ActionContext,
   AppearanceActions,
   AppearanceState,
+  ItemHandle,
   OverlayActions,
 } from "./context"
 import { actionSpec, onPlatform } from "./manifest"
+import type { Zone } from "./manifest"
 import { editorClipboardBehaviours, menuBehaviours } from "./menu-behaviours"
 
 export { consoleAvailability }
@@ -129,6 +131,31 @@ function inConsole(
       const console = context.sources.console
       if (console) run(console)
     },
+  }
+}
+
+/**
+ * The keyboard's side of a drag, on the focused tab, column or catalog row:
+ * offered only where that item says it can do it. The key itself is the
+ * component's (`binding: component`); the menu and the palette land here.
+ */
+function onItem(
+  zones: ReadonlyArray<Zone>,
+  pick: (item: ItemHandle) => (() => void) | undefined
+): ActionBehaviour {
+  const focusedItem = (context: ActionContext) => {
+    for (const zone of zones) {
+      const item = itemHandle(context, zone)
+      if (item) return pick(item)
+    }
+    return undefined
+  }
+  return {
+    enabled: (context) => {
+      if (context.modal) return DIALOG_OPEN
+      return focusedItem(context) ? true : "absent"
+    },
+    run: (context) => focusedItem(context)?.(),
   }
 }
 
@@ -398,6 +425,13 @@ export const behaviours: Record<string, ActionBehaviour> = {
   "console.runAll": inConsole("run", (console) => console.actions.runAll()),
   "console.explain": inConsole("run", (console) => console.actions.explain()),
   "console.cancel": inConsole("cancel", (console) => console.actions.cancel()),
+  "item.moveLeft": onItem(["tabs", "grid"], (item) =>
+    item.move?.bind(null, -1)
+  ),
+  "item.moveRight": onItem(["tabs", "grid"], (item) =>
+    item.move?.bind(null, 1)
+  ),
+  "catalog.insertName": onItem(["tree"], (item) => item.insertName),
   "nav.back": {
     enabled: (context) => {
       if (context.modal) return DIALOG_OPEN

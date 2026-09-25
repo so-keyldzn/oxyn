@@ -13,6 +13,7 @@ import { useRefreshSignal } from "@/features/metadata/refresh-signals"
 import { facetsKey } from "@/features/metadata/use-relation-facets"
 import { hasCapability } from "@/features/session"
 import type { CopyAsForm } from "@/lib/actions/targets"
+import { nameTransfer } from "@/features/workspace/name-transfer"
 import { BackendError, backend, newCommandId } from "@/lib/ipc/client"
 import type { SessionPlace } from "@/lib/ipc/consoles"
 import { metadata } from "@/lib/ipc/metadata"
@@ -339,6 +340,9 @@ export function CatalogSidebar({
         onDismissProblem={() => setProblem(null)}
         onOpen={onOpen ?? ((node) => onSelect(node))}
         onCopyName={(node) => void copyName(node)}
+        nameTransfer={nameTransfer(open.connection, (caught) =>
+          setProblem(problemOf(caught))
+        )}
         onRefreshLevel={(node) => void refresh(node.address)}
         pin={pin}
         operations={{

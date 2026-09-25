@@ -2,6 +2,8 @@ import * as React from "react"
 import type { Meta, StoryObj } from "@storybook/react-vite"
 import { expect, fn, userEvent, waitFor, within } from "storybook/test"
 
+import { moveItem } from "./pointer-drag"
+import { centerOf, drag } from "./pointer-drag-fixtures"
 import { WorkspaceTabs } from "./workspace-tabs"
 import type { TabMenuTarget, WorkspaceTabItem } from "./workspace-tabs"
 import { Tabs, TabsContent } from "@/components/ui/tabs"
@@ -362,3 +364,89 @@ export const MiddleClickCloses: Story = {
  * failed. axe runs here against the light palette.
  */
 export const Light: Story = { globals: { theme: "light" } }
+
+/** The screen keeps the order: here, a list that follows `onMove`. */
+function Reorderable(args: React.ComponentProps<typeof WorkspaceTabs>) {
+  const [items, setItems] = React.useState(args.tabs)
+  return meta.render({
+    ...args,
+    tabs: items,
+    onMove: (key, to) => {
+      args.onMove?.(key, to)
+      setItems((current) =>
+        moveItem(
+          current,
+          current.findIndex((tab) => tab.key === key),
+          to
+        )
+      )
+    },
+  })
+}
+
+const order = (tabList: HTMLElement) =>
+  Array.from(
+    tabList.querySelectorAll('[role="tab"] span[dir="auto"]'),
+    (title) => title.textContent
+  )
+
+/**
+ * The keyboard's side of the drag: ⌥⇧→ moves the focused tab one place, the
+ * focus stays on it, and the move is said aloud.
+ */
+export const ReorderWithTheKeyboard: Story = {
+  args: { onMove: fn() },
+  render: Reorderable,
+  play: async ({ canvas, args }) => {
+    const invoices = canvas.getByRole("tab", { name: /^invoices/ })
+    await expect(invoices).toHaveAttribute(
+      "aria-keyshortcuts",
+      expect.stringContaining("Alt+Shift+ArrowRight")
+    )
+    invoices.focus()
+    await userEvent.keyboard("{Alt>}{Shift>}{ArrowRight}{/Shift}{/Alt}")
+    await expect(args.onMove).toHaveBeenCalledWith("object:invoices", 1)
+    await waitFor(() =>
+      expect(order(canvas.getByRole("tablist"))).toEqual([
+        "console_1.sql",
+        "invoices",
+        "unpaid invoices.sql",
+        "AI · Untitled query",
+      ])
+    )
+    await expect(invoices).toHaveFocus()
+    await expect(canvas.getByRole("status")).toHaveTextContent(
+      "invoices moved to position 2 of 4"
+    )
+    // At the start of the strip, ⌥⇧← does nothing more.
+    await userEvent.keyboard(
+      "{Alt>}{Shift>}{ArrowLeft}{ArrowLeft}{/Shift}{/Alt}"
+    )
+    await expect(args.onMove).toHaveBeenLastCalledWith("object:invoices", 0)
+    await expect(args.onMove).toHaveBeenCalledTimes(2)
+  },
+}
+
+/**
+ * Dragged past two tabs, the first lands third. Released, it closes nothing
+ * and opens nothing else: the click the drag ends in is not a click.
+ */
+export const ReorderWithThePointer: Story = {
+  args: { onMove: fn() },
+  render: Reorderable,
+  play: async ({ canvas, args }) => {
+    const invoices = canvas.getByRole("tab", { name: /^invoices/ })
+    const third = canvas.getByRole("tab", { name: /^unpaid invoices/ })
+    drag(invoices, { x: centerOf(third).x + 8, y: centerOf(third).y })
+    await expect(args.onMove).toHaveBeenCalledWith("object:invoices", 2)
+    await waitFor(() =>
+      expect(order(canvas.getByRole("tablist"))).toEqual([
+        "console_1.sql",
+        "unpaid invoices.sql",
+        "invoices",
+        "AI · Untitled query",
+      ])
+    )
+    await expect(args.onClose).not.toHaveBeenCalled()
+  },
+}

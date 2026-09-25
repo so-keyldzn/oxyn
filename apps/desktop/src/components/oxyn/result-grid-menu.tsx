@@ -104,16 +104,15 @@ export function menuTargetOf(
 }
 
 /**
- * The rows and shown columns a copy of `range` carries. A hidden column is
- * left out, as `⌘C` leaves it out. Pure, so it is tested.
+ * The rows and shown columns a copy of `range` carries. The range spans
+ * drawn positions, so a hidden column is left out and a moved one is taken
+ * where it stands, as `⌘C` takes them. Pure, so it is tested.
  */
 export function selectionCopy(range: GridRange, shown: ReadonlyArray<number>) {
   return {
     offset: range.top,
     count: rangeRows(range),
-    columns: shown.filter(
-      (column) => column >= range.left && column <= range.right
-    ),
+    columns: shown.slice(range.left, range.right + 1),
   }
 }
 
@@ -122,7 +121,13 @@ export function selectionCopy(range: GridRange, shown: ReadonlyArray<number>) {
  * like any copy from the grid (`copyText`). Pure, so it is tested.
  */
 export function valueCopy(cell: Cell) {
-  return copyText([[cell]], [], { top: 0, bottom: 0, left: 0, right: 0 }, false)
+  return copyText(
+    [[cell]],
+    [],
+    { top: 0, bottom: 0, left: 0, right: 0 },
+    false,
+    [0]
+  )
 }
 
 /** « 1 loaded row », « 1,200 loaded rows ». Pure, so it is tested. */
@@ -139,6 +144,7 @@ export interface GridMenuHost {
   shown: ReadonlyArray<number>
   /** Rows the result holds now. */
   rowCount: number
+  /** The selection, in drawn positions: columns index `shown`. */
   range: GridRange | null
   /** The cell's value, read from a loaded page or with one bounded read. */
   readCell: (position: GridPosition) => Promise<Cell | undefined>

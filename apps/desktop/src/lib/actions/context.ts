@@ -350,6 +350,8 @@ export function zoneElement(context: ActionContext, zone: Zone) {
 export interface ZoneHandle {
   find?: () => void
   toggleComment?: () => void
+  /** Puts text where `point` falls in the zone, without running it. */
+  insertAt?: (text: string, point: { x: number; y: number }) => void
 }
 
 const handles = new WeakMap<Element, ZoneHandle>()
@@ -358,6 +360,46 @@ const handles = new WeakMap<Element, ZoneHandle>()
 export function setZoneHandle(element: Element, handle: ZoneHandle | null) {
   if (handle) handles.set(element, handle)
   else handles.delete(element)
+}
+
+/**
+ * What the focused item offers the actions that are otherwise a drag (UX-SPEC
+ * « Souris et glisser »): a tab or the grid's active column moves, a catalog
+ * row puts its name in the console. Attached to the focusable element that
+ * carries `data-item-handle`.
+ */
+export interface ItemHandle {
+  move?: (step: -1 | 1) => void
+  insertName?: () => void
+}
+
+const itemHandles = new WeakMap<Element, ItemHandle>()
+
+/** Attaches `handle` to a focusable item; `null` detaches it. */
+export function setItemHandle(element: Element, handle: ItemHandle | null) {
+  if (handle) itemHandles.set(element, handle)
+  else itemHandles.delete(element)
+}
+
+/** The handle of the focused item inside `zone`, if it has one. */
+export function itemHandle(
+  context: ActionContext,
+  zone: Zone
+): ItemHandle | null {
+  if (!zoneElement(context, zone)) return null
+  const element = context.focused?.closest("[data-item-handle]")
+  return element ? (itemHandles.get(element) ?? null) : null
+}
+
+/** The handle of the `zone` element under a point: where a drag was released. */
+export function zoneHandleAt(
+  zone: Zone,
+  point: { x: number; y: number }
+): ZoneHandle | null {
+  const element = document
+    .elementFromPoint(point.x, point.y)
+    ?.closest(`[data-action-zone="${zone}"]`)
+  return element ? (handles.get(element) ?? null) : null
 }
 
 /** The handle of the `zone` element around the focus. */

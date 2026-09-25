@@ -423,6 +423,41 @@
       }
     },
     {
+      "id": "item.moveLeft",
+      "label": "Move left",
+      "variants": [
+        { "zone": "tabs", "label": "Move tab left" },
+        { "zone": "grid", "label": "Move column left" }
+      ],
+      "zone": "global",
+      "binding": "component",
+      "shortcut": {
+        "mac": "Alt+Shift+ArrowLeft",
+        "other": "Alt+Shift+ArrowLeft"
+      }
+    },
+    {
+      "id": "item.moveRight",
+      "label": "Move right",
+      "variants": [
+        { "zone": "tabs", "label": "Move tab right" },
+        { "zone": "grid", "label": "Move column right" }
+      ],
+      "zone": "global",
+      "binding": "component",
+      "shortcut": {
+        "mac": "Alt+Shift+ArrowRight",
+        "other": "Alt+Shift+ArrowRight"
+      }
+    },
+    {
+      "id": "catalog.insertName",
+      "label": "Insert name in console",
+      "zone": "tree",
+      "binding": "component",
+      "shortcut": { "mac": "Alt+Enter", "other": "Alt+Enter" }
+    },
+    {
       "id": "nav.back",
       "label": "Back",
       "zone": "global",

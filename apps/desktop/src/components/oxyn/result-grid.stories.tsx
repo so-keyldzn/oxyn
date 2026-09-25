@@ -2,6 +2,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite"
 import { expect, fn, userEvent, waitFor } from "storybook/test"
 
 import { invoiceColumns, syntheticPages } from "./fixtures"
+import { centerOf, drag } from "./pointer-drag-fixtures"
 import { ResultGrid } from "./result-grid"
 import type { FetchPage } from "./result-grid"
 import { modKey } from "@/lib/actions/platform"
@@ -414,6 +415,89 @@ export const ResizeFromTheKeyboard: Story = {
     await userEvent.keyboard("{Home}")
     await expect(Number(handle.getAttribute("aria-valuenow"))).toBe(before)
     // The grid's own arrows did not move while the handle had focus.
+    await expect(
+      canvas.queryAllByRole("gridcell", { selected: true })
+    ).toHaveLength(0)
+  },
+}
+
+/** The column names the header draws, in the order it draws them. */
+const headerOrder = (grid: HTMLElement) =>
+  Array.from(
+    grid.querySelectorAll('[role="columnheader"] > span:first-child'),
+    (name) => name.textContent
+  ).filter((name) => name !== "Row number")
+
+/**
+ * ⌥⇧← moves the active cell's column: the cell stays on it, the result's
+ * own indexes do not change — the moved column's cells still carry their
+ * Arrow index in their id — and the move is said aloud.
+ */
+export const MoveAColumnFromTheKeyboard: Story = {
+  args: {
+    resultKey: "story-move-keyboard",
+    rowCount: 40,
+    fetchPage: syntheticPages(40, 0),
+  },
+  play: async ({ canvas }) => {
+    const grid = canvas.getByRole("grid")
+    await waitFor(() =>
+      expect(canvas.getAllByText("Acme SA").length).toBeGreaterThan(0)
+    )
+    await expect(grid).toHaveAttribute(
+      "aria-keyshortcuts",
+      "Alt+Shift+ArrowLeft Alt+Shift+ArrowRight"
+    )
+    grid.focus()
+    await userEvent.keyboard("{ArrowDown}{ArrowRight}")
+    await userEvent.keyboard("{Alt>}{Shift>}{ArrowLeft}{/Shift}{/Alt}")
+    await waitFor(() =>
+      expect(headerOrder(grid).slice(0, 3)).toEqual([
+        "customer",
+        "id",
+        "amount",
+      ])
+    )
+    const id = grid.getAttribute("aria-activedescendant") ?? ""
+    await expect(id).toMatch(/-r1-c1$/)
+    await expect(document.getElementById(id)).toHaveAttribute(
+      "aria-colindex",
+      "2"
+    )
+    await expect(canvas.getByRole("status")).toHaveTextContent(
+      "customer moved to position 1 of"
+    )
+    // Moving is not selecting: one cell stays selected.
+    await expect(
+      canvas.getAllByRole("gridcell", { selected: true })
+    ).toHaveLength(1)
+  },
+}
+
+/** A header dragged past two others lands after them. */
+export const MoveAColumnWithThePointer: Story = {
+  args: {
+    resultKey: "story-move-pointer",
+    rowCount: 40,
+    fetchPage: syntheticPages(40, 0),
+  },
+  play: async ({ canvas }) => {
+    const grid = canvas.getByRole("grid")
+    await waitFor(() =>
+      expect(canvas.getAllByText("Acme SA").length).toBeGreaterThan(0)
+    )
+    const headers = canvas.getAllByRole("columnheader")
+    const [, id, , amount] = headers
+    if (!id || !amount) throw new Error("the invoice columns are drawn")
+    drag(id, { x: centerOf(amount).x + 4, y: centerOf(amount).y })
+    await waitFor(() =>
+      expect(headerOrder(grid).slice(0, 3)).toEqual([
+        "customer",
+        "amount",
+        "id",
+      ])
+    )
+    // The release was not a click on a cell.
     await expect(
       canvas.queryAllByRole("gridcell", { selected: true })
     ).toHaveLength(0)
