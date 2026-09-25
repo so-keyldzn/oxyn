@@ -12,6 +12,12 @@
 # Leur réunion est `make qualite`. `make socle` le vérifie : un workflow qui
 # oublierait une cible atteinte par `qualite` fait échouer la porte.
 #
+# Sur une pull request, le job `zones` dit quelles zones la PR touche, et les
+# jobs des zones intactes sont sautés. Sur `main` et à la demande, tout tourne :
+# c'est le filet (ADR-0045). Le job `qualite` agrège les autres, et c'est le
+# seul status check que la protection de branche exige — un check requis sur un
+# job sauté attendrait pour toujours.
+#
 # Versions des actions et des outils : docs/RESEARCH-NOTES.md, § CI et
 # livraison GitHub.
 name: qualite
@@ -50,7 +56,26 @@ env:
 # 2026-09-24, et plus aucun job ne démarrait. Tout ce qui est fusionné passe
 # encore par macOS, sur `main`.
 jobs:
+  zones:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    outputs:
+      rust: ${{ steps.zones.outputs.rust }}
+      front: ${{ steps.zones.outputs.front }}
+    steps:
+      - name: Récupérer le dépôt
+        # actions/checkout v7.0.1. Sur une PR, HEAD est le commit de fusion : son
+        # premier parent est la base, et `HEAD^1..HEAD` est exactement la PR.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          fetch-depth: 2
+
+      - name: Ranger les fichiers modifiés par zone
+        id: zones
+        run: script/zones-ci HEAD^1
+
   controles:
+    needs: zones
     strategy:
       fail-fast: false
       matrix:
@@ -63,10 +88,14 @@ jobs:
         # actions/checkout v7.0.1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
+      - name: make socle todo
+        run: make socle todo
+
       - name: Installer Node
         # actions/setup-node v7.0.0. La ligne 22 satisfait vite 8.3.0
         # (`^20.19.0 || >=22.12.0`) et vitest 4.1.11, et c'est celle de la
         # machine de développement.
+        if: needs.zones.outputs.front == 'true'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: "22"
@@ -74,6 +103,7 @@ jobs:
       - name: Installer pnpm
         # pnpm/action-setup v6.1.0. Sans `version` : il lit le champ
         # `packageManager` du paquet, seule source de la version de pnpm.
+        if: needs.zones.outputs.front == 'true'
         uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413
         with:
           package_json_file: apps/desktop/package.json
@@ -81,15 +111,19 @@ jobs:
           cache_dependency_path: apps/desktop/pnpm-lock.yaml
 
       - name: Installer les dépendances du front
+        if: needs.zones.outputs.front == 'true'
         run: pnpm -C apps/desktop install --frozen-lockfile
 
-      - name: make socle todo front-controles
-        run: make socle todo front-controles
+      - name: make front-controles
+        if: needs.zones.outputs.front == 'true'
+        run: make front-controles
 
   stories:
     # Les stories dominent le temps du front (plus de quatre minutes sous
     # Linux) : chaque tranche tourne sur son propre runner. Le nombre de
     # tranches est écrit deux fois, dans `tranche` et dans `SHARD`.
+    needs: zones
+    if: needs.zones.outputs.front == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -143,6 +177,11 @@ jobs:
         run: make front-tests SHARD=${{ matrix.tranche }}/2
 
   rust:
+    # Il porte aussi `front-build` : `oxyn-desktop` embarque le front, et le
+    # build du front n'a pas d'autre job. Une PR front le lance donc, sans ce
+    # qui ne sert qu'à `make rust`.
+    needs: zones
+    if: needs.zones.outputs.rust == 'true' || needs.zones.outputs.front == 'true'
     strategy:
       fail-fast: false
       matrix:
@@ -163,7 +202,7 @@ jobs:
       - name: Installer les bibliothèques système de Tauri
         # Liste de la documentation Tauri (prérequis Debian), sans ajout :
         # `keyring` passe par zbus, du Rust pur, et ne demande pas libdbus.
-        if: runner.os == 'Linux'
+        if: runner.os == 'Linux' && needs.zones.outputs.rust == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
@@ -176,6 +215,7 @@ jobs:
         run: rustup show active-toolchain || rustup toolchain install
 
       - name: Restaurer le cache Cargo
+        if: needs.zones.outputs.rust == 'true'
         # Swatinem/rust-cache v2.9.2. `cache-on-failure` : sans lui, le cache
         # n'est enregistré qu'après un job réussi, et une porte rouge recompile
         # tout le graphe à chaque poussée — c'est ce qui s'est produit à chaque
@@ -202,6 +242,7 @@ jobs:
         run: pnpm -C apps/desktop install --frozen-lockfile
 
       - name: Installer cargo-nextest
+        if: needs.zones.outputs.rust == 'true'
         # Le profil de `.config/nextest.toml` — exécution sérialisée des tests
         # de driver, arrêt d'un test qui pend — ne s'applique que si nextest est
         # présent. Sans cette étape, `make test` retomberait silencieusement sur
@@ -231,7 +272,35 @@ jobs:
           echo "$empreinte  $archive" | shasum -a 256 -c -
           tar xzf "$archive" --strip-components=1 -C "${CARGO_HOME:-$HOME/.cargo}/bin" "cargo-about-0.9.2-$cible/cargo-about"
 
-      - name: make front-build rust
+      - name: make front-build
         # `front-build` d'abord : `oxyn-desktop` embarque `apps/desktop/dist`
         # à la compilation.
-        run: make front-build rust
+        run: make front-build
+
+      - name: make rust
+        if: needs.zones.outputs.rust == 'true'
+        run: make rust
+
+  qualite:
+    # Le seul status check requis. Il réussit si `zones` a réussi et si aucun
+    # autre job n'a échoué ni été annulé : un job sauté parce que sa zone est
+    # intacte compte comme réussi. `zones` en échec sauterait tous les autres,
+    # d'où son cas à part.
+    needs: [zones, controles, stories, rust]
+    if: always()
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Agréger les résultats
+        env:
+          ZONES: ${{ needs.zones.result }}
+          RESULTATS: ${{ join(needs.*.result, ' ') }}
+        run: |
+          echo "zones : $ZONES ; tous : $RESULTATS"
+          test "$ZONES" = success
+          for resultat in $RESULTATS; do
+            case "$resultat" in
+              success|skipped) ;;
+              *) echo "Un job a fini en « $resultat »."; exit 1 ;;
+            esac
+          done

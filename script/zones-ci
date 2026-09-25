@@ -1,0 +1,98 @@
+#!/usr/bin/env python3
+"""Dit quelles zones du dépôt une pull request touche : `rust`, `front`, `docs`.
+
+La CI s'en sert pour sauter, sur une PR, les jobs dont la zone n'est pas
+touchée (ADR-0045). Le rangement penche d'un seul côté : un fichier que ce
+script ne sait pas ranger déclenche **tout**. Un oubli coûte alors des minutes
+de runner, jamais un contrôle.
+
+Hors de l'événement `pull_request` — poussée sur `main`, lancement à la main —,
+toutes les zones sont renvoyées sans rien regarder : c'est le filet.
+
+    script/zones-ci HEAD^1          compare HEAD à ce commit
+    GITHUB_EVENT_NAME=push script/zones-ci HEAD^1   toutes les zones
+
+Écrit `rust=true|false` et `front=true|false` dans `$GITHUB_OUTPUT` quand la
+variable existe, et affiche le détail dans tous les cas.
+"""
+
+from __future__ import annotations
+
+import os
+import subprocess
+import sys
+
+ZONES = ("rust", "front", "docs")
+
+# Ce qui décide de la manière dont tout le reste se construit ou se vérifie : le
+# Makefile, les workflows, le graphe Cargo, la chaîne d'outils, le socle et ses
+# scripts. Un préfixe finit par `/`, un fichier non.
+TRANSVERSAUX = (
+    "Makefile",
+    ".github/",
+    "Cargo.toml",
+    "Cargo.lock",
+    ".cargo/",
+    ".config/",
+    "rust-toolchain.toml",
+    "clippy.toml",
+    "deny.toml",
+    "renovate.json5",
+    ".claude/",
+    ".agents/",
+    "script/",
+)
+
+
+def _correspond(chemin: str, motif: str) -> bool:
+    return chemin.startswith(motif) if motif.endswith("/") else chemin == motif
+
+
+def zones_de(chemin: str) -> set[str]:
+    if any(_correspond(chemin, m) for m in TRANSVERSAUX):
+        return set(ZONES)
+    if chemin.startswith("apps/desktop/"):
+        return {"front"}
+    if chemin.startswith(("crates/", "drivers/")):
+        return {"rust"}
+    if chemin.startswith("docs/") or chemin.endswith(".md"):
+        return {"docs"}
+    return set(ZONES)
+
+
+def zones_touchees(evenement: str, fichiers: list[str]) -> set[str]:
+    if evenement != "pull_request":
+        return set(ZONES)
+    touchees: set[str] = set()
+    for chemin in fichiers:
+        touchees |= zones_de(chemin)
+    return touchees
+
+
+def principal(arguments: list[str]) -> int:
+    if len(arguments) != 1:
+        print("usage : script/zones-ci <commit de base>", file=sys.stderr)
+        return 2
+    evenement = os.environ.get("GITHUB_EVENT_NAME", "pull_request")
+    fichiers = subprocess.run(
+        ["git", "diff", "--name-only", arguments[0], "HEAD"],
+        check=True, capture_output=True, text=True,
+    ).stdout.splitlines()
+    touchees = zones_touchees(evenement, fichiers)
+
+    print(f"Événement : {evenement}, {len(fichiers)} fichier(s) modifié(s).")
+    for chemin in fichiers:
+        print(f"  {chemin}  →  {', '.join(sorted(zones_de(chemin)))}")
+    for zone in ZONES:
+        print(f"{zone:6} {'touchée' if zone in touchees else 'non touchée'}")
+
+    sortie = os.environ.get("GITHUB_OUTPUT")
+    if sortie:
+        with open(sortie, "a", encoding="utf-8") as f:
+            for zone in ("rust", "front"):
+                f.write(f"{zone}={'true' if zone in touchees else 'false'}\n")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(principal(sys.argv[1:]))

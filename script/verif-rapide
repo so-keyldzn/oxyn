@@ -1,0 +1,156 @@
+#!/usr/bin/env python3
+"""Vérifie ce qui a changé depuis `origin/main`, et seulement cela.
+
+Le pendant local d'ADR-0045 : sur une machine qui porte plusieurs worktrees,
+`make qualite` recompile et reteste le workspace entier pour un changement
+d'une ligne. Ce script en garde les contrôles qui concernent les fichiers
+modifiés — commités ou non depuis la base de fusion avec `origin/main` — et dit
+ce qu'il laisse à la CI.
+
+**Il ne remplace pas `make qualite`**, qui reste la porte : les crates qui
+dépendent d'une crate modifiée, la documentation Rust, `cargo deny`, les
+stories non affectées et le build du front ne tournent pas ici.
+
+S'arrête au premier échec, avec le code de sortie de la commande fautive.
+
+Appelé par `make verif-rapide`.
+"""
+
+from __future__ import annotations
+
+import os
+import re
+import subprocess
+import sys
+from pathlib import Path
+
+RACINE = Path(__file__).resolve().parents[1]
+FRONT = RACINE / "apps" / "desktop"
+
+# Un changement ici modifie la manière dont tout le workspace se construit ou se
+# vérifie : on ne peut plus raisonner crate par crate.
+GLOBAUX_RUST = (
+    "Cargo.toml",
+    "Cargo.lock",
+    "rust-toolchain.toml",
+    "clippy.toml",
+    "deny.toml",
+)
+EXTENSIONS_ESLINT = (".ts", ".tsx", ".js", ".jsx", ".mjs", ".cjs")
+MOTIF_NOM = re.compile(r'^name\s*=\s*"([^"]+)"', re.MULTILINE)
+
+LAISSE_A_LA_CI = [
+    "les crates qui dépendent des crates modifiées",
+    "cargo doc, cargo deny, et le profil nextest (.config/nextest.toml)",
+    "les stories que Vitest ne relie pas aux fichiers modifiés",
+    "le build du front et les licences npm",
+    "les tests des hooks du socle",
+    "macOS, sur main",
+]
+
+
+def git(*arguments: str) -> str:
+    return subprocess.run(
+        ["git", *arguments], cwd=RACINE, check=True, capture_output=True, text=True
+    ).stdout
+
+
+def fichiers_modifies(base: str) -> list[str]:
+    # `git diff <base>` compare à l'arbre de travail : il compte l'index et les
+    # modifications non indexées. Les fichiers non suivis s'y ajoutent.
+    suivis = git("diff", "--name-only", base).splitlines()
+    nouveaux = git("ls-files", "--others", "--exclude-standard").splitlines()
+    return sorted(set(suivis) | set(nouveaux))
+
+
+def crate_de(chemin: str) -> str | None:
+    """Le nom de la crate dont le `Cargo.toml` est le plus proche du fichier."""
+    dossier = (RACINE / chemin).parent
+    while dossier != RACINE and RACINE in dossier.parents:
+        manifeste = dossier / "Cargo.toml"
+        if manifeste.is_file():
+            nom = MOTIF_NOM.search(manifeste.read_text(encoding="utf-8"))
+            return nom.group(1) if nom else None
+        dossier = dossier.parent
+    return None
+
+
+def lancer(commande: list[str], dossier: Path = RACINE) -> None:
+    print(f"\n$ {' '.join(commande)}", flush=True)
+    code = subprocess.run(commande, cwd=dossier).returncode
+    if code != 0:
+        print(f"\nÉchec : {' '.join(commande)} (code {code}).")
+        sys.exit(code)
+
+
+def controler_rust(fichiers: list[str]) -> None:
+    tout = any(f in GLOBAUX_RUST or f.startswith(".cargo/") for f in fichiers)
+    crates = sorted({c for f in fichiers if (c := crate_de(f))})
+    if not tout and not crates:
+        print("\nRust : aucun fichier de crate modifié.")
+        return
+    if tout:
+        print("\nRust : un fichier global du workspace a changé, tout le workspace est vérifié.")
+        cible = ["--workspace"]
+    else:
+        print(f"\nRust : {', '.join(crates)}.")
+        cible = [a for c in crates for a in ("-p", c)]
+
+    if (tout or "oxyn-desktop" in crates) and not (FRONT / "dist" / "client").is_dir():
+        print("oxyn-desktop embarque apps/desktop/dist/client, absent : lancer `make front-build`.")
+        sys.exit(1)
+
+    lancer(["cargo", "fmt", "--all", "--", "--check"])
+    lancer(["cargo", "clippy", *cible, "--all-targets", "--all-features", "--", "-D", "warnings"])
+    lancer(["cargo", "test", *cible, "--all-features"])
+
+
+def controler_front(fichiers: list[str], base: str) -> None:
+    prefixe = "apps/desktop/"
+    modifies = [f[len(prefixe):] for f in fichiers if f.startswith(prefixe)]
+    if not modifies:
+        print("\nFront : aucun fichier modifié.")
+        return
+    existants = [f for f in modifies if (FRONT / f).is_file()]
+    print(f"\nFront : {len(modifies)} fichier(s) modifié(s).")
+
+    if not (FRONT / "node_modules").is_dir():
+        lancer(["pnpm", "install", "--frozen-lockfile"], FRONT)
+    lancer(["python3", "script/verifier-stories"])
+    lancer(["pnpm", "exec", "tsc", "--noEmit"], FRONT)
+    a_linter = [f for f in existants if f.endswith(EXTENSIONS_ESLINT)]
+    if a_linter:
+        lancer(["pnpm", "exec", "eslint", "--no-warn-ignored", *a_linter], FRONT)
+    if existants:
+        lancer(["pnpm", "exec", "prettier", "--check", "--ignore-unknown", *existants], FRONT)
+    lancer(["pnpm", "exec", "playwright", "install", "chromium"], FRONT)
+    # `--changed <base>` ne lance que les fichiers de test qui importent, de
+    # près ou de loin, un fichier modifié depuis la base (vitest 4.1.11,
+    # RESEARCH-NOTES § Paquets npm).
+    lancer(["pnpm", "exec", "vitest", "run", "--changed", base, "--passWithNoTests"], FRONT)
+
+
+def principal() -> int:
+    try:
+        base = git("merge-base", "origin/main", "HEAD").strip()
+    except subprocess.CalledProcessError:
+        print("origin/main introuvable : lancer `git fetch origin main`.")
+        return 1
+    fichiers = fichiers_modifies(base)
+    print(f"Base : {base[:12]} (merge-base origin/main HEAD), {len(fichiers)} fichier(s) modifié(s).")
+    print("Laissé à la CI et à `make qualite` :")
+    for element in LAISSE_A_LA_CI:
+        print(f"  - {element}")
+
+    lancer(["python3", ".claude/verifier_socle.py"])
+    lancer(["python3", "script/verifier-todo"])
+    controler_rust(fichiers)
+    controler_front(fichiers, base)
+
+    print("\nVérification rapide réussie. `make qualite` reste la porte.")
+    return 0
+
+
+if __name__ == "__main__":
+    os.chdir(RACINE)
+    sys.exit(principal())

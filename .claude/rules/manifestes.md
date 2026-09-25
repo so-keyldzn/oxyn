@@ -65,6 +65,12 @@ le workflow ne tournerait jamais en CI. `make socle` le refuse
 (`controler_couverture_ci`). Une nouvelle cible de la porte s'ajoute donc aux
 deux endroits dans le même commit.
 
+Sur une pull request, les jobs d'une zone intacte sont sautés
+([ADR-0045](../../docs/adr/0045-ci-selective-sur-les-pull-requests.md)) ; sur
+`main`, tout tourne. Un nouveau job qui appelle `make` s'ajoute aux `needs` du
+job agrégat `qualite` (`controler_agregat_ci`), et un nouveau répertoire de
+premier niveau se range dans `script/zones-ci` — sans quoi il déclenche tout.
+
 ## Où vivent les interdits mécanisables
 
 | Fichier | Ce qu'il refuse |
