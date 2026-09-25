@@ -329,6 +329,8 @@ pub trait Session: Send + Sync {
     async fn begin(&self, cancel: &CancelToken) -> Result<()>;
     async fn commit(&self, cancel: &CancelToken) -> Result<()>;
     async fn rollback(&self, cancel: &CancelToken) -> Result<()>;
+    async fn transaction_state(&self, cancel: &CancelToken)
+        -> TransactionState;                         // après tout ce qui a été soumis ; Unknown par défaut
 }
 
 #[async_trait]

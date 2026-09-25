@@ -41,7 +41,7 @@ use futures::future::BoxFuture;
 use oxyn_catalog::{CatalogPath, CatalogProvider};
 use oxyn_core::{
     CancelToken, Capabilities, ConnectionConfig, DriverId, ExecRequest, ExecStats, OxynError,
-    PreviewShape, Result, StatementHandle,
+    PreviewShape, Result, StatementHandle, TransactionState,
 };
 use oxyn_data::BatchSource;
 
@@ -269,6 +269,37 @@ pub trait Session: Send + Sync {
     /// # Erreurs
     /// Toute erreur de transport rencontrée à la fermeture.
     async fn close(self: Box<Self>) -> Result<()>;
+
+    /// The transaction state, once every operation already submitted on this
+    /// session has ended.
+    ///
+    /// **Ordered after what precedes it**: an execution, `begin`, `commit`,
+    /// `rollback` or `set_context` already submitted ends first — succeeded,
+    /// failed or interrupted — and the state read is the one it left. That is
+    /// what makes the answer right after a Stop: SQLite rolls the transaction
+    /// back on its own when interrupted, and a value stored earlier would show
+    /// the transaction still open
+    /// ([ADR-0039](../../../docs/adr/0039-etat-de-transaction-d-une-session.md)).
+    ///
+    /// **No server round trip**: it waits for the operations to end, it does
+    /// not query the server. If `cancel` fires first, or the session can no
+    /// longer answer, it returns [`TransactionState::Unknown`] — never an
+    /// error, never [`TransactionState::Idle`] by default.
+    ///
+    /// **Called once the cursor is released.** A driver may keep its
+    /// connection busy for as long as a cursor lives; a call made meanwhile
+    /// would wait without bound.
+    ///
+    /// **Never deduced from the submitted text**: only the engine knows about
+    /// an automatic rollback after an error.
+    ///
+    /// A session that declares [`Capabilities::TRANSACTIONS`] overrides it.
+    /// The default says it does not know, which is an honest answer
+    /// ([`DRIVER-CONTRACT` §5](../../../docs/DRIVER-CONTRACT.md)).
+    async fn transaction_state(&self, cancel: &CancelToken) -> TransactionState {
+        let _ = cancel;
+        TransactionState::Unknown
+    }
 
     /// Ouvre une transaction.
     ///
@@ -669,6 +700,23 @@ mod tests {
             !err.is_user_error(),
             "c'est un bug du driver, pas une erreur d'usage"
         );
+    }
+
+    #[test]
+    fn par_defaut_une_session_ne_pretend_pas_connaitre_sa_transaction() {
+        // ADR-0039 : un driver qui n'a rien implémenté ne dit pas « aucune
+        // transaction », même s'il déclare la capacité.
+        let jeton = CancelToken::new();
+        for capacites in [
+            Capabilities::SQL,
+            Capabilities::SQL | Capabilities::TRANSACTIONS,
+        ] {
+            let session = SessionFactice::new(capacites);
+            assert_eq!(
+                block_on(session.transaction_state(&jeton)),
+                TransactionState::Unknown
+            );
+        }
     }
 
     #[test]

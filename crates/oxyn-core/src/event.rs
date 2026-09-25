@@ -16,10 +16,11 @@
 use serde::{Deserialize, Serialize};
 
 use crate::error::OxynError;
-use crate::ids::{CommandId, ResultId};
+use crate::ids::{CommandId, ResultId, SessionId};
 use crate::policy::Preview;
 use crate::query::StatementIntent;
 use crate::stats::ExecStats;
+use crate::transaction::TransactionState;
 
 /// Un événement d'exécution destiné à l'interface.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -92,6 +93,20 @@ pub enum Event {
 
     /// Le catalogue a changé : l'arborescence doit être relue.
     CatalogUpdated,
+
+    /// L'état de transaction de la session, constaté à la fin d'une exécution
+    /// ([ADR-0039](../../docs/adr/0039-etat-de-transaction-d-une-session.md)).
+    ///
+    /// Il appartient à la **session**, pas à la commande : l'interface range la
+    /// dernière valeur reçue par session et ne la déduit jamais du texte
+    /// soumis. Quand l'exécution produit un événement terminal, celui-ci arrive
+    /// **après**, jamais avant.
+    TransactionState {
+        /// La session concernée.
+        session: SessionId,
+        /// Ce que la session a constaté.
+        state: TransactionState,
+    },
 
     /// Une exécution réussie est inscrite à l'historique : une vue qui le
     /// montre peut le relire.
@@ -168,6 +183,14 @@ mod tests {
         assert!(!Event::SchemaReady { result: resultat }.is_terminal());
         assert!(!Event::Progress { rows: 10 }.is_terminal());
         assert!(!Event::CatalogUpdated.is_terminal());
+        assert!(
+            !Event::TransactionState {
+                session: SessionId::new(),
+                state: TransactionState::Open,
+            }
+            .is_terminal(),
+            "l'état de transaction précède le terminal, il ne le remplace pas"
+        );
     }
 
     #[test]
@@ -224,6 +247,21 @@ mod tests {
             !evt.is_terminal(),
             "l'exécution n'est pas close, elle attend"
         );
+    }
+
+    #[test]
+    fn l_etat_de_transaction_nomme_sa_session() {
+        let session = SessionId::new();
+        let evt = Event::TransactionState {
+            session,
+            state: TransactionState::Unknown,
+        };
+        let json = serde_json::to_value(&evt).expect("sérialisation");
+        assert_eq!(json["event"], "transaction_state");
+        assert_eq!(json["state"], "unknown");
+        assert_eq!(json["session"], session.to_string());
+        let relu: Event = serde_json::from_value(json).expect("désérialisation");
+        assert_eq!(relu, evt);
     }
 
     #[test]

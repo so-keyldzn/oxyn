@@ -65,7 +65,7 @@ Pour localiser les planches et leurs états avant implémentation, consulter
 | [0036](adr/0036-l-assistant-complete-le-catalogue.md) | L'assistant complète lui-même le catalogue, par le bus et sous des bornes | proposé |
 | [0037](adr/0037-dialogue-natif-pour-les-confirmations-critiques.md) | Une décision critique se confirme dans un dialogue natif de l'hôte, jamais dans la webview | proposé |
 | [0038](adr/0038-un-plantage-s-annonce-une-fois.md) | Un plantage s'annonce une fois, et ⌘Q passe par l'arrêt ordonné | accepté |
-| [0039](adr/0039-etat-de-transaction-d-une-session.md) | Une session rend l'état de transaction qu'elle a constaté, et la console ne montre que celui-là | proposé |
+| [0039](adr/0039-etat-de-transaction-d-une-session.md) | Une session rend l'état de transaction qu'elle a constaté, et la console ne montre que celui-là | accepté |
 | [0040](adr/0040-inscrire-la-fermeture-d-une-sortie-forcee.md) | Une sortie que macOS ne laisse pas retenir inscrit sa fermeture | accepté |
 | [0041](adr/0041-registre-d-actions-menus-et-raccourcis.md) | Un registre d'actions unique alimente la barre de menus, les menus contextuels, la palette et les raccourcis | proposé |
 | [0042](adr/0042-revue-sur-place-des-operations-destructrices.md) | `Drop…`, `Truncate…` et `Rename…` s'exécutent depuis une revue sur place, comme du SQL utilisateur | proposé |

@@ -20,6 +20,7 @@
 //! | [`policy`] | [`PolicyGate`], [`DefaultPolicy`] | ADR-0004, SECURITY |
 //! | [`ai`] | déclaration d'un fournisseur, provenance d'un texte | ADR-0023 |
 //! | [`stats`] | volumétrie et temps d'une exécution | — |
+//! | [`transaction`] | l'état de transaction qu'une session a constaté | ADR-0039 |
 //! | [`event`] | ce qui remonte vers l'interface | UX-SPEC |
 //!
 //! # Les trois choix qui gouvernent cette crate
@@ -91,6 +92,7 @@ pub use preferences::{
 };
 pub mod query;
 pub mod stats;
+pub mod transaction;
 pub mod value;
 
 pub use ai::{
@@ -113,6 +115,7 @@ pub use query::{
     ExecLimits, ExecRequest, MutationRisk, QueryLanguage, SqlDialect, StatementIntent,
 };
 pub use stats::ExecStats;
+pub use transaction::TransactionState;
 pub use value::{ParameterParseError, ParameterType, ScalarValue};
 
 /// Ce qu'on importe d'un coup quand on travaille avec le domaine.
@@ -139,6 +142,7 @@ pub mod prelude {
         ExecLimits, ExecRequest, MutationRisk, QueryLanguage, SqlDialect, StatementIntent,
     };
     pub use crate::stats::ExecStats;
+    pub use crate::transaction::TransactionState;
     pub use crate::value::{ParameterParseError, ParameterType, ScalarValue};
 }
 

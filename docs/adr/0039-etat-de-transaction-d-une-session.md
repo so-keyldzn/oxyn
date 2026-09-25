@@ -1,6 +1,6 @@
 # ADR-0039 — Une session rend l'état de transaction qu'elle a constaté, et la console ne montre que celui-là
 
-**Statut :** proposé · **Date :** 2026-09-25
+**Statut :** accepté · **Date :** 2026-09-25
 
 **Précise :** [ADR-0003](0003-driver-capabilities.md), sur un point : une
 capacité dit ce qu'une session **sait faire** ; rien ne disait encore ce qu'elle
