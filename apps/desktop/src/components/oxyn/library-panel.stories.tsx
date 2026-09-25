@@ -236,6 +236,48 @@ export const OpenRetainedResult: Story = {
   },
 }
 
+/**
+ * Recent results lists the runs that kept a result: this connection's open
+ * their rows, another's says where they open. A reference may have expired.
+ */
+export const RecentResults: Story = {
+  args: { view: "results" },
+  play: async ({ canvas, args }) => {
+    await expect(
+      canvas.getByRole("button", { name: "Recent results" })
+    ).toHaveAttribute("aria-pressed", "true")
+    await expect(canvas.getByText(/may have expired/)).toBeVisible()
+    await expect(
+      canvas.getByText("Rows open from their own connection")
+    ).toBeVisible()
+    await userEvent.click(canvas.getByRole("button", { name: /Open result/ }))
+    await expect(args.onOpenResult).toHaveBeenCalledWith(history[0])
+  },
+}
+
+/** Choosing the view asks for it; the panel does not filter by itself. */
+export const ChooseRecentResults: Story = {
+  play: async ({ canvas, args }) => {
+    await userEvent.click(
+      canvas.getByRole("button", { name: "Recent results" })
+    )
+    await expect(args.onViewChange).toHaveBeenCalledWith("results")
+  },
+}
+
+export const RecentResultsEmpty: Story = {
+  args: {
+    view: "results",
+    state: { status: "history", entries: [] },
+    hasNext: false,
+  },
+  play: async ({ canvas }) => {
+    await expect(
+      canvas.getByText("Runs whose rows are kept for reopening appear here.")
+    ).toBeVisible()
+  },
+}
+
 /** Hostile and right-to-left text stays text, truncated in place. */
 export const HostileText: Story = {
   args: {

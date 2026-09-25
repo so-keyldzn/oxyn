@@ -94,9 +94,13 @@ export function LibrarySidebarSection({
     }
   }
 
+  // Recent results is the history filtered on a result reference: same
+  // filters, same pages, same rows.
+  const resultsOnly = view === "results"
   const historyKey = [
     ...LIBRARY_QUERY_KEY,
     "history",
+    resultsOnly,
     debouncedSearch,
     filters,
     cursor,
@@ -112,9 +116,10 @@ export function LibrarySidebarSection({
           status: filters.status,
           before: typeof cursor === "number" ? cursor : null,
           limit: null,
+          resultsOnly,
         })
       ),
-    enabled: view === "history",
+    enabled: view !== "saved",
     placeholderData: keepPreviousData,
   })
 
@@ -192,7 +197,7 @@ export function LibrarySidebarSection({
     ? { status: "error", error: backendFailure(inspected.error) }
     : (inspected.data ?? { status: "loading" })
 
-  const current = view === "history" ? history : saved
+  const current = view === "saved" ? saved : history
   const state: LibraryState = actionError
     ? { status: "error", error: actionError }
     : cancelled
@@ -201,10 +206,10 @@ export function LibrarySidebarSection({
         ? { status: "loading" }
         : current.isError
           ? { status: "error", error: backendFailure(current.error) }
-          : view === "history"
-            ? { status: "history", entries: history.data?.entries ?? [] }
-            : { status: "saved", entries: saved.data?.entries ?? [] }
-  const next = view === "history" ? history.data?.next : saved.data?.next
+          : view === "saved"
+            ? { status: "saved", entries: saved.data?.entries ?? [] }
+            : { status: "history", entries: history.data?.entries ?? [] }
+  const next = view === "saved" ? saved.data?.next : history.data?.next
 
   const cancel = () => {
     const id = reading.current
@@ -213,7 +218,7 @@ export function LibrarySidebarSection({
     // Drops the answer too: a read that finished anyway does not replace
     // « cancelled » with a list.
     void queryClient.cancelQueries({
-      queryKey: view === "history" ? historyKey : savedKey,
+      queryKey: view === "saved" ? savedKey : historyKey,
     })
   }
 

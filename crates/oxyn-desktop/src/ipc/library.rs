@@ -172,6 +172,10 @@ pub struct HistoryQuery {
     pub status: HistoryStatusChoice,
     pub before: Option<i64>,
     pub limit: Option<u16>,
+    /// Only executions carrying a result reference: Recent results. The
+    /// reference does not prove the buffer is still retained.
+    #[serde(default)]
+    pub results_only: bool,
 }
 
 #[derive(Debug, Clone, Copy, Default, Deserialize)]

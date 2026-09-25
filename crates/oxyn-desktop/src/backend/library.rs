@@ -89,7 +89,7 @@ impl Backend {
         query: HistoryQuery,
     ) -> Result<HistoryList, IpcError> {
         let filter = HistoryFilter {
-            results_only: false,
+            results_only: query.results_only,
             connection,
             search: query.search,
             days: query.days,
@@ -257,6 +257,7 @@ mod tests {
                     status: HistoryStatusChoice::All,
                     before: None,
                     limit: Some(0),
+                    results_only: false,
                 },
             ))
             .expect_err("a page of zero is a malformed request");
@@ -276,7 +277,62 @@ mod tests {
             status: HistoryStatusChoice::All,
             before: None,
             limit: None,
+            results_only: false,
         }
+    }
+
+    #[test]
+    fn history_and_recent_results_read_the_same_execution_without_replaying_it() {
+        use oxyn_core::QueryLanguage;
+        use oxyn_store::history::HistoryRecord;
+
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("a test runtime starts");
+        let _guard = runtime.enter();
+        let store = std::sync::Arc::new(oxyn_store::Store::open_in_memory().expect("store"));
+        let mut kept = HistoryRecord::new(&Actor::Human, QueryLanguage::SQL, "SELECT 1")
+            .succeeded(std::time::Duration::from_millis(3), Some(1));
+        kept.result = Some(ResultId::new());
+        let kept = store.history().record(&kept).expect("recorded");
+        let without = store
+            .history()
+            .record(&HistoryRecord::new(
+                &Actor::Human,
+                QueryLanguage::SQL,
+                "SELECT 2",
+            ))
+            .expect("recorded");
+        let backend = Backend::assemble(
+            store,
+            std::sync::Arc::new(oxyn_secrets::MemorySecretStore::new()),
+        )
+        .expect("backend");
+
+        // The front sends the field by its camelCase name.
+        let query: HistoryQuery = serde_json::from_value(serde_json::json!({
+            "connection": null,
+            "search": "",
+            "days": null,
+            "status": "all",
+            "before": null,
+            "limit": null,
+            "resultsOnly": true,
+        }))
+        .expect("deserializable");
+        let recent = runtime
+            .block_on(backend.read_history(CommandId::new(), None, query))
+            .expect("listed");
+        let ids: Vec<i64> = recent.entries.iter().map(|row| row.id).collect();
+        assert_eq!(ids, vec![kept], "only the run carrying a result");
+        assert!(recent.entries.iter().all(|row| row.result.is_some()));
+
+        let history = runtime
+            .block_on(backend.read_history(CommandId::new(), None, all_history()))
+            .expect("listed");
+        let ids: Vec<i64> = history.entries.iter().map(|row| row.id).collect();
+        assert!(ids.contains(&kept) && ids.contains(&without), "{ids:?}");
     }
 
     #[test]
