@@ -450,9 +450,8 @@ Lots, dans l'ordre :
    seulement, bornés par le backend, aucune lecture du serveur. S'ajoutent au
    registre et aux deux barres `New window`, `Export…`, le menu `Help`
    (`Documentation`, `Keyboard shortcuts`), `Text size ▸`, `Theme ▸` et
-   `Format`. Le manifeste gagne deux champs, lus aussi par `menu.rs` : `parent`
-   (un sous-menu, un niveau) et `check` (un choix coché, `CheckMenuItem` natif,
-   état transmis par `set_menu_state` dans `checked`). Tenu par
+   `Format`, par les champs `parent` et `check` du manifeste qu'ADR-0041
+   (§ 1 et § 4) décrit désormais. Tenu par
    `listings.test.ts` (la palette égale le registre du contexte, raisons
    comprises ; `⌘/` selon la zone ; `⌘P` grisé et non absent sans catalogue),
    `action-overlays.test.tsx` (`⌘P` n'appelle que `search_catalog`),
