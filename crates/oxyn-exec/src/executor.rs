@@ -2220,16 +2220,35 @@ impl Executor {
         connection: ConnectionId,
         result: ResultId,
     ) -> Result<Arc<ResultBuffer>> {
+        self.result_on(connection, result)?
+            .ok_or_else(|| OxynError::Config("result is no longer available".into()))
+    }
+
+    /// The buffer of a retained result, for a reader that names its connection.
+    ///
+    /// The ownership check shared by the commands and the page reads, wherever
+    /// the rows are — in memory, in the page cache or on disk. `Ok(None)` when
+    /// the result is no longer retained.
+    ///
+    /// # Errors
+    ///
+    /// [`OxynError::PolicyDenied`] when the result belongs to another
+    /// connection.
+    pub fn result_on(
+        &self,
+        connection: ConnectionId,
+        result: ResultId,
+    ) -> Result<Option<Arc<ResultBuffer>>> {
         let results = self.results.read();
-        let entry = results
-            .get(&result)
-            .ok_or_else(|| OxynError::Config("result is no longer available".into()))?;
+        let Some(entry) = results.get(&result) else {
+            return Ok(None);
+        };
         if entry.connection != connection {
             return Err(OxynError::PolicyDenied {
                 reason: "result does not belong to this connection".into(),
             });
         }
-        Ok(Arc::clone(&entry.buffer))
+        Ok(Some(Arc::clone(&entry.buffer)))
     }
 
     /// Enforces idle retention limits. Call off the UI thread: evictions can remove spill files.

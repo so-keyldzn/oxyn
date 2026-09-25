@@ -87,10 +87,12 @@ struct RememberedFind {
 impl Backend {
     /// A bounded window of rows, or `Expired` when retention let it go.
     ///
-    /// Batches still in memory are formatted directly; each batch that spilled
-    /// to disk is loaded by `Command::ReadResultPage` first, which checks
-    /// ownership and never contacts the server (ADR-0012). A failed load is
-    /// reported, never retried here.
+    /// Ownership is checked first, the same way whether the rows are in
+    /// memory, in the page cache or on disk: only the disk path goes through
+    /// a command, and a check left to it would let the other two answer any
+    /// connection. Each batch that spilled is then loaded by
+    /// `Command::ReadResultPage`, which never contacts the server (ADR-0012).
+    /// A failed load is reported, never retried here.
     pub async fn read_result_page(
         &self,
         connection: ConnectionId,
@@ -98,7 +100,7 @@ impl Backend {
         offset: usize,
         limit: usize,
     ) -> Result<ResultWindow, IpcError> {
-        let Some(buffer) = self.inner.executor.result(result) else {
+        let Some(buffer) = self.inner.executor.result_on(connection, result)? else {
             return Ok(ResultWindow::Expired);
         };
         for batch in spilled_batches(&buffer, offset, limit.min(MAX_PAGE_ROWS)) {
@@ -783,3 +785,7 @@ mod tests {
         );
     }
 }
+
+#[cfg(test)]
+#[path = "results_access_tests.rs"]
+mod access_tests;
