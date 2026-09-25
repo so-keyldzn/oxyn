@@ -228,6 +228,16 @@ function MentionList({
     else field.setAttribute("aria-activedescendant", optionId(active))
   }, [field, active, options])
 
+  // The query this list answers, once answered. Lexical commits it in a
+  // transition after the keystroke, then puts the highlight back on the first
+  // row in a passive effect: an arrow pressed before that is undone. Set in
+  // the same flush of effects, so whoever waits on it — a story on a loaded
+  // machine — moves the highlight after the reset, never before.
+  const list = React.useRef<HTMLDivElement>(null)
+  React.useEffect(() => {
+    list.current?.setAttribute("data-query", query)
+  }, [query])
+
   // The active option stays in sight as the arrows move it.
   React.useEffect(() => {
     if (active === null) return
@@ -237,6 +247,7 @@ function MentionList({
   return (
     <div
       data-slot="assistant-mention-list"
+      ref={list}
       data-side={placement?.side}
       id={LIST_ID}
       role="listbox"

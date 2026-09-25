@@ -13,6 +13,7 @@ import {
   postgresDriver,
   sqliteDriver,
 } from "@/components/oxyn/fixtures"
+import { modKey } from "@/lib/actions/platform"
 import type { DriverChoice, FormField } from "@/lib/ipc/types"
 
 const optional = (
@@ -167,7 +168,7 @@ export const WorkspaceLeftOpen: Story = {
     ).toBeVisible()
     await userEvent.keyboard("{Escape}")
     await expect(args.onReturnToWorkspace).toHaveBeenCalledOnce()
-    await userEvent.keyboard("{Meta>}[[{/Meta}")
+    await userEvent.keyboard(`{${modKey}>}[[{/${modKey}}`)
     await expect(args.onReturnToWorkspace).toHaveBeenCalledTimes(2)
   },
 }
@@ -247,13 +248,13 @@ export const LeavingTypedValuesAsksFirst: Story = {
     await expect(args.onLeaveDriver).not.toHaveBeenCalled()
     await expect(name).toHaveValue("billing")
 
-    // The Back button and ⌘[ ask the same question.
+    // The Back button and Mod+[ ask the same question.
     await userEvent.click(canvas.getByRole("button", { name: /^Back/ }))
     await userEvent.click(
       await body.findByRole("button", { name: "Keep editing" })
     )
     await waitFor(() => expect(body.queryByRole("alertdialog")).toBeNull())
-    await userEvent.keyboard("{Meta>}[[{/Meta}")
+    await userEvent.keyboard(`{${modKey}>}[[{/${modKey}}`)
     await userEvent.click(await body.findByRole("button", { name: "Discard" }))
     await expect(args.onLeaveDriver).toHaveBeenCalledOnce()
   },
