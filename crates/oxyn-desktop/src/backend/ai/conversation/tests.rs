@@ -2936,3 +2936,6 @@ mod approvals;
 
 /// What the history panel reads besides the open connection's threads.
 mod history;
+
+/// I-03: a provider's streamed error reaches the webview without the key.
+mod provider_errors;

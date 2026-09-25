@@ -560,7 +560,11 @@ impl LlmProvider for OpenAiCompatibleProvider {
         let octets = reponse
             .bytes_stream()
             .map(|resultat| resultat.map_err(|err| crate::stream::describe_stream_error(&err)));
-        Ok(stream::openai_events(Box::pin(octets), cancel.clone()))
+        Ok(stream::openai_events(
+            Box::pin(octets),
+            cancel.clone(),
+            self.api_key.clone(),
+        ))
     }
 }
 

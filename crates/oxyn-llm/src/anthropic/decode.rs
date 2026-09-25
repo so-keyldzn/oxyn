@@ -1123,6 +1123,7 @@ mod tests {
             Box::pin(futures::stream::iter(octets)),
             MessageDecoder::new(),
             oxyn_core::CancelToken::new(),
+            None,
         );
         futures::executor::block_on(flux.collect())
     }
@@ -1190,6 +1191,7 @@ mod tests {
                 Box::pin(futures::stream::iter(coupee)),
                 MessageDecoder::new(),
                 oxyn_core::CancelToken::new(),
+                None,
             );
             futures::executor::block_on(flux.collect::<Vec<_>>())
         };
@@ -1240,6 +1242,7 @@ mod tests {
                 Box::pin(futures::stream::iter(coupee)),
                 MessageDecoder::new(),
                 oxyn_core::CancelToken::new(),
+                None,
             );
             futures::executor::block_on(flux.collect::<Vec<_>>())
         };

@@ -2586,4 +2586,111 @@ mod tests {
             "rien n'a été soumis, rien ne doit s'annoncer comme soumis : {vus:?}"
         );
     }
+
+    /// Un fournisseur sur la boucle locale qui répond `reply` à la première
+    /// connexion, après avoir lu la requête entière.
+    async fn served_once(reply: String) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("a loopback port is free");
+        let origin = format!("http://{}", listener.local_addr().expect("an address"));
+        tokio::spawn(async move {
+            let Ok((mut socket, _)) = listener.accept().await else {
+                return;
+            };
+            let mut lu = Vec::new();
+            let mut tampon = [0_u8; 4096];
+            while let Ok(n) = socket.read(&mut tampon).await {
+                if n == 0 {
+                    break;
+                }
+                lu.extend_from_slice(tampon.get(..n).unwrap_or_default());
+                let texte = String::from_utf8_lossy(&lu).into_owned();
+                let Some(fin) = texte.find("\r\n\r\n") else {
+                    continue;
+                };
+                let attendu = texte
+                    .lines()
+                    .find_map(|ligne| {
+                        let (nom, valeur) = ligne.split_once(':')?;
+                        nom.eq_ignore_ascii_case("content-length")
+                            .then(|| valeur.trim().parse::<usize>().ok())
+                            .flatten()
+                    })
+                    .unwrap_or(0);
+                if lu.len() >= fin + 4 + attendu {
+                    break;
+                }
+            }
+            let _ = socket.write_all(reply.as_bytes()).await;
+            let _ = socket.shutdown().await;
+        });
+        origin
+    }
+
+    /// Clé factice : la chercher dans ce qui sort suffit à prouver qu'elle n'y
+    /// est pas. Jamais une clé réelle.
+    const SENTINELLE: &str = "sk-sentinel-3b9d-must-not-leak";
+
+    /// Un `200` dont l'unique trame SSE est une erreur recopiant la clé.
+    fn flux_d_erreur(trame: &str) -> String {
+        format!(
+            "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{trame}",
+            trame.len()
+        )
+    }
+
+    /// I-03, canal des erreurs affichées : une erreur diffusée après un `200`
+    /// devient `AiError::Provider`, dont ni le `Display` ni le `Debug` ne
+    /// doivent citer la clé.
+    async fn erreur_du_fournisseur(fournisseur: Arc<dyn LlmProvider>) {
+        let moteur = AgentRuntime::new(
+            spec(),
+            fournisseur,
+            Reach::Local,
+            ToolRegistry::builtin(),
+            "modele",
+        )
+        .expect("déclaration valide");
+        let bus = BusFactice::succes();
+        let mut session = session(PrivacyTier::Metadata);
+        let erreur = moteur
+            .run(&mut session, &bus, &(), &CancelToken::new())
+            .await
+            .expect_err("le fournisseur a signalé une erreur");
+        assert!(matches!(erreur, AiError::Provider(_)), "{erreur}");
+        for rendu in [erreur.to_string(), format!("{erreur:?}")] {
+            assert!(!rendu.contains(SENTINELLE), "{rendu}");
+            assert!(rendu.contains("<redacted API key>"), "{rendu}");
+        }
+        let domaine = OxynError::from(erreur).to_string();
+        assert!(!domaine.contains(SENTINELLE), "{domaine}");
+    }
+
+    #[tokio::test]
+    async fn une_erreur_diffusee_par_un_fournisseur_compatible_openai_ne_cite_pas_la_cle() {
+        let trame = format!(
+            "data: {{\"error\":{{\"message\":\"invalid key {SENTINELLE}\"}}}}\n\n"
+        );
+        let origine = served_once(flux_d_erreur(&trame)).await;
+        let fournisseur = oxyn_llm::OpenAiCompatibleProvider::new(
+            oxyn_llm::ProviderId::openrouter(),
+            &format!("{origine}/v1"),
+        )
+        .expect("fournisseur")
+        .with_api_key(oxyn_llm::ApiKey::new(SENTINELLE));
+        erreur_du_fournisseur(Arc::new(fournisseur)).await;
+    }
+
+    #[tokio::test]
+    async fn une_erreur_diffusee_par_anthropic_ne_cite_pas_la_cle() {
+        let trame = format!(
+            "event: error\ndata: {{\"type\":\"error\",\"error\":{{\"type\":\"api_error\",\"message\":\"echo {SENTINELLE}\"}}}}\n\n"
+        );
+        let origine = served_once(flux_d_erreur(&trame)).await;
+        let fournisseur = oxyn_llm::AnthropicProvider::with_base_url(SENTINELLE, &origine)
+            .expect("fournisseur");
+        erreur_du_fournisseur(Arc::new(fournisseur)).await;
+    }
 }

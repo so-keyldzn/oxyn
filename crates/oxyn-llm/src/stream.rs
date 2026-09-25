@@ -20,6 +20,12 @@
 //! * **L'annulation interrompt la lecture.** Le jeton est interrogé avant
 //!   chaque attente *et* concurremment de celle-ci : un fournisseur qui ne
 //!   répond plus ne laisse pas l'utilisateur devant un bouton sans effet.
+//! * **Aucun message d'erreur ne sort sans expurgation.** Un fournisseur peut
+//!   recopier la clé reçue dans une erreur diffusée **après** un statut `200`
+//!   — une passerelle qui la cite dans son diagnostic, par exemple. Ce message
+//!   devient ensuite une erreur affichée : il passe ici par la même garde
+//!   qu'un corps d'erreur HTTP (I-03), parce que c'est le seul endroit par
+//!   lequel passent les événements de tous les décodeurs.
 //! * **Rien n'est repris après une interruption.** Un décodeur SSE dont on a
 //!   perdu des octets est désynchronisé ; une génération se relance, elle ne se
 //!   reprend pas.
@@ -32,6 +38,8 @@ use futures::future::{Either, select};
 use futures::stream::{BoxStream, Stream, StreamExt};
 use oxyn_core::CancelToken;
 
+use crate::error::sanitize;
+use crate::secret::ApiKey;
 use crate::sse::{SseDecoder, SseFrame};
 use crate::types::ChatEvent;
 
@@ -93,6 +101,8 @@ struct StreamState<D> {
     decoder: D,
     pending: VecDeque<ChatEvent>,
     cancel: CancelToken,
+    /// La clé envoyée à ce fournisseur, seulement pour l'effacer des erreurs.
+    key: Option<ApiKey>,
     finished: bool,
 }
 
@@ -107,10 +117,14 @@ enum Step {
 /// Le flux rendu est `'static` et `Send` : il se transmet à une tâche. Il émet
 /// exactement un [`ChatEvent::Done`], en dernier, y compris en cas
 /// d'annulation, d'erreur de transport ou de fermeture brutale.
+///
+/// `key` est la clé présentée au fournisseur : tout [`ChatEvent::Error`] en est
+/// expurgé, et tronqué comme un corps d'erreur HTTP, avant de sortir.
 pub(crate) fn events_stream<D: EventDecoder + 'static>(
     bytes: ByteStream,
     decoder: D,
     cancel: CancelToken,
+    key: Option<ApiKey>,
 ) -> BoxStream<'static, ChatEvent> {
     let etat = StreamState {
         bytes,
@@ -118,6 +132,7 @@ pub(crate) fn events_stream<D: EventDecoder + 'static>(
         decoder,
         pending: VecDeque::new(),
         cancel,
+        key,
         finished: false,
     };
 
@@ -137,7 +152,9 @@ pub(crate) fn events_stream<D: EventDecoder + 'static>(
             if etat.cancel.is_cancelled() {
                 etat.decoder.cancel(&mut sorties);
                 etat.finished = true;
-                etat.pending.extend(sorties);
+                let cle = etat.key.as_ref();
+                etat.pending
+                    .extend(sorties.into_iter().map(|evenement| redact(evenement, cle)));
                 continue;
             }
 
@@ -190,10 +207,23 @@ pub(crate) fn events_stream<D: EventDecoder + 'static>(
                 }
             }
 
-            etat.pending.extend(sorties);
+            let cle = etat.key.as_ref();
+            etat.pending
+                .extend(sorties.into_iter().map(|evenement| redact(evenement, cle)));
         }
     })
     .boxed()
+}
+
+/// Passe un message d'erreur par la garde des corps d'erreur HTTP.
+///
+/// Seul [`ChatEvent::Error`] devient un message affiché : le texte du modèle
+/// est un contenu, pas un diagnostic, et il n'a pas à être réécrit.
+fn redact(evenement: ChatEvent, cle: Option<&ApiKey>) -> ChatEvent {
+    match evenement {
+        ChatEvent::Error(message) => ChatEvent::Error(sanitize(&message, cle)),
+        autre => autre,
+    }
 }
 
 /// Vide le décodeur SSE dans le décodeur de protocole.
@@ -288,7 +318,7 @@ mod tests {
     }
 
     fn jouer(parts: &[&'static str], jeton: CancelToken) -> Vec<ChatEvent> {
-        collecter(events_stream(morceaux(parts), Echo::default(), jeton))
+        collecter(events_stream(morceaux(parts), Echo::default(), jeton, None))
     }
 
     #[test]
@@ -359,7 +389,12 @@ mod tests {
             },
         );
 
-        let evenements = collecter(events_stream(Box::pin(octets), Echo::default(), jeton));
+        let evenements = collecter(events_stream(
+            Box::pin(octets),
+            Echo::default(),
+            jeton,
+            None,
+        ));
         assert_eq!(
             evenements,
             vec![
@@ -382,6 +417,7 @@ mod tests {
             Box::pin(octets),
             Echo::default(),
             CancelToken::new(),
+            None,
         ));
         assert_eq!(
             evenements.first(),
@@ -407,6 +443,7 @@ mod tests {
             Box::pin(futures::stream::iter(deluge)),
             Echo::default(),
             CancelToken::new(),
+            None,
         ));
         assert!(
             evenements.iter().any(|e| matches!(e, ChatEvent::Error(_))),

@@ -157,3 +157,75 @@ async fn gemini_client_does_not_follow_a_redirect_with_its_x_goog_api_key() {
         );
     }
 }
+
+// ── #8 : une erreur diffusée après un `200` ne recopie pas la clé ─────────
+
+/// Un flux `200` dont l'unique trame est une erreur citant la clé.
+fn streamed_error(frame: &str) -> Vec<u8> {
+    format!(
+        "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{frame}",
+        frame.len()
+    )
+    .into_bytes()
+}
+
+/// Joue un flux jusqu'au bout et rend tous ses événements.
+async fn drained(
+    provider: &dyn LlmProvider,
+) -> Vec<crate::types::ChatEvent> {
+    use futures::StreamExt;
+    let flux = provider
+        .stream(question(), &CancelToken::new())
+        .await
+        .expect("a 200 opens the stream");
+    flux.collect().await
+}
+
+/// Aucun événement, ni par son texte ni par son `Debug`, ne cite la clé ; et
+/// l'erreur est bien là, sinon le test ne prouverait rien.
+fn assert_redacted(events: &[crate::types::ChatEvent]) {
+    let rendu = format!("{events:?}");
+    assert!(!rendu.contains(SENTINEL), "{rendu}");
+    let erreur = events
+        .iter()
+        .find_map(|event| match event {
+            crate::types::ChatEvent::Error(message) => Some(message.as_str()),
+            _ => None,
+        })
+        .expect("the streamed error is reported");
+    assert!(erreur.contains("<redacted API key>"), "{erreur}");
+    assert!(
+        matches!(
+            events.last(),
+            Some(crate::types::ChatEvent::Done {
+                stop_reason: crate::types::StopReason::ProviderError
+            })
+        ),
+        "{rendu}"
+    );
+}
+
+#[tokio::test]
+async fn an_openai_compatible_streamed_error_does_not_repeat_the_key() {
+    let frame = format!(
+        "data: {{\"error\":{{\"message\":\"gateway rejected key {SENTINEL}\",\"type\":\"invalid_request_error\"}}}}\n\n"
+    );
+    let server = Server::start(streamed_error(&frame), false).await;
+    let provider =
+        OpenAiCompatibleProvider::new(ProviderId::openrouter(), &format!("{}/v1", server.origin))
+            .expect("provider")
+            .with_api_key(ApiKey::new(SENTINEL));
+
+    assert_redacted(&drained(&provider).await);
+}
+
+#[tokio::test]
+async fn an_anthropic_streamed_error_does_not_repeat_the_key() {
+    let frame = format!(
+        "event: error\ndata: {{\"type\":\"error\",\"error\":{{\"type\":\"overloaded_error\",\"message\":\"proxy saw x-api-key {SENTINEL}\"}}}}\n\n"
+    );
+    let server = Server::start(streamed_error(&frame), false).await;
+    let provider = AnthropicProvider::with_base_url(SENTINEL, &server.origin).expect("provider");
+
+    assert_redacted(&drained(&provider).await);
+}
