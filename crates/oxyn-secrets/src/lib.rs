@@ -76,7 +76,7 @@
 //!
 //! TODO(phase 4, ouvert le 2026-09-05) : chiffrer un workspace exportable avec
 //! le crate `age`, débloqué par le partage de workspace entre postes
-//! (ARCHITECTURE §11, phase 4). Aucune primitive cryptographique ne s'écrit ici
+//! (IMPLEMENTATION-PLAN, phase 4). Aucune primitive cryptographique ne s'écrit ici
 //! d'ici là : `age` n'est pas dans le graphe de dépendances, et improviser un
 //! chiffrement maison serait pire que ne rien offrir.
 
