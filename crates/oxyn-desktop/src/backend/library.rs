@@ -138,6 +138,9 @@ impl Backend {
 
     /// Reopens a result still retained, through the bus; runs no query and
     /// opens no session. A released buffer answers `Expired`.
+    ///
+    /// An opened result counts one more reader until the view that opened it
+    /// calls `forget_result`: its console rerunning no longer takes it away.
     pub async fn open_retained_result(
         &self,
         connection: ConnectionId,
@@ -155,22 +158,25 @@ impl Backend {
             )
             .await?
         {
-            Outcome::RetainedResultOpened { result, buffer } => Ok(RetainedResult::Open {
-                result: result.to_string(),
-                columns: buffer
-                    .schema()
-                    .fields()
-                    .iter()
-                    .map(|field| crate::ipc::ResultColumn {
-                        name: field.name().clone(),
-                        data_type: field.data_type().to_string(),
-                        nullable: field.is_nullable(),
-                    })
-                    .collect(),
-                rows: buffer.row_count(),
-                complete: buffer.is_complete(),
-                truncated: buffer.stats().truncated,
-            }),
+            Outcome::RetainedResultOpened { result, buffer } => {
+                self.add_reader(result, &buffer, false);
+                Ok(RetainedResult::Open {
+                    result: result.to_string(),
+                    columns: buffer
+                        .schema()
+                        .fields()
+                        .iter()
+                        .map(|field| crate::ipc::ResultColumn {
+                            name: field.name().clone(),
+                            data_type: field.data_type().to_string(),
+                            nullable: field.is_nullable(),
+                        })
+                        .collect(),
+                    rows: buffer.row_count(),
+                    complete: buffer.is_complete(),
+                    truncated: buffer.stats().truncated,
+                })
+            }
             _ => Err(IpcError::invalid("Unexpected response to opening a result")),
         }
     }

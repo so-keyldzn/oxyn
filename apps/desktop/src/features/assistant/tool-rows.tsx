@@ -4,6 +4,7 @@ import { useQuery } from "@tanstack/react-query"
 import { AssistantToolRows } from "@/components/oxyn/assistant-tool-rows"
 import type { ToolRowsState } from "@/components/oxyn/assistant-tool-rows"
 import type { ToolCallEntry } from "@/features/assistant/transcript"
+import { useReleaseOnClose } from "@/features/library/use-release-on-close"
 import { openAgentResult } from "@/features/workspace/result-requests"
 import { BackendError } from "@/lib/ipc/client"
 import { library } from "@/lib/ipc/library"
@@ -23,13 +24,18 @@ export function ToolRows({
   connection: string
   entry: ToolCallEntry & { result: string }
 }) {
+  // Opened for this view alone, like a History tab: the opening counts one
+  // reader in the backend, which this view releases when it closes.
+  const view = React.useId()
   const opened = useQuery({
-    queryKey: ["assistant-tool-rows", connection, entry.result],
+    queryKey: ["assistant-tool-rows", connection, entry.result, view],
     queryFn: () => library.openRetainedResult(connection, entry.result),
     // Whether rows are still held is an answer: refetching on focus would
     // turn a grid being read into « no longer available ».
     staleTime: Infinity,
+    gcTime: 0,
   })
+  useReleaseOnClose(opened.data?.type === "open" ? opened.data.result : null)
 
   const fetchPage = React.useCallback(
     (offset: number, limit: number) =>

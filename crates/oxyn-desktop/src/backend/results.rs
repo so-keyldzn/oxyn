@@ -7,7 +7,7 @@
 //! reads happen on the blocking pool, never on the thread that runs the window
 //! ([I-05](../../../../CLAUDE.md#i-05)).
 
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 use oxyn_core::{Actor, CancelToken, Command, CommandId, ConnectionId, ExportFormat, ResultId};
@@ -63,6 +63,20 @@ pub(crate) struct ResultsState {
     finds: Mutex<VecDeque<RememberedFind>>,
     /// The buffers the front is showing, oldest first.
     shown: Mutex<VecDeque<(ResultId, Arc<ResultBuffer>)>>,
+    /// The views reading each result: its console, a History tab, an agent's
+    /// rows. Without a count, the console that reruns forgets a result a
+    /// History tab is still reading (ADR-0017).
+    readers: Mutex<HashMap<ResultId, Readers>>,
+}
+
+/// Who reads one result.
+#[derive(Debug, Clone, Copy, Default)]
+struct Readers {
+    count: usize,
+    /// The front received it from an execution, and its last reader releases
+    /// it outright. A result the front only opened — an agent's, whose
+    /// conversation owns it — is left to retention instead.
+    delivered: bool,
 }
 
 // Not derived: the needles are what the user looked for in their data.
@@ -71,6 +85,7 @@ impl std::fmt::Debug for ResultsState {
         f.debug_struct("ResultsState")
             .field("finds", &self.finds.lock().len())
             .field("shown", &self.shown.lock().len())
+            .field("readers", &self.readers.lock().len())
             .finish()
     }
 }
@@ -150,9 +165,27 @@ impl Backend {
         let Outcome::Executed { result, buffer, .. } = outcome else {
             return;
         };
+        self.add_reader(*result, buffer, true);
+    }
+
+    /// Counts one more view reading `result`, and holds its buffer for it.
+    ///
+    /// Each call is paired with one `forget_result` from the front. The hold
+    /// is bounded like any other: a count keeps the last reader's release
+    /// from being preempted, not the buffer from retention's budgets.
+    pub(crate) fn add_reader(&self, result: ResultId, buffer: &Arc<ResultBuffer>, delivered: bool) {
+        {
+            let mut readers = self.inner.results.readers.lock();
+            // Bounded by what retention still holds: a count whose result was
+            // released elsewhere — a deleted conversation's — reads nothing.
+            readers.retain(|id, _| *id == result || self.inner.executor.result(*id).is_some());
+            let entry = readers.entry(result).or_default();
+            entry.count = entry.count.saturating_add(1);
+            entry.delivered |= delivered;
+        }
         let mut shown = self.inner.results.shown.lock();
-        shown.retain(|(held, _)| held != result);
-        shown.push_back((*result, Arc::clone(buffer)));
+        shown.retain(|(held, _)| *held != result);
+        shown.push_back((result, Arc::clone(buffer)));
         while shown.len() > SHOWN_RESULTS || held_bytes(&shown) > SHOWN_BYTES {
             // The newest is never dropped: it is the one being shown.
             if shown.len() <= 1 {
@@ -194,8 +227,24 @@ impl Backend {
         )
     }
 
-    /// Releases a result the front no longer shows, and what was searched in it.
+    /// One view stops reading `result`.
+    ///
+    /// Its last reader releases it, and what was searched in it: outright if
+    /// the front received it from an execution, by dropping the hold
+    /// otherwise — an agent's result belongs to its conversation, and
+    /// retention takes it back once nobody holds it.
     pub fn forget_result(&self, result: ResultId) {
+        let delivered = {
+            let mut readers = self.inner.results.readers.lock();
+            match readers.get_mut(&result) {
+                Some(entry) if entry.count > 1 => {
+                    entry.count = entry.count.saturating_sub(1);
+                    return;
+                }
+                Some(_) => readers.remove(&result).is_some_and(|entry| entry.delivered),
+                None => false,
+            }
+        };
         self.inner
             .results
             .shown
@@ -206,7 +255,9 @@ impl Backend {
             .finds
             .lock()
             .retain(|find| find.result != result);
-        drop(self.inner.executor.forget_result(result));
+        if delivered {
+            drop(self.inner.executor.forget_result(result));
+        }
     }
 
     /// Runs `work` on the blocking pool with a handle on the backend.
@@ -789,3 +840,7 @@ mod tests {
 #[cfg(test)]
 #[path = "results_access_tests.rs"]
 mod access_tests;
+
+#[cfg(test)]
+#[path = "results_reader_tests.rs"]
+mod reader_tests;
