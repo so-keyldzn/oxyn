@@ -8,9 +8,10 @@ import {
   CollapsibleContent,
   CollapsibleTrigger,
 } from "@/components/ui/collapsible"
-import { Input } from "@/components/ui/input"
 import { Spinner } from "@/components/ui/spinner"
 import type { ThirdPartyNotice } from "@/lib/third-party-licenses"
+
+import { TextInput } from "./text-field"
 
 export type ThirdPartyLicensesState =
   | { status: "loading" }
@@ -84,7 +85,7 @@ function ThirdPartyList({ notices }: { notices: Array<ThirdPartyNotice> }) {
         {packages} packages, under {notices.length} license texts. Each is
         distributed under its own license, reproduced below.
       </p>
-      <Input
+      <TextInput
         type="search"
         aria-label="Filter by package or license"
         placeholder="Filter by package or license"
