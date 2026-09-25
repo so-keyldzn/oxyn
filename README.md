@@ -83,3 +83,6 @@ pourquoi.
 Tout le code de ce dépôt s'utilise sans compte ni abonnement. Ce qui se paiera,
 ce sont des services optionnels rattachés à un compte, comme l'IA hébergée ou la
 synchronisation.
+
+Une contribution externe demande d'accepter le [CLA](CLA.md) : voir
+[CONTRIBUTING](CONTRIBUTING.md).
