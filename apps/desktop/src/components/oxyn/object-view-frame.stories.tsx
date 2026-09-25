@@ -1,4 +1,5 @@
 import * as React from "react"
+import { useHotkeys } from "@tanstack/react-hotkeys"
 import type { Meta, StoryObj } from "@storybook/react-vite"
 import { expect, fn, userEvent, waitFor, within } from "storybook/test"
 
@@ -27,6 +28,9 @@ import { RelationStructure } from "./relation-structure"
 import { ResultPanel } from "./result-panel"
 import type { ResultState } from "./result-panel"
 import { PLAIN_SHAPE } from "@/lib/ipc/metadata"
+
+// `Mod` is Command on macOS and Control elsewhere, as the hotkeys decide.
+const MOD = /Mac/.test(navigator.platform) ? "Meta" : "Control"
 
 const fetched = {
   state: "fetched",
@@ -73,6 +77,18 @@ function Harness({
     "incoming"
   )
   const idle = { status: "idle" } as const
+  // `⌘2` as the workspace binds it for the object on screen.
+  const [gridFocusRequest, setGridFocusRequest] = React.useState(0)
+  useHotkeys([
+    {
+      hotkey: "Mod+2",
+      callback: () => {
+        if (dataUnavailable !== null) return
+        setTab("data")
+        setGridFocusRequest((count) => count + 1)
+      },
+    },
+  ])
   return (
     <ObjectViewFrame
       name={name}
@@ -81,6 +97,7 @@ function Harness({
       onTabChange={setTab}
       dataUnavailable={dataUnavailable}
       onEscape={running ? onCancel : undefined}
+      gridFocusRequest={gridFocusRequest}
       toolbar={
         tab === "data" && dataUnavailable === null ? (
           <PreviewToolbar
@@ -185,6 +202,64 @@ export const Preview: Story = {
     await expect(canvas.getByText("Read-only preview")).toBeVisible()
     // Refresh and Cancel are two buttons: the idle one is inert.
     await expect(canvas.getByRole("button", { name: /^Cancel/ })).toBeDisabled()
+  },
+}
+
+/**
+ * Editing is not offered in a read-only preview: the control is disabled, and
+ * why is readable from the keyboard through the help trigger beside it.
+ */
+export const EditRowsUnavailable: Story = {
+  play: async ({ canvas }) => {
+    const edit = canvas.getByRole("button", { name: "Edit rows…" })
+    await expect(edit).toBeDisabled()
+    await expect(edit).toHaveAccessibleDescription(
+      /needs an editable view, a session that allows writes/
+    )
+    const help = canvas.getByRole("button", { name: "Why unavailable?" })
+    await expect(help).toBeEnabled()
+    help.focus()
+    await userEvent.keyboard("{Shift>}{Tab}{/Shift}{Tab}")
+    await expect(help).toHaveFocus()
+    // Focus alone shows the reason, without a pointer.
+    await waitFor(
+      () =>
+        expect(
+          document.querySelector('[data-slot="tooltip-content"]')
+        ).toHaveTextContent(/editable view.*allows writes.*capabilities/),
+      { timeout: 2000 }
+    )
+  },
+}
+
+/** `⌘2` shows Data and puts the keyboard in its grid, from any tab. */
+export const FocusGridShortcut: Story = {
+  args: { initial: "structure" },
+  play: async ({ canvas }) => {
+    canvas.getByRole("tab", { name: "Structure" }).focus()
+    await userEvent.keyboard(`{${MOD}>}2{/${MOD}}`)
+    await waitFor(() =>
+      expect(canvas.getByRole("tab", { name: "Data" })).toHaveAttribute(
+        "aria-selected",
+        "true"
+      )
+    )
+    await waitFor(() => expect(canvas.getByRole("grid")).toHaveFocus())
+  },
+}
+
+/** Without a preview, `⌘2` changes nothing. */
+export const FocusGridShortcutWithoutPreview: Story = {
+  args: {
+    kind: "view",
+    dataUnavailable: "This session cannot read rows with a query.",
+  },
+  play: async ({ canvas }) => {
+    const structure = canvas.getByRole("tab", { name: "Structure" })
+    structure.focus()
+    await userEvent.keyboard(`{${MOD}>}2{/${MOD}}`)
+    await expect(structure).toHaveAttribute("aria-selected", "true")
+    await expect(structure).toHaveFocus()
   },
 }
 

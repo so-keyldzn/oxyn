@@ -3,6 +3,7 @@ import { HugeiconsIcon } from "@hugeicons/react"
 import {
   ArrowReloadHorizontalIcon,
   CancelCircleIcon,
+  HelpCircleIcon,
 } from "@hugeicons/core-free-icons"
 
 import { Badge } from "@/components/ui/badge"
@@ -60,6 +61,7 @@ export function ObjectViewFrame({
   notice,
   panels,
   onEscape,
+  gridFocusRequest = 0,
 }: {
   name: string
   kind: string
@@ -74,8 +76,18 @@ export function ObjectViewFrame({
   panels: Record<ObjectTab, React.ReactNode>
   /** Escape not handled deeper — by a menu, a dialog or a field. */
   onEscape?: () => void
+  /**
+   * Bumped to focus the preview grid (`⌘2`). The caller shows Data in the
+   * same render: the grid is focused once its panel is drawn.
+   */
+  gridFocusRequest?: number
 }) {
   const reasonId = React.useId()
+  const dataPanel = React.useRef<HTMLDivElement>(null)
+  React.useEffect(() => {
+    if (gridFocusRequest === 0) return
+    dataPanel.current?.querySelector<HTMLElement>('[role="grid"]')?.focus()
+  }, [gridFocusRequest])
   return (
     <Tabs
       onKeyDown={(event: React.KeyboardEvent) => {
@@ -152,6 +164,7 @@ export function ObjectViewFrame({
       {OBJECT_TABS.map((candidate) => (
         <TabsContent
           key={candidate.value}
+          ref={candidate.value === "data" ? dataPanel : undefined}
           value={candidate.value}
           className="flex min-h-0 flex-1 flex-col"
         >
@@ -161,6 +174,13 @@ export function ObjectViewFrame({
     </Tabs>
   )
 }
+
+/**
+ * Why the preview offers no editing. It names what editing needs and stops
+ * there: no way around a read-only session is suggested (docs/UX-SPEC.md).
+ */
+export const EDIT_ROWS_UNAVAILABLE =
+  "Editing rows needs an editable view, a session that allows writes and the capabilities to apply them. This preview is read-only."
 
 /**
  * The preview's own actions: what it is, how to export what is shown, and
@@ -180,9 +200,47 @@ export function PreviewToolbar({
   onRefresh: () => void
   onCancel: () => void
 }) {
+  const reasonId = React.useId()
   return (
     <>
       <Badge variant="secondary">Read-only preview</Badge>
+      <Tooltip>
+        {/* The wrapper carries the tooltip: a disabled button receives no
+            pointer event. The help trigger beside it carries the keyboard. */}
+        <TooltipTrigger render={<span className="inline-flex" />}>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled
+            aria-describedby={reasonId}
+          >
+            Edit rows…
+          </Button>
+        </TooltipTrigger>
+        <TooltipContent className="max-w-72">
+          {EDIT_ROWS_UNAVAILABLE}
+        </TooltipContent>
+      </Tooltip>
+      <Tooltip>
+        <TooltipTrigger
+          render={
+            <Button size="sm" variant="ghost" aria-describedby={reasonId} />
+          }
+        >
+          <HugeiconsIcon
+            icon={HelpCircleIcon}
+            strokeWidth={2}
+            data-icon="inline-start"
+          />
+          Why unavailable?
+        </TooltipTrigger>
+        <TooltipContent className="max-w-72">
+          {EDIT_ROWS_UNAVAILABLE}
+        </TooltipContent>
+      </Tooltip>
+      <span id={reasonId} className="sr-only">
+        Edit rows is unavailable: {EDIT_ROWS_UNAVAILABLE}
+      </span>
       {exportMenu}
       <Button
         size="sm"
