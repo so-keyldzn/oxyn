@@ -52,6 +52,7 @@ Aucune version ne s'écrit de mémoire : voir [I-12](#i-12).
 | | |
 |---|---|
 | `make qualite` | **la** porte de qualité : socle, TODO datés, front (format, lint, types, stories, build), format, clippy, tests, doc. Rien n'est terminé sans elle, et la CI n'appelle qu'elle, en jobs parallèles |
+| `make verif-rapide` | le travail courant : ne vérifie que ce qui a changé depuis `origin/main` — crates modifiées, fichiers du front modifiés, socle — et dit ce qu'il laisse à la CI. Il ne fait **pas** foi : `make qualite` si |
 | `make desktop-dev` | l'application Tauri avec rechargement à chaud, sur un workspace temporaire |
 | `script/nouvelle-crate` | crée une crate déjà conforme — voir le piège des règles plus bas |
 | [`/plan`](.claude/commands/plan.md) [`/implementer`](.claude/commands/implementer.md) [`/relire`](.claude/commands/relire.md) | le cycle courant |
@@ -197,7 +198,10 @@ Les hooks ne valent que pour une session Claude. Ce qui vaut pour **tout le
 monde**, humain compris, passe par `make qualite` — appelée par la CI
 ([.github/workflows/qualite.yml](.github/workflows/qualite.yml)) en jobs
 parallèles, qui n'ajoute aucun contrôle de son côté et dont `make socle` vérifie
-qu'elle n'en oublie aucun :
+qu'elle n'en oublie aucun. Sur une pull request, elle saute les jobs dont la
+zone — Rust, front — n'est pas touchée, et le job agrégat `qualite` est le seul
+check à lire ; sur `main`, tout tourne toujours
+([ADR-0045](docs/adr/0045-ci-selective-sur-les-pull-requests.md)) :
 
 | Ce qui refuse | L'invariant tenu |
 |---|---|

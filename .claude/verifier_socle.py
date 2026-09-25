@@ -371,6 +371,68 @@ def controler_couverture_ci() -> list[str]:
     return erreurs
 
 
+# Sur une pull request, des jobs sont sautés selon les zones touchées, et la
+# protection de branche n'exige que le job `qualite`, qui agrège les autres
+# (ADR-0045). Un job qui passe la porte sans figurer dans ses `needs` pourrait
+# échouer sans bloquer la fusion.
+JOB_AGREGAT = "qualite"
+MOTIF_JOB = re.compile(r"^  ([A-Za-z][\w-]*):\s*$")
+MOTIF_NEEDS = re.compile(r"^    needs:\s*(.+?)\s*$")
+
+
+def _jobs_workflow(texte: str) -> dict[str, tuple[set[str], bool]]:
+    """Job → (ses `needs`, appelle-t-il `make`)."""
+    jobs: dict[str, tuple[set[str], bool]] = {}
+    dans_jobs = False
+    courant: str | None = None
+    for ligne in texte.splitlines():
+        if not ligne.strip() or ligne.lstrip().startswith("#"):
+            continue
+        if not ligne.startswith(" "):
+            dans_jobs = ligne.rstrip() == "jobs:"
+            courant = None
+            continue
+        if not dans_jobs:
+            continue
+        m = MOTIF_JOB.match(ligne)
+        if m:
+            courant = m.group(1)
+            jobs[courant] = (set(), False)
+            continue
+        if courant is None:
+            continue
+        needs, make = jobs[courant]
+        n = MOTIF_NEEDS.match(ligne)
+        if n:
+            needs = set(re.findall(r"[\w-]+", n.group(1)))
+        if MOTIF_MAKE_CI.match(ligne):
+            make = True
+        jobs[courant] = (needs, make)
+    return jobs
+
+
+def erreurs_agregat(texte: str) -> list[str]:
+    jobs = _jobs_workflow(texte)
+    if JOB_AGREGAT not in jobs:
+        return [
+            f"qualite.yml n'a pas de job `{JOB_AGREGAT}` : c'est lui que la "
+            "protection de branche exige (ADR-0045)"
+        ]
+    attendus = jobs[JOB_AGREGAT][0]
+    return [
+        f"qualite.yml : le job `{nom}` appelle `make` sans figurer dans les "
+        f"`needs` du job `{JOB_AGREGAT}` — son échec ne bloquerait pas la fusion"
+        for nom, (_, make) in sorted(jobs.items())
+        if make and nom not in attendus
+    ]
+
+
+def controler_agregat_ci() -> list[str]:
+    if not WORKFLOW_QUALITE.is_file():
+        return []
+    return erreurs_agregat(WORKFLOW_QUALITE.read_text(encoding="utf-8"))
+
+
 def principal() -> int:
     erreurs = (
         controler_liens()
@@ -379,6 +441,7 @@ def principal() -> int:
         + controler_hooks()
         + controler_graphe_dependances()
         + controler_couverture_ci()
+        + controler_agregat_ci()
     )
     avertissements = controler_paths_inertes()
 

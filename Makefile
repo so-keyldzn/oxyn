@@ -7,11 +7,16 @@
 # La CI (.github/workflows/qualite.yml) en appelle les morceaux dans des jobs
 # parallèles — `front-controles`, `front-tests`, `front-build`, `rust` — pour ne
 # pas faire attendre le Rust derrière les stories. Elle n'ajoute rien : `make
-# socle` refuse un workflow qui oublierait une cible atteinte par `qualite`.
+# socle` refuse un workflow qui oublierait une cible atteinte par `qualite`. Sur
+# une pull request, elle saute les jobs dont la zone n'est pas touchée ; sur
+# `main`, tout tourne (ADR-0045).
+#
+# `make verif-rapide` sert au travail courant : il ne vérifie que ce qui a changé
+# depuis `origin/main`. Il ne fait pas foi, `qualite` si.
 #
 # Voir .claude/rules/manifestes.md et .claude/checklists/fin-de-tache.md.
 
-.PHONY: qualite format lint test doc deny todo hooks socle aide front front-controles front-tests front-build rust desktop desktop-dev licences-npm
+.PHONY: qualite verif-rapide format lint test doc deny todo hooks socle aide front front-controles front-tests front-build rust desktop desktop-dev licences-npm
 
 CARGO := cargo
 PROFIL ?= debug
@@ -37,6 +42,7 @@ MENTIONS := $(FRONT)/src/generated/third-party-licenses.json
 
 aide:
 	@echo "make qualite   la porte de qualité complète"
+	@echo "make verif-rapide  ne vérifie que ce qui a changé depuis origin/main (ne fait pas foi)"
 	@echo "make socle     vérifie le socle Claude et Codex (utilisable sans code Rust)"
 	@echo "make hooks     rejoue les tests des hooks"
 	@echo "make todo      refuse une marque de travail restant sans échéance"
@@ -83,6 +89,11 @@ else
 endif
 
 rust: format lint test doc deny
+
+# Hors de la porte, délibérément : elle ne voit ni les crates dépendantes ni ce
+# que la CI vérifie seule. Le détail est dans le script.
+verif-rapide:
+	@python3 script/verif-rapide
 
 # Licences et avis de sécurité publiés — le seul contrôle de la porte qui
 # regarde les dépendances plutôt que le code. `docs/SECURITY.md` § Dépendances en
