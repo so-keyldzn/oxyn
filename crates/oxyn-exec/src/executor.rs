@@ -59,8 +59,6 @@
 
 use std::collections::HashMap;
 use std::fmt;
-use std::fs::File;
-use std::io::BufWriter;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -72,7 +70,7 @@ use oxyn_core::{
 };
 use oxyn_data::{
     BatchProgress, BatchSink, BatchSource, BufferLimits, DEFAULT_MEMORY_BUDGET, ExportOptions,
-    ResultBuffer, SinkOutcome, export,
+    ResultBuffer, SinkOutcome, export_to_path,
 };
 use oxyn_driver::{Cursor, DriverRegistry};
 use oxyn_store::history::Reconciliation;
@@ -997,19 +995,18 @@ impl Executor {
                 ..
             } => {
                 let buffer = self.result_on_connection(*connection, *result)?;
-                // Avant `File::create` : sinon un format que cette version ne sait pas
-                // écrire laisse un fichier de zéro octet à l'emplacement que
-                // l'utilisateur vient de nommer. La vérification vit ici et non dans la
-                // vue parce que cette commande est aussi atteignable par un plugin et
-                // par un `Actor::Agent` — un contrôle qui n'existe que dans l'interface
-                // n'est pas un contrôle du bus (I-01).
+                // Before anything is written: otherwise a format this version cannot
+                // write fails after the user has named the destination. The check
+                // lives here rather than in the view because a plugin and an
+                // `Actor::Agent` reach this command too — a check that exists only
+                // in the interface is not a check of the bus (I-01).
                 if !oxyn_data::is_supported(*format) {
                     return Err(OxynError::NotSupported {
                         capability: format!("export:{}", format.extension()),
                     });
                 }
-                // Un tampon tronqué est refusé ici pour la même raison : avant que
-                // la destination ne soit touchée, et pour tout acteur.
+                // A truncated buffer is refused here for the same reason: before
+                // the destination is touched, and for every actor.
                 oxyn_data::ensure_exportable(&buffer, &ExportOptions::default())?;
                 let format = *format;
                 let destination = destination.clone();
@@ -1019,11 +1016,12 @@ impl Executor {
                 })?;
                 let resume = runtime
                     .spawn_blocking(move || -> Result<_> {
-                        let fichier = File::create(&destination)?;
-                        Ok(export(
+                        // Never `File::create`: it would truncate the file already
+                        // there before knowing whether the export succeeds.
+                        Ok(export_to_path(
                             &buffer,
                             format,
-                            BufWriter::new(fichier),
+                            &destination,
                             &ExportOptions::default(),
                             &cancel_owned,
                         )?)

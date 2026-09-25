@@ -311,3 +311,55 @@ async fn a_preview_whose_limited_sql_ended_normally_still_exports() {
         "n\n1\n2\n"
     );
 }
+
+/// Reproduces the audit's scenario: an export whose token is already
+/// cancelled must not empty the document the user pointed it at.
+#[tokio::test]
+async fn a_cancelled_export_keeps_the_existing_file() {
+    let (executor, connection) = sqlite_executor();
+    let session = connect(&executor, &connection).await;
+    let (result, _) = execute(
+        &executor,
+        connection.id,
+        session,
+        "SELECT 1 AS value UNION ALL SELECT 2",
+        ExecLimits::default(),
+    )
+    .await;
+    let (folder, destination) = existing_document();
+    let cancel = CancelToken::new();
+    cancel.cancel();
+
+    let cancelled = executor
+        .dispatch(
+            Actor::Human,
+            export(connection.id, result, &destination),
+            &cancel,
+        )
+        .await;
+
+    assert!(
+        matches!(cancelled, Err(OxynError::Cancelled)),
+        "{cancelled:?}"
+    );
+    assert_untouched(&folder, &destination);
+
+    let exported = executor
+        .dispatch(
+            Actor::Human,
+            export(connection.id, result, &destination),
+            &CancelToken::new(),
+        )
+        .await
+        .expect("export");
+    assert!(matches!(exported, Outcome::Exported { rows: 2, .. }));
+    assert_eq!(
+        std::fs::read_to_string(&destination).expect("export reread"),
+        "value\n1\n2\n"
+    );
+    assert_eq!(
+        std::fs::read_dir(folder.path()).expect("folder").count(),
+        1,
+        "the temporary file is gone"
+    );
+}
