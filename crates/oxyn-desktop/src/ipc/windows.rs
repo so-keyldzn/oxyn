@@ -1,7 +1,7 @@
 //! What crosses the boundary for the windows
 //! ([ADR-0043](../../../../docs/adr/0043-multi-fenetre.md)).
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// What the backend tells one window, on that window's own channel.
 ///
@@ -23,4 +23,14 @@ pub enum WindowSignal {
     /// The workspace preferences were written by another window: read them
     /// again.
     PreferencesChanged,
+}
+
+/// The consoles a window shows, as its webview reports them: document ids
+/// in tab order, and the one in front. Validated in Rust, never trusted: at
+/// most 256, each a document no other window writes.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WindowConsoles {
+    pub documents: Vec<String>,
+    pub active: Option<String>,
 }

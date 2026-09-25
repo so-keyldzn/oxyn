@@ -14,6 +14,7 @@ import {
   markRecoveryOffered,
   restoreWorkingCopies,
   session,
+  setLaunchCopies,
 } from "@/features/session"
 import {
   savedObjectPlace,
@@ -24,6 +25,7 @@ import { library } from "@/lib/ipc/library"
 import type { DocumentEntry } from "@/lib/ipc/library"
 import { recovery } from "@/lib/ipc/recovery"
 import { settingsBackend } from "@/lib/ipc/settings"
+import { windows } from "@/lib/ipc/windows"
 import { useActionSource } from "@/lib/actions/context"
 
 function failureOf(error: unknown): BackendFailure {
@@ -54,6 +56,10 @@ function connectionLabel(
  * consoles — the one open now, or the next one. Attaching each to a
  * connection is a later, separate gesture. Nothing connects and nothing runs
  * here.
+ *
+ * At launch, each window offers its own consoles, the first adding the
+ * copies no window claims; one not chosen leaves the window and stays in the
+ * library (ADR-0043). Opened later, the screen lists every open copy.
  */
 export function RecoveryScreen() {
   const navigate = useNavigate()
@@ -64,6 +70,9 @@ export function RecoveryScreen() {
     () => new Map<string, DocumentEntry>()
   )
   const selectedOnce = React.useRef(false)
+  const launchCopies = useStore(session, (current) =>
+    startup ? current.launchCopies : null
+  )
 
   const status = useQuery({
     queryKey: ["recovery-status"],
@@ -71,15 +80,17 @@ export function RecoveryScreen() {
     staleTime: Infinity,
   })
   const page = useQuery({
-    queryKey: ["recovery-working-copies", cursor],
+    queryKey: ["recovery-working-copies", cursor, launchCopies !== null],
     queryFn: () =>
-      library.listDocuments(newCommandId(), {
-        savedOnly: false,
-        openOnly: true,
-        search: "",
-        before: cursor,
-        limit: null,
-      }),
+      launchCopies !== null
+        ? Promise.resolve({ entries: launchCopies, next: null })
+        : library.listDocuments(newCommandId(), {
+            savedOnly: false,
+            openOnly: true,
+            search: "",
+            before: cursor,
+            limit: null,
+          }),
   })
 
   // The object tab saved last: read from the workspace, never a server.
@@ -117,10 +128,20 @@ export function RecoveryScreen() {
       ? { status: "error", error: failureOf(page.error) }
       : { status: "ready", entries: page.data.entries }
 
-  const leave = (objectRestored: boolean) => {
+  const leave = (objectRestored: boolean, chosen: Array<DocumentEntry>) => {
     // Not reopened this launch unless chosen; saved all the same.
     declineObjectPlace(!objectRestored)
     markRecoveryOffered()
+    if (launchCopies !== null) {
+      // The copies not chosen leave this window; the library keeps them.
+      setLaunchCopies(null)
+      void windows
+        .reportConsoles({
+          documents: chosen.map((entry) => entry.id),
+          active: null,
+        })
+        .catch(() => undefined)
+    }
     void navigate({ to: "/" })
   }
   // Back returns where the user came from: the open workspace, if any. Nothing
@@ -181,10 +202,11 @@ export function RecoveryScreen() {
           objectSelected={objectSelected}
           onToggleObject={() => setObjectSelected((chosen) => !chosen)}
           onRestore={() => {
-            restoreWorkingCopies([...selected.values()])
-            leave(object !== null && objectSelected)
+            const chosen = [...selected.values()]
+            restoreWorkingCopies(chosen)
+            leave(object !== null && objectSelected, chosen)
           }}
-          onContinue={() => leave(false)}
+          onContinue={() => leave(false, [])}
           backLabel={hasWorkspace ? "Back to workspace" : "Back to connections"}
           onBack={back}
         />

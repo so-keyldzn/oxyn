@@ -188,7 +188,10 @@ Ce qui entre dans Oxyn et n'est pas fiable, par ordre de sous-estimation :
    chaque fenêtre a ses `Channel`, filtrés en Rust, et `clippy.toml` interdit
    les méthodes d'émission de `tauri::Emitter`. Ce qu'une XSS dans une fenêtre
    en tire : ouvrir des fenêtres jusqu'à la borne, fermer la sienne, retenir
-   ou annuler sa propre fermeture. Elle n'atteint rien d'une autre fenêtre.
+   ou annuler sa propre fermeture, réécrire la liste de ses propres consoles
+   pour le prochain lancement (`report_window_consoles`, 256 au plus, jamais
+   un document qu'une autre fenêtre écrit). Elle n'atteint rien d'une autre
+   fenêtre.
    Une réserve, qui tient à un secret : `start_dragging` et
    `internal_toggle_maximize` de Tauri acceptent le libellé d'une autre
    fenêtre (`tauri` 2.11.5, `src/window/plugin.rs`, `get_window`). Aucune

@@ -6,6 +6,7 @@ import { Channel, isTauri } from "@tauri-apps/api/core"
 import { z } from "zod"
 
 import { Nothing, call, guarded } from "./client"
+import { DocumentEntry } from "./library"
 
 export const WindowSignal = z.discriminatedUnion("type", [
   /** Close asked on this window, not the last, and no transaction holds it. */
@@ -16,6 +17,13 @@ export const WindowSignal = z.discriminatedUnion("type", [
   z.object({ type: z.literal("preferencesChanged") }),
 ])
 export type WindowSignal = z.infer<typeof WindowSignal>
+
+/** The consoles a window shows: document ids in tab order, and the one in front. */
+export const WindowConsoles = z.object({
+  documents: z.array(z.string()),
+  active: z.string().nullable(),
+})
+export type WindowConsoles = z.infer<typeof WindowConsoles>
 
 export const windows = {
   /** `New window`: an empty window on the connection screen, 16 at most. */
@@ -35,4 +43,14 @@ export const windows = {
 
   /** This window's consoles are closed: it may go. */
   confirmClose: () => call("confirm_window_close", Nothing),
+
+  /** Writes which consoles this window holds, for the next launch. */
+  reportConsoles: (consoles: WindowConsoles) =>
+    call("report_window_consoles", Nothing, { consoles }),
+
+  /**
+   * The working copies this window reopens offline at launch: its own
+   * consoles, then — first window only, once — those no window claims.
+   */
+  restoredConsoles: () => call("restored_consoles", z.array(DocumentEntry)),
 }

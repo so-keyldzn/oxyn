@@ -82,10 +82,11 @@ fn main() -> Result<()> {
         // One closure: a second `setup` replaces the first, it does not chain.
         .setup(move |app| {
             dialog.attach(app.handle().clone());
-            // The first window, built like every other from the template,
-            // under a label Rust chose (ADR-0043). On the main thread, where
-            // building a window does not deadlock.
-            commands::windows::build_window(app.handle(), &backend, true, temporary)?;
+            // The windows the workspace file kept, or a first one, built
+            // like every other from the template, under a label Rust chose
+            // (ADR-0043). On the main thread, where building a window does
+            // not deadlock.
+            commands::windows::build_launch_windows(app.handle(), &backend, temporary)?;
             Ok(())
         })
         // Files dropped from the system: classified in Rust, `dragDropEnabled`
@@ -181,6 +182,8 @@ fn main() -> Result<()> {
             // The restored object tab
             commands::location::read_object_location,
             commands::location::write_object_location,
+            commands::windows::report_window_consoles,
+            commands::windows::restored_consoles,
             // AI: declarations, conversation, schema-change proposal
             commands::ai::ai_providers,
             commands::ai::ai_external_agents,

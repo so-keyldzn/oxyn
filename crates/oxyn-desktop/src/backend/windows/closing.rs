@@ -42,12 +42,26 @@ pub(crate) enum CloseStep {
 }
 
 impl Backend {
-    /// Reserves a window before it is built: bounded to 16.
+    /// Reserves a new window: the tests that build none.
+    #[cfg(test)]
+    pub(crate) fn reserve_window(&self, initial: bool) -> Result<WindowKey, IpcError> {
+        self.reserve_restored_window(initial, None)
+    }
+
+    /// Reserves a window before it is built, bounded to 16, under the key the
+    /// workspace file kept for it when it is restored.
     ///
     /// # Errors
-    /// Past the bound.
-    pub(crate) fn reserve_window(&self, initial: bool) -> Result<WindowKey, IpcError> {
-        self.inner.windows.reserve(initial)
+    /// Past the bound, or a restored key already open.
+    pub(crate) fn reserve_restored_window(
+        &self,
+        initial: bool,
+        restored: Option<oxyn_core::WindowLayout>,
+    ) -> Result<WindowKey, IpcError> {
+        let key = restored.as_ref().map(|layout| WindowKey::of(layout.window));
+        let key = self.inner.windows.reserve(initial, key)?;
+        self.inner.layouts.register(key, restored);
+        Ok(key)
     }
 
     /// The first window, reserved if there is none: the tests that speak to

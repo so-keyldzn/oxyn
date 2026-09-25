@@ -186,6 +186,13 @@ impl Store {
         crate::sessions::Sessions::new(self)
     }
 
+    /// La disposition des fenêtres ([ADR-0043](../../../docs/adr/0043-multi-fenetre.md)).
+    /// Ne jamais appeler depuis le thread d'interface.
+    #[must_use]
+    pub fn windows(&self) -> crate::windows::Windows<'_> {
+        crate::windows::Windows::new(self)
+    }
+
     /// Les documents du workspace.
     #[must_use]
     pub fn documents(&self) -> Documents<'_> {

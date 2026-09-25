@@ -718,6 +718,43 @@ const M0016_HISTORY_RECONCILED: &str = "ALTER TABLE query_history ADD COLUMN rec
 /// sessions déjà abandonnées sont annoncées une dernière fois.
 const M0017_APP_SESSIONS_REPORTED: &str = "ALTER TABLE app_sessions ADD COLUMN reported_at TEXT;";
 
+/// Migration 18 — la disposition des fenêtres
+/// ([ADR-0043](../../../docs/adr/0043-multi-fenetre.md)).
+///
+/// Des colonnes plutôt qu'un JSON : l'appartenance d'une console à une seule
+/// fenêtre est une contrainte que le fichier tient lui-même,
+/// `UNIQUE (document_id)`, et une écriture qui la violerait échoue au lieu de
+/// produire deux fenêtres rivales sur le même document. Lisible avec
+/// n'importe quel client SQLite ([I-11](../../../CLAUDE.md#i-11)).
+/// `app_session_id` nomme le dernier lancement qui a écrit la ligne : un
+/// lancement n'adopte que celles d'un lancement terminé, pas celles d'une
+/// autre instance vivante sur le même fichier. `object_location` a la forme
+/// qu'il avait dans les préférences.
+const M0018_WORKSPACE_WINDOWS: &str = "CREATE TABLE workspace_windows (
+    id               TEXT PRIMARY KEY NOT NULL,
+    workspace_id     TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
+    app_session_id   TEXT NOT NULL,
+    ordinal          INTEGER NOT NULL,
+    x                REAL,
+    y                REAL,
+    width            REAL NOT NULL,
+    height           REAL NOT NULL,
+    maximized        INTEGER NOT NULL,
+    object_location  TEXT,
+    active_document  TEXT REFERENCES documents(id) ON DELETE SET NULL,
+    revision         INTEGER NOT NULL,
+    updated_at       TEXT NOT NULL
+) STRICT;
+CREATE TABLE workspace_window_consoles (
+    window_id    TEXT NOT NULL REFERENCES workspace_windows(id) ON DELETE CASCADE,
+    document_id  TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    position     INTEGER NOT NULL,
+    PRIMARY KEY (window_id, document_id),
+    UNIQUE (document_id)
+) STRICT;
+CREATE INDEX workspace_windows_order ON workspace_windows(workspace_id, ordinal);
+";
+
 /// Toutes les migrations, dans l'ordre d'application.
 pub(crate) const MIGRATIONS: &[Migration] = &[
     Migration {
@@ -804,6 +841,11 @@ pub(crate) const MIGRATIONS: &[Migration] = &[
         version: 17,
         name: "app_sessions_reported",
         sql: M0017_APP_SESSIONS_REPORTED,
+    },
+    Migration {
+        version: 18,
+        name: "workspace_windows",
+        sql: M0018_WORKSPACE_WINDOWS,
     },
 ];
 

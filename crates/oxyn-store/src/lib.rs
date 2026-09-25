@@ -115,6 +115,7 @@ mod schema;
 #[cfg(test)]
 mod sentinel_tests;
 pub mod sessions;
+pub mod windows;
 
 pub use agents::ExternalAgents;
 pub use connections::Connections;
@@ -242,6 +243,8 @@ mod tests {
                 "query_history",
                 "schema_version",
                 "workspace_preferences",
+                "workspace_window_consoles",
+                "workspace_windows",
                 "workspaces",
             ]
         );

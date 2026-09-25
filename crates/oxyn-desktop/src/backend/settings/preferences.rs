@@ -170,19 +170,6 @@ impl Backend {
         format_options_of(&self.inner.settings.preferences.applied.lock().preferences)
     }
 
-    /// The preferences applied now, read from the store on the first call.
-    pub(super) async fn applied_preferences(&self) -> Result<WorkspacePreferences, IpcError> {
-        self.ensure_preferences_loaded().await?;
-        Ok(self
-            .inner
-            .settings
-            .preferences
-            .applied
-            .lock()
-            .preferences
-            .clone())
-    }
-
     async fn ensure_preferences_loaded(&self) -> Result<(), IpcError> {
         let state = &self.inner.settings.preferences;
         let mut loaded = state.loaded.lock().await;

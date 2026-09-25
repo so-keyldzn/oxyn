@@ -67,6 +67,10 @@ import {
   takeResultOpenRequests,
 } from "@/features/workspace/result-requests"
 import { registerWorkspaceConsoles } from "@/features/windows/window-close"
+import {
+  publishWorkspaceDocuments,
+  withdrawWorkspaceDocuments,
+} from "@/features/windows/window-consoles"
 import { useCompact } from "@/features/workspace/use-compact"
 import { usePanelPreferences } from "@/features/workspace/use-panel-preferences"
 import { useActionSource } from "@/lib/actions/context"
@@ -426,6 +430,27 @@ export function WorkspaceScreen({
         closeAll: () => windowCloseRef.current.closeAll(),
       }),
     [open.session, open.name]
+  )
+
+  // Which consoles this window holds, for the next launch, which reopens them
+  // here offline (ADR-0043). In tab order; the shown workspace's console in
+  // front is the window's.
+  const consoleDocuments = [...work.entries]
+    .sort((a, b) => rank(tabOrder, a.key) - rank(tabOrder, b.key))
+    .map((entry) => entry.seed.document)
+  const activeDocument =
+    work.entries.find((entry) => entry.key === active)?.seed.document ?? null
+  const documentsKey = consoleDocuments.join("\n")
+  React.useEffect(() => {
+    publishWorkspaceDocuments(open.session, {
+      documents: documentsKey === "" ? [] : documentsKey.split("\n"),
+      active: activeDocument,
+      visible,
+    })
+  }, [open.session, documentsKey, activeDocument, visible])
+  React.useEffect(
+    () => () => withdrawWorkspaceDocuments(open.session),
+    [open.session]
   )
 
   // Hidden behind the start screen, the workspace offers its active text to
@@ -869,4 +894,10 @@ export function WorkspaceScreen({
       />
     </>
   )
+}
+
+/** A tab's place in the strip; one not placed yet goes last. */
+function rank(order: ReadonlyArray<string>, key: string) {
+  const index = order.indexOf(key)
+  return index === -1 ? order.length : index
 }

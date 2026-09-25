@@ -310,6 +310,12 @@ impl PolicyGate for DefaultPolicy {
                 reason: "only the human may change workspace display preferences".into(),
             };
         }
+        // An agent opens, closes and arranges no window (ADR-0043).
+        if actor.is_agent() && matches!(cmd, Command::WriteWindowLayout { .. }) {
+            return Decision::Deny {
+                reason: "only the human may arrange the windows".into(),
+            };
+        }
         // Un agent ne déclare pas le point d'accès par lequel il parle. Une
         // déclaration porte une URL de base : un agent qui pourrait l'écrire
         // ferait sortir de la machine tout ce qu'on lui confie ensuite, sans

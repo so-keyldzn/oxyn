@@ -383,6 +383,14 @@ pub enum Command {
         snapshot: Box<crate::PreferencesSnapshot>,
     },
 
+    /// Save or remove one window's layout: its rectangle, object tab and
+    /// consoles. Only the human arranges their windows (ADR-0043).
+    WriteWindowLayout {
+        /// Owning workspace.
+        workspace: WorkspaceId,
+        change: Box<crate::WindowLayoutChange>,
+    },
+
     /// List bounded local document summaries without loading query bodies.
     ListQueryDocuments {
         workspace: WorkspaceId,
@@ -593,6 +601,7 @@ impl Command {
             | Self::Export { .. }
             | Self::ReadWorkspacePreferences { .. }
             | Self::WriteWorkspacePreferences { .. }
+            | Self::WriteWindowLayout { .. }
             | Self::ListQueryDocuments { .. }
             | Self::SaveQueryDocument { .. }
             | Self::CloseQueryDocument { .. }
@@ -656,6 +665,7 @@ impl Command {
             | Self::WriteDocument { .. }
             | Self::ReadWorkspacePreferences { .. }
             | Self::WriteWorkspacePreferences { .. }
+            | Self::WriteWindowLayout { .. }
             // Un fournisseur est déclaré **par machine** (ADR-0023) : il n'a
             // pas de connexion visée, et le niveau de confidentialité qui
             // gouverne son usage reste celui de la connexion ouverte.
@@ -751,6 +761,7 @@ impl Command {
             Self::OpenRetainedResult { .. } => "OpenRetainedResult",
             Self::ReadWorkspacePreferences { .. } => "ReadWorkspacePreferences",
             Self::WriteWorkspacePreferences { .. } => "WriteWorkspacePreferences",
+            Self::WriteWindowLayout { .. } => "WriteWindowLayout",
             Self::WriteDocument { .. } => "WriteDocument",
             Self::CreateConnection { .. } => "CreateConnection",
             Self::TestConnection { .. } => "TestConnection",

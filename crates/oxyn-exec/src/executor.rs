@@ -178,6 +178,9 @@ pub enum Outcome {
         snapshot: oxyn_core::PreferencesSnapshot,
     },
 
+    /// A window's layout saved or removed in the local workspace.
+    WindowLayoutWritten,
+
     /// A bounded library page, with no complete SQL bodies.
     QueryDocumentsListed {
         page: oxyn_store::documents::DocumentPage,
@@ -393,6 +396,9 @@ pub struct Executor {
     /// `connections` never take this lock.
     connection_writes: Arc<Mutex<()>>,
     workspace: WorkspaceId,
+    /// The launch that writes window layouts: the next launch adopts a
+    /// window's line only once this one has ended (ADR-0043).
+    app_session: oxyn_core::AppSessionId,
     memory_budget: usize,
     abandoned: AbandonedOutcomes,
     /// History rows still `running` since then belong to this launch: their
@@ -1078,6 +1084,37 @@ impl Executor {
                     .await
                     .map_err(|_| OxynError::Internal("preference worker stopped".into()))??;
                 Ok(Outcome::WorkspacePreferences { snapshot })
+            }
+
+            Command::WriteWindowLayout { workspace, change } => {
+                self.check_workspace(*workspace)?;
+                if let oxyn_core::WindowLayoutChange::Save(layout) = &**change {
+                    layout.validate()?;
+                }
+                let store = self.store.clone();
+                let workspace = *workspace;
+                let change = (**change).clone();
+                let session = self.app_session;
+                let runtime = tokio::runtime::Handle::try_current().map_err(|_| {
+                    OxynError::Config(
+                        "window layout saving requires the application runtime".into(),
+                    )
+                })?;
+                runtime
+                    .spawn_blocking(move || {
+                        let windows = store.windows();
+                        match change {
+                            oxyn_core::WindowLayoutChange::Save(layout) => {
+                                windows.save(workspace, session, &layout)
+                            }
+                            oxyn_core::WindowLayoutChange::Remove(window) => {
+                                windows.remove(workspace, window)
+                            }
+                        }
+                    })
+                    .await
+                    .map_err(|_| OxynError::Internal("window layout worker stopped".into()))??;
+                Ok(Outcome::WindowLayoutWritten)
             }
 
             Command::ListQueryDocuments { workspace, filter } => {
@@ -2616,6 +2653,7 @@ pub struct ExecutorBuilder {
     approvals: ApprovalRegistry,
     events: EventBus,
     workspace: WorkspaceId,
+    app_session: oxyn_core::AppSessionId,
     memory_budget: usize,
 }
 
@@ -2631,6 +2669,8 @@ impl ExecutorBuilder {
             approvals: ApprovalRegistry::new(),
             events: EventBus::new(),
             workspace: WorkspaceId::new(),
+            // A launch no row names: its lines read as a finished launch's.
+            app_session: oxyn_core::AppSessionId::new(),
             memory_budget: DEFAULT_MEMORY_BUDGET,
         }
     }
@@ -2653,6 +2693,13 @@ impl ExecutorBuilder {
     #[must_use]
     pub fn with_workspace(mut self, workspace: WorkspaceId) -> Self {
         self.workspace = workspace;
+        self
+    }
+
+    /// Le lancement qui écrit la disposition des fenêtres (ADR-0043).
+    #[must_use]
+    pub fn with_app_session(mut self, session: oxyn_core::AppSessionId) -> Self {
+        self.app_session = session;
         self
     }
 
@@ -2694,6 +2741,7 @@ impl ExecutorBuilder {
             connections: Arc::new(RwLock::new(HashMap::new())),
             connection_writes: Arc::new(Mutex::new(())),
             workspace: self.workspace,
+            app_session: self.app_session,
             memory_budget: self.memory_budget,
             abandoned: AbandonedOutcomes::default(),
             started_at: chrono::Utc::now(),

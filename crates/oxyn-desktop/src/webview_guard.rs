@@ -16,13 +16,74 @@
 //! the link or script that gets through anyway.
 
 use anyhow::{Context as _, Result};
+use oxyn_core::WindowGeometry;
+use tauri::utils::config::WindowConfig;
 use tauri::webview::NewWindowResponse;
 use tauri::{Manager, Runtime, Url, WebviewWindow, WebviewWindowBuilder};
 
 /// The window `tauri.conf.json` declares as the template of every window.
 pub(crate) const TEMPLATE: &str = "workspace";
 
-/// Builds a window from the template, under `label`, with its title.
+/// A screen's usable rectangle, in logical pixels.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) struct Screen {
+    pub(crate) x: f64,
+    pub(crate) y: f64,
+    pub(crate) width: f64,
+    pub(crate) height: f64,
+}
+
+/// The screens connected now, in logical pixels, each at its own scale.
+pub(crate) fn screens(app: &tauri::AppHandle) -> Vec<Screen> {
+    app.available_monitors()
+        .unwrap_or_default()
+        .iter()
+        .filter(|monitor| monitor.scale_factor().is_finite() && monitor.scale_factor() > 0.0)
+        .map(|monitor| {
+            let scale = monitor.scale_factor();
+            let area = monitor.work_area();
+            Screen {
+                x: f64::from(area.position.x) / scale,
+                y: f64::from(area.position.y) / scale,
+                width: f64::from(area.size.width) / scale,
+                height: f64::from(area.size.height) / scale,
+            }
+        })
+        .collect()
+}
+
+/// Applies what the workspace file kept of a window to the template.
+///
+/// The file is hostile input (ADR-0043): a size under the template's minimum
+/// is brought up to it, and a rectangle that meets no screen connected now
+/// is dropped — the system places the window, at the template's size, rather
+/// than opening it where nobody can reach it.
+fn restore(config: &mut WindowConfig, geometry: &WindowGeometry, screens: &[Screen]) {
+    let width = geometry.width.max(config.min_width.unwrap_or(0.0));
+    let height = geometry.height.max(config.min_height.unwrap_or(0.0));
+    config.maximized = geometry.maximized;
+    let Some((x, y)) = geometry.x.zip(geometry.y) else {
+        config.width = width;
+        config.height = height;
+        return;
+    };
+    let meets = screens.iter().any(|screen| {
+        x < screen.x + screen.width
+            && screen.x < x + width
+            && y < screen.y + screen.height
+            && screen.y < y + height
+    });
+    if meets {
+        config.width = width;
+        config.height = height;
+        config.x = Some(x);
+        config.y = Some(y);
+        config.center = false;
+    }
+}
+
+/// Builds a window from the template, under `label`, with its title, where
+/// `restored` left it when it comes back from the workspace file.
 ///
 /// Never from a synchronous command or event handler: creating a window
 /// there deadlocks on Windows (the warning on `WebviewWindowBuilder::new`).
@@ -31,6 +92,7 @@ pub(crate) fn open_window<R: Runtime, M: Manager<R>>(
     manager: &M,
     label: &str,
     title: &str,
+    restored: Option<(&WindowGeometry, &[Screen])>,
 ) -> Result<WebviewWindow<R>> {
     let mut config = manager
         .config()
@@ -41,6 +103,9 @@ pub(crate) fn open_window<R: Runtime, M: Manager<R>>(
         .with_context(|| format!("tauri.conf.json declares no window {TEMPLATE:?}"))?
         .clone();
     config.label = label.to_owned();
+    if let Some((geometry, screens)) = restored {
+        restore(&mut config, geometry, screens);
+    }
     let origin = app_origin(
         tauri::is_dev(),
         manager.config().build.dev_url.as_ref(),
@@ -111,7 +176,64 @@ mod tests {
     use rstest::rstest;
     use tauri::Url;
 
-    use super::{app_origin, same_origin};
+    use oxyn_core::WindowGeometry;
+    use tauri::utils::config::WindowConfig;
+
+    use super::{Screen, app_origin, restore, same_origin};
+
+    fn template() -> WindowConfig {
+        WindowConfig {
+            width: 1280.0,
+            height: 820.0,
+            min_width: Some(960.0),
+            min_height: Some(600.0),
+            ..WindowConfig::default()
+        }
+    }
+
+    const LAPTOP: Screen = Screen {
+        x: 0.0,
+        y: 25.0,
+        width: 1512.0,
+        height: 920.0,
+    };
+
+    fn kept(x: Option<f64>, width: f64) -> WindowGeometry {
+        WindowGeometry {
+            x,
+            y: x,
+            width,
+            height: 700.0,
+            maximized: false,
+        }
+    }
+
+    #[test]
+    fn a_window_comes_back_where_it_was_on_a_connected_screen() {
+        let mut config = template();
+        restore(&mut config, &kept(Some(100.0), 1100.0), &[LAPTOP]);
+        assert_eq!((config.x, config.y), (Some(100.0), Some(100.0)));
+        assert_eq!((config.width, config.height), (1100.0, 700.0));
+        assert!(!config.center);
+    }
+
+    #[test]
+    fn a_size_under_the_minimum_is_brought_up_to_it() {
+        let mut config = template();
+        restore(&mut config, &kept(None, 0.0), &[LAPTOP]);
+        assert_eq!((config.width, config.height), (960.0, 700.0));
+        assert_eq!(config.x, None);
+    }
+
+    /// The screen it stood on was unplugged: the system places it, at the
+    /// template's size, rather than off every screen.
+    #[test]
+    fn a_window_off_every_screen_is_placed_by_the_system() {
+        let mut config = template();
+        restore(&mut config, &kept(Some(4000.0), 1100.0), &[LAPTOP]);
+        assert_eq!(config.x, None);
+        assert_eq!((config.width, config.height), (1280.0, 820.0));
+    }
 
     fn url(text: &str) -> Url {
         Url::parse(text).expect("the test URLs are valid")

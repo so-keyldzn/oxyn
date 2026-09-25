@@ -681,24 +681,34 @@ sont dans `backend/windows/tests.rs` (registre, propriété, borne, routage) et
 `backend/windows/closing/tests.rs` (sortie à plusieurs fenêtres, fermeture non
 dernière, approbation rejetée, vidage de toutes les fenêtres). Les précisions
 et écarts sont écrits dans ADR-0043, « Précisions de mise en œuvre » :
-assistant par connexion, fermeture en deux temps, événements d'agent. Reste
-pour la seconde partie :
+assistant par connexion, fermeture en deux temps, événements d'agent.
 
-- la migration 18 (`workspace_windows`, `workspace_window_consoles`),
-  `Command::WriteWindowLayout`, la lecture hostile de la disposition,
-  `object_location` par fenêtre — deux fenêtres qui naviguent s'écrasent
-  encore l'onglet d'objet sauvegardé ;
-- la restauration des fenêtres et de leurs consoles, hors ligne, après une
-  fermeture ordinaire, et la reprise par fenêtre après un arrêt anormal.
-  D'ici là, un relancement ne rouvre qu'une fenêtre ;
+**Lot 7, disposition et restauration, faite le 2026-09-26.** La migration 18
+ajoute `workspace_windows` et `workspace_window_consoles`, écrites par
+`Command::WriteWindowLayout`, refusée à un agent, comptée comme écriture
+locale, et relues comme une entrée hostile par `oxyn-store/src/windows.rs`.
+`backend/windows/layout.rs` tient la disposition de chaque fenêtre et
+sérialise ses écritures. Au lancement, `build_launch_windows` rouvre chaque
+fenêtre sous sa clé, à sa place si elle recoupe un écran branché. Le
+rectangle s'écrit une seconde après le dernier déplacement et avant l'arrêt.
+Les consoles de chaque fenêtre reviennent hors ligne après une fermeture
+ordinaire, et chaque fenêtre propose les siennes après un arrêt anormal. Les
+copies qu'aucune fenêtre ne réclame vont à la première. `object_location` est
+par fenêtre. Les tests sont dans `oxyn-store/src/windows/tests.rs` (aller et
+retour, déplacement d'une console, instance vivante, borne de 16, ligne
+hostile) et `backend/windows/layout/tests.rs` (consoles d'une autre fenêtre
+écartées, fenêtre fermée qui ne revient pas, copies orphelines une fois, refus
+à un agent). Précisions dans ADR-0043, « Précisions de mise en œuvre,
+2026-09-26 ». Reste :
+
 - `Open in new window` et le `ConsoleHandoff`. L'entrée reste grisée, dans
   `menu-behaviours.ts` ;
 - rouvrir depuis la bibliothèque un document qu'une autre fenêtre écrit : il
   est refusé à l'écriture, mais la fenêtre propriétaire ne passe pas encore
   au premier plan sur cet onglet ;
 - l'essai à la main sous Windows et Linux : la fermeture d'une fenêtre, la
-  barre web de chacune, et la création d'une fenêtre depuis une commande
-  `async`.
+  barre web de chacune, la création d'une fenêtre depuis une commande
+  `async`, et la restauration sur deux écrans d'échelles différentes.
 
 **Lot 8 fait le 2026-09-25, pour une fenêtre.** ADR-0039 est accepté et mis en
 œuvre. `backend/exit.rs` tient les sessions de console et le dernier état
