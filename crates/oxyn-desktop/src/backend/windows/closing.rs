@@ -230,6 +230,10 @@ impl Backend {
             // An agent's tools act on a session of this connection: none
             // outlives the sessions it was given.
             self.inner.ai.release_agents(connection);
+            // Its sample grants, queued questions and live threads go too:
+            // the front's `ai_forget` that follows finds nothing left to
+            // forget once the registry let the assistant go.
+            self.close_ai_conversation(connection);
             windows.release_assistant(window, connection);
         }
         if windows.release_connection(window, connection) {

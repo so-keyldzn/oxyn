@@ -49,18 +49,37 @@ fn connection(value: &str) -> Result<ConnectionId, IpcError> {
 /// agent that serves them and the samples it asked for belong to one window
 /// at a time (ADR-0043). Another window asking for them does not take them:
 /// the window that has them comes to the front.
+///
+/// Only on a connection this window holds a workspace on: a script cannot
+/// take the assistant of a connection another window shows.
 fn assistant(backend: &Backend, webview: &Webview, value: &str) -> Result<ConnectionId, IpcError> {
-    let window = caller(backend, webview)?;
-    let connection = connection(value)?;
-    match backend.inner.windows.claim_assistant(window, connection) {
-        Ok(()) => Ok(connection),
-        Err(owner) => {
-            bring_to_front(webview.app_handle(), owner);
-            Err(IpcError::invalid(
-                "The assistant of this connection is open in another window",
-            ))
-        }
+    claim(backend, webview, value).map_err(|(error, _)| error)
+}
+
+/// [`assistant`], with the window that has it when it is another's.
+fn claim(
+    backend: &Backend,
+    webview: &Webview,
+    value: &str,
+) -> Result<ConnectionId, (IpcError, Option<crate::backend::WindowKey>)> {
+    let window = caller(backend, webview).map_err(|error| (error, None))?;
+    let connection = connection(value).map_err(|error| (error, None))?;
+    let windows = &backend.inner.windows;
+    if !windows.holds(window, connection) {
+        return Err((
+            IpcError::invalid("This connection is not open in this window"),
+            None,
+        ));
     }
+    windows
+        .claim_assistant(window, connection)
+        .map_err(|owner| {
+            (
+                IpcError::invalid("The assistant of this connection is open in another window"),
+                Some(owner),
+            )
+        })?;
+    Ok(connection)
 }
 
 #[tauri::command]
@@ -270,13 +289,16 @@ pub async fn ai_open_thread(
     thread: String,
     channel: Channel<AiUpdate>,
 ) -> Result<ThreadView, IpcError> {
-    backend
-        .ai_open_thread(
-            assistant(&backend, &webview, &connection)?,
-            &thread,
-            channel,
-        )
-        .await
+    // Opening a conversation is the gesture that brings the window holding
+    // it to the front; no other refusal moves the focus, or a script looping
+    // on it would steal the keyboard of another window.
+    let connection = claim(&backend, &webview, &connection).map_err(|(error, owner)| {
+        if let Some(owner) = owner {
+            bring_to_front(webview.app_handle(), owner);
+        }
+        error
+    })?;
+    backend.ai_open_thread(connection, &thread, channel).await
 }
 
 #[tauri::command]
