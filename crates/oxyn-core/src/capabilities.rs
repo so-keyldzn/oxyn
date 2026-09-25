@@ -123,6 +123,20 @@ bitflags! {
         /// vérifient une condition. Séparée du tri : un moteur peut savoir
         /// ordonner sans savoir filtrer, et l'inverse.
         const PREVIEW_FILTER       = 1 << 43;
+        // Ce que la revue d'un `DROP`, d'un `TRUNCATE` ou d'un renommage doit
+        // dire de ce qui part ([ADR-0042](../../docs/adr/0042-revue-sur-place-des-operations-destructrices.md)).
+        // Aucun n'est déclaré sans le test d'intégration du driver qui le
+        // prouve contre le moteur.
+        /// La session accepte l'instruction `TRUNCATE`.
+        const TRUNCATE             = 1 << 44;
+        /// Toute instruction DDL acceptée, `TRUNCATE` compris, s'applique
+        /// entière ou pas du tout, et obéit à la transaction qui l'entoure.
+        /// Redshift ne l'a pas : son `TRUNCATE` valide la transaction.
+        const TRANSACTIONAL_DDL    = 1 << 45;
+        /// Sans `CASCADE`, le moteur refuse `DROP` et `TRUNCATE` tant qu'un
+        /// autre objet en dépend. SQLite ne l'a pas : une vue ou des lignes
+        /// filles n'y empêchent pas un `DROP TABLE`.
+        const RESTRICT_DEPENDENTS  = 1 << 46;
 
         // ── Langages acceptés ───────────────────────────────────────────────
         /// SQL.

@@ -255,6 +255,10 @@ pub fn base_capabilities() -> Capabilities {
         // colonnes de tri et transmet le prédicat tel quel (ADR-0020).
         | Capabilities::PREVIEW_SORT
         | Capabilities::PREVIEW_FILTER
+        // Chacun prouvé contre le serveur par `ddl_tests` (ADR-0042).
+        | Capabilities::TRUNCATE
+        | Capabilities::TRANSACTIONAL_DDL
+        | Capabilities::RESTRICT_DEPENDENTS
         | Capabilities::SQL
         | Capabilities::RELATIONAL
         | Capabilities::FULL_TEXT_SEARCH
@@ -265,7 +269,10 @@ pub fn base_capabilities() -> Capabilities {
 /// * pas de vues matérialisées exposées par `relkind = 'm'` ;
 /// * ni déclencheurs, ni séquences, ni types définis par l'utilisateur ;
 /// * `EXPLAIN` existe, `EXPLAIN ANALYZE` non — le plan n'est jamais exécuté ;
-/// * pas de `tsvector`, donc pas de recherche plein texte native.
+/// * pas de `tsvector`, donc pas de recherche plein texte native ;
+/// * `TRUNCATE` valide la transaction qui l'entoure, et ignore les clés
+///   étrangères : ni DDL transactionnel, ni refus sur dépendances
+///   ([ADR-0042](../../../docs/adr/0042-revue-sur-place-des-operations-destructrices.md)).
 #[must_use]
 fn redshift_missing() -> Capabilities {
     // Constraint introspection uses PostgreSQL catalog functions unavailable here.
@@ -278,6 +285,8 @@ fn redshift_missing() -> Capabilities {
         | Capabilities::USER_TYPES
         | Capabilities::EXPLAIN_ANALYZE
         | Capabilities::FULL_TEXT_SEARCH
+        | Capabilities::TRANSACTIONAL_DDL
+        | Capabilities::RESTRICT_DEPENDENTS
 }
 
 /// Les capacités que le **driver** annonce avant toute connexion.
@@ -409,6 +418,11 @@ mod tests {
         // Les retirer priverait l'utilisateur de contrôles qui fonctionnent.
         assert!(capacites.contains(Capabilities::PREVIEW_SORT));
         assert!(capacites.contains(Capabilities::PREVIEW_FILTER));
+        // `TRUNCATE` existe, mais valide la transaction et ignore les clés
+        // étrangères : la revue ne doit promettre ni retour arrière, ni refus.
+        assert!(capacites.contains(Capabilities::TRUNCATE));
+        assert!(!capacites.contains(Capabilities::TRANSACTIONAL_DDL));
+        assert!(!capacites.contains(Capabilities::RESTRICT_DEPENDENTS));
     }
 
     #[test]
