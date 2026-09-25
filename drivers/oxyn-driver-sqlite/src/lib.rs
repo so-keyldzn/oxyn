@@ -72,10 +72,10 @@
 
 pub mod catalog;
 mod constraints;
-#[cfg(test)]
-mod ddl_tests;
 pub mod convert;
 pub mod cursor;
+#[cfg(test)]
+mod ddl_tests;
 mod definition;
 pub mod driver;
 pub mod error;
