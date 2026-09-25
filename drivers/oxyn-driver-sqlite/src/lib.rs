@@ -72,6 +72,8 @@
 
 pub mod catalog;
 mod constraints;
+#[cfg(test)]
+mod ddl_tests;
 pub mod convert;
 pub mod cursor;
 mod definition;

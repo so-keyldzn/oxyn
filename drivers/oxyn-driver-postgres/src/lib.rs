@@ -131,6 +131,8 @@ mod cancel_tests;
 #[cfg(test)]
 mod context_tests;
 #[cfg(test)]
+mod ddl_tests;
+#[cfg(test)]
 mod definition_tests;
 /// Les tests qui demandent un serveur. Tous `#[ignore]`.
 #[cfg(test)]

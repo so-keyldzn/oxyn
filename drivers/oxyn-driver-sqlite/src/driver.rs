@@ -113,6 +113,11 @@ impl SqliteDriver {
             | Capabilities::AFFECTED_ROWS
             | Capabilities::EXPLAIN
             | Capabilities::DDL
+            // `BEGIN; DROP TABLE t; ROLLBACK;` gives the table back; proven
+            // by `ddl_tests`. Neither `TRUNCATE`, which SQLite does not
+            // have, nor `RESTRICT_DEPENDENTS`: a view or child rows do not
+            // stop a `DROP TABLE` here (ADR-0042).
+            | Capabilities::TRANSACTIONAL_DDL
             | Capabilities::DML
             | Capabilities::READ_ONLY_SESSION
             // Aperçu : `ORDER BY` sur des colonnes citées, prédicat écrit par
