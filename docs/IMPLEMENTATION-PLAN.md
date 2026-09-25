@@ -437,6 +437,36 @@ Lots, dans l'ordre :
      le caractère fermant, alors que BigQuery (et probablement ClickHouse) lit
      les échappements par antislash dans un identifiant cité. Aucun driver ne
      produit ces dialectes aujourd'hui ; à régler avant le premier.
+
+   **Lot 3 bis — défauts relevés à l'usage, corrigés le 2026-09-25** :
+   - **copies refusées par WKWebView** (« The request is not allowed by the
+     user agent… ») : le presse-papiers était écrit après un aller-retour IPC,
+     hors du geste de l'utilisateur. `writeClipboard` (`lib/clipboard.ts`)
+     est désormais l'unique écriture : appelée dans le clic, elle confie un
+     texte encore à lire à un `ClipboardItem` résolu plus tard
+     ([RESEARCH-NOTES](RESEARCH-NOTES.md#presse-papiers-de-la-webview--vérification-du-2026-09-25)),
+     et dit en clair un refus tardif là où le moteur n'a pas `ClipboardItem`.
+     Passent par elle : le catalogue (`Copy qualified name`, `Copy as ▸`),
+     `Copy value` et les copies de lignes de la grille, `⌘C` de la grille,
+     l'éditeur, l'assistant, `Copy name` du diagramme. Aucune dépendance,
+     aucune permission Tauri ;
+   - **`Copy as ▸ INSERT template` sans colonnes lues** : le catalogue lit
+     d'abord la structure par le bus (`refresh_relation_facet`, facette
+     `detail`), puis compose ; `compose_object_sql` garde son refus, qui n'est
+     plus atteint depuis le menu. Un échec de copie est le toast de la copie,
+     et non plus l'alerte « The catalog could not be read » du panneau
+     (`features/workspace/catalog-copies.ts`) ;
+   - **infobulle d'un nœud par-dessus le menu contextuel** : l'infobulle du
+     système (`title`) est remplacée par celle de Base UI, fermée et
+     désactivée tant que le menu est ouvert ; le commentaire d'un objet reste
+     la description accessible de sa ligne ;
+   - **deux menus pour deux tables sœurs** : non reproduit. Le menu du
+     catalogue n'a qu'une source (`menuSources` de `catalog-tree.tsx`) et
+     `Collapse all` y est toujours présent ; la liste relevée sur `customers`
+     est exactement le menu écrit à la main d'avant le registre (`f038428`),
+     d'où l'hypothèse d'une build antérieure au lot 3. La story
+     `SiblingTablesShareTheirMenu` tient l'égalité ; l'utilisateur revérifie
+     sur la build installée.
 4. **Revue destructive** — `review_object_operation`, `run_object_operation`,
    qui approuve une commande retenue par `confirm_held`, donc par le dialogue
    natif d'[ADR-0037](adr/0037-dialogue-natif-pour-les-confirmations-critiques.md)
