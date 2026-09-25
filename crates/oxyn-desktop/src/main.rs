@@ -117,6 +117,8 @@ fn main() -> Result<()> {
             commands::metadata::search_catalog,
             commands::metadata::related_rows_template,
             commands::metadata::subscribe_refresh_signals,
+            commands::object_operations::review_object_operation,
+            commands::object_operations::run_object_operation,
             // Results: pages, search, value inspection, export
             commands::results::read_result_page,
             commands::results::result_columns,

@@ -359,7 +359,7 @@ s'utilise donc pas sur `Result<Box<dyn Cursor>>` ; les tests passent par un `mat
 ### 4.2 Les capacités, pas le dénominateur commun
 
 `Capabilities` est un `bitflags` sur 64 bits, dans `oxyn-core` pour que l'UI et l'IA
-le lisent sans dépendre des drivers. **53 drapeaux** au 2026-09-14, plus le masque
+le lisent sans dépendre des drivers. **56 drapeaux** au 2026-09-25, plus le masque
 `LANGUAGES`, répartis en quatre plages qui laissent chacune de la place. Le
 tableau ci-dessous est un **extrait** : il ne liste pas `INCOMING_FOREIGN_KEYS`,
 `OBJECT_DEFINITION`, `SESSION_CONTEXT`, `PREVIEW_SORT` ni `PREVIEW_FILTER`, que
@@ -368,7 +368,7 @@ d'autres sections de ce document citent pourtant. `capabilities.rs` fait foi :
 | Plage | Drapeaux |
 |---|---|
 | Introspection du catalogue | `SCHEMAS`, `TABLES`, `VIEWS`, `MATERIALIZED_VIEWS`, `INDEXES`, `CONSTRAINTS`, `FOREIGN_KEYS`, `ROUTINES`, `TRIGGERS`, `SEQUENCES`, `USER_TYPES`, `COMMENTS`, `PERMISSIONS`, `ROW_COUNT_ESTIMATE` |
-| Exécution | `TRANSACTIONS`, `SAVEPOINTS`, `PREPARED_STATEMENTS`, `NAMED_CURSORS`, `MULTIPLE_STATEMENTS`, `SERVER_SIDE_CANCEL`, `STREAMING`, `AFFECTED_ROWS`, `EXPLAIN`, `EXPLAIN_ANALYZE`, `DDL`, `DML`, `GRANT_REVOKE`, `BULK_LOAD`, `READ_ONLY_SESSION` |
+| Exécution | `TRANSACTIONS`, `SAVEPOINTS`, `PREPARED_STATEMENTS`, `NAMED_CURSORS`, `MULTIPLE_STATEMENTS`, `SERVER_SIDE_CANCEL`, `STREAMING`, `AFFECTED_ROWS`, `EXPLAIN`, `EXPLAIN_ANALYZE`, `DDL`, `DML`, `GRANT_REVOKE`, `BULK_LOAD`, `READ_ONLY_SESSION` ; au-delà des langages, `TRUNCATE`, `TRANSACTIONAL_DDL`, `RESTRICT_DEPENDENTS` ([ADR-0042](adr/0042-revue-sur-place-des-operations-destructrices.md)) |
 | Langages acceptés | `SQL`, `CYPHER`, `GREMLIN`, `MONGO_QUERY`, `REDIS_COMMAND`, `SEARCH_DSL`, `CQL`, `PARTIQL`, `INFLUXQL`, `FLUX` |
 | Modèle de données | `RELATIONAL`, `DOCUMENT`, `KEY_VALUE`, `GRAPH`, `TIME_SERIES`, `SCHEMALESS`, `INFERRED_SCHEMA`, `VECTOR_SEARCH`, `FULL_TEXT_SEARCH` |
 

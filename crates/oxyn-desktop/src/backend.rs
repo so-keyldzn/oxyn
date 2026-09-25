@@ -83,6 +83,9 @@ pub(crate) struct Inner {
     pub(crate) confirmations: confirm::Confirmations,
     /// Metadata and results: the searches remembered for « next match ».
     pub(crate) results: results::ResultsState,
+    /// The review sessions of `Drop…`, `Truncate…` and `Rename…` whose
+    /// command waits for a decision (ADR-0042).
+    pub(crate) object_operations: object_operations::ReviewSessions,
 }
 
 // Not derived: `Executor` and `Store` reach connection configurations, and a
@@ -231,6 +234,7 @@ impl Backend {
                 ai: ai::AiState::default(),
                 confirmations,
                 results: results::ResultsState::default(),
+                object_operations: object_operations::ReviewSessions::default(),
             }),
         };
         backend.start_heartbeat();
@@ -248,11 +252,15 @@ impl Backend {
                 // The same tick journals the outcomes of commands whose caller
                 // dropped them: without it, an abandoned agent command has a
                 // decision in the audit journal and never an outcome.
+                let pruned = Arc::clone(&inner);
                 let _ = tokio::task::spawn_blocking(move || {
-                    inner.executor.prune_results();
-                    inner.executor.journal_abandoned();
+                    pruned.executor.prune_results();
+                    pruned.executor.journal_abandoned();
                 })
                 .await;
+                // A review session outlives its command only until the
+                // approval expires (ADR-0042).
+                Self { inner }.release_stale_reviews().await;
             }
         });
         Ok(backend)
@@ -638,6 +646,22 @@ impl Backend {
     /// An agent's call may be waiting on it: it is told what the decision did,
     /// and answers its model with that.
     pub async fn decide(
+        &self,
+        command: CommandId,
+        approved: bool,
+    ) -> Result<CommandOutcome, IpcError> {
+        let decided = self.decide_held(command, approved).await;
+        // Approved, rejected or expired: a review session held for this
+        // command is no longer needed (ADR-0042). A busy host dialog leaves
+        // the command pending, and its session with it.
+        let pending = self.inner.executor.approvals().peek(command).is_some();
+        if !pending {
+            self.release_review(command).await;
+        }
+        decided
+    }
+
+    async fn decide_held(
         &self,
         command: CommandId,
         approved: bool,
@@ -1243,6 +1267,7 @@ mod consoles;
 mod documents;
 mod library;
 mod metadata;
+mod object_operations;
 mod proposal;
 mod recovery;
 mod results;

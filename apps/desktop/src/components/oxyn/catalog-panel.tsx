@@ -9,7 +9,11 @@ import {
 } from "@hugeicons/core-free-icons"
 
 import { CatalogTree } from "@/components/oxyn/catalog-tree"
-import type { OpenTarget, PinToQuestion } from "@/components/oxyn/catalog-tree"
+import type {
+  ObjectOperations,
+  OpenTarget,
+  PinToQuestion,
+} from "@/components/oxyn/catalog-tree"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import {
@@ -74,6 +78,7 @@ export function CatalogPanel({
   onCopyName,
   onRefreshLevel,
   pin,
+  operations,
   onLeave,
 }: {
   connectionName: string
@@ -109,6 +114,8 @@ export function CatalogPanel({
   onRefreshLevel?: (node: CatalogNode) => void
   /** Offered only where a sample could follow; see `canPin`. */
   pin?: PinToQuestion
+  /** `Drop…`, `Truncate…`, `Rename…`, by capability (ADR-0042). */
+  operations?: ObjectOperations
   onLeave: () => void
 }) {
   const { setOpen } = useSidebar()
@@ -257,6 +264,7 @@ export function CatalogPanel({
                     onCopyName={onCopyName}
                     onRefresh={onRefreshLevel}
                     pin={pin}
+                    operations={operations}
                   />
                 )}
               </>

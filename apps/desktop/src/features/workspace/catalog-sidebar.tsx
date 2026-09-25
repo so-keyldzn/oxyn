@@ -8,6 +8,7 @@ import type { OpenTarget } from "@/components/oxyn/catalog-tree"
 import { Sidebar, SidebarRail } from "@/components/ui/sidebar"
 import { usePinToQuestion } from "@/features/assistant/object-pin"
 import { copyToClipboard } from "@/features/metadata/clipboard"
+import { useObjectOperation } from "@/features/metadata/object-operation-flow"
 import { useRefreshSignal } from "@/features/metadata/refresh-signals"
 import { hasCapability } from "@/features/session"
 import { BackendError, backend, newCommandId } from "@/lib/ipc/client"
@@ -19,6 +20,15 @@ import type {
 } from "@/lib/ipc/types"
 
 const CATALOG_CAPABILITIES = ["SCHEMAS", "TABLES", "VIEWS", "ROUTINES"]
+
+function findNode(nodes: Array<CatalogNode>, key: string): CatalogNode | null {
+  for (const node of nodes) {
+    if (addressKey(node.address) === key) return node
+    const found = findNode(node.children, key)
+    if (found) return found
+  }
+  return null
+}
 
 function problemOf(caught: unknown): CatalogProblem {
   return {
@@ -53,6 +63,17 @@ export function CatalogSidebar({
 }) {
   const queryClient = useQueryClient()
   const pin = usePinToQuestion(open)
+  const treeNodes = React.useRef<Array<CatalogNode>>([])
+  // After a drop, the selection moves to the parent level; the tree itself
+  // changes once the executor's invalidation is read again (ADR-0042).
+  const operation = useObjectOperation(open, (node, kind) => {
+    if (kind !== "drop") return
+    const parent = findNode(
+      treeNodes.current,
+      addressKey({ ...node.address, relation: null })
+    )
+    if (parent) onSelect(parent)
+  })
   const [loading, setLoading] = React.useState<Set<string>>(() => new Set())
   const [expanded, setExpanded] = React.useState<Set<string>>(() => new Set())
   const [problem, setProblem] = React.useState<CatalogProblem | null>(null)
@@ -73,6 +94,8 @@ export function CatalogSidebar({
     enabled: supported,
     placeholderData: (previous) => previous,
   })
+
+  treeNodes.current = tree.data ?? []
 
   const hits = useQuery({
     queryKey: ["catalog-search", open.connection, query],
@@ -238,9 +261,14 @@ export function CatalogSidebar({
         onCopyName={(node) => void copyName(node)}
         onRefreshLevel={(node) => void refresh(node.address)}
         pin={pin}
+        operations={{
+          capabilities: open.capabilities,
+          onOperation: operation.start,
+        }}
         onLeave={onLeave}
       />
       <SidebarRail />
+      {operation.element}
     </Sidebar>
   )
 }

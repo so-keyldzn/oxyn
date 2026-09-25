@@ -885,6 +885,35 @@ mod tests {
         }
     }
 
+    /// ADR-0042: `Drop…`, `Truncate…` and `Rename…` from the catalog are human
+    /// actions. An agent that wants a table gone writes SQL like anyone, and
+    /// the gate refuses it on production; no tool reaches the review.
+    #[test]
+    fn object_operations_are_not_tools() {
+        let registre = ToolRegistry::builtin();
+        for interdit in [
+            "review_object_operation",
+            "run_object_operation",
+            "drop_object",
+            "truncate_table",
+            "rename_object",
+            "rename_table",
+        ] {
+            assert!(!registre.contains(interdit), "{interdit}");
+        }
+        for outil in &registre.tools {
+            for marque in ["Drop", "Truncate", "Rename", "ObjectOperation"] {
+                assert!(
+                    !outil.name().to_lowercase().contains(&marque.to_lowercase())
+                        && !outil.command().contains(marque),
+                    "{} reaches {}, an object operation",
+                    outil.name(),
+                    outil.command()
+                );
+            }
+        }
+    }
+
     #[test]
     fn un_outil_hors_liste_blanche_est_refuse() {
         let registre = ToolRegistry::builtin();

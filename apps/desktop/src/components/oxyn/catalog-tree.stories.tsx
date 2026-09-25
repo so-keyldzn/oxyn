@@ -277,6 +277,54 @@ async function openInvoicesMenu(canvas: ReturnType<typeof within>) {
   return menu
 }
 
+/**
+ * SQLite declares `DDL` without `TRUNCATE`: `Truncate…` is greyed and says
+ * why, by capability, never by product name (ADR-0042).
+ */
+export const OperationsWithoutTruncate: Story = {
+  args: {
+    onCopyName: fn(),
+    operations: {
+      capabilities: ["SQL", "DDL", "TRANSACTIONAL_DDL"],
+      onOperation: fn(),
+    },
+  },
+  play: async ({ canvas, args }) => {
+    const menu = await openInvoicesMenu(canvas)
+    const truncate = menu.getByRole("menuitem", { name: /Truncate…/ })
+    await expect(truncate).toHaveAttribute("aria-disabled", "true")
+    await expect(truncate).toHaveTextContent(
+      "This database has no TRUNCATE statement."
+    )
+    await userEvent.click(menu.getByRole("menuitem", { name: "Drop…" }))
+    await expect(args.operations?.onOperation).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "invoices" }),
+      "drop"
+    )
+    await waitFor(() => expect(menu.queryByRole("menu")).toBeNull())
+  },
+}
+
+/** A read-only session declares no `DDL`: the three entries are greyed. */
+export const OperationsOnReadOnly: Story = {
+  args: {
+    onCopyName: fn(),
+    operations: { capabilities: ["SQL"], onOperation: fn() },
+  },
+  play: async ({ canvas }) => {
+    const menu = await openInvoicesMenu(canvas)
+    for (const name of [/Rename…/, /Truncate…/, /Drop…/]) {
+      const item = menu.getByRole("menuitem", { name })
+      await expect(item).toHaveAttribute("aria-disabled", "true")
+      await expect(item).toHaveTextContent(
+        "This connection does not accept schema changes."
+      )
+    }
+    await userEvent.keyboard("{Escape}")
+    await waitFor(() => expect(menu.queryByRole("menu")).toBeNull())
+  },
+}
+
 /** Under `sampled`, to a built-in provider, an object can be pinned. */
 export const PinToQuestion: Story = {
   args: {

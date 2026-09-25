@@ -33,8 +33,10 @@ import { InputGroup, InputGroupAddon } from "@/components/ui/input-group"
 import { Spinner } from "@/components/ui/spinner"
 import { Toggle } from "@/components/ui/toggle"
 import type { CatalogSearchHit } from "@/lib/ipc/metadata"
+import type { OperationKind } from "@/lib/ipc/object-operations"
 import type { CatalogAddress, CatalogNode, PrivacyTier } from "@/lib/ipc/types"
 import { cn } from "@/lib/utils"
+import { operationOffer } from "./object-operations"
 import { InputGroupTextInput } from "./text-field"
 
 /**
@@ -53,6 +55,22 @@ export interface PinToQuestion {
   destination: "provider" | "agent" | null
   onPin: (node: CatalogNode) => void
 }
+
+/**
+ * `Drop…`, `Truncate…` and `Rename…`: offered by the capabilities of the
+ * catalog's session, greyed with the reason otherwise (ADR-0042). Human
+ * actions only — no list built for an agent carries them.
+ */
+export interface ObjectOperations {
+  capabilities: ReadonlyArray<string>
+  onOperation: (node: CatalogNode, operation: OperationKind) => void
+}
+
+const OPERATIONS: ReadonlyArray<{ kind: OperationKind; label: string }> = [
+  { kind: "rename", label: "Rename…" },
+  { kind: "truncate", label: "Truncate…" },
+  { kind: "drop", label: "Drop…" },
+]
 
 export function canPin(pin: PinToQuestion | undefined, node: CatalogNode) {
   return (
@@ -325,6 +343,7 @@ export function CatalogTree({
   onCopyName,
   onRefresh,
   pin,
+  operations,
 }: {
   nodes: Array<CatalogNode>
   loading: ReadonlySet<string>
@@ -347,6 +366,7 @@ export function CatalogTree({
   onCopyName?: (node: CatalogNode) => void
   onRefresh?: (node: CatalogNode) => void
   pin?: PinToQuestion
+  operations?: ObjectOperations
 }) {
   const [ownExpanded, setOwnExpanded] = React.useState<Set<string>>(
     () => new Set()
@@ -760,12 +780,53 @@ export function CatalogTree({
                     </ContextMenuItem>
                   ) : null}
                 </ContextMenuGroup>
+                {operations ? (
+                  <OperationItems node={menuNode} operations={operations} />
+                ) : null}
               </>
             ) : null}
           </ContextMenuContent>
         </ContextMenu>
       )}
     </div>
+  )
+}
+
+/** The destructive entries, last and apart: a slip lands on anything else. */
+function OperationItems({
+  node,
+  operations,
+}: {
+  node: CatalogNode
+  operations: ObjectOperations
+}) {
+  const offers = OPERATIONS.map((operation) => ({
+    ...operation,
+    offer: operationOffer(operation.kind, node, operations.capabilities),
+  })).filter(({ offer }) => offer.state !== "absent")
+  if (offers.length === 0) return null
+  return (
+    <>
+      <ContextMenuSeparator />
+      <ContextMenuGroup>
+        {offers.map(({ kind, label, offer }) => (
+          <ContextMenuItem
+            key={kind}
+            disabled={offer.state !== "offered"}
+            variant={kind === "rename" ? "default" : "destructive"}
+            onClick={() => operations.onOperation(node, kind)}
+            className="flex-col items-start gap-0.5"
+          >
+            {label}
+            {offer.state === "greyed" ? (
+              <span className="max-w-60 text-[length:var(--reading-caption)] text-muted-foreground">
+                {offer.reason}
+              </span>
+            ) : null}
+          </ContextMenuItem>
+        ))}
+      </ContextMenuGroup>
+    </>
   )
 }
 
