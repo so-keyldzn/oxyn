@@ -38,6 +38,7 @@ import {
 } from "@/components/ui/empty"
 import { Kbd, KbdGroup } from "@/components/ui/kbd"
 import { Spinner } from "@/components/ui/spinner"
+import { actionKeys } from "@/lib/actions/manifest"
 import type { Cell, ResultColumn } from "@/lib/ipc/types"
 import type { DensityChoice } from "@/lib/ipc/settings"
 
@@ -262,8 +263,9 @@ export const ResultPanel = React.memo(function ResultPanel({
             <EmptyDescription>
               {initialHint}{" "}
               <KbdGroup>
-                <Kbd>⌘</Kbd>
-                <Kbd>↵</Kbd>
+                {actionKeys("console.run").map((key) => (
+                  <Kbd key={key}>{key}</Kbd>
+                ))}
               </KbdGroup>
             </EmptyDescription>
           </EmptyHeader>
@@ -488,8 +490,9 @@ export const ResultPanel = React.memo(function ResultPanel({
                       />
                       Edit query
                       <KbdGroup className="ml-1">
-                        <Kbd>⌘</Kbd>
-                        <Kbd>J</Kbd>
+                        {actionKeys("console.focus").map((key) => (
+                          <Kbd key={key}>{key}</Kbd>
+                        ))}
                       </KbdGroup>
                     </Button>
                   ) : null}

@@ -13,6 +13,7 @@ import { ReactQueryDevtoolsPanel } from "@tanstack/react-query-devtools"
 import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools"
 
 import { Toaster } from "@/components/ui/toast"
+import { ActionOverlays } from "@/features/actions/action-overlays"
 import { AppMenubarHost } from "@/features/actions/app-menubar-host"
 import { useActionRuntime } from "@/features/actions/use-action-runtime"
 import { TooltipProvider } from "@/components/ui/tooltip"
@@ -111,6 +112,8 @@ function RootComponent() {
           />
           {/* An exit held by an open transaction asks here (ADR-0043). */}
           <ExitTransactionsHost />
+          {/* ⌘K, ⌘P and ⌘/ from every screen, through the registry. */}
+          <ActionOverlays />
         </Toaster>
       </TooltipProvider>
       <TanStackDevtools

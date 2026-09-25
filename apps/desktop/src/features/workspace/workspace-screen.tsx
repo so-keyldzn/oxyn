@@ -43,7 +43,10 @@ import {
   changePreferences,
   preferencesStore,
 } from "@/features/settings/preferences"
-import { CatalogSidebar } from "@/features/workspace/catalog-sidebar"
+import {
+  CatalogSidebar,
+  hasCatalog,
+} from "@/features/workspace/catalog-sidebar"
 import {
   savedObjectPlace,
   saveObjectPlace,
@@ -453,6 +456,16 @@ export function WorkspaceScreen({
         setFocusAssistant((count) => count + 1)
       },
       switchConnection: onSwitchConnection,
+    }
+  )
+  // ⌘P searches the catalog this workspace has loaded, and opens a hit as a
+  // click in the tree does.
+  useActionSource(
+    "catalog",
+    visible && hasCatalog(open) ? { connection: open.connection } : null,
+    {
+      openObject: (object) =>
+        openObject({ ...relatedNode(object.address), ...object, loaded: true }),
     }
   )
 

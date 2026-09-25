@@ -16,9 +16,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog"
-import { Kbd } from "@/components/ui/kbd"
+import { Kbd, KbdGroup } from "@/components/ui/kbd"
 import { ScrollArea } from "@/components/ui/scroll-area"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
+import { actionKeys } from "@/lib/actions/manifest"
 import type { DisplayPreferences, PreferencesChange } from "@/lib/ipc/settings"
 
 // The generated trigger dims inactive tabs to foreground/60, which misses AA
@@ -101,8 +102,12 @@ export function SettingsDialogView({
         <DialogHeader>
           <DialogTitle>Settings</DialogTitle>
           <DialogDescription>
-            Saved in this workspace. Open them from anywhere with <Kbd>⌘</Kbd>
-            <Kbd>,</Kbd>
+            Saved in this workspace. Open them from anywhere with{" "}
+            <KbdGroup>
+              {actionKeys("app.settings").map((key) => (
+                <Kbd key={key}>{key}</Kbd>
+              ))}
+            </KbdGroup>
           </DialogDescription>
         </DialogHeader>
 

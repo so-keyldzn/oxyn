@@ -268,8 +268,8 @@ clic droit sur chaque surface, raccourcis, palette, glisser-déposer, plusieurs
 fenêtres. Le comportement est dans [UX-SPEC](UX-SPEC.md#menus-raccourcis-et-gestes),
 les décisions dans [ADR-0041](adr/0041-registre-d-actions-menus-et-raccourcis.md),
 [ADR-0042](adr/0042-revue-sur-place-des-operations-destructrices.md) et
-[ADR-0043](adr/0043-multi-fenetre.md). Les lots 1 à 4 sont faits (le 4 sous
-la liste) ; les autres ne sont pas implémentés. Les interfaces sont écrites en shadcn/ui (`menubar`, `context-menu`, `command`,
+[ADR-0043](adr/0043-multi-fenetre.md). Les lots 1 à 5 sont faits (le 4 sous
+la liste), le 8 pour une fenêtre ; les autres ne sont pas implémentés. Les interfaces sont écrites en shadcn/ui (`menubar`, `context-menu`, `command`,
 `alert-dialog`, `kbd`), sauf la barre native de macOS, construite en Rust.
 
 Arbitrages de l'utilisateur, le 2026-09-25 : barre de menus aussi sous Windows
@@ -440,6 +440,51 @@ Lots, dans l'ordre :
    `RESTRICT_DEPENDENTS`, chacun prouvé par un test d'intégration du driver
    avant d'être déclaré (ADR-0042).
 5. **Palette et ouverture rapide** — `⌘K`, `⌘P`, feuille des raccourcis.
+   **Fait le 2026-09-25.** La palette (`components/oxyn/command-palette.tsx`),
+   l'ouverture rapide (`quick-open.tsx`) et la feuille (`shortcut-sheet.tsx`)
+   sont posées une fois par `features/actions/action-overlays.tsx`, ouvertes
+   par les actions `palette.open`, `object.quickOpen` et `help.shortcuts`, et
+   ne lisent que le registre : `lib/actions/listings.ts` en tire les entrées,
+   grisées avec la raison de `enabled`. `⌘P` passe par `search_catalog`, sous
+   la clé de requête de la recherche du catalogue : les objets chargés
+   seulement, bornés par le backend, aucune lecture du serveur. S'ajoutent au
+   registre et aux deux barres `New window`, `Export…`, le menu `Help`
+   (`Documentation`, `Keyboard shortcuts`), `Text size ▸`, `Theme ▸` et
+   `Format`. Le manifeste gagne deux champs, lus aussi par `menu.rs` : `parent`
+   (un sous-menu, un niveau) et `check` (un choix coché, `CheckMenuItem` natif,
+   état transmis par `set_menu_state` dans `checked`). Tenu par
+   `listings.test.ts` (la palette égale le registre du contexte, raisons
+   comprises ; `⌘/` selon la zone ; `⌘P` grisé et non absent sans catalogue),
+   `action-overlays.test.tsx` (`⌘P` n'appelle que `search_catalog`),
+   `manifest.test.ts`, les stories `Oxyn/CommandPalette`, `Oxyn/QuickOpen`,
+   `Oxyn/ShortcutSheet` et `Oxyn/AppMenubar` (`ThemeIsAChoice`), et les tests
+   de `menu.rs`. Arbitrages et écarts :
+   - `Settings…` reste sous Windows et Linux dans `File`, au-dessus d'`Exit`,
+     et UX-SPEC l'écrit désormais (arbitré le 2026-09-25) ;
+   - `Format` est présent partout, **grisé** avec sa raison : aucun formateur
+     SQL n'est livré (lot 9 ci-dessous) ;
+   - `Documentation` est présent, **grisé** avec sa raison, jusqu'à
+     `open_external` (reporté du lot 1) ;
+   - `New window` est présent, **grisé** avec sa raison, jusqu'au lot 7 ;
+   - `Export…` ouvre le menu d'export du résultat affiché, repéré par
+     `data-action-export` : son grisé et sa raison sont ceux du bouton. Mais
+     la fin d'un aperçu d'objet ne change aucune source du registre : sous
+     macOS, l'entrée native peut rester grisée jusqu'au prochain changement
+     de focus ou d'onglet (`invoke` réévalue de toute façon au clic) ;
+   - un choix coché déjà en vigueur, cliqué dans la barre native, voit sa
+     coche basculée par AppKit : le front renvoie l'état après chaque
+     activation native pour la rétablir ;
+   - `Open Recent ▸` et `Save as…` ne sont toujours pas dans la barre ;
+   - les `Kbd` de `⌘,`, `⌘↵`, `⌘J` et `⌘⌥B` écrits à la main (préférences,
+     résultat, panneau latéral) lisent désormais le manifeste ; ceux qui
+     restent décrivent des touches internes à un composant (`Esc`, `↵`), que
+     le manifeste ne déclare pas ;
+   - la feuille ne liste pas encore les touches internes aux composants
+     (flèches, `Home`, `End`…) qu'ADR-0041 § 2 lui fait montrer : elles ne
+     sont pas déclarées au manifeste ;
+   - `Open object…` est déclaré dans la zone `app`, grisé sous un dialogue :
+     le répartiteur n'y résout que cette zone, et `Ctrl+P` y aurait atteint
+     l'impression de WebView2.
 6. **Glisser-déposer** — interne sur événements de pointeur, dépôt de fichiers
    depuis le système (ADR-0041).
 7. **Multi-fenêtre** — abonnements par fenêtre, `WindowRegistry`, capability
@@ -450,6 +495,10 @@ Lots, dans l'ordre :
    `ShutdownSignal::ResolveTransactions`, `shutdown_acknowledged`,
    `cancel_exit`, journal de la sortie forcée (ADR-0043). **Fait pour une
    fenêtre**, voir ci-dessous.
+9. **Formatage SQL** — `Query ▸ Format`, déclaré et grisé depuis le lot 5 :
+   choisir un formateur par [`/versions`](../.claude/commands/versions.md),
+   dater le choix dans RESEARCH-NOTES, puis rendre l'action à l'éditeur.
+   Ajouté le 2026-09-25 par l'arbitrage du lot 5.
 
 **Lot 4 fait le 2026-09-25.** `backend/object_operations.rs` compose, revoit et
 soumet ; `review_object_operation` et `run_object_operation` sont les deux
