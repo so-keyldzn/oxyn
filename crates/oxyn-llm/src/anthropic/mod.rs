@@ -54,7 +54,7 @@ use crate::error::LlmError;
 use crate::http;
 use crate::provider::{self, LlmProvider, ProviderId};
 use crate::reach;
-use crate::secret::{ApiKey, redact_key};
+use crate::secret::ApiKey;
 use crate::stream::{describe_stream_error, events_stream};
 use crate::types::{ChatEvent, ChatRequest, ModelInfo};
 
@@ -271,8 +271,14 @@ impl AnthropicProvider {
     /// Le statut décide de la reprise ; le corps ne sert qu'à l'affichage, et
     /// il est tronqué et débarrassé de la clé par
     /// [`LlmError::from_response`].
-    async fn failure(&self, response: reqwest::Response) -> LlmError {
-        http::failure(&ProviderId::anthropic(), response, Some(&self.api_key)).await
+    async fn failure(&self, response: reqwest::Response, cancel: Option<&CancelToken>) -> LlmError {
+        http::failure(
+            &ProviderId::anthropic(),
+            response,
+            Some(&self.api_key),
+            cancel,
+        )
+        .await
     }
 
     /// Envoie une requête et rend sa réponse, en cédant à l'annulation.
@@ -294,23 +300,23 @@ impl AnthropicProvider {
             Either::Right((resultat, _)) => resultat.map_err(|err| self.transport(&err))?,
         };
         if !reponse.status().is_success() {
-            return Err(self.failure(reponse).await.into());
+            // Sous le même jeton que l'envoi : un corps d'erreur qui ne finit
+            // pas ne doit pas rendre « Annuler » inopérant.
+            return Err(self.failure(reponse, Some(cancel)).await.into());
         }
         Ok(reponse)
     }
 
-    /// Lit un corps JSON, en classant un défaut de décodage.
+    /// Lit un corps JSON sous borne, en classant un défaut de décodage.
+    ///
+    /// Sans jeton : les appels qui s'en servent ne reçoivent pas d'annulation
+    /// du trait. La taille et le délai restent bornés.
     async fn read_json<T: serde::de::DeserializeOwned>(
         &self,
         reponse: reqwest::Response,
+        subject: &str,
     ) -> Result<T> {
-        reponse.json::<T>().await.map_err(|err| {
-            LlmError::Decode {
-                provider: ProviderId::anthropic(),
-                detail: redact_key(&err.to_string(), Some(&self.api_key)),
-            }
-            .into()
-        })
+        Ok(http::read_json(&ProviderId::anthropic(), reponse, subject, None).await?)
     }
 }
 
@@ -352,13 +358,17 @@ impl LlmProvider for AnthropicProvider {
             // et le trait ne passe pas de jeton.
             let reponse = requete.send().await.map_err(|err| self.transport(&err))?;
             if !reponse.status().is_success() {
-                return Err(self.failure(reponse).await.into());
+                return Err(self.failure(reponse, None).await.into());
             }
 
-            let brut: wire::ModelsResponse = self.read_json(reponse).await?;
+            let brut: wire::ModelsResponse = self.read_json(reponse, "model list").await?;
             let encore = brut.has_more;
             let dernier = brut.last_id.clone();
             fiches.extend(wire::parse_models(brut));
+            // Borne cumulée : chaque page est bornée, pas leur somme.
+            if fiches.len() > http::MAX_MODELS {
+                return Err(http::too_many_models(&ProviderId::anthropic()).into());
+            }
 
             // `last_id` absent alors qu'il y aurait une suite : on s'arrête
             // plutôt que de redemander la même page indéfiniment.
@@ -380,9 +390,9 @@ impl LlmProvider for AnthropicProvider {
 
         let reponse = requete.send().await.map_err(|err| self.transport(&err))?;
         if !reponse.status().is_success() {
-            return Err(self.failure(reponse).await.into());
+            return Err(self.failure(reponse, None).await.into());
         }
-        let brut: wire::CountResponse = self.read_json(reponse).await?;
+        let brut: wire::CountResponse = self.read_json(reponse, "token count").await?;
         Ok(Some(brut.count()))
     }
 

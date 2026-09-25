@@ -365,7 +365,7 @@ pub(crate) struct ModelsResponse {
     /// Volontairement non typée : une entrée malformée ne doit pas faire
     /// échouer la liste entière. Chaque élément est analysé séparément par
     /// [`parse_models`].
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::http::bounded_entries")]
     pub(crate) data: Vec<serde_json::Value>,
 }
 

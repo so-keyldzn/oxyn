@@ -38,7 +38,7 @@ use crate::error::LlmError;
 use crate::http;
 use crate::provider::{self, LlmProvider, ProviderId};
 use crate::reach;
-use crate::secret::{ApiKey, redact_key};
+use crate::secret::ApiKey;
 use crate::types::{ChatEvent, ChatRequest, ModelInfo};
 
 /// Point d'accès local d'Ollama.
@@ -426,9 +426,10 @@ impl OpenAiCompatibleProvider {
         LlmError::from_transport(self.id.clone(), err, None)
     }
 
-    /// Transforme une réponse d'échec en erreur, corps expurgé.
-    async fn failure(&self, response: reqwest::Response) -> LlmError {
-        http::failure(&self.id, response, self.api_key.as_ref()).await
+    /// Transforme une réponse d'échec en erreur, corps expurgé et lu sous
+    /// borne — annulable quand l'appelant tient un jeton.
+    async fn failure(&self, response: reqwest::Response, cancel: Option<&CancelToken>) -> LlmError {
+        http::failure(&self.id, response, self.api_key.as_ref(), cancel).await
     }
 }
 
@@ -505,12 +506,12 @@ impl LlmProvider for OpenAiCompatibleProvider {
         let requete = self.apply_auth(self.client.get(url))?;
         let reponse = requete.send().await.map_err(|err| self.transport(&err))?;
         if !reponse.status().is_success() {
-            return Err(self.failure(reponse).await.into());
+            return Err(self.failure(reponse, None).await.into());
         }
-        let brut: wire::ModelsResponse = reponse.json().await.map_err(|err| LlmError::Decode {
-            provider: self.id.clone(),
-            detail: redact_key(&err.to_string(), self.api_key.as_ref()),
-        })?;
+        // Pas de jeton ici : le trait n'en passe pas. La lecture reste bornée
+        // en taille et en temps.
+        let brut: wire::ModelsResponse =
+            http::read_json(&self.id, reponse, "model list", None).await?;
         Ok(wire::parse_models(brut))
     }
 
@@ -554,7 +555,10 @@ impl LlmProvider for OpenAiCompatibleProvider {
         };
 
         if !reponse.status().is_success() {
-            return Err(self.failure(reponse).await.into());
+            // Le corps d'erreur se lit sous le même jeton que l'envoi : un
+            // statut d'échec suivi d'un corps qui ne finit pas ne doit pas
+            // rendre « Annuler » inopérant.
+            return Err(self.failure(reponse, Some(cancel)).await.into());
         }
 
         let octets = reponse

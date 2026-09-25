@@ -472,7 +472,7 @@ impl WireError {
 pub(crate) struct ModelsResponse {
     /// Volontairement non typée : une entrée malformée ne doit pas faire
     /// échouer la liste entière.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "crate::http::bounded_entries")]
     pub(crate) data: Vec<Value>,
     #[serde(default)]
     pub(crate) has_more: bool,

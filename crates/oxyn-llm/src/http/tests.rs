@@ -40,7 +40,10 @@ fn refused(issue: oxyn_core::Result<impl Sized>) -> OxynError {
 /// Ce que toute redirection refusée doit tenir, quel que soit le fournisseur.
 fn assert_refused(err: &OxynError, origin: &Server, target: &Server) {
     let rendu = format!("{err} {err:?}");
-    assert!(rendu.contains("redirect"), "the message names the cause: {rendu}");
+    assert!(
+        rendu.contains("redirect"),
+        "the message names the cause: {rendu}"
+    );
     assert!(!rendu.contains(SENTINEL), "{rendu}");
     assert!(
         !rendu.contains(&target.origin),
@@ -147,7 +150,11 @@ async fn gemini_client_does_not_follow_a_redirect_with_its_x_goog_api_key() {
             .send()
             .await
             .expect("the origin answers");
-        assert_eq!(response.status().as_u16(), status, "the redirect is not followed");
+        assert_eq!(
+            response.status().as_u16(),
+            status,
+            "the redirect is not followed"
+        );
         assert_eq!(target.hits(), 0, "{}", target.seen());
         assert!(
             origin
@@ -170,9 +177,7 @@ fn streamed_error(frame: &str) -> Vec<u8> {
 }
 
 /// Joue un flux jusqu'au bout et rend tous ses événements.
-async fn drained(
-    provider: &dyn LlmProvider,
-) -> Vec<crate::types::ChatEvent> {
+async fn drained(provider: &dyn LlmProvider) -> Vec<crate::types::ChatEvent> {
     use futures::StreamExt;
     let flux = provider
         .stream(question(), &CancelToken::new())
@@ -228,4 +233,225 @@ async fn an_anthropic_streamed_error_does_not_repeat_the_key() {
     let provider = AnthropicProvider::with_base_url(SENTINEL, &server.origin).expect("provider");
 
     assert_redacted(&drained(&provider).await);
+}
+
+// ── #12 : un corps hors flux se lit sous borne ─────────────────────────────
+
+use std::time::Duration;
+
+use super::{
+    MAX_ERROR_BODY_BYTES, MAX_JSON_BODY_BYTES, Read, failure, failure_within, read_json_within,
+    read_limited,
+};
+use crate::error::LlmError;
+
+/// Borne de sécurité des tests : si elle expire, c'est que la lecture attend
+/// un corps qui ne viendra jamais — le défaut que ces tests ferment. Aucun
+/// test ne l'attend pour réussir.
+const GUARD: Duration = Duration::from_secs(5);
+
+/// Des en-têtes de statut `status`, puis `body`, sur une connexion que le
+/// serveur ne ferme pas.
+fn open_body(status: u16, length: Option<usize>, body: &[u8]) -> Vec<u8> {
+    let mut reply = format!("HTTP/1.1 {status} Status\r\n").into_bytes();
+    if let Some(length) = length {
+        reply.extend_from_slice(format!("content-length: {length}\r\n").as_bytes());
+    }
+    reply.extend_from_slice(b"\r\n");
+    reply.extend_from_slice(body);
+    reply
+}
+
+/// Les en-têtes sont reçus : c'est la lecture du corps qu'on éprouve.
+async fn headers_of(server: &Server) -> reqwest::Response {
+    super::client(&ProviderId::openai())
+        .expect("client")
+        .get(&server.origin)
+        .send()
+        .await
+        .expect("headers arrive")
+}
+
+#[tokio::test]
+async fn cancel_ends_the_read_of_an_error_body_that_never_finishes() {
+    let server = Server::start(open_body(500, Some(1_000_000), b"partial diagnostic"), true).await;
+    let response = headers_of(&server).await;
+    let cancel = CancelToken::new();
+    let annule = cancel.clone();
+
+    let (err, ()) = tokio::time::timeout(
+        GUARD,
+        futures::future::join(
+            failure(&ProviderId::openai(), response, None, Some(&cancel)),
+            async move {
+                tokio::task::yield_now().await;
+                annule.cancel();
+            },
+        ),
+    )
+    .await
+    .expect("cancelling ends the read of an open body");
+    assert!(matches!(err, LlmError::Cancelled), "{err:?}");
+}
+
+#[tokio::test]
+async fn an_error_body_past_its_delay_keeps_the_status_and_what_arrived() {
+    let server = Server::start(open_body(503, Some(1_000_000), b"overloaded"), true).await;
+    let response = headers_of(&server).await;
+
+    let err = tokio::time::timeout(
+        GUARD,
+        failure_within(
+            &ProviderId::openai(),
+            response,
+            None,
+            None,
+            Duration::from_millis(50),
+        ),
+    )
+    .await
+    .expect("the delay bounds the read");
+    assert!(
+        matches!(&err, LlmError::Http { status: 503, message, .. } if message.contains("overloaded")),
+        "{err:?}"
+    );
+    assert!(err.is_retryable(), "the status still decides the class");
+}
+
+#[tokio::test]
+async fn an_error_body_is_never_held_past_its_bound() {
+    // Quatre mébioctets annoncés par rien, puis une connexion qui reste
+    // ouverte : lire jusqu'à la fin attendrait toujours.
+    let big = vec![b'x'; 4 * 1024 * 1024];
+    let server = Server::start(open_body(500, None, &big), true).await;
+    let response = headers_of(&server).await;
+
+    let lu = tokio::time::timeout(
+        GUARD,
+        read_limited(response, MAX_ERROR_BODY_BYTES, GUARD, None),
+    )
+    .await
+    .expect("the bound stops the read");
+    match lu {
+        Read::Overflow(corps) => assert_eq!(corps.len(), MAX_ERROR_BODY_BYTES),
+        _ => panic!("the bound is reported as such"),
+    }
+}
+
+#[tokio::test]
+async fn an_error_body_announced_long_is_read_up_to_its_bound_only() {
+    let big = vec![b'y'; 64 * 1024];
+    let server = Server::start(open_body(500, Some(1 << 30), &big), true).await;
+    let response = headers_of(&server).await;
+
+    let lu = tokio::time::timeout(
+        GUARD,
+        read_limited(response, MAX_ERROR_BODY_BYTES, GUARD, None),
+    )
+    .await
+    .expect("the bound stops the read");
+    assert!(matches!(lu, Read::Overflow(corps) if corps.len() == MAX_ERROR_BODY_BYTES));
+}
+
+#[tokio::test]
+async fn a_key_cut_by_the_bound_does_not_leave_its_start_behind() {
+    // Le serveur recopie la clé, et la connexion s'arrête au milieu.
+    let partial = format!("rejected key {}", SENTINEL.get(..12).unwrap_or_default());
+    let server = Server::start(open_body(401, Some(10_000), partial.as_bytes()), true).await;
+    let response = headers_of(&server).await;
+    let cle = ApiKey::new(SENTINEL);
+
+    let err = tokio::time::timeout(
+        GUARD,
+        failure_within(
+            &ProviderId::openai(),
+            response,
+            Some(&cle),
+            None,
+            Duration::from_millis(50),
+        ),
+    )
+    .await
+    .expect("the delay bounds the read");
+    let rendu = format!("{err} {err:?}");
+    assert!(
+        !rendu.contains(SENTINEL.get(..8).unwrap_or_default()),
+        "{rendu}"
+    );
+    assert!(matches!(err, LlmError::Http { status: 401, .. }), "{rendu}");
+}
+
+#[tokio::test]
+async fn a_model_list_announced_too_large_is_refused_by_name() {
+    let reply = open_body(200, Some(MAX_JSON_BODY_BYTES + 1), b"{\"data\":[");
+    let server = Server::start(reply, true).await;
+    let provider =
+        OpenAiCompatibleProvider::new(ProviderId::openai(), &format!("{}/v1", server.origin))
+            .expect("provider");
+
+    let err = refused(
+        tokio::time::timeout(GUARD, provider.models())
+            .await
+            .expect("refused without reading"),
+    );
+    let rendu = err.to_string();
+    assert!(rendu.contains("model list"), "{rendu}");
+    assert!(rendu.contains(&MAX_JSON_BODY_BYTES.to_string()), "{rendu}");
+}
+
+#[tokio::test]
+async fn a_model_list_without_length_is_refused_at_the_first_byte_too_many() {
+    let mut liste = b"{\"data\":[".to_vec();
+    liste.extend(std::iter::repeat_n(b' ', 4096));
+    let server = Server::start(open_body(200, None, &liste), true).await;
+    let response = headers_of(&server).await;
+
+    let err = tokio::time::timeout(
+        GUARD,
+        read_json_within::<serde_json::Value>(
+            &ProviderId::anthropic(),
+            response,
+            "model list",
+            None,
+            1024,
+        ),
+    )
+    .await
+    .expect("the bound stops the read")
+    .expect_err("too large");
+    assert!(
+        matches!(&err, LlmError::Decode { detail, .. } if detail.contains("model list is larger than 1024 bytes")),
+        "{err:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_anthropic_model_list_announced_too_large_is_refused_by_name() {
+    let reply = open_body(200, Some(MAX_JSON_BODY_BYTES + 1), b"{");
+    let server = Server::start(reply, true).await;
+    let provider = AnthropicProvider::with_base_url(SENTINEL, &server.origin).expect("provider");
+
+    let err = refused(
+        tokio::time::timeout(GUARD, provider.models())
+            .await
+            .expect("refused without reading"),
+    );
+    assert!(err.to_string().contains("model list"), "{err}");
+}
+
+#[tokio::test]
+async fn a_model_list_with_too_many_entries_is_refused_by_name() {
+    // Des entrées minimales : la borne en octets ne les arrête pas.
+    let mut liste = String::from("{\"data\":[");
+    liste.push_str(&vec!["{}"; super::MAX_MODELS + 1].join(","));
+    liste.push_str("]}");
+    let server = Server::start(open_body(200, Some(liste.len()), liste.as_bytes()), false).await;
+    let provider =
+        OpenAiCompatibleProvider::new(ProviderId::openai(), &format!("{}/v1", server.origin))
+            .expect("provider");
+
+    let err = refused(provider.models().await);
+    let rendu = err.to_string();
+    assert!(rendu.contains(&super::MAX_MODELS.to_string()), "{rendu}");
+    assert!(rendu.contains("model list"), "{rendu}");
 }
