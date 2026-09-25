@@ -7,12 +7,10 @@ import { addressKey, staleExpanded } from "@/components/oxyn/catalog-tree"
 import type { OpenTarget } from "@/components/oxyn/catalog-tree"
 import { Sidebar, SidebarRail } from "@/components/ui/sidebar"
 import { usePinToQuestion } from "@/features/assistant/object-pin"
-import { copyToClipboard } from "@/features/metadata/clipboard"
 import { useObjectOperation } from "@/features/metadata/object-operation-flow"
 import { useRefreshSignal } from "@/features/metadata/refresh-signals"
-import { facetsKey } from "@/features/metadata/use-relation-facets"
 import { hasCapability } from "@/features/session"
-import type { CopyAsForm } from "@/lib/actions/targets"
+import { useCatalogCopies } from "@/features/workspace/catalog-copies"
 import { nameTransfer } from "@/features/workspace/name-transfer"
 import { BackendError, backend, newCommandId } from "@/lib/ipc/client"
 import type { SessionPlace } from "@/lib/ipc/consoles"
@@ -24,14 +22,6 @@ import type {
 } from "@/lib/ipc/types"
 
 const CATALOG_CAPABILITIES = ["SCHEMAS", "TABLES", "VIEWS", "ROUTINES"]
-
-/** What the clipboard's toast calls each form of `Copy as ▸`. */
-const COPIED_AS: Record<CopyAsForm, string> = {
-  quotedName: "Quoted name",
-  selectAll: "SELECT *",
-  insertTemplate: "INSERT template",
-  ddl: "DDL",
-}
 
 /**
  * Whether the source has a catalog to draw and search: the interface is
@@ -233,74 +223,7 @@ export function CatalogSidebar({
     void reloadStale()
   })
 
-  const copyName = async (node: CatalogNode) => {
-    try {
-      const facets = await metadata.relationFacets(
-        open.connection,
-        node.address
-      )
-      await copyToClipboard(facets.qualifiedName, "Qualified name")
-    } catch (caught) {
-      setProblem(problemOf(caught))
-    }
-  }
-
-  // The definition the object view's DDL tab reads, by the same facet: read
-  // once if never read, and written back under that tab's key.
-  const definitionOf = async (node: CatalogNode) => {
-    const key = facetsKey(open.connection, node.address)
-    const cached = await queryClient.fetchQuery({
-      queryKey: key,
-      queryFn: () => metadata.relationFacets(open.connection, node.address),
-    })
-    if (cached.definition.freshness.state === "fetched")
-      return cached.definition.value
-    const outcome = await metadata.refreshRelationFacet(
-      newCommandId(),
-      open.connection,
-      open.session,
-      node.address,
-      "definition"
-    )
-    switch (outcome.type) {
-      case "cancelled":
-        throw new Error("Reading the definition was cancelled.")
-      case "denied":
-        throw new Error(outcome.reason)
-      case "needsApproval":
-        // A metadata read waits for nobody: refused, and said.
-        void backend.decide(outcome.command, false)
-        throw new Error(
-          "The connection policy requires an approval for this metadata read."
-        )
-      default:
-    }
-    const read = await metadata.relationFacets(open.connection, node.address)
-    queryClient.setQueryData(key, read)
-    return read.definition.value
-  }
-
-  // Every form but DDL is composed by the backend, identifiers quoted by the
-  // driver (I-10); nothing runs, the text goes to the clipboard.
-  const copyAs = async (node: CatalogNode, form: CopyAsForm) => {
-    try {
-      if (form === "ddl") {
-        const definition = await definitionOf(node)
-        if (definition === null)
-          throw new Error("No definition was reported for this object.")
-        await copyToClipboard(definition.sql, COPIED_AS.ddl)
-        return
-      }
-      const sql = await metadata.composeObjectSql(
-        open.connection,
-        node.address,
-        form
-      )
-      await copyToClipboard(sql, COPIED_AS[form])
-    } catch (caught) {
-      setProblem(problemOf(caught))
-    }
-  }
+  const copies = useCatalogCopies(open)
 
   const cancelRefresh = () => {
     if (!rootCommand || cancelling) return
@@ -339,7 +262,7 @@ export function CatalogSidebar({
         notice={notice}
         onDismissProblem={() => setProblem(null)}
         onOpen={onOpen ?? ((node) => onSelect(node))}
-        onCopyName={(node) => void copyName(node)}
+        onCopyName={copies.copyName}
         nameTransfer={nameTransfer(open.connection, (caught) =>
           setProblem(problemOf(caught))
         )}
@@ -351,7 +274,7 @@ export function CatalogSidebar({
         }}
         copyAs={{
           definition: hasCapability(open, "OBJECT_DEFINITION"),
-          onCopy: (node, form) => void copyAs(node, form),
+          onCopy: copies.copyAs,
         }}
         onNewConsole={
           onNewConsole && hasCapability(open, "SESSION_CONTEXT")
