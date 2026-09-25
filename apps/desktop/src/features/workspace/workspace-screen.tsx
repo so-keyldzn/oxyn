@@ -32,6 +32,10 @@ import { LibrarySidebar } from "@/features/library/library-sidebar"
 import { RetainedResultTab } from "@/features/library/retained-result-tab"
 import { inspectObject } from "@/features/metadata/inspection"
 import { setSqlDraft } from "@/features/session"
+import {
+  changePreferences,
+  preferencesStore,
+} from "@/features/settings/preferences"
 import { CatalogSidebar } from "@/features/workspace/catalog-sidebar"
 import { ObjectView } from "@/features/workspace/object-view"
 import {
@@ -135,6 +139,10 @@ export function WorkspaceScreen({
   const [leftView, setLeftView] = React.useState<LeftView>("catalog")
   const [asideOpen, setAsideOpen] = React.useState(aside.length > 0)
   const [asideActive, setAsideActive] = React.useState(aside[0]?.id ?? "")
+  const inspectorWidth = useStore(
+    preferencesStore,
+    (state) => state.preferences.inspectorWidth
+  )
   // `Ask AI` exists only when the assistant panel does: the column composes
   // itself from what is declared (docs/UX-SPEC.md).
   const hasAssistant = aside.some((item) => item.id === "assistant")
@@ -425,6 +433,10 @@ export function WorkspaceScreen({
         }
         asideOpen={asideOpen}
         onAsideOpenChange={setAsideOpen}
+        asideWidth={inspectorWidth}
+        onAsideWidthCommit={(width) =>
+          void changePreferences({ inspectorWidth: width })
+        }
         compact={compact}
         onOpenSettings={onOpenSettings}
         onDisconnect={onDisconnect}

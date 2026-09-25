@@ -34,6 +34,17 @@ import { cn } from "@/lib/utils"
 
 export type LeftView = "catalog" | "library"
 
+/**
+ * The right column's width in logical pixels (ADR-0013): 280 comes from
+ * Figma and is what Home restores; the bounds are implementation guards,
+ * the same the backend validates before saving.
+ */
+export const ASIDE_WIDTH = { initial: 280, min: 240, max: 480 } as const
+
+function boundedAsideWidth(width: number) {
+  return Math.min(ASIDE_WIDTH.max, Math.max(ASIDE_WIDTH.min, Math.round(width)))
+}
+
 function IconAction({
   label,
   keys,
@@ -99,6 +110,8 @@ export function WorkspaceLayout({
   aside = null,
   asideOpen = false,
   onAsideOpenChange,
+  asideWidth = ASIDE_WIDTH.initial,
+  onAsideWidthCommit,
   compact,
   onOpenSettings,
   onDisconnect,
@@ -127,6 +140,13 @@ export function WorkspaceLayout({
   aside?: React.ReactNode
   asideOpen?: boolean
   onAsideOpenChange?: (open: boolean) => void
+  /** The saved wide-screen width of the right column, in pixels. */
+  asideWidth?: number
+  /**
+   * The width the user settled on: once a drag is released or a key pressed,
+   * never on every frame (docs/UX-SPEC.md).
+   */
+  onAsideWidthCommit?: (width: number) => void
   compact: boolean
   onOpenSettings?: () => void
   onDisconnect?: () => void
@@ -143,6 +163,39 @@ export function WorkspaceLayout({
     if (asideOpen) panel.expand()
     else panel.collapse()
   }, [asideOpen, compact, asidePanel])
+
+  // `defaultSize` only counts at mount: a width read or restored later
+  // reaches the open column here.
+  const width = boundedAsideWidth(asideWidth)
+  React.useEffect(() => {
+    const panel = asidePanel.current
+    if (compact || !asideOpen || !panel || panel.isCollapsed()) return
+    if (Math.round(panel.getSize().inPixels) !== width) panel.resize(width)
+  }, [width, asideOpen, compact, asidePanel])
+
+  // The layout settles once the pointer is released or a key has resized,
+  // never per frame. The width is the panel's measured one, read on the next
+  // frame: a key press has not redrawn the panel yet when the layout settles.
+  // A collapse is closing the column, not a width to remember.
+  const commitAsideWidth = (meta: { isUserInteraction: boolean }) => {
+    if (!meta.isUserInteraction) return
+    requestAnimationFrame(() => {
+      const panel = asidePanel.current
+      if (!panel || panel.isCollapsed()) return
+      onAsideWidthCommit?.(boundedAsideWidth(panel.getSize().inPixels))
+    })
+  }
+
+  // Home restores 280 px (docs/UX-SPEC.md), where the library would move the
+  // handle to its end. Taken in the capture phase: the library listens on the
+  // handle itself and skips an event already handled.
+  const restoreAsideWidth = (event: React.KeyboardEvent) => {
+    const panel = asidePanel.current
+    if (event.key !== "Home" || !panel) return
+    event.preventDefault()
+    panel.resize(ASIDE_WIDTH.initial)
+    onAsideWidthCommit?.(ASIDE_WIDTH.initial)
+  }
 
   // Escape closes the overlaid column (docs/UX-SPEC.md). Watched on the whole
   // workspace, not on the column: it is opened from a button in the top bar,
@@ -276,6 +329,7 @@ export function WorkspaceLayout({
             <ResizablePanelGroup
               orientation="horizontal"
               className="min-h-0 flex-1"
+              onLayoutChanged={(_layout, meta) => commitAsideWidth(meta)}
             >
               {/* Unit-less sizes are percentages: the work area keeps at
                   least 40 % of the group, whatever the side column asks. */}
@@ -286,6 +340,8 @@ export function WorkspaceLayout({
                 <>
                   <ResizableHandle
                     withHandle
+                    aria-label="Resize side panel"
+                    onKeyDownCapture={restoreAsideWidth}
                     className={cn(!asideOpen && "hidden")}
                   />
                   <ResizablePanel
@@ -293,9 +349,9 @@ export function WorkspaceLayout({
                     panelRef={asidePanel}
                     collapsible
                     collapsedSize="0px"
-                    defaultSize={asideOpen ? "320px" : "0px"}
-                    minSize="240px"
-                    maxSize="560px"
+                    defaultSize={asideOpen ? `${width}px` : "0px"}
+                    minSize={`${ASIDE_WIDTH.min}px`}
+                    maxSize={`${ASIDE_WIDTH.max}px`}
                     onResize={() => {
                       if (asidePanel.current?.isCollapsed())
                         onAsideOpenChange?.(false)

@@ -261,6 +261,102 @@ export const WithSidePanel: Story = {
   },
 }
 
+function asidePanelOf(canvas: ReturnType<typeof within>) {
+  const content: HTMLElement = canvas.getByText("Row 12 of invoices")
+  const panel = content.closest<HTMLElement>('[data-slot="resizable-panel"]')
+  if (!panel) throw new Error("no side panel")
+  return panel
+}
+
+async function expectAsideWidth(panel: HTMLElement, width: number) {
+  await waitFor(() =>
+    expect(Math.round(panel.getBoundingClientRect().width)).toBe(width)
+  )
+}
+
+/**
+ * The column opens at 280 px, the width Figma draws (ADR-0013); a saved
+ * width replaces it, and one outside 240–480 px is brought back inside.
+ */
+export const SidePanelWidth: Story = {
+  args: WithSidePanel.args,
+  play: async ({ canvas }) => {
+    await expectAsideWidth(asidePanelOf(canvas), 280)
+  },
+}
+
+export const SidePanelSavedWidthOutOfBounds: Story = {
+  args: { ...WithSidePanel.args, asideWidth: 900 },
+  play: async ({ canvas }) => {
+    await expectAsideWidth(asidePanelOf(canvas), 480)
+  },
+}
+
+export const SidePanelSavedWidthBelowBounds: Story = {
+  args: { ...WithSidePanel.args, asideWidth: 100 },
+  play: async ({ canvas }) => {
+    await expectAsideWidth(asidePanelOf(canvas), 240)
+  },
+}
+
+/**
+ * The handle works from the keyboard: arrows stop at 480 px, Home restores
+ * 280 px, and each key saves the width once.
+ */
+export const SidePanelHandleKeyboard: Story = {
+  args: { ...WithSidePanel.args, onAsideWidthCommit: fn() },
+  play: async ({ canvas, args }) => {
+    const panel = asidePanelOf(canvas)
+    const handle = canvas.getByRole("separator", { name: "Resize side panel" })
+    handle.focus()
+    for (let step = 0; step < 8; step++) await userEvent.keyboard("{ArrowLeft}")
+    await expectAsideWidth(panel, 480)
+    await expect(args.onAsideWidthCommit).toHaveBeenLastCalledWith(480)
+
+    await userEvent.keyboard("{Home}")
+    await expectAsideWidth(panel, 280)
+    await expect(args.onAsideWidthCommit).toHaveBeenLastCalledWith(280)
+  },
+}
+
+/** A drag saves once, on release — never on every frame (docs/UX-SPEC.md). */
+export const SidePanelHandleDrag: Story = {
+  args: { ...WithSidePanel.args, onAsideWidthCommit: fn() },
+  play: async ({ canvas, args }) => {
+    const panel = asidePanelOf(canvas)
+    const handle = canvas.getByRole("separator", { name: "Resize side panel" })
+    // A synthetic pointer is not one the browser tracks, so it cannot be
+    // captured; the capture changes nothing to what the handle computes.
+    handle.setPointerCapture = () => undefined
+    handle.releasePointerCapture = () => undefined
+    const { left, top, height } = handle.getBoundingClientRect()
+    const y = top + height / 2
+    const at = (x: number) => ({
+      clientX: x,
+      clientY: y,
+      pointerType: "mouse",
+      button: 0,
+      buttons: 1,
+      bubbles: true,
+    })
+    handle.dispatchEvent(new PointerEvent("pointerdown", at(left)))
+    for (const dx of [20, 40, 60, 80]) {
+      handle.ownerDocument.dispatchEvent(
+        new PointerEvent("pointermove", at(left - dx))
+      )
+    }
+    await expectAsideWidth(panel, 360)
+    await expect(args.onAsideWidthCommit).not.toHaveBeenCalled()
+
+    handle.ownerDocument.dispatchEvent(
+      new PointerEvent("pointerup", at(left - 80))
+    )
+    await waitFor(() => expect(args.onAsideWidthCommit).toHaveBeenCalled())
+    await expect(args.onAsideWidthCommit).toHaveBeenCalledTimes(1)
+    await expect(args.onAsideWidthCommit).toHaveBeenCalledWith(360)
+  },
+}
+
 /**
  * In compact the side panel overlays the work area; Escape closes it —
  * including from the bar that opened it, which is where the focus sits after
