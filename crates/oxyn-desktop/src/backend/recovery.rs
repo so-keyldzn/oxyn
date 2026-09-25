@@ -264,21 +264,29 @@ impl Backend {
     }
 
     /// Asks the webview to flush, waits for it and for local writes, then
-    /// records the close. Each wait is bounded; an unconfirmed close is left
-    /// unwritten on purpose.
+    /// records the close. Each wait is bounded.
+    ///
+    /// A webview that does not confirm its flush — silent, unreachable, late —
+    /// does not keep the close unwritten: its drafts are at most 250 ms old
+    /// (ADR-0024), the loss ADR-0040 accepts. Only a local write still running
+    /// past its grace leaves the close unwritten, never recorded over it
+    /// (ADR-0021).
     pub(crate) async fn shutdown(&self) {
+        self.shutdown_within(FLUSH_GRACE).await;
+    }
+
+    async fn shutdown_within(&self, flush_grace: Duration) {
         let local = &self.inner.workbench.local;
         let channel = local.shutdown.lock().clone();
-        // The close is recorded all the same: a webview that cannot answer
-        // must not keep the window open, and its drafts are at most 250 ms
-        // old (ADR-0024). The line says which drafts may be missing.
+        // Recorded all the same, see above: the warning says which drafts may
+        // be missing.
         match channel {
             None => tracing::warn!("no webview subscribed to the shutdown; drafts not flushed"),
             Some(channel) => {
                 let flushed = local.flushed.notified();
                 if channel.send(ShutdownSignal::FlushDrafts).is_err() {
                     tracing::warn!("the webview could not be asked to flush its drafts");
-                } else if tokio::time::timeout(FLUSH_GRACE, flushed).await.is_err() {
+                } else if tokio::time::timeout(flush_grace, flushed).await.is_err() {
                     tracing::warn!("the webview did not confirm its drafts were flushed");
                 }
             }
@@ -375,6 +383,133 @@ mod tests {
             .expect("the shutdown is bounded");
         assert!(first.shutdown_finished());
         // Long enough for an unrecorded close to read as a crash.
+        exit_and_age(&store, first);
+
+        let next = Backend::assemble(store, secrets).expect("relaunch");
+        assert!(!next.recovery_status().abnormal);
+    }
+
+    /// A webview subscribed to the shutdown. `confirms` says whether it answers
+    /// `FlushDrafts`; `reachable` whether the signal reaches it at all. Holds
+    /// the backend weakly: the backend owns the channel.
+    fn webview(backend: &Backend, confirms: bool, reachable: bool) -> Arc<AtomicUsize> {
+        let asked = Arc::new(AtomicUsize::new(0));
+        let count = Arc::clone(&asked);
+        let inner = Arc::downgrade(&backend.inner);
+        backend.subscribe_shutdown(Channel::new(move |_| {
+            count.fetch_add(1, Ordering::SeqCst);
+            if !reachable {
+                return Err(tauri::Error::FailedToReceiveMessage);
+            }
+            if let (true, Some(inner)) = (confirms, inner.upgrade()) {
+                Backend { inner }.shutdown_flushed();
+            }
+            Ok(())
+        }));
+        asked
+    }
+
+    /// Runs the shutdown of `launch`, bounded well under `flush_grace` when the
+    /// webview confirms, then ends the launch.
+    fn shut_down(
+        runtime: &tokio::runtime::Runtime,
+        store: &Store,
+        launch: Backend,
+        flush_grace: Duration,
+    ) {
+        runtime
+            .block_on(async {
+                tokio::time::timeout(Duration::from_secs(30), launch.shutdown_within(flush_grace))
+                    .await
+            })
+            .expect("the shutdown is bounded");
+        assert!(launch.shutdown_finished());
+        exit_and_age(store, launch);
+    }
+
+    /// The webview confirms its flush: the shutdown goes on at once, not at
+    /// the end of the grace, and the next launch speaks of no crash.
+    #[test]
+    fn a_confirmed_flush_records_the_close_without_waiting_for_the_grace() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("a test runtime starts");
+        let _guard = runtime.enter();
+        let store = Arc::new(Store::open_in_memory().expect("in-memory store"));
+        let secrets = Arc::new(oxyn_secrets::MemorySecretStore::new());
+
+        let first = Backend::assemble(Arc::clone(&store), secrets.clone()).expect("launch");
+        let asked = webview(&first, true, true);
+        // Longer than the outer bound: waiting for it would fail the test.
+        shut_down(&runtime, &store, first, Duration::from_secs(3600));
+        assert_eq!(
+            asked.load(Ordering::SeqCst),
+            1,
+            "the webview was asked once"
+        );
+
+        let next = Backend::assemble(store, secrets).expect("relaunch");
+        assert!(!next.recovery_status().abnormal);
+    }
+
+    /// A webview that never confirms, or cannot be reached: the close is
+    /// recorded all the same (ADR-0040), after the grace, and the running
+    /// sessions are still closed. Recovery is not offered for drafts at most
+    /// 250 ms old.
+    #[test]
+    fn an_unconfirmed_flush_still_records_the_close_after_the_grace() {
+        for reachable in [true, false] {
+            let runtime = tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()
+                .expect("a test runtime starts");
+            let _guard = runtime.enter();
+            let store = Arc::new(Store::open_in_memory().expect("in-memory store"));
+            let secrets = Arc::new(oxyn_secrets::MemorySecretStore::new());
+
+            let first = Backend::assemble(Arc::clone(&store), secrets.clone()).expect("launch");
+            let asked = webview(&first, false, reachable);
+            let sessions = Arc::clone(&first.inner);
+            shut_down(&runtime, &store, first, Duration::from_millis(100));
+            assert_eq!(asked.load(Ordering::SeqCst), 1);
+            assert!(sessions.executor.sessions().is_empty());
+            assert!(sessions.executor.running().is_empty());
+            drop(sessions);
+
+            let next = Backend::assemble(store, secrets).expect("relaunch");
+            assert!(
+                !next.recovery_status().abnormal,
+                "reachable: {reachable}; an unconfirmed flush is not a crash"
+            );
+        }
+    }
+
+    /// The confirmation arrives once the close is recorded: it changes
+    /// nothing, and the next launch speaks of no crash.
+    #[test]
+    fn a_late_flush_confirmation_changes_nothing() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("a test runtime starts");
+        let _guard = runtime.enter();
+        let store = Arc::new(Store::open_in_memory().expect("in-memory store"));
+        let secrets = Arc::new(oxyn_secrets::MemorySecretStore::new());
+
+        let first = Backend::assemble(Arc::clone(&store), secrets.clone()).expect("launch");
+        webview(&first, false, true);
+        runtime
+            .block_on(async {
+                tokio::time::timeout(
+                    Duration::from_secs(30),
+                    first.shutdown_within(Duration::from_millis(100)),
+                )
+                .await
+            })
+            .expect("the shutdown is bounded");
+        first.shutdown_flushed();
+        assert!(first.shutdown_finished());
         exit_and_age(&store, first);
 
         let next = Backend::assemble(store, secrets).expect("relaunch");
