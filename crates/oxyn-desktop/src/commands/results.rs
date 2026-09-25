@@ -10,7 +10,8 @@ use tauri_plugin_dialog::DialogExt;
 use super::parse;
 use crate::backend::Backend;
 use crate::ipc::results::{
-    ExportFormatChoice, FindAnswer, ResultWindow, ValuePageView, export_format, suggested_file_name,
+    CopiedRows, CopyRowsRequest, CopySpec, ExportFormatChoice, FindAnswer, ResultWindow,
+    ValuePageView, export_format, suggested_file_name,
 };
 use crate::ipc::{CommandOutcome, IpcError, ResultColumn};
 
@@ -115,6 +116,45 @@ pub async fn export_result(
         .export(command_id, connection, result, format, destination)
         .await
         .map(Some)
+}
+
+/// Rows of a held result as text for the clipboard; runs nothing.
+///
+/// `async`: the rows may have spilled to disk, and are read on the blocking
+/// pool ([I-05](../../../../CLAUDE.md#i-05)).
+#[tauri::command]
+pub async fn copy_result_rows(
+    backend: State<'_, Backend>,
+    request: CopyRowsRequest,
+) -> Result<CopiedRows, IpcError> {
+    let CopyRowsRequest {
+        result,
+        offset,
+        count,
+        columns,
+        format,
+        header,
+        connection,
+        address,
+    } = request;
+    let connection = connection
+        .as_deref()
+        .map(|connection| parse("connection", connection))
+        .transpose()?;
+    backend
+        .copy_result_rows(
+            parse("result", &result)?,
+            connection,
+            address,
+            CopySpec {
+                offset,
+                count,
+                columns,
+                format,
+                header,
+            },
+        )
+        .await
 }
 
 /// `null` when the result has expired.

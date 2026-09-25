@@ -425,6 +425,21 @@ pub enum RelationFacet {
     Definition,
 }
 
+/// The texts the catalog's « Copy as » entries compose for a relation.
+///
+/// Composed in Rust, quoted by the dialect, and copied — never run
+/// ([I-10](../../../../CLAUDE.md#i-10)).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum ObjectSqlForm {
+    /// The qualified name, as the object view shows it.
+    QuotedName,
+    /// `SELECT *` over the relation.
+    SelectAll,
+    /// `INSERT` naming every column the catalog has read, with placeholders.
+    InsertTemplate,
+}
+
 /// A relation the catalog search found among what is already loaded.
 ///
 /// The search never introspects: an object whose level was never expanded is

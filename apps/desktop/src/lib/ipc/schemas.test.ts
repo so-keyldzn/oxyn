@@ -61,4 +61,40 @@ describe("the boundary's modules", () => {
       }).success
     ).toBe(true)
   })
+
+  it("mirror the copy commands' names exactly", () => {
+    // The Rust enums are `camelCase`: `inList`, `insertTemplate`. A
+    // snake_case spelling on either side fails every call, not a rare one.
+    expect(results.CopyRowsFormat.options).toEqual([
+      "tsv",
+      "csv",
+      "json",
+      "markdown",
+      "insert",
+      "inList",
+    ])
+    expect(metadata.ObjectSqlForm.options).toEqual([
+      "quotedName",
+      "selectAll",
+      "insertTemplate",
+    ])
+    expect(
+      results.CopiedRows.safeParse({ text: "1\t2", rows: 1 }).success
+    ).toBe(true)
+    expect(results.CopiedRows.safeParse({ text: "", rows: -1 }).success).toBe(
+      false
+    )
+    expect(
+      results.CopyRowsRequest.safeParse({
+        result: "r",
+        offset: 0,
+        count: 2,
+        columns: [1, 0],
+        format: "inList",
+        header: false,
+        connection: null,
+        address: null,
+      }).success
+    ).toBe(true)
+  })
 })

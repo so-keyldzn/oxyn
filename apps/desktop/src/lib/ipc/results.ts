@@ -6,7 +6,12 @@
 import { z } from "zod"
 
 import { call, Nothing } from "./client"
-import { CommandOutcome, ResultColumn, ResultWindow } from "./types"
+import {
+  CatalogAddress,
+  CommandOutcome,
+  ResultColumn,
+  ResultWindow,
+} from "./types"
 
 /**
  * The largest window one page call returns (`MAX_PAGE_ROWS`). A page is also
@@ -47,6 +52,51 @@ export const ExportFormatChoice = z.object({
   supported: z.boolean(),
 })
 export type ExportFormatChoice = z.infer<typeof ExportFormatChoice>
+
+/** The most rows one copy holds (`MAX_COPY_ROWS`); refused above it. */
+export const MAX_COPY_ROWS = 2000
+
+/**
+ * A « Copy rows as » format. The first four render values as the grid shows
+ * them; `insert` and `inList` compose SQL in Rust, quoted and escaped by the
+ * connection's dialect. None of them runs anything.
+ */
+export const CopyRowsFormat = z.enum([
+  "tsv",
+  "csv",
+  "json",
+  "markdown",
+  "insert",
+  "inList",
+])
+export type CopyRowsFormat = z.infer<typeof CopyRowsFormat>
+
+export const CopiedRows = z.object({
+  text: z.string(),
+  rows: z.number().int().nonnegative(),
+})
+export type CopiedRows = z.infer<typeof CopiedRows>
+
+/**
+ * Which rows of a held result to copy, and how (`CopyRowsRequest`).
+ *
+ * `count` is at most `MAX_COPY_ROWS` and stays within the rows the result
+ * holds; `columns` are Arrow indexes in the order the grid shows them.
+ * `connection` is required for `insert` and `inList`, whose literals follow
+ * its dialect, and to read rows that spilled to disk: pass it whenever it is
+ * known. `address` is the relation an `insert` writes into.
+ */
+export const CopyRowsRequest = z.object({
+  result: z.string(),
+  offset: z.number().int().nonnegative(),
+  count: z.number().int().nonnegative(),
+  columns: z.array(z.number().int().nonnegative()),
+  format: CopyRowsFormat,
+  header: z.boolean(),
+  connection: z.string().nullable(),
+  address: CatalogAddress.nullable(),
+})
+export type CopyRowsRequest = z.infer<typeof CopyRowsRequest>
 
 export const results = {
   /**
@@ -96,6 +146,15 @@ export const results = {
       format,
       suggestedName,
     }),
+
+  /**
+   * Rows of a held result as text for the clipboard. Reads the buffer only —
+   * never the rest of the cursor, never the query again — and runs nothing.
+   * Refused, never trimmed: past `MAX_COPY_ROWS`, outside the rows held, on a
+   * column type with no SQL literal (the message names the column).
+   */
+  copyResultRows: (request: CopyRowsRequest) =>
+    call("copy_result_rows", CopiedRows, { request }),
 
   /** `null` when the result has expired. */
   findInResult: (

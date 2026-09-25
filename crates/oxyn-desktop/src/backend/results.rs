@@ -1,4 +1,5 @@
-//! Results the backend holds: windows of rows, search, value pages, export.
+//! Results the backend holds: windows of rows, search, value pages, export,
+//! rows copied as text.
 //!
 //! A result is never re-run to be read again (ADR-0012, ADR-0017). Rows already
 //! in memory are formatted from the buffer, as the grid reads them; a
@@ -7,19 +8,26 @@
 //! reads happen on the blocking pool, never on the thread that runs the window
 //! ([I-05](../../../../CLAUDE.md#i-05)).
 
+mod copy;
+
 use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 use oxyn_core::{Actor, CancelToken, Command, CommandId, ConnectionId, ExportFormat, ResultId};
-use oxyn_data::{BatchIndex, FindOutcome, FormatOptions, ResultBuffer, find_rows, format_cell};
+use oxyn_data::{
+    BatchIndex, FindOutcome, FormatOptions, NumberGrouping, ResultBuffer, find_rows, format_cell,
+};
 use oxyn_exec::Outcome;
 use parking_lot::Mutex;
 
+use self::copy::SqlTarget;
 use super::Backend;
+use super::metadata::qualified_name;
 use crate::ipc::results::{
-    ExportFormatChoice, FindAnswer, ResultWindow, ValuePageView, export_formats, matches_in_window,
+    CopiedRows, CopyRowsFormat, CopySpec, ExportFormatChoice, FindAnswer, ResultWindow,
+    ValuePageView, export_formats, matches_in_window,
 };
-use crate::ipc::{Cell, CommandOutcome, IpcError, ResultColumn, ResultPage};
+use crate::ipc::{CatalogAddress, Cell, CommandOutcome, IpcError, ResultColumn, ResultPage};
 
 /// The largest window of rows one page call returns.
 ///
@@ -118,7 +126,113 @@ impl Backend {
         let Some(buffer) = self.inner.executor.result_on(connection, result)? else {
             return Ok(ResultWindow::Expired);
         };
-        for batch in spilled_batches(&buffer, offset, limit.min(MAX_PAGE_ROWS)) {
+        let spilled = spilled_batches(&buffer, offset, limit.min(MAX_PAGE_ROWS));
+        if !self.load_spilled(connection, result, spilled).await? {
+            return Ok(ResultWindow::Expired);
+        }
+        let options = self.format_options();
+        let page = blocking(move || format_window(&buffer, offset, limit, &options)).await??;
+        Ok(ResultWindow::Page(page))
+    }
+
+    /// Rows of a held result as text for the clipboard, in one of the « Copy
+    /// rows as » formats.
+    ///
+    /// Reads the buffer only: never the rest of the cursor, never the query
+    /// again (ADR-0017). With `connection`, the result must belong to it —
+    /// checked by `Command::ReadResultPage` before anything is composed —,
+    /// which also brings back a spilled batch; without it, only rows in
+    /// memory copy, and never as SQL. Nothing composed
+    /// here runs: `INSERT` and `IN` lists quote identifiers and escape values
+    /// by the connection's dialect, and go to the clipboard
+    /// ([I-10](../../../../CLAUDE.md#i-10)). Bounded by
+    /// `MAX_COPY_ROWS` and `MAX_COPY_BYTES` (`results/copy.rs`); an expired result
+    /// is an error here, since there is no window to draw instead.
+    pub async fn copy_result_rows(
+        &self,
+        result: ResultId,
+        connection: Option<ConnectionId>,
+        address: Option<CatalogAddress>,
+        spec: CopySpec,
+    ) -> Result<CopiedRows, IpcError> {
+        let expired = || IpcError::invalid("This result has expired; run the query again to copy");
+        let batches = |buffer: &ResultBuffer| {
+            spilled_batches(buffer, spec.offset, spec.count.min(copy::MAX_COPY_ROWS))
+        };
+        let buffer = if let Some(connection) = connection {
+            // The connection chooses the dialect of the literals: a result of
+            // another connection would be escaped for the wrong engine — a
+            // MySQL cell escaped as SQLite keeps `\'`, and closes its literal
+            // once pasted into MySQL (I-10). Ownership is checked first,
+            // whether the rows are in memory or on disk.
+            let Some(buffer) = self.inner.executor.result_on(connection, result)? else {
+                return Err(expired());
+            };
+            if !self
+                .load_spilled(connection, result, batches(&buffer))
+                .await?
+            {
+                return Err(expired());
+            }
+            buffer
+        } else {
+            let Some(buffer) = self.inner.executor.result(result) else {
+                return Err(expired());
+            };
+            if !batches(&buffer).is_empty() {
+                return Err(IpcError::invalid(
+                    "These rows were stored on disk; reading them needs the connection",
+                ));
+            }
+            buffer
+        };
+        let sql = match (spec.format, connection) {
+            (CopyRowsFormat::Insert | CopyRowsFormat::InList, Some(connection)) => {
+                // Reads the store: off the runtime worker.
+                let dialect = self
+                    .on_blocking_pool(move |backend| backend.dialect_of(connection))
+                    .await?;
+                let relation = match (spec.format, address) {
+                    (CopyRowsFormat::Insert, Some(address)) => {
+                        let path = address.to_path()?;
+                        if path.relation().is_none() {
+                            return Err(IpcError::invalid(
+                                "An INSERT needs a table, not a schema or a database",
+                            ));
+                        }
+                        Some(qualified_name(&path, dialect))
+                    }
+                    _ => None,
+                };
+                Some(SqlTarget { dialect, relation })
+            }
+            _ => None,
+        };
+        let options = self
+            .format_options()
+            // A copy is the value whole, and a number that pastes back as a
+            // number: no cut, no digit groups — those are reading comforts of
+            // the grid.
+            .with_max_len(0)
+            .with_number_grouping(NumberGrouping::None);
+        let rows = spec.count;
+        let text =
+            blocking(move || copy::compose(&buffer, &spec, sql.as_ref(), &options)).await??;
+        Ok(CopiedRows { text, rows })
+    }
+
+    /// Brings spilled batches back through `Command::ReadResultPage`, which
+    /// checks ownership and never contacts the server (ADR-0012).
+    ///
+    /// `false` when the result went away meanwhile. A failed load is reported,
+    /// never retried here.
+    async fn load_spilled(
+        &self,
+        connection: ConnectionId,
+        result: ResultId,
+        batches: Vec<BatchIndex>,
+    ) -> Result<bool, IpcError> {
+        for batch in batches {
             let outcome = self
                 .inner
                 .executor
@@ -143,15 +257,11 @@ impl Backend {
                     ));
                 }
                 Ok(_) => return Err(IpcError::invalid("Unexpected result page response")),
-                Err(_) if self.inner.executor.result(result).is_none() => {
-                    return Ok(ResultWindow::Expired);
-                }
+                Err(_) if self.inner.executor.result(result).is_none() => return Ok(false),
                 Err(error) => return Err(error.into()),
             }
         }
-        let options = self.format_options();
-        let page = blocking(move || format_window(&buffer, offset, limit, &options)).await??;
-        Ok(ResultWindow::Page(page))
+        Ok(true)
     }
 
     /// Holds a result the front is about to receive, so that retention does

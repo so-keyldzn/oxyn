@@ -1622,6 +1622,50 @@ d'ADR-0037 : ni l'un ni l'autre n'est repris ici.
 | MySQL 8.4 | `DROP TABLE`, `TRUNCATE TABLE`, `RENAME TABLE`, `ALTER TABLE` valident implicitement | [implicit-commit](https://dev.mysql.com/doc/refman/8.4/en/implicit-commit.html) |
 | SQLite | Pas de `TRUNCATE` ; `DROP TABLE` passe malgré une vue dépendante, et malgré des lignes filles quand `foreign_keys` vaut `0` ; `DROP` se défait par `ROLLBACK` | constaté avec le client `sqlite3` 3.51.0 ; le driver embarque 3.50.2, d'où l'exigence d'ADR-0042 : un test d'intégration du driver avant de déclarer chaque drapeau |
 
+## Littéraux de chaîne SQL — vérification du 2026-09-25
+
+Faits sur lesquels repose `push_string_literal`
+(`crates/oxyn-catalog/src/literal.rs`). Cette fonction écrit les valeurs
+des copies `INSERT` et `IN (…)`. Une règle fausse ici laisse une valeur fermer
+son littéral une fois collée ([I-10](../CLAUDE.md#i-10)). Relevé aux
+documentations officielles.
+
+| Moteur | Fait vérifié | Source |
+|---|---|---|
+| PostgreSQL 18 | `''` dans une chaîne standard. `E'…'` accepte `\\` et `\'`. Avec `standard_conforming_strings` à `on` (défaut depuis 9.1), l'antislash est littéral hors `E'…'` ; à `off`, il échappe aussi dans une chaîne ordinaire | [sql-syntax-lexical](https://www.postgresql.org/docs/18/sql-syntax-lexical.html) |
+| MySQL 8.4 | `''` ou `\'` ; séquences `\0 \' \" \b \n \r \t \Z \\ \% \_`. Sous `NO_BACKSLASH_ESCAPES`, l'antislash n'échappe plus rien | [string-literals](https://dev.mysql.com/doc/refman/8.4/en/string-literals.html) |
+| Snowflake | L'antislash échappe ; `''` ou `\'` pour l'apostrophe ; `\\` pour l'antislash | [data-types-text](https://docs.snowflake.com/en/sql-reference/data-types-text) |
+| ClickHouse | « you need to escape at least `'` and `\` using escape codes `\'` (or: `''`) and `\\` » | [syntax](https://clickhouse.com/docs/sql-reference/syntax) |
+| BigQuery | L'antislash introduit les séquences `\\ \' \" \n \r \t` et d'autres ; une séquence inconnue est une erreur. Une chaîne entre apostrophes ne peut pas contenir de saut de ligne. Deux littéraux séparés se concatènent, donc `''` n'est pas une apostrophe. Un identifiant entre accents graves « Have the same escape sequences as string literals » | [lexical](https://docs.cloud.google.com/bigquery/docs/reference/standard-sql/lexical) |
+| SQL Server | `''` dans une chaîne. `N'…'` est interprété en Unicode ; une chaîne sans `N` passe par la page de code. Le type `bit` s'écrit `0` ou `1` | [constants-transact-sql](https://learn.microsoft.com/en-us/sql/t-sql/data-types/constants-transact-sql), page mise à jour le 2026-09-21 |
+| SQLite | `''` ; « C-style escapes using the backslash character are not supported » | [lang_expr](https://www.sqlite.org/lang_expr.html) |
+| DuckDB | `''` ; les séquences d'échappement n'existent qu'avec le préfixe `E` | [literal_types](https://duckdb.org/docs/current/sql/data_types/literal_types.html) |
+| Oracle 23 | `''` ; la page ne donne aucun rôle à l'antislash | [Literals](https://docs.oracle.com/en/database/oracle/oracle-database/23/sqlrf/Literals.html) |
+
+**Ce qu'Oxyn en fait.**
+
+- MySQL, Snowflake, ClickHouse : antislash doublé, apostrophe en `''`. Ces deux
+  formes restent sûres quel que soit `NO_BACKSLASH_ESCAPES`.
+- BigQuery : `\'`, antislash doublé, et sauts de ligne et tabulations en `\n`,
+  `\r`, `\t`.
+- PostgreSQL : `E'…'` dès qu'un antislash est présent.
+- SQL Server : `N'…'`.
+- SQLite, DuckDB, Oracle et les dialectes inconnus : `''` seul.
+
+**Non vérifié.**
+
+- **Redshift.** Ni la valeur de `standard_conforming_strings` ni la prise en
+  charge de `E'…'` ne figurent dans les pages lues :
+  [r_Literals](https://docs.aws.amazon.com/redshift/latest/dg/r_Literals.html),
+  [r_Character_types](https://docs.aws.amazon.com/redshift/latest/dg/r_Character_types.html).
+  Le code applique la forme PostgreSQL, `E'…'` dès qu'un antislash est présent.
+  Sans `E'…'`, le texte échoue à l'analyse ; il ne ferme jamais son littéral.
+- **Identifiants BigQuery.** `quote_identifier` en style `Backtick` double
+  l'accent grave. Or BigQuery lit un identifiant entre accents graves avec les
+  échappements d'une chaîne : ce doublement n'y vaut rien, et un nom terminé par
+  un antislash échapperait l'accent fermant. Aucun driver BigQuery n'existe
+  aujourd'hui ; à corriger avant le premier.
+
 ## Licences — vérification du 2026-09-25
 
 Faits sur lesquels repose [ADR-0044](adr/0044-licence-gpl-et-contrat-apache.md).

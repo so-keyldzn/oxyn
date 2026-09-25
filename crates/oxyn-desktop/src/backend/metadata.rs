@@ -21,8 +21,9 @@ use crate::catalog;
 use crate::ipc::consoles::ParameterKind;
 use crate::ipc::metadata::{
     BoundValue, CatalogSearchHit, ConstraintRow, DefinitionView, Facet, ForeignKeyRow,
-    IncomingKeyRow, IndexRow, PREVIEW_ROWS, Pagination, PreviewShapeDraft, RelatedRowsQuery,
-    RelatedRowsSource, RelationFacet, RelationFacets, pagination, parameter_placeholder,
+    IncomingKeyRow, IndexRow, ObjectSqlForm, PREVIEW_ROWS, Pagination, PreviewShapeDraft,
+    RelatedRowsQuery, RelatedRowsSource, RelationFacet, RelationFacets, pagination,
+    parameter_placeholder,
 };
 use crate::ipc::{CatalogAddress, CatalogNode, CommandOutcome, IpcError, RelationDetail};
 
@@ -283,6 +284,42 @@ impl Backend {
         Ok(related_rows_query(&holder, &fields, dialect, &conditions))
     }
 
+    /// A text the catalog's « Copy as » entries put on the clipboard.
+    ///
+    /// Reads the store (the dialect) and the catalog cache, never the server:
+    /// an `INSERT` template whose columns were never read is refused, not
+    /// guessed. Call off the runtime worker.
+    pub fn compose_object_sql(
+        &self,
+        connection: ConnectionId,
+        address: &CatalogAddress,
+        form: ObjectSqlForm,
+    ) -> Result<String, IpcError> {
+        let path = address.to_path()?;
+        if path.relation().is_none() {
+            return Err(IpcError::invalid("Only a table or a view is copied as SQL"));
+        }
+        let dialect = self.dialect_of(connection)?;
+        let columns = match form {
+            ObjectSqlForm::InsertTemplate => {
+                let cache = self.catalog_cache(connection)?;
+                let cache = cache.read();
+                let relation = cache.relation(&path).ok_or_else(|| {
+                    IpcError::invalid(
+                        "The columns of this table have not been read yet; open its structure first",
+                    )
+                })?;
+                relation
+                    .fields
+                    .iter()
+                    .map(|field| field.name.clone())
+                    .collect()
+            }
+            ObjectSqlForm::QuotedName | ObjectSqlForm::SelectAll => Vec::new(),
+        };
+        object_sql(&path, dialect, form, &columns)
+    }
+
     /// The values of `columns` in one row of a held result.
     ///
     /// `None` when the result has gone, the row is out of the buffer, a
@@ -426,6 +463,62 @@ pub(crate) fn qualified_name(path: &CatalogPath, dialect: SqlDialect) -> String 
     sql_path
         .unwrap_or_else(|_| path.clone())
         .qualify_sql(dialect)
+}
+
+/// The « Copy as » text of a relation, quoted by the dialect
+/// ([I-10](../../../../CLAUDE.md#i-10)).
+///
+/// `SELECT *` carries **no `LIMIT`**, unlike `related_rows_query`. That
+/// template is a preview Oxyn proposes, bounded like one; this text is what
+/// the entry names, which the user pastes and runs as their own SQL — bounded
+/// at execution by the result buffer ([I-06](../../../../CLAUDE.md#i-06)), not
+/// by a clause. A `LIMIT` is also not T-SQL, nor Oracle.
+///
+/// The `INSERT` template names every column the catalog read, in the server's
+/// order, with the dialect's placeholders: a template to fill in, as the
+/// related-row query is — a generated column is the user's to drop.
+fn object_sql(
+    path: &CatalogPath,
+    dialect: SqlDialect,
+    form: ObjectSqlForm,
+    columns: &[String],
+) -> Result<String, IpcError> {
+    let name = qualified_name(path, dialect);
+    Ok(match form {
+        ObjectSqlForm::QuotedName => name,
+        ObjectSqlForm::SelectAll => format!("SELECT *\nFROM {name};"),
+        ObjectSqlForm::InsertTemplate => {
+            if columns.is_empty() {
+                return Err(IpcError::invalid(
+                    "This relation has no column to insert into",
+                ));
+            }
+            let style = oxyn_catalog::QuoteStyle::for_dialect(dialect);
+            // A field name comes from the server unvalidated, unlike a path
+            // segment: refused before it reaches the clipboard.
+            let names: Vec<String> = columns
+                .iter()
+                .enumerate()
+                .map(|(position, column)| {
+                    oxyn_catalog::check_identifier(column).map_err(|error| {
+                        IpcError::invalid(format!(
+                            "The name of column {} cannot be written into SQL: {error}",
+                            position.saturating_add(1)
+                        ))
+                    })?;
+                    Ok(quote_identifier(column, style))
+                })
+                .collect::<Result<_, IpcError>>()?;
+            let places: Vec<String> = (1..=columns.len())
+                .map(|position| parameter_placeholder(dialect, position))
+                .collect();
+            format!(
+                "INSERT INTO {name} ({})\nVALUES ({});",
+                names.join(", "),
+                places.join(", ")
+            )
+        }
+    })
 }
 
 /// What one key column contributes to the `WHERE` clause.
@@ -1197,5 +1290,118 @@ mod tests {
         assert!(facets.unique_key.is_none(), "unknown, not « no key »");
         let json = serde_json::to_string(&facets).expect("serializable");
         assert!(json.contains(r#""constraints":{"freshness":{"state":"never"},"value":null}"#));
+    }
+
+    #[test]
+    fn copy_as_quotes_every_identifier_and_each_text_parses() {
+        let path =
+            CatalogPath::for_relation(Some("billing"), Some("public"), HOSTILE).expect("legal");
+        let columns = vec!["id".to_owned(), HOSTILE.to_owned()];
+        let quoted = r#""public"."users""; DROP TABLE audit; --""#;
+        let compose = |form, dialect| object_sql(&path, dialect, form, &columns).expect("composes");
+
+        assert_eq!(
+            compose(ObjectSqlForm::QuotedName, SqlDialect::Postgres),
+            quoted
+        );
+        assert_eq!(
+            compose(ObjectSqlForm::SelectAll, SqlDialect::Postgres),
+            format!("SELECT *\nFROM {quoted};"),
+            "no LIMIT: the user runs it as their own SQL"
+        );
+        assert_eq!(
+            compose(ObjectSqlForm::InsertTemplate, SqlDialect::Postgres),
+            format!(
+                "INSERT INTO {quoted} (\"id\", \"users\"\"; DROP TABLE audit; --\")\nVALUES ($1, $2);"
+            )
+        );
+        assert_eq!(
+            compose(ObjectSqlForm::InsertTemplate, SqlDialect::MySql),
+            "INSERT INTO `billing`.`public`.`users\"; DROP TABLE audit; --` (`id`, `users\"; DROP TABLE audit; --`)\nVALUES (?, ?);"
+        );
+        for dialect in [SqlDialect::Postgres, SqlDialect::Sqlite, SqlDialect::MySql] {
+            for form in [ObjectSqlForm::SelectAll, ObjectSqlForm::InsertTemplate] {
+                let sql = compose(form, dialect);
+                oxyn_query::validate(&sql, dialect)
+                    .unwrap_or_else(|error| panic!("{dialect:?} {form:?}: {error}\n{sql}"));
+            }
+        }
+        assert!(
+            object_sql(
+                &path,
+                SqlDialect::Postgres,
+                ObjectSqlForm::InsertTemplate,
+                &[]
+            )
+            .is_err(),
+            "no column, no template"
+        );
+        let escape = vec!["id".to_owned(), "x\u{1b}[201~".to_owned()];
+        let refused = object_sql(
+            &path,
+            SqlDialect::Postgres,
+            ObjectSqlForm::InsertTemplate,
+            &escape,
+        )
+        .expect_err("an escape sequence never reaches the clipboard");
+        assert!(refused.message.contains("column 2"), "{}", refused.message);
+        assert!(!refused.message.contains('\u{1b}'));
+    }
+
+    #[test]
+    fn an_insert_template_needs_columns_the_catalog_has_read() {
+        use crate::ipc::{ConnectResponse, ConnectionDraft};
+        use oxyn_core::Environment;
+
+        let runtime = runtime();
+        let _guard = runtime.enter();
+        let backend = Backend::open_temporary().expect("temporary backend");
+        let draft = ConnectionDraft {
+            driver: "sqlite".into(),
+            name: "copy as".into(),
+            environment: Environment::Local,
+            privacy_tier: oxyn_core::PrivacyTier::Metadata,
+            read_only: false,
+            values: [("path".to_owned(), ":memory:".to_owned())]
+                .into_iter()
+                .collect(),
+            secrets: std::collections::BTreeMap::new(),
+        };
+        let ConnectResponse::Open(open) = runtime
+            .block_on(backend.connect(CommandId::new(), draft))
+            .expect("connects")
+        else {
+            panic!("a local connection opens directly");
+        };
+        let connection: ConnectionId = open.connection.parse().expect("connection");
+        let address = CatalogAddress {
+            catalog: Some("main".into()),
+            namespace: None,
+            relation: Some(HOSTILE.into()),
+        };
+        assert_eq!(
+            backend
+                .compose_object_sql(connection, &address, ObjectSqlForm::QuotedName)
+                .expect("a name needs no catalog read"),
+            r#""main"."users""; DROP TABLE audit; --""#
+        );
+        let unread = backend
+            .compose_object_sql(connection, &address, ObjectSqlForm::InsertTemplate)
+            .expect_err("columns never read");
+        assert!(
+            unread.message.contains("not been read"),
+            "{}",
+            unread.message
+        );
+        let schema = CatalogAddress {
+            relation: None,
+            ..address
+        };
+        assert!(
+            backend
+                .compose_object_sql(connection, &schema, ObjectSqlForm::SelectAll)
+                .is_err(),
+            "a database is not copied as a SELECT"
+        );
     }
 }
