@@ -144,7 +144,7 @@ export function useActionSource<TKey extends SourceKey>(
       wrapped[name] = () =>
         (latest.current as unknown as Record<string, () => void>)[name]?.()
     }
-    return wrapped as unknown as ActionsOf<TKey>
+    return wrapped
   }, [])
   const stateKey = state === null ? null : JSON.stringify(state)
   React.useEffect(() => {
