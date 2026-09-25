@@ -174,6 +174,19 @@ sans objet — un retour vers un workspace qui n'existe pas — n'est pas affich
 désactivée : elle est absente. La marque est unique : une seule image de logo,
 jamais deux variantes côte à côte.
 
+## Modifier une connexion enregistrée
+
+Le formulaire d'édition remontre les paramètres non secrets, jamais un secret :
+un champ secret laissé vide garde ce que le trousseau porte, et le dit
+(« Stored in the keyring »). Dès qu'un paramètre non secret s'écarte de la
+valeur enregistrée, ce champ cesse de se dire stocké et annonce qu'il faut le
+ressaisir (« Connection settings changed — enter the password again ») : le
+secret enregistré sera oublié à l'enregistrement
+([SECURITY](SECURITY.md#un-secret-ne-suit-pas-sa-connexion-ailleurs)). Revenir à
+la valeur enregistrée rétablit l'état stocké. L'annonce se fait avant
+l'enregistrement, pas après : l'utilisateur qui corrige une faute de frappe dans
+l'hôte apprend qu'il perd le mot de passe au moment où il peut encore annuler.
+
 ## Structure commune du workspace
 
 La structure retenue est le **workbench dense** de la page Figma

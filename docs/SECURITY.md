@@ -26,6 +26,44 @@ workspace, c'est une **référence** au secret, jamais le secret.
 production, commité par l'utilisateur dans le dépôt de son équipe, parce que le
 fichier avait l'air d'être une simple configuration.
 
+### Un secret ne suit pas sa connexion ailleurs
+
+Un secret saisi pour une destination n'est jamais présenté à une autre que
+l'utilisateur n'a pas choisie en le saisissant. Quand une modification change
+**un paramètre non secret déclaré par le driver** — hôte, port, base, fichier
+SQLite, mais aussi utilisateur, mode TLS ou nom d'application —, la connexion
+enregistrée ne référence plus l'entrée de trousseau de l'ancienne destination.
+Ce qui a été ressaisi dans la même modification est écrit dans une entrée
+**neuve**, sous une référence qu'aucune configuration n'a portée avant ; sans
+ressaisie, la connexion n'a plus de secret. L'ancienne entrée est ensuite
+**oubliée** du trousseau. Le nom, l'environnement, le niveau IA et la lecture
+seule ne changent pas la destination, et ne touchent pas au secret. Les valeurs
+se comparent après suppression des espaces de bord, comme elles s'enregistrent.
+
+L'entrée neuve est ce qui rend la règle sans exception. La configuration est
+enregistrée **avant** l'écriture au trousseau — une modification retenue par la
+politique puis refusée ne doit rien changer — : une référence dérivée du seul
+identifiant nommerait, dans l'intervalle, l'entrée qui porte encore l'ancien
+mot de passe, et pour toujours si le processus s'arrête entre les deux. Avec
+une référence neuve, un échec d'écriture laisse la connexion sans secret, et un
+échec d'oubli laisse une entrée que plus rien ne référence ; ni l'un ni l'autre
+ne présente l'ancien secret à la nouvelle destination.
+
+Le formulaire le dit avant l'enregistrement
+([UX-SPEC](UX-SPEC.md#modifier-une-connexion-enregistrée)). L'action Test ne
+s'offre qu'à un brouillon neuf, sous un identifiant neuf : elle n'atteint jamais
+le secret d'une connexion enregistrée. Les fournisseurs IA suivent la même règle
+pour leur clé d'API, au changement de famille, de schéma, d'hôte, de port, de
+chemin ou de requête de l'URL de base.
+
+Tout paramètre plutôt qu'une « adresse » : un mot de passe envoyé sous un autre
+rôle, ou sous `sslmode=disable` là où il partait sous `verify-full`, fuit tout
+autant ; dans le doute, oublier ne coûte qu'une ressaisie.
+
+**Panne concrète :** une adresse collée depuis un message, ou une faute de frappe
+dans l'hôte, et le mot de passe de production part s'authentifier auprès d'un
+serveur tiers au premier clic, sans que l'utilisateur l'ait ressaisi.
+
 ### Ce qui ne sort jamais d'un processus
 
 Les six canaux, et il faut les traiter tous les six — il suffit d'en oublier un.

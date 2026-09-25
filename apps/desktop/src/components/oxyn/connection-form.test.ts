@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { draftFrom, missingFields } from "./connection-form"
+import { draftFrom, missingFields, settingsChanged } from "./connection-form"
 import type { DriverChoice } from "@/lib/ipc/types"
 
 const postgres: DriverChoice = {
@@ -99,5 +99,85 @@ describe("draftFrom", () => {
         hasStoredSecrets: true,
       })
     ).toEqual(["Host"])
+  })
+})
+
+describe("settingsChanged", () => {
+  const saved = {
+    id: "x",
+    name: "prod",
+    driver: "postgres",
+    environment: "production" as const,
+    readOnly: false,
+    privacyTier: "metadata" as const,
+    values: { host: "db.internal", sslmode: "require" },
+    hasStoredSecrets: true,
+  }
+  const form = (values: Record<string, string>) => ({
+    name: "renamed",
+    environment: "local" as const,
+    privacyTier: "local" as const,
+    readOnly: true,
+    values,
+  })
+
+  it("ignores the name, the marking and a re-trimmed value", () => {
+    expect(
+      settingsChanged(
+        postgres,
+        form({ host: " db.internal ", sslmode: "require", password: "" }),
+        saved
+      )
+    ).toBe(false)
+  })
+
+  it("sees a changed host or a weaker TLS mode", () => {
+    expect(
+      settingsChanged(
+        postgres,
+        form({ host: "db.other", sslmode: "require" }),
+        saved
+      )
+    ).toBe(true)
+    expect(
+      settingsChanged(
+        postgres,
+        form({ host: "db.internal", sslmode: "disable" }),
+        saved
+      )
+    ).toBe(true)
+  })
+
+  it("never counts a typed secret as a changed setting", () => {
+    expect(
+      settingsChanged(
+        postgres,
+        form({ host: "db.internal", sslmode: "require", password: "new" }),
+        saved
+      )
+    ).toBe(false)
+  })
+
+  it("asks for a required stored secret again once a setting changed", () => {
+    const required = {
+      ...postgres,
+      fields: postgres.fields.map((field) =>
+        field.secret ? { ...field, required: true } : field
+      ),
+    }
+    expect(
+      missingFields(
+        required,
+        form({ host: "db.internal", sslmode: "require" }),
+        saved
+      )
+    ).toEqual([])
+    expect(
+      missingFields(
+        required,
+        form({ host: "db.other", sslmode: "require" }),
+        saved
+      )
+    ).toEqual(["Password"])
   })
 })

@@ -101,9 +101,42 @@ export function draftFrom(
 }
 
 /**
+ * Whether an edit changes a parameter of the saved connection — any
+ * non-secret field, not only the host: its stored secrets are then forgotten
+ * on save, and must be typed again for where it points now (SECURITY.md
+ * « Secrets »). Compared trimmed, as the backend does.
+ */
+export function settingsChanged(
+  driver: DriverChoice,
+  form: FormValues,
+  existing?: ConnectionDetails
+): boolean {
+  if (!existing) return false
+  return driver.fields.some(
+    (field) =>
+      !field.secret &&
+      (form.values[field.key] ?? "").trim() !==
+        (existing.values[field.key] ?? "").trim()
+  )
+}
+
+/** Whether an empty secret field keeps what the keyring holds. */
+function keepsStoredSecret(
+  driver: DriverChoice,
+  form: FormValues,
+  existing?: ConnectionDetails
+): boolean {
+  return (
+    existing?.hasStoredSecrets === true &&
+    !settingsChanged(driver, form, existing)
+  )
+}
+
+/**
  * The labels of the required fields still empty.
  *
- * A stored secret left empty is kept, so it is not missing.
+ * A stored secret left empty is kept, so it is not missing — unless a
+ * parameter changed, which forgets it.
  */
 export function missingFields(
   driver: DriverChoice,
@@ -115,7 +148,7 @@ export function missingFields(
   for (const field of driver.fields) {
     if (!field.required || field.kind.type === "bool") continue
     if ((form.values[field.key] ?? "").trim() !== "") continue
-    if (field.secret && existing?.hasStoredSecrets) continue
+    if (field.secret && keepsStoredSecret(driver, form, existing)) continue
     missing.push(field.label)
   }
   return missing
@@ -128,7 +161,8 @@ export function missingFields(
  * password inputs and their values leave for the keyring, never the
  * configuration (I-03). With `existing`, it edits a saved connection: its
  * non-secret values are shown, its secrets are not, and a secret left empty
- * is kept.
+ * is kept — until a parameter changes: the stored secret would then reach a
+ * destination it was not typed for, so it is forgotten and asked again.
  *
  * While `submitting`, the only live action is `onAbort` (Esc), which cancels
  * the opening on the server side (docs/UX-SPEC.md « Annulation »). The submit
@@ -194,6 +228,7 @@ export function ConnectionForm({
     onValuesChange?.(values)
   }, [values, onValuesChange])
   const missing = missingFields(driver, values, existing)
+  const moved = settingsChanged(driver, values, existing)
   const malformed = driver.fields.some(
     (field) =>
       field.kind.type === "number" &&
@@ -292,7 +327,16 @@ export function ConnectionForm({
                     onChange={(next) => field.handleChange(next)}
                     onBlur={field.handleBlur}
                     storedSecret={
-                      editing && spec.secret && existing.hasStoredSecrets
+                      editing &&
+                      spec.secret &&
+                      existing.hasStoredSecrets &&
+                      !moved
+                    }
+                    forgottenSecret={
+                      editing &&
+                      spec.secret &&
+                      existing.hasStoredSecrets &&
+                      moved
                     }
                     editing={editing}
                     onBrowse={onBrowse}
@@ -437,6 +481,7 @@ function DriverField({
   onChange,
   onBlur,
   storedSecret,
+  forgottenSecret,
   editing,
   onBrowse,
 }: {
@@ -445,6 +490,8 @@ function DriverField({
   onChange: (value: string) => void
   onBlur: () => void
   storedSecret: boolean
+  /** A secret is stored, and the changed parameters forget it on save. */
+  forgottenSecret: boolean
   editing: boolean
   onBrowse?: (field: FormField) => Promise<string | null>
 }) {
@@ -556,8 +603,11 @@ function DriverField({
       </FieldLabel>
       {control}
       {editing && spec.secret ? (
-        <FieldDescription id={`${id}-help`}>
-          Leave empty to keep the stored value. It is never shown again.
+        // Polite: the text changes as the user types in another field.
+        <FieldDescription id={`${id}-help`} aria-live="polite">
+          {forgottenSecret
+            ? `Connection settings changed — enter the ${spec.label.toLowerCase()} again. The stored one is removed on save.`
+            : "Leave empty to keep the stored value. It is never shown again."}
         </FieldDescription>
       ) : spec.help ? (
         <FieldDescription id={`${id}-help`}>{spec.help}</FieldDescription>

@@ -7,10 +7,24 @@
 //! having the policy hold the edit back — or the user reject it — would have
 //! changed the password of a connection whose configuration did not change.
 //! Written after, a keyring failure leaves the previous secrets in use, and
-//! the answer says so.
+//! the answer says so. An edit that moves the connection writes to a fresh
+//! entry instead, so the previous one is never in use under the new
+//! destination.
 //!
 //! A deletion forgets the secrets **after** the store dropped the connection:
 //! a failure there leaves an unreferenced entry, which nothing can reach.
+//!
+//! # A secret does not follow the connection elsewhere
+//!
+//! A password typed for one server is not presented to another the user did
+//! not type it for: an edit that changes any non-secret parameter the driver
+//! declares — host, port, database, file, but also the user or the TLS mode —
+//! forgets the stored secrets, and saves only what was typed for the new
+//! destination, under a fresh keyring reference ([SECURITY](../../../../../docs/SECURITY.md#un-secret-ne-suit-pas-sa-connexion-ailleurs)). Every
+//! parameter rather than an « address » subset: a password for another role,
+//! or sent under `sslmode=disable` where it went under `verify-full`, leaves
+//! just as surely, and in doubt forgetting only costs a retype. The name, the
+//! environment, the tier and read-only change nothing to where it goes.
 //!
 //! # The marking an open workspace holds
 //!
@@ -22,11 +36,11 @@
 
 use std::collections::BTreeMap;
 
-use oxyn_core::{Actor, Command, CommandId, ConnectionConfig, ConnectionId, OxynError};
+use oxyn_core::{Actor, Command, CommandId, ConnectionConfig, ConnectionId};
 use oxyn_exec::Outcome;
-use oxyn_secrets::SecretRef;
 
 use crate::backend::Backend;
+use crate::credentials::KeyringCredentials;
 use crate::ipc::settings::{ConnectionChange, ConnectionDetails, ConnectionEdit};
 use crate::ipc::{IpcError, SavedConnection};
 
@@ -36,10 +50,26 @@ use crate::ipc::{IpcError, SavedConnection};
 pub(crate) enum PendingChange {
     Update {
         config: Box<ConnectionConfig>,
-        secrets: BTreeMap<String, String>,
+        secrets: SecretsEdit,
     },
     Delete {
         config: Box<ConnectionConfig>,
+    },
+}
+
+/// What a saved edit does to the connection's keyring entry.
+///
+/// No `Debug` derive: it carries the secrets the user retyped (I-03).
+pub(crate) enum SecretsEdit {
+    /// Same destination, nothing retyped.
+    Keep,
+    /// Same destination: the retyped secrets replace theirs, the others stay.
+    Merge(BTreeMap<String, String>),
+    /// Another destination, or nothing referenced yet: what was `typed`, if
+    /// anything, goes to a fresh entry, and `previous` is forgotten.
+    Rewrite {
+        previous: Option<String>,
+        typed: BTreeMap<String, String>,
     },
 }
 
@@ -64,6 +94,7 @@ impl Backend {
     /// The driver cannot change: a configuration's parameters belong to its
     /// protocol. What changes on an open session applies from the next
     /// connection, except the marking, which the policy reads on every command.
+    /// A changed parameter forgets the stored secrets (see the module).
     ///
     /// # Errors
     /// An empty name, a value under a secret field's key, a refusal.
@@ -74,7 +105,7 @@ impl Backend {
         edit: ConnectionEdit,
     ) -> Result<ConnectionChange, IpcError> {
         let current = self.read_config(connection).await?;
-        let config = self.edited(&current, &edit)?;
+        let (config, secrets) = self.edited(&current, edit)?;
         let inner = &self.inner;
         let cancel = self.track(id)?;
         let outcome = inner
@@ -89,7 +120,7 @@ impl Backend {
             )
             .await?;
         match outcome {
-            Outcome::ConnectionSaved { .. } => self.finish_update(&config, &edit.secrets).await,
+            Outcome::ConnectionSaved { .. } => Ok(self.finish_update(&config, secrets).await),
             Outcome::NeedsApproval {
                 command,
                 reason,
@@ -99,7 +130,7 @@ impl Backend {
                     command,
                     PendingChange::Update {
                         config: Box::new(config),
-                        secrets: edit.secrets,
+                        secrets,
                     },
                 );
                 Ok(approval(command, reason, preview, &current.name))
@@ -191,7 +222,7 @@ impl Backend {
         let outcome = inner.executor.approve("human", command, &cancel).await?;
         match (outcome, pending) {
             (Outcome::ConnectionSaved { .. }, PendingChange::Update { config, secrets }) => {
-                self.finish_update(&config, &secrets).await.map(Some)
+                Ok(Some(self.finish_update(&config, secrets).await))
             }
             (Outcome::ConnectionDeleted { .. }, PendingChange::Delete { config }) => {
                 self.finish_delete(&config).await;
@@ -221,8 +252,8 @@ impl Backend {
     fn edited(
         &self,
         current: &ConnectionConfig,
-        edit: &ConnectionEdit,
-    ) -> Result<ConnectionConfig, IpcError> {
+        edit: ConnectionEdit,
+    ) -> Result<(ConnectionConfig, SecretsEdit), IpcError> {
         let name = edit.name.trim();
         if name.is_empty() {
             return Err(IpcError::invalid("A connection needs a name"));
@@ -274,39 +305,121 @@ impl Backend {
                     "{key} is not a secret field of this driver"
                 )));
             }
-            config.secret_ref = Some(SecretRef::for_connection(config.id).as_str().to_owned());
         }
-        Ok(config)
+
+        let moved = metadata
+            .connection_fields
+            .iter()
+            .filter(|field| !field.is_secret())
+            .any(|field| {
+                declared_value(current, &field.key) != declared_value(&config, &field.key)
+            });
+        let secrets = match &current.secret_ref {
+            Some(_) if !moved && edit.secrets.is_empty() => SecretsEdit::Keep,
+            Some(_) if !moved => SecretsEdit::Merge(edit.secrets),
+            previous => {
+                // Never the previous entry, not even for the instant between
+                // this save and its deletion: an empty one until the new
+                // secrets land, or none.
+                config.secret_ref = (!edit.secrets.is_empty())
+                    .then(|| KeyringCredentials::fresh_reference(config.id));
+                SecretsEdit::Rewrite {
+                    previous: previous.clone(),
+                    typed: edit.secrets,
+                }
+            }
+        };
+        Ok((config, secrets))
     }
 
     async fn finish_update(
         &self,
         config: &ConnectionConfig,
-        secrets: &BTreeMap<String, String>,
-    ) -> Result<ConnectionChange, IpcError> {
+        secrets: SecretsEdit,
+    ) -> ConnectionChange {
         // Before anything else: the gate decides the next write on this.
         self.inner.policy.register(config);
         // An agent kept alive was launched under the connection as it was —
         // its tier, its environment. The next question relaunches it under the
         // connection as it is (I-04).
         self.inner.ai.release_agents(config.id);
-        let mut secrets_error = None;
-        if !secrets.is_empty() {
-            let credentials = std::sync::Arc::clone(&self.inner.credentials);
-            let target = config.clone();
-            let values = secrets.clone();
-            let written =
-                tokio::task::spawn_blocking(move || credentials.replace_secrets(&target, &values))
-                    .await
-                    .map_err(|_| OxynError::Internal("the keyring worker stopped".into()));
-            if let Err(error) | Ok(Err(error)) = written {
-                tracing::warn!(connection = %config.name, %error, "edited connection secrets not written");
-                secrets_error = Some(error.to_string());
+        let secrets_error = match secrets {
+            SecretsEdit::Keep => None,
+            SecretsEdit::Merge(typed) => {
+                let target = config.clone();
+                self.on_blocking_pool(move |backend| {
+                    backend
+                        .inner
+                        .credentials
+                        .replace_secrets(&target, &typed)
+                        .map_err(IpcError::from)
+                })
+                .await
+                .err()
+                .map(|error| {
+                    tracing::warn!(connection = %config.name, error = %error.message, "edited connection secrets not written");
+                    format!("The connection keeps its previous secrets. {}", error.message)
+                })
             }
-        }
-        Ok(ConnectionChange::Saved {
+            SecretsEdit::Rewrite { previous, typed } => {
+                self.rewrite_secrets(config, previous, typed).await
+            }
+        };
+        ConnectionChange::Saved {
             connection: SavedConnection::of(config),
             secrets_error,
+        }
+    }
+
+    /// Writes the secrets typed for where the connection points now, under
+    /// the fresh reference [`Self::edited`] gave it, then forgets the entry
+    /// the previous configuration named.
+    ///
+    /// The saved configuration no longer names that entry, so neither a
+    /// failure here nor a process stopped in between can present its secrets
+    /// to the new destination: a failed deletion leaves an unreachable entry,
+    /// logged like a deletion's; a failed write leaves the connection without
+    /// secrets, and the answer says so.
+    async fn rewrite_secrets(
+        &self,
+        config: &ConnectionConfig,
+        previous: Option<String>,
+        typed: BTreeMap<String, String>,
+    ) -> Option<String> {
+        let written = if typed.is_empty() {
+            Ok(())
+        } else {
+            let target = config.clone();
+            self.on_blocking_pool(move |backend| {
+                backend
+                    .inner
+                    .credentials
+                    .store_secrets(&target, &typed)
+                    .map(|_| ())
+                    .map_err(IpcError::from)
+            })
+            .await
+        };
+        if let Some(reference) = previous {
+            let forgotten = self
+                .on_blocking_pool(move |backend| {
+                    backend
+                        .inner
+                        .credentials
+                        .forget_secrets(&reference)
+                        .map_err(IpcError::from)
+                })
+                .await;
+            if forgotten.is_err() {
+                tracing::warn!(connection = %config.name, "previous connection secrets left in the keyring");
+            }
+        }
+        written.err().map(|error| {
+            tracing::warn!(connection = %config.name, error = %error.message, "moved connection secrets not written");
+            format!(
+                "The connection has no stored secrets now: type them again. {}",
+                error.message
+            )
         })
     }
 
@@ -326,6 +439,16 @@ impl Backend {
             tracing::warn!(connection = %config.name, "deleted connection secrets left in the keyring");
         }
     }
+}
+
+/// A parameter as it reaches the driver: trimmed, and empty as absent, which
+/// is how an edit saves it — a value only re-trimmed has not moved.
+fn declared_value<'a>(config: &'a ConnectionConfig, key: &str) -> Option<&'a str> {
+    config
+        .params
+        .get(key)
+        .map(|value| value.trim())
+        .filter(|value| !value.is_empty())
 }
 
 fn approval(
