@@ -11,6 +11,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { actionKeys, ariaKeys } from "@/lib/actions/manifest"
 
 /** One tab of the right column: the inspector, the assistant… */
 export interface AsideItem {
@@ -65,7 +66,7 @@ export function WorkspaceAside({
                 variant="ghost"
                 className="ml-auto"
                 aria-label="Close side panel"
-                aria-keyshortcuts="Meta+Alt+B"
+                aria-keyshortcuts={ariaKeys("view.sidePanel")}
                 onClick={onClose}
               />
             }
@@ -75,9 +76,9 @@ export function WorkspaceAside({
           <TooltipContent className="flex items-center gap-2">
             Close side panel
             <KbdGroup>
-              <Kbd>⌘</Kbd>
-              <Kbd>⌥</Kbd>
-              <Kbd>B</Kbd>
+              {actionKeys("view.sidePanel").map((key) => (
+                <Kbd key={key}>{key}</Kbd>
+              ))}
             </KbdGroup>
           </TooltipContent>
         </Tooltip>
