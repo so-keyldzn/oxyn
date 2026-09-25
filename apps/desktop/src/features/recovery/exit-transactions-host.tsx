@@ -11,7 +11,10 @@ import {
 } from "@/features/recovery/exit-transactions"
 import { transactionStates } from "@/lib/ipc/events"
 
-/** The dialog of an exit held by an open transaction, once per window. */
+/**
+ * The dialog of an exit, or of this window's close, held by an open
+ * transaction: once per window, on its own consoles (ADR-0043).
+ */
 export function ExitTransactionsHost() {
   const hold = useStore(exitHold)
   const labels = useStore(consoleLabels)
@@ -20,6 +23,7 @@ export function ExitTransactionsHost() {
   return (
     <ExitTransactionsDialog
       rows={shown}
+      scope={hold?.scope ?? "application"}
       busy={hold?.busy ?? null}
       error={hold?.error ?? null}
       commitBlocked={hold && shown ? commitBlocked(hold, shown) : false}

@@ -280,8 +280,12 @@ describe("the shortcut sheet", () => {
 })
 
 describe("the new entries of the bar", () => {
-  it("grey New window, Documentation and Format with their reason", () => {
-    for (const id of ["window.new", "help.documentation", "console.format"])
+  it("offer New window, which acts on the application (ADR-0043)", () => {
+    expect(behaviours["window.new"]?.enabled(context("other"))).toBe(true)
+  })
+
+  it("grey Documentation and Format with their reason", () => {
+    for (const id of ["help.documentation", "console.format"])
       expect(behaviours[id]?.enabled(context("other")), id).toMatchObject({
         reason: expect.any(String),
       })

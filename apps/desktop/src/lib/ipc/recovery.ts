@@ -29,11 +29,17 @@ export const ExitTransaction = z.object({
 })
 export type ExitTransaction = z.infer<typeof ExitTransaction>
 
+/** What an open transaction holds: the application's exit, or this window's close. */
+export const ExitScope = z.enum(["application", "window"])
+export type ExitScope = z.infer<typeof ExitScope>
+
 export const ShutdownSignal = z.discriminatedUnion("type", [
   z.object({ type: z.literal("flushDrafts") }),
   z.object({
     type: z.literal("resolveTransactions"),
+    /** This window's consoles only. */
     transactions: z.array(ExitTransaction),
+    scope: ExitScope,
   }),
   z.object({ type: z.literal("exitCancelled") }),
 ])
@@ -53,10 +59,10 @@ export const recovery = {
 
   shutdownFlushed: () => call("shutdown_flushed", Nothing),
 
-  /** The dialog of `resolveTransactions` is shown: the exit waits for it. */
+  /** The dialog of `resolveTransactions` or of a window close is shown: the exit waits for it. */
   shutdownAcknowledged: () => call("shutdown_acknowledged", Nothing),
 
-  /** Abandons an exit held by a transaction; nothing was flushed. */
+  /** Abandons an exit held by a transaction, or this window's close; nothing was flushed. */
   cancelExit: () => call("cancel_exit", Nothing),
 
   /** The ordered exit of ⌘Q, asked by `File ▸ Exit`: takes nothing, chooses nothing. */

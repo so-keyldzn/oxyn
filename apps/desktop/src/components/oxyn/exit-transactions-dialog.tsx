@@ -30,6 +30,26 @@ const STATE_LABEL: Record<TransactionState, string> = {
   idle: "No transaction",
 }
 
+const WORDS = {
+  application: {
+    title: (count: number) =>
+      count === 1
+        ? "Quit with an open transaction?"
+        : "Quit with open transactions?",
+    nothing: "No transaction is open any more. Cancel, then quit again.",
+    ask: "Commit or roll back to quit. Cancel keeps Oxyn open, with every transaction as it is.",
+  },
+  window: {
+    title: (count: number) =>
+      count === 1
+        ? "Close this window with an open transaction?"
+        : "Close this window with open transactions?",
+    nothing:
+      "No transaction is open any more. Cancel, then close the window again.",
+    ask: "Commit or roll back to close this window. Cancel keeps it open, with every transaction as it is.",
+  },
+} as const
+
 /**
  * The decision an exit needs while consoles hold a transaction (ADR-0043):
  * commit or roll back every listed one, or cancel the exit.
@@ -42,6 +62,7 @@ const STATE_LABEL: Record<TransactionState, string> = {
  */
 export function ExitTransactionsDialog({
   rows,
+  scope = "application",
   busy = null,
   error = null,
   commitBlocked = false,
@@ -51,6 +72,11 @@ export function ExitTransactionsDialog({
 }: {
   /** `null` keeps the dialog closed. */
   rows: ReadonlyArray<ExitTransactionRow> | null
+  /**
+   * What the transactions hold: quitting Oxyn, or closing this window, which
+   * is not the last (ADR-0043). Only the words change.
+   */
+  scope?: "application" | "window"
   busy?: "commit" | "rollback" | null
   /** The last failure, as the server said it. */
   error?: string | null
@@ -86,15 +112,9 @@ export function ExitTransactionsDialog({
         }}
       >
         <AlertDialogHeader>
-          <AlertDialogTitle>
-            {count === 1
-              ? "Quit with an open transaction?"
-              : "Quit with open transactions?"}
-          </AlertDialogTitle>
+          <AlertDialogTitle>{WORDS[scope].title(count)}</AlertDialogTitle>
           <AlertDialogDescription>
-            {nothing
-              ? "No transaction is open any more. Cancel, then quit again."
-              : "Commit or roll back to quit. Cancel keeps Oxyn open, with every transaction as it is."}
+            {nothing ? WORDS[scope].nothing : WORDS[scope].ask}
           </AlertDialogDescription>
         </AlertDialogHeader>
         {nothing ? null : (

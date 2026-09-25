@@ -176,6 +176,20 @@ Ce qui entre dans Oxyn et n'est pas fiable, par ordre de sous-estimation :
    *capabilities* minimales dans `capabilities/main.json`, et une surface IPC
    dont chaque commande est relue comme un changement de sécurité.
 
+   **Plusieurs fenêtres ne font pas plusieurs surfaces**
+   ([ADR-0043](adr/0043-multi-fenetre.md)). La capability couvre les fenêtres
+   par le motif `workspace-*`, avec les mêmes trois permissions, dont aucune
+   ne crée de fenêtre ni de webview. Une fenêtre ne s'ouvre que par
+   `open_window`, en Rust, bornée à 16. L'identité d'une fenêtre vient de la
+   `Webview` que Tauri fournit à la commande, jamais d'un libellé envoyé par
+   le JavaScript. Chaque commande qui vise une console, une session, une
+   commande, un résultat, un document ou l'assistant d'une connexion refuse ce
+   qu'une autre fenêtre possède (`backend/windows.rs`). Rien n'est diffusé :
+   chaque fenêtre a ses `Channel`, filtrés en Rust, et `clippy.toml` interdit
+   les méthodes d'émission de `tauri::Emitter`. Ce qu'une XSS dans une fenêtre
+   en tire : ouvrir des fenêtres jusqu'à la borne, fermer la sienne, retenir
+   ou annuler sa propre fermeture. Elle n'atteint rien d'une autre fenêtre.
+
    **Une confirmation dessinée dans la webview ne résiste pas à un script qui
    s'y exécute** : il appelle la commande que le bouton aurait appelée. Les
    décisions critiques se confirment donc dans un **dialogue natif de l'hôte**,

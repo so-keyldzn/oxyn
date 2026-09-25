@@ -16,6 +16,7 @@ const backend = vi.hoisted(() => ({
   failing: new Map<string, string>(),
   exits: 0,
   cancels: 0,
+  closes: 0,
 }))
 
 vi.mock("@/lib/ipc/consoles", async () => {
@@ -66,6 +67,15 @@ vi.mock("@/lib/ipc/recovery", () => ({
   },
 }))
 
+vi.mock("@/lib/ipc/windows", () => ({
+  windows: {
+    close: () => {
+      backend.closes += 1
+      return Promise.resolve()
+    },
+  },
+}))
+
 function transaction(session: string): ExitTransaction {
   return {
     session,
@@ -83,6 +93,7 @@ describe("resolving an exit held by transactions", () => {
     backend.failing.clear()
     backend.exits = 0
     backend.cancels = 0
+    backend.closes = 0
   })
 
   it("commits each session through the console path, then asks for the exit again", async () => {
@@ -94,6 +105,15 @@ describe("resolving an exit held by transactions", () => {
       { session: "s2", sql: "COMMIT" },
     ])
     expect(backend.exits).toBe(1)
+  })
+
+  it("asks again for this window's close, not for the exit, when it held the close", async () => {
+    const listed = [transaction("s1")]
+    holdExit(listed, "window")
+    await resolveExit("rollback", listed)
+    expect(backend.sent).toEqual([{ session: "s1", sql: "ROLLBACK" }])
+    expect(backend.closes).toBe(1)
+    expect(backend.exits).toBe(0)
   })
 
   it("stops at a refused COMMIT, shows the server's message and never sends it again", async () => {

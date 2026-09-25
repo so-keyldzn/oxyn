@@ -51,7 +51,7 @@ export function subscribeToShutdown() {
           // Acknowledged first: past two seconds without it, the backend
           // takes this webview for frozen and exits (ADR-0043).
           void recovery.shutdownAcknowledged().catch(() => undefined)
-          holdExit(signal.transactions)
+          holdExit(signal.transactions, signal.scope)
           return
         case "exitCancelled":
           releaseExit()

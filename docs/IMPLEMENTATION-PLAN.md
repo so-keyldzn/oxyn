@@ -273,7 +273,8 @@ fenêtres. Le comportement est dans [UX-SPEC](UX-SPEC.md#menus-raccourcis-et-ges
 les décisions dans [ADR-0041](adr/0041-registre-d-actions-menus-et-raccourcis.md),
 [ADR-0042](adr/0042-revue-sur-place-des-operations-destructrices.md) et
 [ADR-0043](adr/0043-multi-fenetre.md). Les lots 1 à 6 sont faits (le 4 sous
-la liste), le 8 pour une fenêtre ; les autres ne sont pas implémentés. Les interfaces sont écrites en shadcn/ui (`menubar`, `context-menu`, `command`,
+la liste), le 8 aussi, le 7 pour sa première partie ; les autres ne sont pas
+implémentés. Les interfaces sont écrites en shadcn/ui (`menubar`, `context-menu`, `command`,
 `alert-dialog`, `kbd`), sauf la barre native de macOS, construite en Rust.
 
 Arbitrages de l'utilisateur, le 2026-09-25 : barre de menus aussi sous Windows
@@ -541,7 +542,7 @@ Lots, dans l'ordre :
      SQL n'est livré (lot 9 ci-dessous) ;
    - `Documentation` est présent, **grisé** avec sa raison, jusqu'à
      `open_external` (reporté du lot 1) ;
-   - `New window` est présent, **grisé** avec sa raison, jusqu'au lot 7 ;
+   - `New window` est présent ; actif depuis le lot 7 ;
    - `Export…` ouvre le menu d'export du résultat affiché, repéré par
      `data-action-export` : son grisé et sa raison sont ceux du bouton. Mais
      la fin d'un aperçu d'objet ne change aucune source du registre : sous
@@ -602,7 +603,7 @@ Lots, dans l'ordre :
      ne déclarent pas les fichiers qu'ils lisent. Aucun driver DuckDB n'est
      enregistré, un `.duckdb` est donc refusé avec sa raison. Bornes : 4 Mio
      par `.sql`, 16 fichiers par dépôt ; un lien symbolique est refusé ;
-   - seule la fenêtre `main` reçoit les dépôts (le lot 7 les étendra) ;
+   - chaque fenêtre reçoit les dépôts faits sur elle, et eux seuls (lot 7) ;
    - pas de défilement automatique quand un onglet ou une colonne est glissé
      au bord de la vue, ni de marque de dépôt dans l'éditeur : le fantôme
      suit le pointeur ;
@@ -613,7 +614,8 @@ Lots, dans l'ordre :
 7. **Multi-fenêtre** — abonnements par fenêtre, `WindowRegistry`, capability
    par motif `workspace-*`, migration de disposition, `Open in new window`,
    restauration par fenêtre, consoles comprises après une fermeture ordinaire
-   (ADR-0043).
+   (ADR-0043). Livré en deux pull requests ; **la première est faite**, voir
+   ci-dessous.
 8. **Transaction ouverte à la sortie** — étape avant l'arrêt ordonné,
    `ShutdownSignal::ResolveTransactions`, `shutdown_acknowledged`,
    `cancel_exit`, journal de la sortie forcée (ADR-0043). **Fait pour une
@@ -655,9 +657,48 @@ Les drapeaux `TRUNCATE`, `TRANSACTIONAL_DDL` et `RESTRICT_DEPENDENTS` (bits 44
   `TRANSACTIONAL_DDL` et `RESTRICT_DEPENDENTS` est vérifié sur la variante
   (`variant.rs`), pas contre le moteur ;
 - plusieurs fenêtres (ADR-0042, « Plusieurs fenêtres ») : la fermeture d'une
-  fenêtre ne rejette pas encore l'approbation en attente. Cela relève du lot 7.
-  D'ici là, la session de revue se ferme à l'échéance de l'approbation, par le
-  balayage d'une seconde du backend.
+  fenêtre rejette l'approbation en attente qu'elle possède (lot 7), et la
+  session de revue se ferme avec elle.
+
+**Lot 7, première partie, faite le 2026-09-25 : des fenêtres vivantes.**
+`backend/windows.rs` tient le registre. Il donne à chaque fenêtre sa
+`WindowKey` et son libellé `workspace-<uuid>`, borne les fenêtres à 16 et suit
+le focus. Il dit aussi ce que chaque fenêtre possède : sessions, commandes,
+résultats, documents, assistant d'une connexion, connexions tenues. Les
+commandes de `commands/` reçoivent la `Webview` appelante et refusent ce qu'une
+autre fenêtre possède. `tauri.conf.json` ne déclare plus qu'un gabarit,
+`workspace`, et `capabilities/main.json` couvre `workspace-*` avec ses trois
+permissions. `clippy.toml` interdit les six méthodes d'émission. Les flux
+d'exécution, de catalogue, d'arrêt, de menu, de dépôts et le nouveau
+`subscribe_window` sont par fenêtre, filtrés en Rust. Le menu natif montre
+l'état de la fenêtre au focus et lui envoie ses actions, à elle seule.
+`Disconnect` n'est émis que par le backend, quand la dernière fenêtre relâche
+la connexion. Fermer une fenêtre non dernière résout ses seules transactions,
+puis demande dans un dialogue groupé ce qu'on fait de ses consoles
+(`CloseWindowDialog`). La sortie interroge chaque fenêtre sur ses propres
+transactions et vide les brouillons de toutes. `New window` est actif. Les tests
+sont dans `backend/windows/tests.rs` (registre, propriété, borne, routage) et
+`backend/windows/closing/tests.rs` (sortie à plusieurs fenêtres, fermeture non
+dernière, approbation rejetée, vidage de toutes les fenêtres). Les précisions
+et écarts sont écrits dans ADR-0043, « Précisions de mise en œuvre » :
+assistant par connexion, fermeture en deux temps, événements d'agent. Reste
+pour la seconde partie :
+
+- la migration 18 (`workspace_windows`, `workspace_window_consoles`),
+  `Command::WriteWindowLayout`, la lecture hostile de la disposition,
+  `object_location` par fenêtre — deux fenêtres qui naviguent s'écrasent
+  encore l'onglet d'objet sauvegardé ;
+- la restauration des fenêtres et de leurs consoles, hors ligne, après une
+  fermeture ordinaire, et la reprise par fenêtre après un arrêt anormal.
+  D'ici là, un relancement ne rouvre qu'une fenêtre ;
+- `Open in new window` et le `ConsoleHandoff`. L'entrée reste grisée, dans
+  `menu-behaviours.ts` ;
+- rouvrir depuis la bibliothèque un document qu'une autre fenêtre écrit : il
+  est refusé à l'écriture, mais la fenêtre propriétaire ne passe pas encore
+  au premier plan sur cet onglet ;
+- l'essai à la main sous Windows et Linux : la fermeture d'une fenêtre, la
+  barre web de chacune, et la création d'une fenêtre depuis une commande
+  `async`.
 
 **Lot 8 fait le 2026-09-25, pour une fenêtre.** ADR-0039 est accepté et mis en
 œuvre. `backend/exit.rs` tient les sessions de console et le dernier état
@@ -682,14 +723,12 @@ jamais rejouée, la webview muette et le Quit du Dock. Écarts et restes :
   le piège noté dans DRIVER-CONTRACT vaut aussi ici : un `COMMIT` de
   production est une lecture bornée à la lecture seule, et la borne ne doit
   pas toucher la transaction qu'il valide ;
-- **ce que le lot 7 devra étendre** : la liste porte sur toutes les consoles,
-  pas sur celles d'une fenêtre ; le canal d'arrêt est unique
-  (`LocalWork::shutdown`), donc le signal, l'accusé et `ExitCancelled` ne
-  visent qu'une webview ; l'état de l'étape (`ExitHold`) est global, ce qui
-  convient à un `Cancel` qui abandonne la sortie pour toutes, mais la
-  fermeture d'une fenêtre qui n'est pas la dernière doit porter sur ses seules
-  sessions et ne pas passer par `begin_shutdown` ; la mise au premier plan
-  vise toutes les fenêtres, et devra viser celles qui ont une transaction.
+- **étendu par le lot 7** : la liste est groupée par fenêtre et chaque
+  fenêtre reçoit les siennes sur son propre canal d'arrêt ; l'accusé est
+  attendu de chacune ; `ExitCancelled` va à toutes celles qui ont été
+  interrogées ; la fermeture d'une fenêtre non dernière porte sur ses seules
+  sessions, sans passer par `begin_shutdown` ; seules les fenêtres qui ont
+  une transaction passent au premier plan.
 
 Écarts relevés en rédigeant, non tranchés, re-vérifiés sur `origin/main` le
 2026-09-25 :

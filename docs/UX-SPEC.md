@@ -561,8 +561,10 @@ document (« Restauration après un arrêt brutal », « Restauration sélective
 démarrage »), fenêtre par fenêtre, hors ligne, sans reconnexion ni exécution.
 Un onglet ne s'arrache pas de sa fenêtre à la souris : il en change par `Open
 in new window`. Fermer une fenêtre ferme ses consoles, après le dialogue qui
-nomme celles qui le demandent ; fermer la dernière quitte Oxyn, sur toutes les
-plateformes, comme `Quit Oxyn` (ADR-0043).
+nomme celles qui le demandent : un seul pour la fenêtre, avec `Cancel`, qui a
+le focus, et `Discard and close window`. Une console à garder se sauvegarde
+avant. Fermer la dernière quitte Oxyn, sur toutes les plateformes, comme
+`Quit Oxyn` (ADR-0043).
 
 **Une transaction ouverte retient la sortie.** Avant de quitter, et avant de
 fermer une fenêtre, un dialogue liste chaque console dont la transaction est
