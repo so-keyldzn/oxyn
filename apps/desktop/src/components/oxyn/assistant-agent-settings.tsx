@@ -158,7 +158,7 @@ function ChoiceSelect({
         aria-describedby={describedBy}
         aria-busy={pending || undefined}
         title={`${name}: ${label}`}
-        className="max-w-40 min-w-0 border-transparent px-2 shadow-none dark:bg-transparent"
+        className="max-w-40 min-w-0"
       >
         {pending ? <Spinner /> : null}
         <SelectValue className="min-w-0">

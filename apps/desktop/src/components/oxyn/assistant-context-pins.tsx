@@ -8,6 +8,7 @@ import {
 } from "@hugeicons/core-free-icons"
 
 import { PRIVACY_TIERS } from "@/components/oxyn/privacy-tier"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
   Attachment,
   AttachmentAction,
@@ -157,24 +158,28 @@ export function AssistantContextPins({
           <Pin key={pin.key} pin={pin} onRemove={onRemove} />
         ))}
       </AttachmentGroup>
-      <div className="flex min-w-0 flex-col gap-0.5 rounded-md border border-dashed px-2 py-1.5 text-xs text-muted-foreground">
-        <p>
-          Sending this question lets these leave this machine, under{" "}
-          <strong className="font-medium text-foreground">
-            {PRIVACY_TIERS[tier].label}
-          </strong>
-          :
-        </p>
-        <ul className="flex min-w-0 flex-col gap-0.5">
-          {kinds.map((kind) => (
-            <li key={kind} className="min-w-0 wrap-break-word">
-              <span className="text-foreground">{KINDS[kind].label}s</span> —{" "}
-              {LEAVES[kind][tier]}
-            </li>
-          ))}
-        </ul>
-        <p>Nothing is sent from here.</p>
-      </div>
+      {/* Standing, not news: `role="note"` replaces `Alert`'s live
+          `role="alert"`, which would announce it at every pin. */}
+      <Alert role="note" className="min-w-0">
+        <AlertDescription className="flex min-w-0 flex-col gap-0.5 text-xs [&_p:not(:last-child)]:mb-0">
+          <p>
+            Sending this question lets these leave this machine, under{" "}
+            <strong className="font-medium text-foreground">
+              {PRIVACY_TIERS[tier].label}
+            </strong>
+            :
+          </p>
+          <ul className="flex min-w-0 flex-col gap-0.5">
+            {kinds.map((kind) => (
+              <li key={kind} className="min-w-0 wrap-break-word">
+                <span className="text-foreground">{KINDS[kind].label}s</span> —{" "}
+                {LEAVES[kind][tier]}
+              </li>
+            ))}
+          </ul>
+          <p>Nothing is sent from here.</p>
+        </AlertDescription>
+      </Alert>
     </section>
   )
 }
