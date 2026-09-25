@@ -51,6 +51,8 @@ const ActionSpec = z.object({
   shortcut: PerPlatform(Shortcuts).optional(),
   menu: PerPlatform(Placement).optional(),
   destructive: z.boolean().default(false),
+  /** A choice shown with a check mark, which the behaviour's `checked` reads. */
+  check: z.boolean().default(false),
 })
 export type ActionSpec = z.infer<typeof ActionSpec>
 
@@ -59,6 +61,11 @@ const MenuSpec = z.object({
   title: z.string(),
   platform: z.enum(["mac", "other"]).optional(),
   mnemonic: z.string().length(1).optional(),
+  /**
+   * Where a submenu sits in a menu of the bar (`View ▸ Text size`). One level
+   * only: the parent is a menu without a parent.
+   */
+  parent: PerPlatform(Placement).optional(),
   /** macOS system items, placed by `menu.rs`; the web bar has none. */
   roles: z
     .array(

@@ -1,7 +1,7 @@
 // Mirror of `crates/oxyn-desktop/src/ipc/menu.rs`, as executable schemas
 // (ADR-0031). The native macOS bar sends an action id and nothing else; the
-// front sends back, per entry, two switches and a variant index — never a
-// text or a combination (ADR-0041, point 4).
+// front sends back, per entry, switches and a variant index — never a text or
+// a combination (ADR-0041, point 4).
 
 import { Channel, isTauri } from "@tauri-apps/api/core"
 import { z } from "zod"
@@ -16,6 +16,8 @@ export const MenuEntryState = z.object({
   enabled: z.boolean(),
   variant: z.number().int().nonnegative(),
   shortcut: z.boolean(),
+  /** The check mark of a choice (`View ▸ Theme ▸ Dark`); `null` for the others. */
+  checked: z.boolean().nullable(),
 })
 export type MenuEntryState = z.infer<typeof MenuEntryState>
 

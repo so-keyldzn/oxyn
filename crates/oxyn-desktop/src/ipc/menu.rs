@@ -4,7 +4,7 @@
 //!
 //! Both directions are deliberately poor. Towards the front, an activation is
 //! an action id and nothing else: Rust does not know what the action does.
-//! Towards Rust, an entry's state is a switch, a variant index and a switch:
+//! Towards Rust, an entry's state is switches and a variant index:
 //! no text and no combination, so a script in the webview can neither rename
 //! « Quit » nor bind a key.
 
@@ -29,4 +29,7 @@ pub struct MenuEntryState {
     /// Whether the entry carries its accelerator: a zone with the focus may
     /// bind the same combination to another action.
     pub shortcut: bool,
+    /// The check mark of a choice (`View ▸ Theme ▸ Dark`); ignored on an
+    /// entry the manifest does not declare `check`.
+    pub checked: Option<bool>,
 }

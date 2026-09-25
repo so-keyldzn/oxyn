@@ -57,6 +57,10 @@ function withConsole(running: boolean): ActionSources {
       actions: consoleActions,
     },
     settings: { state: {}, actions: { open: nothing } },
+    appearance: {
+      state: { theme: "dark", density: "compact" },
+      actions: { setTheme: nothing, setDensity: nothing },
+    },
   }
 }
 
@@ -172,6 +176,25 @@ export const AbsentEntriesAreNotDrawn: Story = {
     await body.findByRole("menuitem", { name: /Toggle sidebar/ })
     await expect(body.queryByRole("menuitem", { name: /Assistant/ })).toBeNull()
     await closeMenus()
+  },
+}
+
+/**
+ * View ▸ Theme is a submenu of choices: the saved one is checked, and
+ * choosing another invokes its action — the same choice as the settings.
+ */
+export const ThemeIsAChoice: Story = {
+  args: { openMenu: "view" },
+  play: async ({ args }) => {
+    const body = within(document.body)
+    await userEvent.hover(await body.findByRole("menuitem", { name: "Theme" }))
+    const dark = await body.findByRole("menuitemcheckbox", { name: "Dark" })
+    await expect(dark).toHaveAttribute("aria-checked", "true")
+    await userEvent.click(body.getByRole("menuitemcheckbox", { name: "Light" }))
+    await expect(args.onInvoke).toHaveBeenCalledWith("view.theme.light")
+    await waitFor(() =>
+      expect(document.querySelector("[data-base-ui-focus-guard]")).toBeNull()
+    )
   },
 }
 

@@ -66,7 +66,12 @@ export function ExportMenuView({
   if (state.status === "exporting") {
     return (
       <ButtonGroup aria-label="Export in progress">
-        <Button variant="outline" size="sm" disabled>
+        <Button
+          variant="outline"
+          size="sm"
+          disabled
+          data-action-export="An export is running"
+        >
           <Spinner data-icon="inline-start" />
           {state.cancelling ? "Cancelling…" : `Exporting ${state.format}…`}
         </Button>
@@ -99,6 +104,7 @@ export function ExportMenuView({
               size="sm"
               aria-disabled="true"
               aria-describedby={reasonId}
+              data-action-export={reason}
               className="cursor-not-allowed opacity-50 hover:bg-background"
             />
           }
@@ -120,7 +126,11 @@ export function ExportMenuView({
 
   return (
     <DropdownMenu>
-      <DropdownMenuTrigger render={<Button variant="outline" size="sm" />}>
+      {/* `data-action-export` lets File ▸ Export… open this menu: its reason,
+          when set, is the one the menu entry shows (lib/actions/registry.ts). */}
+      <DropdownMenuTrigger
+        render={<Button variant="outline" size="sm" data-action-export="" />}
+      >
         <HugeiconsIcon
           icon={Download04Icon}
           strokeWidth={2}

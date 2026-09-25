@@ -1,5 +1,5 @@
 {
-  "$comment": "The static half of the action registry (docs/adr/0041-registre-d-actions-menus-et-raccourcis.md, point 1). Read by registry.ts in the front and by crates/oxyn-desktop/src/menu.rs through include_str!: moving this file breaks the Rust build, which is the point. Nothing here is executable. Shortcuts: `Mod` is ⌘ on macOS and Ctrl elsewhere; `Ctrl` is the Control key on every platform. `binding`: `dispatcher` (default) is bound by lib/actions/keyboard.ts or by the native macOS menu; `component` is handled by the component of its zone and only shown; `system` is the webview's own editing key, only shown. A menu's `roles` are the macOS system items (Edit's Copy, Hide…), placed by group and order among the actions; the web bar of Windows and Linux ignores them.",
+  "$comment": "The static half of the action registry (docs/adr/0041-registre-d-actions-menus-et-raccourcis.md, point 1). Read by registry.ts in the front and by crates/oxyn-desktop/src/menu.rs through include_str!: moving this file breaks the Rust build, which is the point. Nothing here is executable. Shortcuts: `Mod` is ⌘ on macOS and Ctrl elsewhere; `Ctrl` is the Control key on every platform. `binding`: `dispatcher` (default) is bound by lib/actions/keyboard.ts or by the native macOS menu; `component` is handled by the component of its zone and only shown; `system` is the webview's own editing key, only shown. `check`: a choice shown with a check mark. A menu with a `parent` is a submenu placed in that menu, one level deep. A menu's `roles` are the macOS system items (Edit's Copy, Hide…), placed by group and order among the actions; the web bar of Windows and Linux ignores them.",
   "menus": [
     {
       "id": "app",
@@ -31,7 +31,23 @@
       "id": "view",
       "title": "View",
       "mnemonic": "v",
-      "roles": [{ "role": "fullscreen", "group": 1, "order": 0 }]
+      "roles": [{ "role": "fullscreen", "group": 1, "order": 1 }]
+    },
+    {
+      "id": "textSize",
+      "title": "Text size",
+      "parent": {
+        "mac": { "menu": "view", "group": 1, "order": 0 },
+        "other": { "menu": "view", "group": 1, "order": 0, "mnemonic": "t" }
+      }
+    },
+    {
+      "id": "theme",
+      "title": "Theme",
+      "parent": {
+        "mac": { "menu": "view", "group": 1, "order": 2 },
+        "other": { "menu": "view", "group": 1, "order": 1, "mnemonic": "h" }
+      }
     },
     { "id": "query", "title": "Query", "mnemonic": "q" },
     {
@@ -42,7 +58,8 @@
         { "role": "minimize", "group": 0, "order": 0 },
         { "role": "zoom", "group": 0, "order": 1 }
       ]
-    }
+    },
+    { "id": "help", "title": "Help", "mnemonic": "h" }
   ],
   "actions": [
     {
@@ -76,12 +93,21 @@
       }
     },
     {
+      "id": "window.new",
+      "label": "New window",
+      "zone": "global",
+      "menu": {
+        "mac": { "menu": "file", "group": 0, "order": 1 },
+        "other": { "menu": "file", "group": 0, "order": 1, "mnemonic": "w" }
+      }
+    },
+    {
       "id": "connection.new",
       "label": "New connection…",
       "zone": "global",
       "menu": {
-        "mac": { "menu": "file", "group": 0, "order": 1 },
-        "other": { "menu": "file", "group": 0, "order": 1, "mnemonic": "c" }
+        "mac": { "menu": "file", "group": 0, "order": 2 },
+        "other": { "menu": "file", "group": 0, "order": 2, "mnemonic": "c" }
       }
     },
     {
@@ -113,6 +139,15 @@
       "menu": {
         "mac": { "menu": "file", "group": 3, "order": 0 },
         "other": { "menu": "file", "group": 3, "order": 0, "mnemonic": "l" }
+      }
+    },
+    {
+      "id": "result.export",
+      "label": "Export…",
+      "zone": "global",
+      "menu": {
+        "mac": { "menu": "file", "group": 4, "order": 0 },
+        "other": { "menu": "file", "group": 4, "order": 0, "mnemonic": "e" }
       }
     },
     {
@@ -214,7 +249,32 @@
       "id": "help.shortcuts",
       "label": "Keyboard shortcuts",
       "zone": "global",
-      "shortcut": { "mac": "Mod+/", "other": "Mod+/" }
+      "shortcut": { "mac": "Mod+/", "other": "Mod+/" },
+      "menu": {
+        "mac": { "menu": "help", "group": 0, "order": 1 },
+        "other": { "menu": "help", "group": 0, "order": 1, "mnemonic": "k" }
+      }
+    },
+    {
+      "id": "help.documentation",
+      "label": "Documentation",
+      "zone": "global",
+      "menu": {
+        "mac": { "menu": "help", "group": 0, "order": 0 },
+        "other": { "menu": "help", "group": 0, "order": 0, "mnemonic": "d" }
+      }
+    },
+    {
+      "id": "palette.open",
+      "label": "Command palette",
+      "zone": "global",
+      "shortcut": { "mac": "Mod+K", "other": "Mod+K" }
+    },
+    {
+      "id": "object.quickOpen",
+      "label": "Open object…",
+      "zone": "app",
+      "shortcut": { "mac": "Mod+P", "other": "Mod+P" }
     },
     {
       "id": "view.sidebar",
@@ -243,6 +303,56 @@
       "menu": {
         "mac": { "menu": "view", "group": 0, "order": 2 },
         "other": { "menu": "view", "group": 0, "order": 2, "mnemonic": "a" }
+      }
+    },
+    {
+      "id": "view.textSize.compact",
+      "label": "Compact",
+      "zone": "global",
+      "check": true,
+      "menu": {
+        "mac": { "menu": "textSize", "group": 0, "order": 0 },
+        "other": { "menu": "textSize", "group": 0, "order": 0, "mnemonic": "c" }
+      }
+    },
+    {
+      "id": "view.textSize.comfortable",
+      "label": "Comfortable",
+      "zone": "global",
+      "check": true,
+      "menu": {
+        "mac": { "menu": "textSize", "group": 0, "order": 1 },
+        "other": { "menu": "textSize", "group": 0, "order": 1, "mnemonic": "f" }
+      }
+    },
+    {
+      "id": "view.theme.light",
+      "label": "Light",
+      "zone": "global",
+      "check": true,
+      "menu": {
+        "mac": { "menu": "theme", "group": 0, "order": 0 },
+        "other": { "menu": "theme", "group": 0, "order": 0, "mnemonic": "l" }
+      }
+    },
+    {
+      "id": "view.theme.dark",
+      "label": "Dark",
+      "zone": "global",
+      "check": true,
+      "menu": {
+        "mac": { "menu": "theme", "group": 0, "order": 1 },
+        "other": { "menu": "theme", "group": 0, "order": 1, "mnemonic": "d" }
+      }
+    },
+    {
+      "id": "view.theme.system",
+      "label": "System",
+      "zone": "global",
+      "check": true,
+      "menu": {
+        "mac": { "menu": "theme", "group": 0, "order": 2 },
+        "other": { "menu": "theme", "group": 0, "order": 2, "mnemonic": "s" }
       }
     },
     {
@@ -301,6 +411,15 @@
       "menu": {
         "mac": { "menu": "query", "group": 1, "order": 0 },
         "other": { "menu": "query", "group": 1, "order": 0, "mnemonic": "c" }
+      }
+    },
+    {
+      "id": "console.format",
+      "label": "Format",
+      "zone": "global",
+      "menu": {
+        "mac": { "menu": "query", "group": 1, "order": 1 },
+        "other": { "menu": "query", "group": 1, "order": 1, "mnemonic": "f" }
       }
     },
     {

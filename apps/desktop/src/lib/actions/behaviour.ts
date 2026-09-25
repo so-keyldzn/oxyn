@@ -10,6 +10,8 @@ export type Availability = true | { reason: string } | "absent"
 export interface ActionBehaviour {
   enabled: (context: ActionContext) => Availability
   run: (context: ActionContext) => void | Promise<void>
+  /** The check mark of a `check` action of the manifest. */
+  checked?: (context: ActionContext) => boolean
 }
 
 /**

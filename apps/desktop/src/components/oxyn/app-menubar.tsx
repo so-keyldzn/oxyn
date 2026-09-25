@@ -4,6 +4,7 @@ import { Menu01Icon } from "@hugeicons/core-free-icons"
 
 import {
   Menubar,
+  MenubarCheckboxItem,
   MenubarContent,
   MenubarGroup,
   MenubarItem,
@@ -15,7 +16,12 @@ import {
   MenubarSubTrigger,
   MenubarTrigger,
 } from "@/components/ui/menubar"
-import type { EntryState, MenuEntry, MenuModel } from "@/lib/actions/menu-model"
+import type {
+  EntryState,
+  MenuEntry,
+  MenuItemModel,
+  MenuModel,
+} from "@/lib/actions/menu-model"
 import { keyCaps } from "@/lib/actions/shortcut"
 import type { Platform } from "@/lib/actions/shortcut"
 
@@ -53,43 +59,73 @@ function Mnemonic({
   )
 }
 
+/** Whether an entry, or one entry of a submenu, is offered here. */
+function offered(
+  item: MenuItemModel,
+  states: Record<string, EntryState>
+): boolean {
+  if (item.kind === "submenu")
+    return item.groups.some((group) =>
+      group.some((entry) => offered(entry, states))
+    )
+  const state = states[item.id]
+  return state !== undefined && state.availability !== "absent"
+}
+
 function Entries({
-  menu,
+  groups,
   states,
   platform,
   mnemonics,
   onInvoke,
 }: {
-  menu: MenuModel
+  groups: Array<Array<MenuItemModel>>
   states: Record<string, EntryState>
   platform: Platform
   mnemonics: boolean
   onInvoke: (id: string) => void
 }) {
-  const groups = menu.groups
-    .map((group) =>
-      group.flatMap((entry) => {
-        const state = states[entry.id]
-        return state && state.availability !== "absent"
-          ? [{ entry, state }]
-          : []
-      })
-    )
+  const shown = groups
+    .map((group) => group.filter((item) => offered(item, states)))
     .filter((group) => group.length > 0)
-  return groups.map((group, index) => (
-    <React.Fragment key={group[0]?.entry.id ?? index}>
+  return shown.map((group, index) => (
+    <React.Fragment key={group[0]?.id ?? index}>
       {index > 0 ? <MenubarSeparator /> : null}
       <MenubarGroup>
-        {group.map(({ entry, state }) => (
-          <Entry
-            key={entry.id}
-            entry={entry}
-            state={state}
-            platform={platform}
-            mnemonics={mnemonics}
-            onInvoke={onInvoke}
-          />
-        ))}
+        {group.map((item) => {
+          if (item.kind === "submenu")
+            return (
+              <MenubarSub key={item.id}>
+                <MenubarSubTrigger label={item.mnemonic ?? undefined}>
+                  <Mnemonic
+                    label={item.title}
+                    mnemonic={item.mnemonic}
+                    shown={mnemonics}
+                  />
+                </MenubarSubTrigger>
+                <MenubarSubContent>
+                  <Entries
+                    groups={item.groups}
+                    states={states}
+                    platform={platform}
+                    mnemonics={mnemonics}
+                    onInvoke={onInvoke}
+                  />
+                </MenubarSubContent>
+              </MenubarSub>
+            )
+          const state = states[item.id]
+          return state ? (
+            <Entry
+              key={item.id}
+              entry={item}
+              state={state}
+              platform={platform}
+              mnemonics={mnemonics}
+              onInvoke={onInvoke}
+            />
+          ) : null
+        })}
       </MenubarGroup>
     </React.Fragment>
   ))
@@ -116,14 +152,8 @@ function Entry({
     state.shortcut && entry.chord
       ? keyCaps(entry.chord, platform).join(platform === "mac" ? "" : "+")
       : null
-  return (
-    <MenubarItem
-      disabled={reason !== null}
-      // The typeahead of Base UI then answers to the mnemonic, as Windows does.
-      label={entry.mnemonic ?? undefined}
-      aria-describedby={reason ? reasonId : undefined}
-      onClick={() => onInvoke(entry.id)}
-    >
+  const content = (
+    <>
       <span className="flex min-w-0 flex-col">
         <span>
           <Mnemonic label={label} mnemonic={entry.mnemonic} shown={mnemonics} />
@@ -142,6 +172,29 @@ function Entry({
         ) : null}
       </span>
       {shortcut ? <MenubarShortcut>{shortcut}</MenubarShortcut> : null}
+    </>
+  )
+  const common = {
+    disabled: reason !== null,
+    // The typeahead of Base UI then answers to the mnemonic, as Windows does.
+    label: entry.mnemonic ?? undefined,
+    "aria-describedby": reason ? reasonId : undefined,
+  }
+  if (entry.check)
+    return (
+      <MenubarCheckboxItem
+        {...common}
+        checked={state.checked ?? false}
+        // The registry sets the choice; the mark follows its state.
+        onCheckedChange={() => onInvoke(entry.id)}
+        closeOnClick
+      >
+        {content}
+      </MenubarCheckboxItem>
+    )
+  return (
+    <MenubarItem {...common} onClick={() => onInvoke(entry.id)}>
+      {content}
     </MenubarItem>
   )
 }
@@ -202,7 +255,7 @@ export function AppMenubar({
                 </MenubarSubTrigger>
                 <MenubarSubContent>
                   <Entries
-                    menu={menu}
+                    groups={menu.groups}
                     states={states}
                     platform={platform}
                     mnemonics={mnemonics}
@@ -240,7 +293,7 @@ export function AppMenubar({
           </MenubarTrigger>
           <MenubarContent>
             <Entries
-              menu={menu}
+              groups={menu.groups}
               states={states}
               platform={platform}
               mnemonics={mnemonics}
