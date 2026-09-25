@@ -35,7 +35,7 @@ Pour localiser les planches et leurs états avant implémentation, consulter
 | [0006](adr/0006-ai-privacy-tiers.md) | Niveaux de confidentialité IA, par connexion | accepté |
 | [0007](adr/0007-driver-sidecar.md) | Processus sidecar pour les drivers à dépendances natives | proposé |
 | [0008](adr/0008-chaine-outils-rust.md) | Chaîne d'outils Rust épinglée dans le dépôt | accepté |
-| [0009](adr/0009-source-dependance-gpui.md) | GPUI consommé depuis crates.io, non depuis le dépôt Zed | remplacé |
+| [0009](adr/0009-source-dependance-gpui.md) | GPUI consommé depuis crates.io, non depuis son dépôt amont | remplacé |
 | [0010](adr/0010-contraintes-natives-sqlite.md) | Une seule version de libsqlite3-sys dans le graphe | accepté |
 | [0011](adr/0011-structure-commune-workspace.md) | Workbench dense comme structure commune du workspace | accepté |
 | [0012](adr/0012-lecture-pages-resultats.md) | Lecture de pages hors rendu et cache borné en octets | accepté |

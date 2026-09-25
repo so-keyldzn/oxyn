@@ -1,4 +1,4 @@
-# ADR-0009 — GPUI consommé depuis crates.io, non depuis le dépôt Zed
+# ADR-0009 — GPUI consommé depuis crates.io, non depuis son dépôt amont
 
 **Statut :** remplacé · **Date :** 2026-09-05
 **Remplacé par :** [ADR-0029](0029-interface-tauri-shadcn.md), effectif au retrait
@@ -17,7 +17,7 @@ registre le 2026-09-05 ([RESEARCH-NOTES](../RESEARCH-NOTES.md#gpui)) :
 
 * la dernière version publiée est `0.2.2`, du **2025-10-22**, soit près de onze
   mois sans publication, alors que le développement continue dans
-  `zed-industries/zed` ;
+  le dépôt amont ;
 * `gpui` ne déclare **aucun MSRV** ;
 * `gpui` épingle plusieurs dépendances avec `=`, dont `cocoa =0.26.0`,
   `cocoa-foundation =0.2.0` et `core-foundation =0.10.0`.
@@ -40,7 +40,7 @@ Oxyn dépend de **`gpui` publié sur crates.io**, en version exacte.
   l'architecture se stabilise.
 * **−** Aucun correctif amont, aucune API postérieure à octobre 2025. Un défaut
   GPUI rencontré doit être contourné dans `oxyn-ui`, pas corrigé en amont.
-* **−** L'écart avec le dépôt Zed grandit tant qu'aucune version n'est publiée ;
+* **−** L'écart avec le dépôt amont grandit tant qu'aucune version n'est publiée ;
   une future migration sera d'autant plus coûteuse.
 * **−** Les épinglages `=` de `gpui` sur les crates système macOS peuvent rendre
   insoluble l'ajout d'une dépendance qui touche aux mêmes API. À vérifier avant
@@ -57,6 +57,6 @@ publié, ou si les publications sur crates.io reprennent un rythme régulier.
 
 | Alternative | Raison du rejet |
 |---|---|
-| Dépendance git sur un `rev` du dépôt Zed | remise en cause par la décision du mainteneur du 2026-09-05 ; interdit toute publication d'Oxyn sur crates.io |
+| Dépendance git sur un `rev` du dépôt amont | remise en cause par la décision du mainteneur du 2026-09-05 ; interdit toute publication d'Oxyn sur crates.io |
 | Dépendance git suivant une branche | non reproductible : deux constructions à deux dates donnent deux binaires |
 | Vendorer GPUI dans le dépôt | 5,3 Mo de source et 65 dépendances à maintenir à la main |

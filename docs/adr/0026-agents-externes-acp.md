@@ -25,7 +25,7 @@ et datés dans [RESEARCH-NOTES](../RESEARCH-NOTES.md#agent-client-protocol--vér
   **processus enfant** de l'application hôte ;
 * `agent-client-protocol` **2.1.0** (crates.io, 2026-09-04) est sous
   **Apache-2.0**, déclare `rust-version` 1.88.0 et l'édition 2024 ;
-* Zed déclare un agent externe par une commande, des arguments et un
+* un éditeur client déclare un agent externe par une commande, des arguments et un
   environnement, et sa documentation est explicite : **aucune clé d'API n'est
   requise** — l'agent porte sa propre authentification, et la facturation comme
   la rétention des données regardent l'utilisateur et le fournisseur de l'agent,

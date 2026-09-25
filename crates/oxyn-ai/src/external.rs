@@ -24,7 +24,7 @@
 //! montrer *quel* fichier ni *quelle* commande, donc pas de quoi demander à
 //! l'utilisateur de décider en connaissance de cause.
 //!
-//! Un éditeur de code comme Zed accorde ces droits parce que son périmètre les
+//! Un éditeur de code accorde ces droits parce que son périmètre les
 //! rend sensés et parce qu'il sait les montrer. Copier ce choix sans l'un ni
 //! l'autre serait ouvrir un accès au système derrière une fenêtre de base de
 //! données.

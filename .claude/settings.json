@@ -47,7 +47,6 @@
       "WebFetch(domain:blog.rust-lang.org)",
       "WebFetch(domain:rust-lang.github.io)",
       "WebFetch(domain:gpui.rs)",
-      "WebFetch(domain:zed.dev)",
       "WebFetch(domain:arrow.apache.org)",
       "WebFetch(domain:www.postgresql.org)",
       "WebFetch(domain:dev.mysql.com)",

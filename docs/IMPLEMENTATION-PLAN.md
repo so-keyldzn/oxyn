@@ -1400,8 +1400,8 @@ matrice onglet × index × dialecte pour que les deux ne puissent pas diverger.
 ### Agents externes : ce qui est écrit, et le seul lot qui reste
 
 [ADR-0026](adr/0026-agents-externes-acp.md), ouvert par l'utilisateur le
-2026-09-14 (« regarder le repo de Zed […] deux modes, un avec API et l'autre les
-agents externes »). **Le dos est complet et éprouvé ; il ne manque que
+2026-09-14 (« regarder […] deux modes, un avec API et l'autre les agents
+externes »). **Le dos est complet et éprouvé ; il ne manque que
 l'interface.**
 
 > **État au 2026-09-23.** Le tableau et les deux paragraphes qui le suivent
