@@ -1,6 +1,7 @@
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import {
+  ArrowDown01Icon,
   ArrowReloadHorizontalIcon,
   CancelCircleIcon,
   HelpCircleIcon,
@@ -9,6 +10,13 @@ import {
 import { DefinitionBeside } from "@/components/oxyn/definition-beside"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuRadioGroup,
+  DropdownMenuRadioItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import { Kbd } from "@/components/ui/kbd"
 import { Spinner } from "@/components/ui/spinner"
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs"
@@ -32,6 +40,14 @@ export const OBJECT_TABS: ReadonlyArray<{ value: ObjectTab; label: string }> = [
   { value: "definition", label: "DDL" },
 ]
 
+/** Below 1200 px these leave the tab bar for `More` (docs/UX-SPEC.md). */
+const MORE_TABS: ReadonlySet<ObjectTab> = new Set<ObjectTab>([
+  "indexes",
+  "constraints",
+  "relations",
+  "definition",
+])
+
 /**
  * The tab to open on. Data only when the object holds rows this session can
  * read: a disabled tab is never the selected one.
@@ -51,6 +67,10 @@ export function initialObjectTab(
  * and every state can be drawn from fixtures. The name is text, never markup,
  * and keeps its own direction (`dir="auto"`): a Hebrew table name does not
  * flip the tab bar.
+ *
+ * Below 1200 px (`compact`) only Data and Structure stay tabs; the other four
+ * are reached through `More`, whose button names the one shown. Changing the
+ * width reads nothing: every panel stays what it was.
  */
 export function ObjectViewFrame({
   name,
@@ -64,6 +84,7 @@ export function ObjectViewFrame({
   onEscape,
   gridFocusRequest = 0,
   definitionLayout,
+  compact = false,
 }: {
   name: string
   kind: string
@@ -93,12 +114,20 @@ export function ObjectViewFrame({
     width: number
     onWidthChange: (width: number) => void
   }
+  compact?: boolean
 }) {
   const reasonId = React.useId()
   const beside = definitionLayout?.beside ?? false
   const tabs = beside
     ? OBJECT_TABS.filter((candidate) => candidate.value !== "definition")
     : OBJECT_TABS
+  const inTabBar = tabs.filter(
+    (candidate) => !compact || !MORE_TABS.has(candidate.value)
+  )
+  const inMore = tabs.filter((candidate) => MORE_TABS.has(candidate.value))
+  const shownInMore = compact
+    ? inMore.find((candidate) => candidate.value === tab)
+    : undefined
   const dataPanel = React.useRef<HTMLDivElement>(null)
   React.useEffect(() => {
     if (gridFocusRequest === 0) return
@@ -145,7 +174,7 @@ export function ObjectViewFrame({
           aria-label={`Views of ${name}`}
           className="max-w-full overflow-x-auto"
         >
-          {tabs.map((candidate) =>
+          {inTabBar.map((candidate) =>
             candidate.value === "data" && dataUnavailable ? (
               <Tooltip key={candidate.value}>
                 {/* The trigger is the wrapper, not the tab: a disabled button
@@ -171,6 +200,46 @@ export function ObjectViewFrame({
             )
           )}
         </TabsList>
+        {compact ? (
+          // Beside the tab list, not inside it: a `tablist` holds tabs only.
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              render={
+                <Button
+                  size="sm"
+                  variant={shownInMore ? "secondary" : "ghost"}
+                />
+              }
+            >
+              {shownInMore ? `More · ${shownInMore.label}` : "More"}
+              <HugeiconsIcon
+                icon={ArrowDown01Icon}
+                strokeWidth={2}
+                data-icon="inline-end"
+              />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              <DropdownMenuRadioGroup
+                value={tab}
+                onValueChange={(value: unknown) => {
+                  const next = inMore.find(
+                    (candidate) => candidate.value === value
+                  )
+                  if (next) onTabChange(next.value)
+                }}
+              >
+                {inMore.map((candidate) => (
+                  <DropdownMenuRadioItem
+                    key={candidate.value}
+                    value={candidate.value}
+                  >
+                    {candidate.label}
+                  </DropdownMenuRadioItem>
+                ))}
+              </DropdownMenuRadioGroup>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        ) : null}
         {toolbar ? (
           <div className="ml-auto flex shrink-0 items-center gap-2">
             {toolbar}

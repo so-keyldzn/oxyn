@@ -1,9 +1,12 @@
 import * as React from "react"
+import { HugeiconsIcon } from "@hugeicons/react"
+import { ViewIcon } from "@hugeicons/core-free-icons"
 import { useHotkeys } from "@tanstack/react-hotkeys"
 import type { Meta, StoryObj } from "@storybook/react-vite"
 import { expect, fn, userEvent, waitFor, within } from "storybook/test"
 
 import { DEFINITION_WIDTH } from "./definition-beside"
+import { ExportMenuView, ExportSubmenu } from "./export-menu"
 import { FacetFrame } from "./facet-frame"
 import { invoiceColumns, invoicesDetail, syntheticPages } from "./fixtures"
 import {
@@ -28,7 +31,9 @@ import { IncomingKeys } from "./relation-keys"
 import { RelationStructure } from "./relation-structure"
 import { ResultPanel } from "./result-panel"
 import type { ResultState } from "./result-panel"
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu"
 import { PLAIN_SHAPE } from "@/lib/ipc/metadata"
+import type { ExportFormatChoice } from "@/lib/ipc/results"
 
 // `Mod` is Command on macOS and Control elsewhere, as the hotkeys decide.
 const MOD = /Mac/.test(navigator.platform) ? "Meta" : "Control"
@@ -37,6 +42,11 @@ const fetched = {
   state: "fetched",
   fetchedAt: "2026-09-15T09:30:00+00:00",
 } as const
+
+const exportFormats: Array<ExportFormatChoice> = [
+  { format: "csv", label: "CSV", extension: "csv", supported: true },
+  { format: "json", label: "JSON", extension: "json", supported: true },
+]
 
 const populated: ResultState = {
   status: "populated",
@@ -58,9 +68,12 @@ function Harness({
   state = populated,
   running = false,
   cancelling = false,
+  compact = false,
   onRefresh,
   onCancel,
   wide = false,
+  onExport,
+  onInspectRow,
 }: {
   /** The layout of 1200 px and more: the definition sits beside the tabs. */
   wide?: boolean
@@ -71,8 +84,11 @@ function Harness({
   state?: ResultState
   running?: boolean
   cancelling?: boolean
+  compact?: boolean
   onRefresh: () => void
   onCancel: () => void
+  onExport: () => void
+  onInspectRow: () => void
 }) {
   const [tab, setTab] = React.useState<ObjectTab>(
     initial ?? initialObjectTab(undefined, dataUnavailable === null)
@@ -96,12 +112,21 @@ function Harness({
       },
     },
   ])
+  const exportChoice = {
+    formats: exportFormats,
+    formatsFailed: false,
+    exportable: state.status === "populated",
+    reason: "Export becomes available once the preview has finished loading.",
+    label: "Export preview…",
+    scope: "The preview rows shown · not the entire table",
+  }
   return (
     <ObjectViewFrame
       name={name}
       kind={kind}
       tab={tab}
       onTabChange={setTab}
+      compact={compact}
       dataUnavailable={dataUnavailable}
       onEscape={running ? onCancel : undefined}
       gridFocusRequest={gridFocusRequest}
@@ -145,6 +170,31 @@ function Harness({
                   onRetry={onRefresh}
                   context={{ connectionName: "billing-prod", statement: null }}
                   footerNote="Preview · total row count not requested"
+                  footerActions={
+                    compact ? null : (
+                      <ExportMenuView
+                        {...exportChoice}
+                        state={idle}
+                        onExport={onExport}
+                        onCancel={onCancel}
+                      />
+                    )
+                  }
+                  compactActions={
+                    compact ? (
+                      <>
+                        <ExportSubmenu
+                          {...exportChoice}
+                          exporting={false}
+                          onExport={onExport}
+                        />
+                        <DropdownMenuItem onClick={onInspectRow}>
+                          <HugeiconsIcon icon={ViewIcon} strokeWidth={2} />
+                          Inspect row
+                        </DropdownMenuItem>
+                      </>
+                    ) : undefined
+                  }
                 />
               </div>
             </>
@@ -199,18 +249,31 @@ const meta = {
       </div>
     ),
   ],
-  args: { onRefresh: fn(), onCancel: fn() },
+  args: {
+    onRefresh: fn(),
+    onCancel: fn(),
+    onExport: fn(),
+    onInspectRow: fn(),
+  },
 } satisfies Meta<typeof Harness>
 
 export default meta
 type Story = StoryObj<typeof meta>
 
+/** Wide: the six sub-tabs, and the preview's actions each in the bar. */
 export const Preview: Story = {
   play: async ({ canvas }) => {
     await expect(canvas.getByRole("tab", { name: "Data" })).toHaveAttribute(
       "aria-selected",
       "true"
     )
+    await expect(canvas.getAllByRole("tab")).toHaveLength(6)
+    await expect(canvas.queryByRole("button", { name: /^More/ })).toBeNull()
+    await expect(canvas.getByRole("button", { name: "Columns" })).toBeVisible()
+    await expect(
+      canvas.getByRole("button", { name: "Export preview…" })
+    ).toBeVisible()
+    await expect(canvas.queryByRole("button", { name: "Actions" })).toBeNull()
     await expect(canvas.getByText("Read-only preview")).toBeVisible()
     // Refresh and Cancel are two buttons: the idle one is inert.
     await expect(canvas.getByRole("button", { name: /^Cancel/ })).toBeDisabled()
@@ -507,6 +570,60 @@ export const DefinitionBesideKeepsItsWidth: Story = {
     )
     await userEvent.click(canvas.getByRole("tab", { name: "Indexes" }))
     await waitFor(() => expect(widthOf(narrowed())).toBe(DEFINITION_WIDTH.min))
+  },
+}
+
+/**
+ * Below 1200 px: Data and Structure stay tabs, the four others are in `More`;
+ * Columns, Export preview… and Inspect row are in `Actions` only, with no
+ * duplicate in the bar (docs/UX-SPEC.md, « Largeur réduite »).
+ */
+export const Compact: Story = {
+  args: { compact: true },
+  decorators: [
+    (Story) => (
+      <div className="h-[560px] w-[900px] border">
+        <Story />
+      </div>
+    ),
+  ],
+  play: async ({ canvas, args }) => {
+    const body = within(document.body)
+    await expect(
+      canvas.getAllByRole("tab").map((tab) => tab.textContent)
+    ).toEqual(["Data", "Structure"])
+    await expect(canvas.getByText("Read-only preview")).toBeVisible()
+    await expect(canvas.queryByRole("button", { name: "Columns" })).toBeNull()
+    await expect(
+      canvas.queryByRole("button", { name: "Export preview…" })
+    ).toBeNull()
+
+    await userEvent.click(canvas.getByRole("button", { name: "Actions" }))
+    await waitFor(() =>
+      expect(body.getByRole("menuitem", { name: /Columns/ })).toBeVisible()
+    )
+    await expect(
+      body.getByRole("menuitem", { name: "Export preview…" })
+    ).toBeVisible()
+    await userEvent.click(body.getByRole("menuitem", { name: "Inspect row" }))
+    await expect(args.onInspectRow).toHaveBeenCalled()
+    await waitFor(() => expect(body.queryByRole("menu")).toBeNull())
+
+    await userEvent.click(canvas.getByRole("button", { name: "More" }))
+    await userEvent.click(
+      await body.findByRole("menuitemradio", { name: "DDL" })
+    )
+    await waitFor(() =>
+      expect(canvas.getByRole("button", { name: "More · DDL" })).toBeVisible()
+    )
+    await expect(canvas.getByLabelText("Object definition")).toBeVisible()
+    await expect(canvas.queryByText("Read-only preview")).toBeNull()
+
+    // Back to a tab of the bar: `More` names nothing again.
+    await userEvent.click(canvas.getByRole("tab", { name: "Structure" }))
+    await waitFor(() =>
+      expect(canvas.getByRole("button", { name: "More" })).toBeVisible()
+    )
   },
 }
 

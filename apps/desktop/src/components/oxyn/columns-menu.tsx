@@ -10,6 +10,9 @@ import {
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
+  DropdownMenuSub,
+  DropdownMenuSubContent,
+  DropdownMenuSubTrigger,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
 import type { ResultColumn } from "@/lib/ipc/types"
@@ -32,20 +35,75 @@ export function columnsSummary(total: number, hidden: number) {
  * the file. The last shown column cannot be hidden: a grid with no column is
  * a result that looks empty.
  */
-export function ColumnsMenu({
-  columns,
-  hidden,
-  onHiddenChange,
-}: {
+export function ColumnsMenu(props: ColumnsMenuProps) {
+  return (
+    <DropdownMenu>
+      {/* `xs`, as Cancel beside it: a taller button grows the footer and
+          takes a row from the grid over the console's splitter floor. */}
+      <DropdownMenuTrigger render={<Button variant="outline" size="xs" />}>
+        <ColumnsLabel {...props} />
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="max-h-96 w-72">
+        <ColumnsItems {...props} />
+      </DropdownMenuContent>
+    </DropdownMenu>
+  )
+}
+
+/**
+ * The same choice as a submenu of `Actions`, below 1200 px, where the footer
+ * has no room for its own button (docs/UX-SPEC.md, « Largeur réduite »).
+ */
+export function ColumnsSubmenu(props: ColumnsMenuProps) {
+  return (
+    <DropdownMenuSub>
+      <DropdownMenuSubTrigger>
+        <ColumnsLabel {...props} />
+      </DropdownMenuSubTrigger>
+      <DropdownMenuSubContent className="max-h-96 w-72">
+        <ColumnsItems {...props} />
+      </DropdownMenuSubContent>
+    </DropdownMenuSub>
+  )
+}
+
+interface ColumnsMenuProps {
   columns: ReadonlyArray<ResultColumn>
   /** Arrow indexes of the hidden columns. */
   hidden: ReadonlySet<number>
   onHiddenChange: (hidden: ReadonlySet<number>) => void
-}) {
-  const hiddenCount = columns.reduce(
+}
+
+function countHidden({ columns, hidden }: ColumnsMenuProps) {
+  return columns.reduce(
     (count, _, index) => count + (hidden.has(index) ? 1 : 0),
     0
   )
+}
+
+function ColumnsLabel(props: ColumnsMenuProps) {
+  const hiddenCount = countHidden(props)
+  const total = props.columns.length
+  return (
+    <>
+      <HugeiconsIcon
+        icon={LayoutThreeColumnIcon}
+        strokeWidth={2}
+        data-icon="inline-start"
+      />
+      Columns
+      {hiddenCount > 0 ? (
+        <span className="text-muted-foreground tabular-nums">
+          {total - hiddenCount}/{total}
+        </span>
+      ) : null}
+    </>
+  )
+}
+
+function ColumnsItems(props: ColumnsMenuProps) {
+  const { columns, hidden, onHiddenChange } = props
+  const hiddenCount = countHidden(props)
   const lastShown = columns.length - hiddenCount === 1
 
   const toggle = (index: number, shown: boolean) => {
@@ -56,61 +114,44 @@ export function ColumnsMenu({
   }
 
   return (
-    <DropdownMenu>
-      {/* `xs`, as Cancel beside it: a taller button grows the footer and
-          takes a row from the grid over the console's splitter floor. */}
-      <DropdownMenuTrigger render={<Button variant="outline" size="xs" />}>
-        <HugeiconsIcon
-          icon={LayoutThreeColumnIcon}
-          strokeWidth={2}
-          data-icon="inline-start"
-        />
-        Columns
-        {hiddenCount > 0 ? (
-          <span className="text-muted-foreground tabular-nums">
-            {columns.length - hiddenCount}/{columns.length}
-          </span>
-        ) : null}
-      </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" className="max-h-96 w-72">
-        <DropdownMenuGroup>
-          <DropdownMenuLabel className="tabular-nums">
-            {columnsSummary(columns.length, hiddenCount)}
-          </DropdownMenuLabel>
-          {columns.map((column, index) => {
-            const shown = !hidden.has(index)
-            return (
-              <DropdownMenuCheckboxItem
-                key={index}
-                checked={shown}
-                disabled={shown && lastShown}
-                onCheckedChange={(checked) => toggle(index, checked)}
-              >
-                <span dir="auto" className="min-w-0 flex-1 truncate">
-                  {column.name}
-                </span>
-                <span className="max-w-24 shrink-0 truncate font-mono text-xs text-muted-foreground">
-                  {column.dataType}
-                </span>
-              </DropdownMenuCheckboxItem>
-            )
-          })}
-        </DropdownMenuGroup>
-        <DropdownMenuSeparator />
-        <DropdownMenuGroup>
-          <DropdownMenuItem
-            disabled={hiddenCount === 0}
-            closeOnClick={false}
-            onClick={() => onHiddenChange(new Set())}
-          >
-            <HugeiconsIcon icon={ViewIcon} strokeWidth={2} />
-            Show all
-          </DropdownMenuItem>
-          <DropdownMenuLabel className="font-normal text-muted-foreground">
-            Hiding changes this view only. An export keeps every column.
-          </DropdownMenuLabel>
-        </DropdownMenuGroup>
-      </DropdownMenuContent>
-    </DropdownMenu>
+    <>
+      <DropdownMenuGroup>
+        <DropdownMenuLabel className="tabular-nums">
+          {columnsSummary(columns.length, hiddenCount)}
+        </DropdownMenuLabel>
+        {columns.map((column, index) => {
+          const shown = !hidden.has(index)
+          return (
+            <DropdownMenuCheckboxItem
+              key={index}
+              checked={shown}
+              disabled={shown && lastShown}
+              onCheckedChange={(checked) => toggle(index, checked)}
+            >
+              <span dir="auto" className="min-w-0 flex-1 truncate">
+                {column.name}
+              </span>
+              <span className="max-w-24 shrink-0 truncate font-mono text-xs text-muted-foreground">
+                {column.dataType}
+              </span>
+            </DropdownMenuCheckboxItem>
+          )
+        })}
+      </DropdownMenuGroup>
+      <DropdownMenuSeparator />
+      <DropdownMenuGroup>
+        <DropdownMenuItem
+          disabled={hiddenCount === 0}
+          closeOnClick={false}
+          onClick={() => onHiddenChange(new Set())}
+        >
+          <HugeiconsIcon icon={ViewIcon} strokeWidth={2} />
+          Show all
+        </DropdownMenuItem>
+        <DropdownMenuLabel className="font-normal text-muted-foreground">
+          Hiding changes this view only. An export keeps every column.
+        </DropdownMenuLabel>
+      </DropdownMenuGroup>
+    </>
   )
 }

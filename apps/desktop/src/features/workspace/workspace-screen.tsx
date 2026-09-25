@@ -485,6 +485,17 @@ export function WorkspaceScreen({
                 if (handle) objectHandles.current.set(tab.key, handle)
                 else objectHandles.current.delete(tab.key)
               }}
+              // The value panel shows the selected row. At wide width the
+              // column is where the preference left it; this action exists
+              // only in the compact `Actions` menu, where it overlays.
+              onInspectRow={
+                aside.some((item) => item.id === "value")
+                  ? () => {
+                      setAsideActive("value")
+                      setAsideOpen(true)
+                    }
+                  : undefined
+              }
               onOpenRelated={(address) => openObject(relatedNode(address))}
               onOpenInConsole={(sql, title, options = {}) =>
                 void work.openConsole({
