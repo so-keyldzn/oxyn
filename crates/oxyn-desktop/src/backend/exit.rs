@@ -181,6 +181,17 @@ impl ConsoleTransactions {
         });
     }
 
+    /// The state of one console session once every published event is
+    /// applied, and whether a statement runs on it: what a move to another
+    /// window must know (ADR-0043). `None` for a session no console opened.
+    pub(crate) async fn observed(&self, session: SessionId) -> Option<(TransactionState, bool)> {
+        self.settled(ACKNOWLEDGE_GRACE)
+            .await
+            .into_iter()
+            .find(|entry| entry.session == session)
+            .map(|entry| (entry.state, entry.running > 0))
+    }
+
     pub(crate) fn closed(&self, session: SessionId) {
         self.entries.lock().retain(|entry| entry.session != session);
     }

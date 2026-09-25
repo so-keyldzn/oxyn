@@ -9,6 +9,10 @@ vi.mock("@/lib/ipc/library", () => ({
   library: { newDocument: () => Promise.resolve("doc-1") },
 }))
 
+// Its schemas import the mocked `consoles` module; nothing here moves a tab.
+vi.mock("@/lib/ipc/windows", () => ({
+  windows: { openInNewWindow: vi.fn(), reportConsoles: vi.fn() },
+}))
 vi.mock("@/lib/ipc/consoles", () => ({
   consoles: { close: () => Promise.resolve() },
 }))
@@ -50,6 +54,7 @@ function modifiedConsole() {
       running: false,
       transaction: null,
     }),
+    handoff: () => ({ result: null, parameters: [] }),
     text: () => text,
     flush: () => Promise.resolve(true),
     save: () =>

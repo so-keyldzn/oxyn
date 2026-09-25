@@ -66,8 +66,9 @@ pub enum RunTarget {
 /// A positional value typed by the user.
 ///
 /// **No `Debug` derive**: `text` is a value the user chose to bind rather than
-/// write in the SQL, and a `{run:?}` added later would print it.
-#[derive(Clone, Deserialize)]
+/// write in the SQL, and a `{run:?}` added later would print it. Serialized
+/// only to the window a console moves to (ADR-0043).
+#[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ParameterInput {
     #[serde(rename = "type")]

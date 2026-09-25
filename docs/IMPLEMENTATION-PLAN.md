@@ -405,7 +405,8 @@ Lots, dans l'ordre :
      formateur SQL : dépendance à passer par `/versions`), `Ask assistant about
      selection` (le composeur ne reçoit pas de texte de l'extérieur), `Re-layout`
      et `Export image…` de l'ERD, `Reveal in Finder`/`Explorer` (attend une
-     commande système, comme `open_external`), `Open in new window` (lot 7) ;
+     commande système, comme `open_external`) ; `Open in new window` est
+     actif depuis le lot 7 ;
    - **grisées** dans la bibliothèque, avec ce qu'elles attendent (lot 3 ter) :
      `Rename…`, `Duplicate` et `Copy path` — il faudrait
      `rename_query_document` et `duplicate_query_document` en Rust, la
@@ -699,10 +700,22 @@ retour, déplacement d'une console, instance vivante, borne de 16, ligne
 hostile) et `backend/windows/layout/tests.rs` (consoles d'une autre fenêtre
 écartées, fenêtre fermée qui ne revient pas, copies orphelines une fois, refus
 à un agent). Précisions dans ADR-0043, « Précisions de mise en œuvre,
-2026-09-26 ». Reste :
+2026-09-26 ».
 
-- `Open in new window` et le `ConsoleHandoff`. L'entrée reste grisée, dans
-  `menu-behaviours.ts` ;
+**Lot 7, `Open in new window`, fait le 2026-09-26.** Le menu d'un onglet
+déplace une console vers une fenêtre construite pour elle, avec sa session,
+son document, son résultat et ses valeurs liées ; rien n'est réexécuté.
+`backend/windows/handoff.rs` prépare le `ConsoleHandoff` avant de construire la
+fenêtre, et la nouvelle webview l'adopte une fois (`take_console_handoff`).
+Le registre transfère session et document sous un seul verrou ; la cible lit le
+résultat avant que la source ne relâche sa vue. Une fenêtre qui ne se
+construit pas rend la console. Un onglet d'objet part comme un emplacement.
+L'entrée est grisée, avec sa raison, pendant une exécution, une confirmation,
+un export ou une sauvegarde. Les tests sont dans
+`backend/windows/handoff/tests.rs` (même session, adoption unique, résultat
+toujours lu, console d'une autre fenêtre refusée, console rendue) et
+`context-menus.test.ts`. Reste :
+
 - rouvrir depuis la bibliothèque un document qu'une autre fenêtre écrit : il
   est refusé à l'écriture, mais la fenêtre propriétaire ne passe pas encore
   au premier plan sur cet onglet ;

@@ -768,6 +768,30 @@ la seconde apporte la disposition persistée, la restauration par fenêtre et
   à côté du refus des préférences. Le test est côté desktop
   (`backend/windows/layout/tests.rs`).
 
+### Précisions de mise en œuvre, 2026-09-26 (lot 7, `Open in new window`)
+
+- **Le déplacement est préparé avant la fenêtre.** `open_in_new_window`
+  réserve la cible, lui transfère la console et ouvre sa session de
+  catalogue, puis seulement construit la fenêtre : sa webview trouve le
+  `ConsoleHandoff` dès qu'elle le demande (`take_console_handoff`, une fois).
+  Une fenêtre qui ne se construit pas rend la console à la source, session et
+  transaction comprises.
+- **Session et document changent de fenêtre sous un seul verrou**
+  (`WindowRegistry::hand_over`) : aucune commande ne voit la console à
+  personne, ni aux deux. La source garde la connexion et son catalogue.
+- **Le résultat** est compté pour la cible avant que la source ne démonte sa
+  console, qui relâche alors sa propre vue. La cible relit les colonnes ; un
+  résultat expiré entre-temps n'est pas montré, et sa vue est rendue.
+- **Refus.** Le menu grise l'entrée, avec sa raison, pendant une exécution,
+  une confirmation, un export ou une sauvegarde de la console, et sur une
+  console hors ligne. Le backend refuse de son côté une console dont une
+  instruction tourne encore, d'après l'état de transaction qu'il suit, et
+  tout ce qu'une autre fenêtre possède. Une revue destructive ouverte tient
+  son dialogue au premier plan : le menu d'onglet n'est pas atteignable.
+- **La cible ne restaure rien d'autre** : ni écran de reprise, ni copies. Sa
+  première console est la console déplacée, avec la mention « Moved from
+  another window. Nothing was executed. »
+
 ## Conséquences
 
 * **+** Deux connexions, ou deux consoles, se regardent côte à côte, sur deux

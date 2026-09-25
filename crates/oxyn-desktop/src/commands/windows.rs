@@ -23,7 +23,7 @@ use crate::commands::parse;
 use crate::commands::recovery::{ExitJournal, begin_exit};
 use crate::file_drop::FileDrops;
 use crate::ipc::library::DocumentEntry;
-use crate::ipc::windows::{WindowConsoles, WindowSignal};
+use crate::ipc::windows::{ConsoleHandoff, HandoffRequest, WindowConsoles, WindowSignal};
 use crate::ipc::{CommandOutcome, IpcError, OpenConnection};
 use crate::menu::MenuBar;
 use crate::webview_guard;
@@ -71,6 +71,21 @@ pub(crate) fn build_window(
     let key = backend
         .reserve_restored_window(initial, restored)
         .map_err(|error| anyhow::anyhow!(error.message))?;
+    build_reserved(app, backend, key, geometry, temporary).inspect_err(|_| {
+        // Nothing to release yet: it owned nothing.
+        let _ = backend.inner.windows.forget(key);
+    })
+}
+
+/// Builds the window of `key`, already reserved. On failure, the caller
+/// releases what the window was given.
+fn build_reserved(
+    app: &AppHandle,
+    backend: &Backend,
+    key: WindowKey,
+    geometry: Option<WindowGeometry>,
+    temporary: bool,
+) -> anyhow::Result<()> {
     let screens = if geometry.is_some() {
         webview_guard::screens(app)
     } else {
@@ -95,10 +110,7 @@ pub(crate) fn build_window(
             });
             Ok(())
         }
-        Err(error) => {
-            let _ = backend.inner.windows.forget(key);
-            Err(error)
-        }
+        Err(error) => Err(error),
     }
 }
 
@@ -202,6 +214,49 @@ pub async fn open_window(
     temporary: State<'_, Temporary>,
 ) -> Result<(), IpcError> {
     build_window(&app, &backend, false, None, temporary.0).map_err(IpcError::from)
+}
+
+/// `Open in new window` on a tab: the console, with its session, its result
+/// and its bound values, or the object's place, moves to a new window.
+///
+/// Prepared before the window is built, so that its webview finds it; a
+/// window that cannot be built gives the console back. Refused while the
+/// console runs a statement, and past the bound of 16 windows.
+///
+/// # Errors
+/// What the checks refuse, the new catalog session, or the window's build.
+#[tauri::command]
+pub async fn open_in_new_window(
+    app: AppHandle,
+    webview: Webview,
+    backend: State<'_, Backend>,
+    temporary: State<'_, Temporary>,
+    request: HandoffRequest,
+) -> Result<(), IpcError> {
+    let source = caller(&backend, &webview)?;
+    backend.check_handoff(source, &request).await?;
+    let target = backend.reserve_restored_window(false, None)?;
+    if let Err(error) = backend.hand_off(source, target, request).await {
+        backend.release_window(target).await;
+        return Err(error);
+    }
+    if let Err(error) = build_reserved(&app, &backend, target, None, temporary.0) {
+        backend.hand_back(target, source);
+        backend.release_window(target).await;
+        return Err(IpcError::from(error));
+    }
+    Ok(())
+}
+
+/// What this window received from `Open in new window`, once; `None` for
+/// any other window. Memory only.
+#[tauri::command]
+pub fn take_console_handoff(
+    webview: Webview,
+    backend: State<'_, Backend>,
+) -> Result<Option<ConsoleHandoff>, IpcError> {
+    let window = caller(&backend, &webview)?;
+    Ok(backend.inner.handoffs.take(window))
 }
 
 /// The consoles this window shows, in tab order, and the one in front:

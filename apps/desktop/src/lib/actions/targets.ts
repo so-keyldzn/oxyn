@@ -69,6 +69,8 @@ export interface TabMenuState {
   toTheRight: number
   /** The console is saved in the library. */
   saved: boolean
+  /** Why the tab cannot open in a new window now, or `null` (ADR-0043). */
+  moveBlocked: string | null
 }
 
 export interface TabMenuActions {
@@ -79,6 +81,7 @@ export interface TabMenuActions {
   duplicate?: () => void
   rename?: () => void
   revealInLibrary?: () => void
+  openInNewWindow?: () => void
 }
 
 export interface EditorMenuState {

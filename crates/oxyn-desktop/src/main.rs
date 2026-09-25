@@ -184,6 +184,8 @@ fn main() -> Result<()> {
             commands::location::write_object_location,
             commands::windows::report_window_consoles,
             commands::windows::restored_consoles,
+            commands::windows::open_in_new_window,
+            commands::windows::take_console_handoff,
             // AI: declarations, conversation, schema-change proposal
             commands::ai::ai_providers,
             commands::ai::ai_external_agents,

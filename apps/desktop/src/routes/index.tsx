@@ -3,9 +3,11 @@ import { createFileRoute, redirect } from "@tanstack/react-router"
 import { ConnectionScreen } from "@/features/connections/connection-screen"
 import {
   markRecoveryOffered,
+  openConnection,
   restoreWorkingCopies,
   session,
   setLaunchCopies,
+  setMovedConsole,
 } from "@/features/session"
 import { recovery } from "@/lib/ipc/recovery"
 import { windows } from "@/lib/ipc/windows"
@@ -18,6 +20,14 @@ export const Route = createFileRoute("/")({
   beforeLoad: async () => {
     if (session.state.recoveryOffered) return
     markRecoveryOffered()
+    // Built by `Open in new window`: the tab it received opens at once, on
+    // the connection it came with. Such a window has nothing to restore.
+    const handoff = await windows.takeHandoff().catch(() => null)
+    if (handoff) {
+      if (handoff.type === "console") setMovedConsole(handoff)
+      openConnection(handoff.open)
+      throw redirect({ to: "/workspace" })
+    }
     const [status, copies] = await Promise.all([
       recovery.status().catch(() => ({ abnormal: false })),
       windows.restoredConsoles().catch(() => []),

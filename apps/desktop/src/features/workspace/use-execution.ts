@@ -73,15 +73,36 @@ export function stateFromOutcome(outcome: CommandOutcome): {
  * another. Starting a new run in a slot cancels the previous one and ignores
  * its late answer (docs/UX-SPEC.md, « Données d'une table sélectionnée »).
  */
-export function useExecution({ serverCancel }: { serverCancel: boolean }) {
-  const [state, setState] = React.useState<ResultState>({ status: "initial" })
-  const [summary, setSummary] = React.useState<ExecutionSummary>({
-    status: "idle",
-  })
+export function useExecution({
+  serverCancel,
+  initial = null,
+}: {
+  serverCancel: boolean
+  /**
+   * The result a console moved from another window shows: read again from
+   * the same buffer, never executed again (ADR-0043). Held like a result
+   * this slot received: released when replaced or unmounted.
+   */
+  initial?: ResultState | null
+}) {
+  const [state, setState] = React.useState<ResultState>(
+    () => initial ?? { status: "initial" }
+  )
+  const [summary, setSummary] = React.useState<ExecutionSummary>(() =>
+    initial?.status === "populated" && !initial.cancelled
+      ? {
+          status: "done",
+          rows: initial.rows,
+          elapsedMs: initial.elapsedMs ?? 0,
+        }
+      : { status: "idle" }
+  )
   const [approval, setApproval] = React.useState<PendingApproval | null>(null)
   const [deciding, setDeciding] = React.useState(false)
   const current = React.useRef<string | null>(null)
-  const heldResult = React.useRef<string | null>(null)
+  const heldResult = React.useRef<string | null>(
+    initial?.status === "populated" ? initial.result : null
+  )
   const [running, setRunning] = React.useState<string | null>(null)
   /** Stop was pressed and the answer has not arrived: said, not guessed. */
   const [cancelling, setCancelling] = React.useState(false)

@@ -120,7 +120,13 @@ describe("context menus", () => {
         },
       },
       tab: {
-        state: { console: true, count: 2, toTheRight: 0, saved: false },
+        state: {
+          console: true,
+          count: 2,
+          toTheRight: 0,
+          saved: false,
+          moveBlocked: null,
+        },
         actions: { close: nothing, closeRight: nothing },
       },
     }
@@ -135,6 +141,34 @@ describe("context menus", () => {
     expect(right?.kind === "entry" && right.entry.state).toEqual({
       reason: "No tab is to the right",
     })
+  })
+
+  it("grey Open in new window with what holds the console, and offer it otherwise", () => {
+    const entry = (moveBlocked: string | null) => {
+      const sources: ActionSources = {
+        tab: {
+          state: {
+            console: true,
+            count: 2,
+            toTheRight: 0,
+            saved: false,
+            moveBlocked,
+          },
+          actions: { openInNewWindow: nothing },
+        },
+      }
+      const row = menuRows("tab", contextWith(sources))
+        .flat()
+        .find(
+          (item) =>
+            item.kind === "entry" && item.entry.id === "tab.openInNewWindow"
+        )
+      return row?.kind === "entry" ? row.entry.state : undefined
+    }
+    expect(entry("Wait for the statement to finish, or stop it")).toEqual({
+      reason: "Wait for the statement to finish, or stop it",
+    })
+    expect(entry(null)).toBe(true)
   })
 
   it("grey the preview filters of a console's result: its SQL is never rewritten", () => {
@@ -233,7 +267,13 @@ describe("context menus", () => {
         tab: {
           workspace: workspace(everything),
           tab: {
-            state: { console: true, count: 3, toTheRight: 1, saved: true },
+            state: {
+              console: true,
+              count: 3,
+              toTheRight: 1,
+              saved: true,
+              moveBlocked: null,
+            },
             actions,
           },
         },
