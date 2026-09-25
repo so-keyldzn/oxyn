@@ -189,12 +189,11 @@ pas le tag : un tag se déplace, un SHA non.
 | Édition | 2024 | crates.io API | 2026-09-05 |
 | MSRV déclaré | **aucun** (`rust_version` absent) | crates.io API | 2026-09-05 |
 | Dépendances normales non optionnelles | 65 | crates.io API `/dependencies` | 2026-09-05 |
-| Dépôt de développement | `github.com/zed-industries/zed` | crates.io API | 2026-09-05 |
 | Features | `default`, `inspector`, `leak-detection`, `macos-blade`, `runtime_shaders`, `screen-capture`, `test-support`, `wayland`, `windows-manifest`, `x11` | crates.io API | 2026-09-05 |
 
 > **Deux pièges vérifiés.**
 > 1. La dernière publication remonte à **près de onze mois** alors que le
->    développement continue dans le dépôt Zed. La version épinglée ne recevra
+>    développement continue dans le dépôt amont. La version épinglée ne recevra
 >    ni correctif ni nouvelle API. C'est un coût accepté, tranché en
 >    [ADR-0009](adr/0009-source-dependance-gpui.md).
 > 2. `gpui` épingle plusieurs de ses dépendances avec `=` — dont
@@ -461,9 +460,9 @@ plus rien.
 
 ## Agent Client Protocol — vérification du 2026-09-14
 
-Piste ouverte par l'utilisateur : « regarder le repo de Zed pour l'intégration
-IA, surtout pour ne pas passer par les API ; il y a deux modes, un avec API et
-l'autre les agents externes ». Vérification faite aux sources, pas de mémoire.
+Piste ouverte par l'utilisateur : l'intégration IA, surtout pour ne pas passer
+par les API ; « il y a deux modes, un avec API et l'autre les agents
+externes ». Vérification faite aux sources, pas de mémoire.
 
 **Le protocole.** L'Agent Client Protocol est du **JSON-RPC**, sur `stdio` pour
 un agent local, sur HTTP ou WebSocket pour un agent distant. Un agent local est
@@ -505,16 +504,13 @@ l'agent, y compris si l'annulation arrive avant que quoi que ce soit n'ait été
 lu. C'est ce sur quoi repose `run_turn`, qui sélectionne la conversation contre
 le jeton d'annulation plutôt que de relire un drapeau entre deux étapes.
 
-**Ce que Zed en fait.** Un agent externe se déclare dans les réglages sous
-`agent_servers`, par une commande, ses arguments et son environnement — par
-exemple `{"type": "custom", "command": "node", "args": ["…/index.js", "--acp"]}`.
-Zed le lance en processus séparé. La documentation est explicite sur le point qui
-nous intéresse : **aucune clé d'API n'est requise pour un agent externe**, qui
-porte sa propre authentification, et « Billing, legal terms, retention, and data
-handling are between you and the agent provider ». Cela s'oppose à ses
-fournisseurs natifs, où la clé est configurée dans l'éditeur. Consultation de
-[zed.dev/docs/ai/external-agents](https://zed.dev/docs/ai/external-agents) le
-2026-09-14.
+**Ce qu'en fait un éditeur client.** Un agent externe s'y déclare par une
+commande, ses arguments et son environnement, et l'éditeur le lance en
+processus séparé. **Aucune clé d'API n'est requise pour un agent externe**, qui
+porte sa propre authentification ; la facturation, les conditions et la
+rétention des données regardent l'utilisateur et le fournisseur de l'agent.
+Cela s'oppose aux fournisseurs natifs, où la clé est configurée dans
+l'éditeur. Relevé le 2026-09-14.
 
 **Ce que la crate ajoute au processus**, mesuré le 2026-09-14 par
 `cargo tree -p oxyn-ai --edges normal -i <crate>` : `async-io 2.6.0`,
@@ -550,7 +546,6 @@ valeurs de `crates/oxyn-ai/src/external/presets.rs`.
 | `@anthropic-ai/claude-agent-sdk` (dépendance, CLI embarquée 2.1.270) | 0.3.270 | « SEE LICENSE IN README.md » | — | [registre npm](https://registry.npmjs.org/@anthropic-ai/claude-agent-sdk/0.3.270) |
 | `@agentclientprotocol/codex-acp` | **1.12.0** | Apache-2.0 | `codex-acp` ; aucun `engines` déclaré, mais sa dépendance `open@^11` exige `node >=20`, la plus haute de ses dépendances directes (`vscode-jsonrpc@9` : `>=14`, `diff@9` : `>=0.3.1`, `zod@4` et `@agentclientprotocol/sdk@1.4` : rien) — relevé au registre npm le 2026-09-23 | [registre npm](https://registry.npmjs.org/@agentclientprotocol/codex-acp), [registre ACP](https://github.com/agentclientprotocol/registry/blob/main/codex-acp/agent.json) |
 | `@openai/codex` (dépendance) | 0.154.0 | Apache-2.0 | `codex` ; `node >=16` | [registre npm](https://registry.npmjs.org/@openai/codex/latest) |
-| `@zed-industries/claude-code-acp`, `@zed-industries/codex-acp` | 0.16.2, 0.16.0 | Apache-2.0 | — | **dépréciés** au profit des deux premiers ; le dépôt `zed-industries/codex-acp` est archivé |
 
 Les deux adaptateurs publient plusieurs fois par semaine (les deux dernières
 versions datent du 2026-09-15 à sept minutes d'écart) : la commande proposée
