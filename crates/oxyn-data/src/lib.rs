@@ -68,7 +68,7 @@ pub use cell::{
     TimestampDisplay, format_cell, format_value, timestamp_display,
 };
 pub use error::{DataError, Result};
-pub use export::{ExportOptions, ExportSummary, export, is_supported};
+pub use export::{ExportOptions, ExportSummary, ensure_exportable, export, is_supported};
 pub use find::{FindOutcome, find_rows};
 pub use sink::{BatchProgress, BatchSink, BatchSource, SinkOutcome};
 
