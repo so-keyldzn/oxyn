@@ -216,6 +216,12 @@ async fn preview_sqlite_is_bounded_preserves_hostile_table_and_correlates_events
                     assert_eq!(found, result);
                     completed = true;
                 }
+                // A preview runs on the session like any execution: the state
+                // it leaves is announced before `Completed` (ADR-0039).
+                Event::TransactionState { state, .. } => {
+                    assert!(!completed, "the state comes before the terminal event");
+                    assert_eq!(state, oxyn_core::TransactionState::Idle);
+                }
                 other => panic!("unexpected event: {other:?}"),
             }
         }
