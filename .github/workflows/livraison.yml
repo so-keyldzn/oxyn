@@ -2,9 +2,15 @@
 # paquets dans une release GitHub en BROUILLON.
 #
 # Rien n'est publié automatiquement : la release reste un brouillon jusqu'à ce
-# qu'un humain la relise et la publie. Le tag doit porter la version de
-# `crates/oxyn-desktop/tauri.conf.json` (`v0.0.1` pour `0.0.1`) : c'est elle
-# que les paquets portent dans leur nom.
+# qu'un humain la relise et la publie.
+#
+# Le tag vaut exactement `v` suivi de la version de
+# `crates/oxyn-desktop/tauri.conf.json`, suffixe de préversion compris
+# (`v0.1.0-rc.1` pour `0.1.0-rc.1`, qui crée un brouillon marqué préversion) ;
+# sinon le workflow échoue avant de créer le brouillon, et rien n'est corrigé
+# automatiquement. C'est cette version que les paquets portent dans leur nom.
+#
+# Cette règle est appliquée et testée par `script/livraison`.
 #
 # Les paquets ne sont PAS signés : macOS demande au premier lancement un clic
 # droit, puis « Ouvrir ». La signature et la notarisation demandent un compte
@@ -35,15 +41,17 @@ jobs:
   brouillon:
     runs-on: ubuntu-24.04
     steps:
-      - name: Créer la release en brouillon
-        # `--verify-tag` : la release ne s'attache qu'à un tag qui existe déjà
-        # sur le dépôt, jamais à un tag que gh créerait lui-même.
+      - name: Récupérer le dépôt
+        # actions/checkout v7.0.1
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          # Le job ne se sert pas de git : `gh` reçoit son jeton par GH_TOKEN.
+          persist-credentials: false
+
+      - name: Vérifier le tag et créer la release en brouillon
         env:
           GH_TOKEN: ${{ github.token }}
-        run: |
-          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
-            || gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" \
-                 --draft --verify-tag --generate-notes --title "Oxyn $GITHUB_REF_NAME"
+        run: python3 script/livraison brouillon "$GITHUB_REF_NAME" "$GITHUB_REPOSITORY"
 
   paquets:
     needs: brouillon
