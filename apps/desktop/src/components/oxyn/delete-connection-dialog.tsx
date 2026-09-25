@@ -102,7 +102,7 @@ export function DeleteConnectionDialog<
               connection stays in the workspace file (docs/UX-SPEC.md). */}
           <p
             data-slot="delete-connection-conversations"
-            className="text-sm text-muted-foreground"
+            className="min-w-0 text-sm wrap-anywhere text-muted-foreground"
           >
             Its assistant conversations are kept in this workspace, under the
             name <bdi>{name}</bdi>, and stay listed, read-only, in the assistant
