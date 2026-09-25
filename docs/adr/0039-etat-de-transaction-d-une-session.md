@@ -191,8 +191,17 @@ commande.
 `ConsoleSession` (`crates/oxyn-desktop/src/backend/consoles.rs`) porte l'état
 lu par `transaction_state` à l'ouverture de la console. Une connexion SQLite
 neuve est en autocommit, et cela se **constate** : la console démarre à `Idle`,
-sans repère ni dialogue superflu. `console_session`, aujourd'hui synchrone,
-devient asynchrone pour ses deux appelants.
+sans repère ni dialogue superflu.
+
+L'état initial est lu **par l'exécuteur** pendant `Command::Connect`, et porté
+par `Outcome::Connected` : le pont n'appelle aucun driver hors du bus
+([I-01](../../CLAUDE.md#i-01)). `console_session` reste donc synchrone ; elle
+reçoit l'état de la réponse de connexion au lieu de le lire.
+
+*Précision de mise en œuvre, 2026-09-25 :* le texte proposé faisait lire l'état
+par `console_session`, devenue asynchrone. La relecture des invariants a
+montré que c'était un appel au driver depuis `oxyn-desktop`, hors du bus ; la
+lecture est passée dans l'exécuteur.
 
 ### 5. La console le montre à côté de son contexte
 
@@ -253,6 +262,10 @@ la barre de console) et `revue-driver.md`. Pas avant : tant que cet ADR est
   pour SQLite. Un driver qui la redéfinit doit respecter l'ordre « après tout ce
   qui a été soumis » ; une valeur simplement rangée par le driver et lue sans
   attendre recréerait la course décrite au contexte.
+* **−** Après un Stop, la fin de l'exécution attend que le thread SQLite sorte
+  effectivement de `sqlite3_step` : le jeton de lecture n'est borné que par la
+  fermeture de la session. Une instruction qui ignorerait l'interruption
+  laisserait la console « en cours », sans borne, jusqu'à sa fermeture.
 * **−** L'état est celui de la **fin de la dernière opération**. Un futur driver
   réseau dont la connexion est tuée côté serveur resterait affiché `Open`
   jusqu'à l'exécution suivante.
