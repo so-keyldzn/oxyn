@@ -184,6 +184,14 @@ bloquée. L'annulation transmet le même `CancelToken` jusqu'au driver. Les
 décisions `RequireApproval` ouvrent une confirmation avant de reprendre la
 commande correspondante. Fermer la dernière fenêtre quitte l'application.
 
+Ce paragraphe décrit l'hôte à fenêtre unique d'aujourd'hui.
+[ADR-0043](adr/0043-multi-fenetre.md) (proposé) en fait un hôte à plusieurs
+fenêtres : session, flux d'événements et consoles deviennent propres à une
+fenêtre, et fermer une fenêtre qui n'est pas la dernière ferme ses consoles.
+[ADR-0041](adr/0041-registre-d-actions-menus-et-raccourcis.md) (proposé) y
+ajoute la barre de menus native de macOS, construite en Rust depuis le
+registre d'actions du front.
+
 L'option explicite `--temporary-workspace` ouvre un état et un magasin de secrets
 en mémoire pour les vérifications locales. Elle ne lit ni le workspace enregistré
 ni le trousseau et n'ouvre aucune base automatiquement. Les connexions choisies
@@ -987,7 +995,10 @@ décision. Détail et fenêtres d'abandon assumées : [ADR-0035](adr/0035-ecritu
 (`subscribe_events`), alimenté par le canal de diffusion de l'exécuteur. Une
 webview lente en perd — c'est journalisé, jamais masqué —, mais l'issue de chaque
 commande revient comme réponse de son `invoke` : une perte d'événements
-intermédiaires ne laisse pas une vue bloquée.
+intermédiaires ne laisse pas une vue bloquée. Cet abonnement est aujourd'hui
+unique pour tout le processus : une seconde fenêtre couperait le flux de la
+première. [ADR-0043](adr/0043-multi-fenetre.md) le rend propre à chaque
+fenêtre, filtré en Rust.
 
 **Un second réacteur entre par les agents externes.** `agent-client-protocol`
 ([ADR-0026](adr/0026-agents-externes-acp.md)) tire `async-io` et `blocking` en
