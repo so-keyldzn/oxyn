@@ -32,6 +32,14 @@ const COPIED_AS: Record<CopyAsForm, string> = {
   ddl: "DDL",
 }
 
+/**
+ * Whether the source has a catalog to draw and search: the interface is
+ * conditional on capabilities (ADR-0003), and a key-value store has none.
+ */
+export function hasCatalog(open: OpenConnection) {
+  return CATALOG_CAPABILITIES.some((name) => hasCapability(open, name))
+}
+
 function findNode(nodes: Array<CatalogNode>, key: string): CatalogNode | null {
   for (const node of nodes) {
     if (addressKey(node.address) === key) return node
@@ -99,11 +107,9 @@ export function CatalogSidebar({
   const [rootCommand, setRootCommand] = React.useState<string | null>(null)
   const [cancelling, setCancelling] = React.useState(false)
   const running = React.useRef(new Set<string>())
-  // The interface is conditional on capabilities (ADR-0003): a key-value store
-  // has no tree to draw, and must not pretend to have an empty one.
-  const supported = CATALOG_CAPABILITIES.some((name) =>
-    hasCapability(open, name)
-  )
+  // A key-value store has no tree to draw, and must not pretend to have an
+  // empty one.
+  const supported = hasCatalog(open)
 
   const tree = useQuery({
     queryKey: ["catalog", open.connection],

@@ -357,7 +357,7 @@ volerait un caractère.
 | Menu | Entrées |
 |---|---|
 | `Oxyn` (macOS) | `About Oxyn`, `Settings…` `⌘,`, `Hide Oxyn`, `Quit Oxyn` `⌘Q` |
-| `File` | `New console` `⌘T`, `New window`, `New connection…`, `Open from library…`, `Open Recent ▸`, `Save` `⌘S`, `Save as…`, `Close tab` `⌘W`, `Export…`, et sous Windows et Linux `Exit` `Ctrl+Q` |
+| `File` | `New console` `⌘T`, `New window`, `New connection…`, `Open from library…`, `Open Recent ▸`, `Save` `⌘S`, `Save as…`, `Close tab` `⌘W`, `Export…`, et sous Windows et Linux `Settings…` `Ctrl+,` puis `Exit` `Ctrl+Q` |
 | `Edit` | `Undo`, `Redo`, `Cut`, `Copy`, `Paste`, `Select All`, `Find` `⌘F` |
 | `View` | `Toggle sidebar` `⌘B`, `Toggle side panel` `⌘⌥B`, `Assistant`, `Text size ▸`, `Enter full screen`, `Theme ▸` |
 | `Query` | `Run` `⌘↵`, `Run all` `⌘⇧↵`, `Explain`, `Cancel` `Esc`, `Format` |
@@ -387,7 +387,10 @@ Ce que ces entrées font est écrit ailleurs, et le menu n'y ajoute rien :
   dans les mêmes cas que leurs boutons ;
 - `Text size` choisit l'un des préréglages de « Lisibilité et hauteur de
   grille », le même choix que les préférences et la barre de résultat,
-  sauvegardé de la même façon ;
+  sauvegardé de la même façon ; `Theme` choisit de même entre `Light`, `Dark`
+  et `System`, et la barre coche le choix en vigueur ;
+- `Settings…` est sous Windows et Linux dans `File`, juste au-dessus d'`Exit`
+  (arbitré le 2026-09-25) : ces plateformes n'ont pas de menu d'application ;
 - `Assistant` ouvre l'assistant dans le panneau latéral ; sans destination IA
   déclarée, l'entrée n'existe pas ;
 - `Export…` suit « Ce qui est exporté est ce qui est affiché », y compris pour
