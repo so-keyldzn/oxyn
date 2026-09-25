@@ -108,6 +108,27 @@ export const SQLite: Story = {
   },
 }
 
+/**
+ * A `.sqlite` file dropped on the window: its path is in the form, and that is
+ * all — the connection starts as production like any other, and nothing is
+ * sent until Connect (UX-SPEC « Souris et glisser »).
+ */
+export const PrefilledFromADroppedFile: Story = {
+  args: {
+    driver: sqliteDriver,
+    dropped: { path: "/Users/me/Downloads/scratch.sqlite" },
+  },
+  play: async ({ canvas, args }) => {
+    await expect(canvas.getByLabelText(/^Database file/)).toHaveValue(
+      "/Users/me/Downloads/scratch.sqlite"
+    )
+    await expect(
+      canvas.getByRole("radio", { name: /PRODUCTION/ })
+    ).toBeChecked()
+    await expect(args.onSubmit).not.toHaveBeenCalled()
+  },
+}
+
 export const OpeningCanBeCancelled: Story = {
   args: { submitting: true },
   play: async ({ canvas, args }) => {

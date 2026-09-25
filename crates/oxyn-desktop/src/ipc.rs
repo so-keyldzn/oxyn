@@ -716,6 +716,7 @@ mod tests {
 
 pub mod ai;
 pub mod consoles;
+pub mod file_drops;
 pub mod library;
 pub mod location;
 pub mod menu;

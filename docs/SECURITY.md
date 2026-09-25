@@ -228,6 +228,16 @@ Ce qui entre dans Oxyn et n'est pas fiable, par ordre de sous-estimation :
 6. **Les réponses des fournisseurs IA.** Ce sont des propositions, pas des
    ordres : elles passent par le `PolicyGate` comme n'importe quelle commande
    ([ADR-0004](adr/0004-command-bus.md)). Voir [I-07](../CLAUDE.md#i-07).
+7. **Les fichiers déposés sur la fenêtre.** Un chemin reçu du système est ce
+   que l'utilisateur a glissé — ou ce qu'une page ouverte ailleurs a mis dans
+   le glisser. Il est classé en Rust (`crates/oxyn-desktop/src/file_drop.rs`) :
+   un lien symbolique est refusé, pas suivi, parce que l'extension de son nom
+   ne dit rien du fichier visé ; un `.sql` est lu borné à 4 Mio, en UTF-8
+   strict, et ouvert dans une console sans être exécuté ; un fichier de base
+   n'est qu'**offert** comme connexion, en `production`, créée seulement si
+   l'utilisateur la valide. La commande `subscribe_file_drops` ne prend aucun
+   chemin : la webview ne peut pas demander la lecture d'un fichier de son
+   choix, et le front ne reçoit qu'un texte ou une valeur de formulaire.
 
 ## Politique `unsafe`
 

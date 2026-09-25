@@ -18,6 +18,7 @@ import { AppMenubarHost } from "@/features/actions/app-menubar-host"
 import { useActionRuntime } from "@/features/actions/use-action-runtime"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { subscribeToShutdown } from "@/features/consoles/draft-registry"
+import { useFileDrops } from "@/features/file-drops/use-file-drops"
 import { ProviderSettings } from "@/features/assistant/provider-settings"
 import { ExitTransactionsHost } from "@/features/recovery/exit-transactions-host"
 import { openConnection, session } from "@/features/session"
@@ -70,6 +71,8 @@ function RootComponent() {
   const open = useStore(session, (state) => state.open)
   // Keyboard, focus zones and the macOS menu bar, for every screen (ADR-0041).
   useActionRuntime()
+  // Files dropped from the system, classified by Rust (ADR-0041, point 9).
+  useFileDrops()
   // The shell is prerendered in Node, which knows no keyboard family: the
   // web menu bar appears once the window runs, never in the static HTML.
   const client = React.useSyncExternalStore(

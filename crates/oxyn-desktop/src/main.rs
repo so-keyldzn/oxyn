@@ -11,6 +11,7 @@ mod backend;
 mod catalog;
 mod commands;
 mod credentials;
+mod file_drop;
 mod ipc;
 mod logging;
 mod menu;
@@ -83,7 +84,8 @@ fn main() -> Result<()> {
     // drawn by the front elsewhere (ADR-0041).
     let builder = tauri::Builder::default()
         .manage(menu::MenuBar::default())
-        .manage(commands::recovery::ExitJournal(journal.clone()));
+        .manage(commands::recovery::ExitJournal(journal.clone()))
+        .manage(file_drop::FileDrops::default());
     #[cfg(target_os = "macos")]
     let builder = builder.menu(menu::application_menu);
     builder
@@ -95,6 +97,10 @@ fn main() -> Result<()> {
             webview_guard::open_window(app, MAIN_WINDOW, window_title(temporary))?;
             Ok(())
         })
+        // Files dropped from the system: classified in Rust, `dragDropEnabled`
+        // left on, which is why the front's own drags use pointer events
+        // (ADR-0041, point 9).
+        .on_window_event(|window, event| file_drop::on_window_event(window, event, MAIN_WINDOW))
         // Grouped by feature. A feature module adds its block here and nowhere
         // else: a command missing from this list fails silently in the front.
         .invoke_handler(tauri::generate_handler![
@@ -166,6 +172,8 @@ fn main() -> Result<()> {
             commands::menu::subscribe_menu,
             commands::menu::set_menu_state,
             commands::recovery::request_exit,
+            // Files dropped from the system (ADR-0041, point 9)
+            commands::file_drops::subscribe_file_drops,
             // Settings: preferences and saved-connection management
             commands::settings::read_preferences,
             commands::settings::write_preferences,
