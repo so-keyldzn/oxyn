@@ -104,6 +104,17 @@ Ne pas la « simplifier ».
 une retouche y est écrasée au prochain `shadcn add --overwrite`. Ce qui est propre à
 Oxyn va dans `src/components/oxyn`.
 
+**Une seule exception, datée du 2026-09-25** : `src/components/ui/select.tsx`
+transmet à la liste ouverte le nom de son déclencheur — son `aria-labelledby`
+s'il en a un, sinon son `aria-label` — et accepte un `aria-label` explicite sur
+`SelectContent`. Base UI laisse la listbox sans nom : axe relève
+`aria-input-field-name`, et un lecteur d'écran annonce une liste anonyme. Le
+déclencheur n'est pas visé par `aria-labelledby` : un combobox référencé ainsi
+prête sa valeur choisie, pas son libellé. La retouche est commentée en tête du
+fichier ; la story `ListIsNamedAfterItsTrigger` de
+`assistant-reasoning-effort.stories.tsx` échoue si une régénération l'efface.
+Elle tombe le jour où Base UI nomme la liste lui-même.
+
 ## Chaque composant Oxyn a ses stories, et ses stories sont ses tests
 
 Un composant de `src/components/oxyn` qui dépend d'une opération distante a une
