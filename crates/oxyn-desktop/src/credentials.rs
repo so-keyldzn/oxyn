@@ -15,7 +15,7 @@
 
 use std::sync::Arc;
 
-use oxyn_core::{AiProviderConfig, ConnectionConfig, OxynError, ProviderId};
+use oxyn_core::{AiProviderConfig, ConnectionConfig, ConnectionId, OxynError, ProviderId};
 use oxyn_driver::Credentials;
 use oxyn_exec::CredentialResolver;
 use oxyn_llm::ApiKey;
@@ -45,6 +45,11 @@ impl KeyringCredentials {
 
     /// Writes a connection's secrets, replacing whatever was there.
     ///
+    /// Under the reference `config` carries, or the one derived from its id
+    /// when it carries none: the caller that gives a connection a
+    /// [fresh reference](Self::fresh_reference) writes there, never into the
+    /// entry the previous configuration named.
+    ///
     /// The `values` are keyed by **field key**, as the driver declares them:
     /// `password` and `token` land in the bundle's own slots, anything else
     /// becomes an extra under its own name. Mapping on the key rather than on
@@ -52,13 +57,14 @@ impl KeyringCredentials {
     /// without this function having to know about it.
     ///
     /// # Errors
-    /// [`OxynError::Config`] if the keyring refuses the write.
+    /// [`OxynError::Config`] if the reference is unreadable or the keyring
+    /// refuses the write.
     pub fn store_secrets(
         &self,
         config: &ConnectionConfig,
         values: &std::collections::BTreeMap<String, String>,
     ) -> Result<SecretRef, OxynError> {
-        let reference = SecretRef::for_connection(config.id);
+        let reference = reference_of(config)?;
 
         let mut bundle = CredentialBundle::new();
         for (cle, valeur) in values {
@@ -85,19 +91,21 @@ impl KeyringCredentials {
     /// Editing a connection sends only the secrets the user retyped: a password
     /// changed on its own must not erase the token or the TLS key stored beside
     /// it, which [`store_secrets`](Self::store_secrets) would do. The existing
-    /// bundle is read here, inside the audited module, and never leaves it.
+    /// bundle is read here, inside the audited module, and never leaves it —
+    /// the entry `config` references, the one its destination already uses.
     ///
     /// # Blocking
     /// Reaches the platform keyring: call it from the blocking pool.
     ///
     /// # Errors
-    /// [`OxynError::Config`] if the keyring refuses the read or the write.
+    /// [`OxynError::Config`] if the reference is unreadable or the keyring
+    /// refuses the read or the write.
     pub fn replace_secrets(
         &self,
         config: &ConnectionConfig,
         values: &std::collections::BTreeMap<String, String>,
     ) -> Result<SecretRef, OxynError> {
-        let reference = SecretRef::for_connection(config.id);
+        let reference = reference_of(config)?;
         let mut bundle = self
             .store
             .get_bundle(&reference)
@@ -118,6 +126,24 @@ impl KeyringCredentials {
                 OxynError::Config(format!("writing the connection secrets: {erreur}"))
             })?;
         Ok(reference)
+    }
+
+    /// A keyring reference for `connection` that no configuration has named
+    /// before.
+    ///
+    /// For a connection that moves to another destination: its configuration
+    /// is saved before its secrets are written, and a reference derived from
+    /// the id alone would name the entry still holding what was typed for the
+    /// old destination — until it is forgotten, forever if the process stops
+    /// in between. A fresh one names an empty entry until the new secrets land.
+    #[must_use]
+    pub fn fresh_reference(connection: ConnectionId) -> String {
+        format!(
+            "{}:{}:{connection}.{}",
+            SecretRef::SCHEME,
+            SecretRef::KIND_CONNECTION,
+            uuid::Uuid::new_v4().simple()
+        )
     }
 
     /// Forgets a deleted connection's secrets.
@@ -208,6 +234,14 @@ impl KeyringCredentials {
             .delete(&reference)
             .map_err(|erreur| OxynError::Config(format!("forgetting the provider key: {erreur}")))
     }
+}
+
+/// The entry a connection's secrets are written to: the one it references,
+/// never a derived one in its place — writing beside the entry the resolver
+/// reads would leave the old secrets in use.
+fn reference_of(config: &ConnectionConfig) -> Result<SecretRef, OxynError> {
+    SecretRef::for_connection_config(config)
+        .map_err(|erreur| OxynError::Config(format!("connection secret reference: {erreur}")))
 }
 
 impl CredentialResolver for KeyringCredentials {

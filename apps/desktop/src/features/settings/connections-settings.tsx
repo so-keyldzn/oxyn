@@ -238,10 +238,8 @@ export function ConnectionsSettings({
       {secretsError ? (
         <Alert>
           <HugeiconsIcon icon={Alert02Icon} strokeWidth={2} />
-          <AlertTitle>Saved, but the secrets were not replaced</AlertTitle>
-          <AlertDescription data-selectable>
-            The connection keeps its previous secrets. {secretsError}
-          </AlertDescription>
+          <AlertTitle>Saved, but the secrets were not written</AlertTitle>
+          <AlertDescription data-selectable>{secretsError}</AlertDescription>
         </Alert>
       ) : null}
       <ConnectionManager

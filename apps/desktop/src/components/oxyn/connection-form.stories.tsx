@@ -194,6 +194,51 @@ export const EditingASavedConnection: Story = {
   },
 }
 
+/**
+ * A stored password is not presented to a host it was not typed for: once a
+ * parameter changes, the field stops saying « stored » and asks for it again.
+ */
+export const ChangedHostAsksForThePasswordAgain: Story = {
+  args: { existing: billing },
+  play: async ({ canvas, args }) => {
+    const password = canvas.getByLabelText(/^Password/)
+    await expect(password).toHaveAttribute(
+      "placeholder",
+      "Stored in the keyring"
+    )
+
+    const host = canvas.getByLabelText(/^Host/)
+    await userEvent.clear(host)
+    await userEvent.type(host, "db.other.example")
+    await expect(password).toHaveValue("")
+    await expect(password).not.toHaveAttribute("placeholder")
+    await expect(password).toHaveAccessibleDescription(
+      /Connection settings changed — enter the password again/
+    )
+
+    // Back to the saved host: the stored password applies again.
+    await userEvent.clear(host)
+    await userEvent.type(host, "db.internal")
+    await expect(password).toHaveAttribute(
+      "placeholder",
+      "Stored in the keyring"
+    )
+
+    await userEvent.clear(host)
+    await userEvent.type(host, "db.other.example")
+    await userEvent.type(password, "typed-for-the-new-host")
+    await userEvent.click(canvas.getByRole("button", { name: "Save" }))
+    await waitFor(() =>
+      expect(args.onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          values: expect.objectContaining({ host: "db.other.example" }),
+          secrets: { password: "typed-for-the-new-host" },
+        })
+      )
+    )
+  },
+}
+
 export const HostileAndRightToLeftName: Story = {
   args: {
     existing: {

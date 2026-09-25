@@ -12,7 +12,8 @@
 //! The list of saved connections still carries no parameter at all.
 //!
 //! Secrets travel one way, into [`ConnectionEdit::secrets`], and only when the
-//! user retyped one: an empty slot keeps what the keyring holds.
+//! user retyped one: an empty slot keeps what the keyring holds, as long as
+//! no parameter changed.
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -317,7 +318,8 @@ pub struct ConnectionEdit {
     /// absent is removed; a parameter the driver does not declare is kept.
     #[serde(default)]
     pub values: BTreeMap<String, String>,
-    /// Only the secrets the user retyped. An absent key keeps the stored one.
+    /// Only the secrets the user retyped. An absent key keeps the stored one,
+    /// unless a parameter changed: the stored secrets are then forgotten.
     #[serde(default)]
     pub secrets: BTreeMap<String, String>,
 }
@@ -343,8 +345,9 @@ pub enum ConnectionChange {
     #[serde(rename_all = "camelCase")]
     Saved {
         connection: SavedConnection,
-        /// Set when the configuration was saved but the retyped secrets were
-        /// not written: the connection keeps its previous secrets.
+        /// Set when the configuration was saved but the keyring did not do
+        /// what the edit asked of it. The message says which secrets are in
+        /// use now: the previous ones, or none.
         secrets_error: Option<String>,
     },
     Deleted,

@@ -333,6 +333,238 @@ fn a_production_edit_writes_its_secrets_only_once_approved_and_keeps_the_others(
     );
 }
 
+/// A saved local connection whose keyring entry holds a password and a token.
+fn saved_with_secrets(runtime: &tokio::runtime::Runtime, backend: &Backend) -> ConnectionConfig {
+    let config = saved(runtime, backend, Environment::Local);
+    let stored: BTreeMap<String, String> = [("password", "old"), ("token", "old-token")]
+        .into_iter()
+        .map(|(key, value)| (key.to_owned(), value.to_owned()))
+        .collect();
+    let reference = backend
+        .inner
+        .credentials
+        .store_secrets(&config, &stored)
+        .expect("memory keyring");
+    let config = config.with_secret_ref(reference.as_str());
+    let outcome = runtime
+        .block_on(backend.inner.executor.dispatch(
+            Actor::Human,
+            Command::UpdateConnection {
+                config: Box::new(config.clone()),
+            },
+            &CancelToken::new(),
+        ))
+        .expect("policy answers");
+    assert!(
+        matches!(outcome, Outcome::ConnectionSaved { .. }),
+        "a local edit needs no approval"
+    );
+    config
+}
+
+/// What the keyring still holds under the entry `config` named, whether a
+/// saved configuration still references it or not.
+fn left_in_keyring(backend: &Backend, config: &ConnectionConfig) -> oxyn_driver::Credentials {
+    assert!(config.secret_ref.is_some(), "probing a named entry");
+    backend
+        .inner
+        .credentials
+        .resolve(config)
+        .expect("resolvable")
+}
+
+fn saved_edit(
+    backend: &Backend,
+    runtime: &tokio::runtime::Runtime,
+    config: &ConnectionConfig,
+    change: ConnectionEdit,
+) -> Option<String> {
+    match runtime
+        .block_on(backend.update_connection(CommandId::new(), config.id, change))
+        .expect("saved")
+    {
+        ConnectionChange::Saved { secrets_error, .. } => secrets_error,
+        other => panic!("a local edit is saved without approval, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_changed_host_forgets_the_stored_secrets() {
+    let runtime = runtime();
+    let _guard = runtime.enter();
+    let backend = Backend::open_temporary().expect("temporary backend");
+    let config = saved_with_secrets(&runtime, &backend);
+
+    let mut moved = edit(Environment::Local);
+    moved
+        .values
+        .insert("host".to_owned(), "db.attacker.example".to_owned());
+    assert!(saved_edit(&backend, &runtime, &config, moved).is_none());
+
+    let stored = backend.config(config.id).expect("still saved");
+    assert_eq!(stored.secret_ref, None, "nothing references the old entry");
+    assert_eq!(
+        password(&backend, config.id),
+        None,
+        "opening it presents no password to the new host"
+    );
+    let left = left_in_keyring(&backend, &config);
+    assert!(left.password().is_none(), "the password is forgotten");
+    assert!(left.token().is_none(), "every secret of the entry is");
+}
+
+#[test]
+fn a_weaker_tls_mode_forgets_the_stored_password() {
+    let runtime = runtime();
+    let _guard = runtime.enter();
+    let backend = Backend::open_temporary().expect("temporary backend");
+    let config = saved(&runtime, &backend, Environment::Local);
+
+    let mut verified = edit(Environment::Local);
+    verified
+        .values
+        .insert("sslmode".to_owned(), "verify-full".to_owned());
+    verified
+        .secrets
+        .insert("password".to_owned(), "hunter2".to_owned());
+    assert!(saved_edit(&backend, &runtime, &config, verified.clone()).is_none());
+    assert_eq!(password(&backend, config.id).as_deref(), Some("hunter2"));
+    let verified_config = backend.config(config.id).expect("saved");
+
+    let mut downgraded = verified;
+    downgraded.secrets.clear();
+    downgraded
+        .values
+        .insert("sslmode".to_owned(), "disable".to_owned());
+    assert!(saved_edit(&backend, &runtime, &config, downgraded).is_none());
+    assert_eq!(password(&backend, config.id), None);
+    assert!(
+        left_in_keyring(&backend, &verified_config)
+            .password()
+            .is_none()
+    );
+}
+
+#[test]
+fn a_moved_production_connection_keeps_its_secret_until_the_move_is_approved() {
+    let runtime = runtime();
+    let _guard = runtime.enter();
+    let backend = Backend::open_temporary().expect("temporary backend");
+    let config = saved(&runtime, &backend, Environment::Production);
+    let mut typed = edit(Environment::Production);
+    typed
+        .secrets
+        .insert("password".to_owned(), "old".to_owned());
+    let ConnectionChange::Approval { command, .. } = runtime
+        .block_on(backend.update_connection(CommandId::new(), config.id, typed))
+        .expect("policy answers")
+    else {
+        panic!("a production edit needs approval");
+    };
+    runtime
+        .block_on(backend.decide_connection_change(command.parse().expect("id"), true))
+        .expect("approved");
+    let before = backend.config(config.id).expect("saved");
+    assert_eq!(password(&backend, config.id).as_deref(), Some("old"));
+
+    let mut moved = edit(Environment::Production);
+    moved
+        .values
+        .insert("host".to_owned(), "db.other.example".to_owned());
+    moved
+        .secrets
+        .insert("password".to_owned(), "new".to_owned());
+    let ask = |change: ConnectionEdit| match runtime
+        .block_on(backend.update_connection(CommandId::new(), config.id, change))
+        .expect("policy answers")
+    {
+        ConnectionChange::Approval { command, .. } => {
+            command.parse::<CommandId>().expect("a minted id")
+        }
+        other => panic!("a production edit needs approval, got {other:?}"),
+    };
+
+    let rejected = ask(moved.clone());
+    runtime
+        .block_on(backend.decide_connection_change(rejected, false))
+        .expect("rejected");
+    assert_eq!(
+        backend.config(config.id).expect("saved").secret_ref,
+        before.secret_ref
+    );
+    assert_eq!(
+        password(&backend, config.id).as_deref(),
+        Some("old"),
+        "a rejected move forgets nothing"
+    );
+
+    let approved = ask(moved);
+    runtime
+        .block_on(backend.decide_connection_change(approved, true))
+        .expect("approved");
+    assert_eq!(password(&backend, config.id).as_deref(), Some("new"));
+    assert!(left_in_keyring(&backend, &before).password().is_none());
+}
+
+#[test]
+fn a_new_host_with_a_retyped_password_keeps_nothing_else_of_the_old_entry() {
+    let runtime = runtime();
+    let _guard = runtime.enter();
+    let backend = Backend::open_temporary().expect("temporary backend");
+    let config = saved_with_secrets(&runtime, &backend);
+
+    let mut moved = edit(Environment::Local);
+    moved
+        .values
+        .insert("host".to_owned(), "db2.internal".to_owned());
+    moved
+        .secrets
+        .insert("password".to_owned(), "new".to_owned());
+    assert!(saved_edit(&backend, &runtime, &config, moved).is_none());
+
+    let stored = backend.config(config.id).expect("saved");
+    assert_ne!(
+        stored.secret_ref, config.secret_ref,
+        "the new host never names the old entry, not even before it is forgotten"
+    );
+    assert_eq!(password(&backend, config.id).as_deref(), Some("new"));
+    let resolved = backend
+        .inner
+        .credentials
+        .resolve(&stored)
+        .expect("resolvable");
+    assert!(
+        resolved.token().is_none(),
+        "a secret typed for the old host does not follow to the new one"
+    );
+    let left = left_in_keyring(&backend, &config);
+    assert!(left.password().is_none() && left.token().is_none());
+}
+
+#[test]
+fn a_renamed_connection_keeps_its_secrets() {
+    let runtime = runtime();
+    let _guard = runtime.enter();
+    let backend = Backend::open_temporary().expect("temporary backend");
+    let config = saved_with_secrets(&runtime, &backend);
+
+    let mut renamed = edit(Environment::Development);
+    renamed.name = "billing (eu)".into();
+    renamed.privacy_tier = PrivacyTier::Local;
+    renamed.read_only = true;
+    // Re-typed with spaces: the same destination, as saved trimmed.
+    renamed
+        .values
+        .insert("host".to_owned(), " db.internal ".to_owned());
+    assert!(saved_edit(&backend, &runtime, &config, renamed).is_none());
+
+    let stored = backend.config(config.id).expect("still saved");
+    assert_eq!(stored.name, "billing (eu)");
+    assert_eq!(stored.secret_ref, config.secret_ref);
+    assert_eq!(password(&backend, config.id).as_deref(), Some("old"));
+    assert!(left_in_keyring(&backend, &config).token().is_some());
+}
+
 #[test]
 fn a_secret_sent_as_a_value_is_refused() {
     let runtime = runtime();
