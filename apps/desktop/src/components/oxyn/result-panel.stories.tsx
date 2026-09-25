@@ -292,6 +292,69 @@ export const WithFooter: Story = {
   },
 }
 
+/**
+ * The text size from the result bar: the same two presets as the settings.
+ * Choosing one asks for no page and reruns nothing (docs/UX-SPEC.md,
+ * « Lisibilité et hauteur de grille »).
+ */
+export const TextSize: Story = {
+  args: {
+    state: {
+      status: "populated",
+      result: "panel-text-size",
+      columns: invoiceColumns,
+      rows: 200,
+      complete: true,
+      truncated: false,
+      cancelled: false,
+    },
+    fetchPage: syntheticPages(200, 0),
+    density: { value: "compact", onChange: fn() },
+  },
+  play: async ({ canvas, args }) => {
+    const body = within(document.body)
+    await waitFor(() =>
+      expect(canvas.getAllByText("Acme SA").length).toBeGreaterThan(0)
+    )
+    await userEvent.click(
+      canvas.getByRole("button", { name: "Text size: Compact" })
+    )
+    await waitFor(() =>
+      expect(
+        body.getByRole("menuitemradio", { name: /Compact/ })
+      ).toHaveAttribute("aria-checked", "true")
+    )
+    await userEvent.click(
+      body.getByRole("menuitemradio", { name: /Comfortable/ })
+    )
+    await expect(args.density?.onChange).toHaveBeenCalledWith("comfortable")
+    await expect(args.onRetry).not.toHaveBeenCalled()
+    await expect(args.onCancel).not.toHaveBeenCalled()
+  },
+}
+
+/** No grid, no text size: nothing on screen would change. */
+export const TextSizeWithoutRows: Story = {
+  args: {
+    state: {
+      status: "populated",
+      result: "panel-text-size-empty",
+      columns: invoiceColumns,
+      rows: 0,
+      complete: true,
+      truncated: false,
+      cancelled: false,
+    },
+    density: { value: "comfortable", onChange: fn() },
+  },
+  play: async ({ canvas }) => {
+    await expect(canvas.getByText("No rows")).toBeVisible()
+    await expect(
+      canvas.queryByRole("button", { name: /^Text size/ })
+    ).toBeNull()
+  },
+}
+
 /** The schema is known: rows are readable while the stream still runs. */
 function Streaming(props: React.ComponentProps<typeof ResultPanel>) {
   const [rows, setRows] = React.useState(0)

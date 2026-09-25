@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query"
 
 import { RetainedResultView } from "@/components/oxyn/retained-result-view"
 import type { RetainedResultState } from "@/components/oxyn/retained-result-view"
+import { useResultDensity } from "@/features/settings/use-result-density"
 import { BackendError } from "@/lib/ipc/client"
 import { library } from "@/lib/ipc/library"
 import { results } from "@/lib/ipc/results"
@@ -29,6 +30,7 @@ export function RetainedResultTab({
   /** Absent when the statement cannot be opened with its provenance. */
   onOpenCopy?: () => void
 }) {
+  const density = useResultDensity()
   const opened = useQuery({
     queryKey: ["retained-result", connection, result],
     queryFn: () => library.openRetainedResult(connection, result),
@@ -75,6 +77,7 @@ export function RetainedResultTab({
       onRetry={() => void opened.refetch()}
       onOpenCopy={onOpenCopy}
       destination={connectionName}
+      density={density}
     />
   )
 }

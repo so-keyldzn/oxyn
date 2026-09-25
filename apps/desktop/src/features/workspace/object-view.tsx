@@ -39,6 +39,7 @@ import {
   gridInspection,
   useReleaseSelection,
 } from "@/features/metadata/value-inspection"
+import { useResultDensity } from "@/features/settings/use-result-density"
 import { useResultExport } from "@/features/workspace/export-menu"
 import { useCompact } from "@/features/workspace/use-compact"
 import { metadata } from "@/lib/ipc/metadata"
@@ -228,6 +229,7 @@ export function ObjectView({
     data?.definition.freshness.state === "invalidated" ||
     facets.loads.definition.status === "error"
 
+  const density = useResultDensity()
   const exporter = useResultExport({
     connection: open.connection,
     result,
@@ -331,6 +333,7 @@ export function ObjectView({
                 onRetry={preview.refresh}
                 context={{ connectionName: open.name, statement: null }}
                 footerNote="Preview · total row count not requested"
+                density={density}
                 // Compact: the export sits in `Actions`, and the footer shows
                 // only a running export's progress and its Cancel.
                 footerActions={

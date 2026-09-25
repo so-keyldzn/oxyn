@@ -23,7 +23,8 @@ const THEMES: ReadonlyArray<{ value: ThemeChoice; label: string }> = [
   { value: "system", label: "System" },
 ]
 
-const DENSITIES: ReadonlyArray<{
+/** The two reading presets (docs/UX-SPEC.md « Lisibilité et hauteur de grille »). */
+export const DENSITIES: ReadonlyArray<{
   value: DensityChoice
   label: string
   detail: string
