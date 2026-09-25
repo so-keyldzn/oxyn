@@ -98,7 +98,8 @@ export function ConnectionsSettings({
     target: ConnectionSummary
   ) => {
     if (change === null) {
-      // Rejected: nothing changed. A deletion ends there; an edit stays open.
+      // Rejected, in the review or in the host's native dialog: nothing
+      // changed. A deletion ends there; an edit stays open.
       setReview(null)
       setDeleting(null)
       return

@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use oxyn_core::CommandId;
 use parking_lot::Mutex;
 
-pub(crate) use connections::PendingChange;
+pub(crate) use connections::{PendingChange, SecretsEdit};
 pub(crate) use preferences::PreferenceState;
 
 /// The state this feature adds to [`Inner`](crate::backend::Inner).

@@ -1595,16 +1595,18 @@ décision, prise pour tous les aperçus et non pour le seul échantillon.
 **Échéance** : avant la porte de sortie de cette phase, et au plus tard le
 2026-10-31.
 
-**Reste à faire, noté le 2026-09-25 — les confirmations critiques sont encore
-dans la webview.** [ADR-0037](adr/0037-dialogue-natif-pour-les-confirmations-critiques.md)
+**Reste à faire, noté le 2026-09-25 — la sortie de lignes vers un agent se
+confirme encore dans la webview.** [ADR-0037](adr/0037-dialogue-natif-pour-les-confirmations-critiques.md)
 décide qu'une écriture en `production`, une sortie de lignes vers un agent et
-un changement de marquage se confirment dans un dialogue natif. Le code
-l'ignore : `decide`, `decide_connection`, `decide_connection_change`, `ai_answer_sample`, le champ
-`sample` d'`ai_ask` et `update_connection` accordent sur un simple appel, et
-un changement de marquage hors `production` n'est confirmé nulle part. **Ce qui
-le débloque** : le port `HostConfirm` et sa réponse scriptée, puis les trois
-chemins, un commit chacun, avec les tests du § 4 de l'ADR. **Échéance** : au
-plus tard le 2026-10-31.
+un changement de marquage se confirment dans un dialogue natif. Le port
+`HostConfirm` existe (`crates/oxyn-desktop/src/backend/confirm.rs`), et
+`decide`, `decide_connection`, `decide_connection_change` et
+`update_connection` le traversent. Restent la famille 2 — `ai_answer_sample`
+et le champ `sample` d'`ai_ask` accordent toujours sur un simple appel — et
+`ai_save_external_agent`, qui ouvre encore son dialogue sans passer par le
+port. **Ce qui le débloque** : la fin des travaux en cours sur l'assistant
+(`commands/ai.rs`, `backend/ai`), puis un commit par chemin, avec les tests du
+§ 4 de l'ADR. **Échéance** : au plus tard le 2026-10-31.
 
 ## Phase 4 — Extension et isolation
 

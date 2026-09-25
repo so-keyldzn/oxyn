@@ -16,12 +16,13 @@ mod logging;
 #[cfg(test)]
 mod sentinel_tests;
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
 use tauri::Manager as _;
 
-use crate::backend::Backend;
+use crate::backend::{Backend, NativeDialog};
 use crate::logging::FileJournal;
 
 /// How long a failed start waits for its journal to reach the disk.
@@ -60,10 +61,13 @@ fn main() -> Result<()> {
     let temporary = std::env::args()
         .skip(1)
         .any(|arg| arg == "--temporary-workspace");
+    // Built without the application handle, which `setup` gives it: until
+    // then it refuses every critical decision (ADR-0037).
+    let dialog = Arc::new(NativeDialog::default());
     let opened = if temporary {
-        Backend::open_temporary()
+        Backend::open_temporary_with(dialog.clone())
     } else {
-        Backend::open()
+        Backend::open(dialog.clone())
     }
     .context("starting Oxyn");
     let backend = match opened {
@@ -79,6 +83,10 @@ fn main() -> Result<()> {
     let builder = builder.menu(commands::recovery::application_menu);
     builder
         .plugin(tauri_plugin_dialog::init())
+        .setup(move |app| {
+            dialog.attach(app.handle().clone());
+            Ok(())
+        })
         .manage(backend)
         .setup(move |app| {
             if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
