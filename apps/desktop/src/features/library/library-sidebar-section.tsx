@@ -26,9 +26,11 @@ import type {
   HistoryRow,
 } from "@/lib/ipc/library"
 import type { OpenConnection } from "@/lib/ipc/types"
-
-/** Every library query starts with this key: a run invalidates it. */
-export const LIBRARY_QUERY_KEY = ["library"] as const
+import {
+  LIBRARY_QUERY_KEY,
+  refreshLibrary,
+  useLibraryRefresh,
+} from "@/features/library/library-refresh"
 
 /** `retryable` comes from the backend; anything else is not worth retrying. */
 function backendFailure(error: unknown): BackendFailure {
@@ -57,6 +59,7 @@ export function LibrarySidebarSection({
   onResume: (document: DocumentView) => void
 }) {
   const queryClient = useQueryClient()
+  useLibraryRefresh()
   const [view, setView] = React.useState<LibraryView>("history")
   const [search, setSearch] = React.useState("")
   const [debouncedSearch] = useDebouncedValue(search, { wait: 250 })
@@ -282,7 +285,7 @@ export function LibrarySidebarSection({
         onRefresh={() => {
           setActionError(null)
           setCancelled(false)
-          void queryClient.invalidateQueries({ queryKey: LIBRARY_QUERY_KEY })
+          void refreshLibrary(queryClient)
         }}
         currentConnection={open.connection}
         currentConnectionName={open.name}
@@ -297,7 +300,7 @@ export function LibrarySidebarSection({
         onReconcile={(row) =>
           void guard(async () => {
             await library.reconcileHistoryEntry(row.id)
-            await queryClient.invalidateQueries({ queryKey: LIBRARY_QUERY_KEY })
+            await refreshLibrary(queryClient)
           })
         }
         onOpenSaved={(entry) =>
@@ -315,7 +318,7 @@ export function LibrarySidebarSection({
               entry.id,
               Math.max(document.revision, document.savedRevision) + 1
             )
-            await queryClient.invalidateQueries({ queryKey: LIBRARY_QUERY_KEY })
+            await refreshLibrary(queryClient)
           })
         }
       />

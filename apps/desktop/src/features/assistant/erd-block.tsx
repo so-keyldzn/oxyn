@@ -133,7 +133,7 @@ export function ErdBlock({
   })
 
   useRefreshSignal(open.connection, (signal) => {
-    if (signal.type === "rowsChanged") return
+    if (signal.type !== "catalogInvalidated" && signal.type !== "lagged") return
     void queryClient.invalidateQueries({
       queryKey: ["assistant-erd", open.connection],
     })

@@ -178,7 +178,11 @@ export function CatalogSidebar({
   }, [open.connection, refresh])
 
   useRefreshSignal(open.connection, (signal) => {
-    if (!supported || signal.type === "rowsChanged") return
+    if (
+      !supported ||
+      (signal.type !== "catalogInvalidated" && signal.type !== "lagged")
+    )
+      return
     void reloadStale()
   })
 

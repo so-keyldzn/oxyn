@@ -23,14 +23,16 @@ function subscribe() {
 
 /**
  * Calls `onSignal` when something shown for `connection` should be read again
- * (ADR-0022): a DDL invalidated the catalog, a write changed rows, or the
- * channel lagged and nobody knows what changed.
+ * (ADR-0022): a DDL invalidated the catalog, a write or a DDL changed rows, a
+ * successful run was written to the history, or the channel lagged and nobody
+ * knows what changed.
  *
- * Signals for another connection are ignored. The caller decides what is on
- * screen and reads only that: a hidden tab reads again when it comes back.
+ * Signals for another connection are ignored; `null` takes every connection,
+ * for a view such as the library that spans them. The caller decides what is
+ * on screen and reads only that: a hidden tab reads again when it comes back.
  */
 export function useRefreshSignal(
-  connection: string,
+  connection: string | null,
   onSignal: (signal: RefreshSignal) => void
 ) {
   const latest = React.useRef(onSignal)
@@ -38,7 +40,12 @@ export function useRefreshSignal(
   React.useEffect(() => {
     subscribe()
     const listener: Listener = (signal) => {
-      if (signal.type !== "lagged" && signal.connection !== connection) return
+      if (
+        connection !== null &&
+        signal.type !== "lagged" &&
+        signal.connection !== connection
+      )
+        return
       latest.current(signal)
     }
     listeners.add(listener)
