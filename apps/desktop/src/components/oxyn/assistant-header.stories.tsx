@@ -59,6 +59,21 @@ const LONG_DESTINATIONS: Array<DestinationOption> = [
 ]
 
 /**
+ * Axe runs after `play`, on whatever is still mounted: a list animating out
+ * keeps its focus guards and its listbox for a few frames, and the
+ * suite's pace decides whether axe sees them.
+ */
+async function closeList() {
+  await userEvent.keyboard("{Escape}")
+  await waitFor(() => {
+    // Hidden once closed, but kept mounted: the accessibility tree, as axe
+    // reads it, is what must be empty.
+    expect(within(document.body).queryByRole("listbox")).toBeNull()
+    expect(document.querySelector("[data-base-ui-focus-guard]")).toBeNull()
+  })
+}
+
+/**
  * Long provider, agent and model names: the header's row keeps its selects
  * inside, and each select's list stays inside its own frame.
  */
@@ -76,14 +91,11 @@ export const LongNamesStayInTheirFrames: Story = {
     const canvas = within(canvasElement)
     await userEvent.click(canvas.getByRole("combobox", { name: "Who answers" }))
     await expectContainedInFrame(await openFrame("select-content"))
-    await userEvent.keyboard("{Escape}")
-    await waitFor(() =>
-      expect(within(document.body).queryByRole("listbox")).toBeNull()
-    )
+    await closeList()
 
     await userEvent.click(canvas.getByRole("combobox", { name: "Model" }))
     await expectContainedInFrame(await openFrame("select-content"))
-    await userEvent.keyboard("{Escape}")
+    await closeList()
   },
 }
 
@@ -293,11 +305,7 @@ export const AgentClosedOnALocalConnection: Story = {
     await expect(agent).toHaveTextContent(
       /cannot see where an external agent sends data/
     )
-    await userEvent.keyboard("{Escape}")
-    // Axe runs after `play`: wait for the popup and its focus guards to go.
-    await waitFor(() =>
-      expect(document.querySelector("[data-base-ui-focus-guard]")).toBeNull()
-    )
+    await closeList()
   },
 }
 
