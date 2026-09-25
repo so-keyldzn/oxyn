@@ -11,8 +11,15 @@ edition       = "2024"
 # construction ordinaire, et le plancher réel resterait invisible jusqu'au jour
 # où quelqu'un active la fonctionnalité. Voir ADR-0008 et RESEARCH-NOTES.
 rust-version  = "1.95"
-license       = "Apache-2.0"
-repository    = "https://github.com/keyldzn/oxyn"
+# L'application est sous GPL ; les quatre crates qu'un driver tiers doit lier
+# écrivent `Apache-2.0` dans leur propre manifeste (ADR-0044, NOTICE).
+license       = "GPL-3.0-or-later"
+# Toute crate sous GPL hérite de `publish = false`. C'est ce qui l'exempte du
+# contrôle de licence de `cargo deny` (`[licenses.private]` dans deny.toml) sans
+# ajouter la GPL à la liste `allow`, où elle accepterait aussi une dépendance
+# tierce. Les crates sous Apache n'en héritent pas : elles restent publiables.
+publish       = false
+repository    = "https://github.com/so-keyldzn/oxyn"
 authors       = ["Oxyn contributors"]
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -102,9 +109,8 @@ reqwest       = { version = "0.13.4", default-features = false, features = [
 ] }
 schemars      = "1.2.2"
 # Le protocole des agents externes (ADR-0026). Apache-2.0, donc compatible avec
-# la licence du dépôt — contrairement au source de Zed, qui est GPL-3.0-or-later
-# et qu'il ne faut donc pas recopier ici. Le numéro de la crate ne dit **pas**
-# celui du protocole : la 2.1.0 porte un v1 stable et un v2 brouillon.
+# la GPL d'Oxyn (ADR-0044). Le numéro de la crate ne dit **pas** celui du
+# protocole : la 2.1.0 porte un v1 stable et un v2 brouillon.
 # Vérifié le 2026-09-14, voir RESEARCH-NOTES.
 agent-client-protocol = "2.1.0"
 

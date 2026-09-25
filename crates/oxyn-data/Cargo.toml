@@ -4,7 +4,9 @@ description = "Buffers de résultats Arrow : streaming, contre-pression, débord
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-license.workspace = true
+# Apache-2.0 et non la GPL du workspace : un driver tiers lie cette crate
+# (ADR-0044).
+license = "Apache-2.0"
 repository.workspace = true
 
 [lints]

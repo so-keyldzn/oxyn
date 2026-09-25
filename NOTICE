@@ -1,0 +1,28 @@
+Oxyn
+Copyright 2026 Nicolas Boromée
+
+Oxyn is distributed under two licenses. See docs/adr/0044 for the reasons.
+
+GNU General Public License, version 3 or later (GPL-3.0-or-later)
+Full text: LICENSE-GPL
+  - the application: crates/oxyn-desktop and apps/desktop
+  - the crates of the core not listed below: oxyn-ai, oxyn-exec, oxyn-llm,
+    oxyn-plugin, oxyn-query, oxyn-secrets, oxyn-store
+  - the drivers shipped with Oxyn: drivers/oxyn-driver-postgres,
+    drivers/oxyn-driver-sqlite
+  - everything else in this repository, unless a file or a manifest states
+    otherwise
+
+Apache License, version 2.0 (Apache-2.0)
+Full text: LICENSE-APACHE
+  - crates/oxyn-core, crates/oxyn-catalog, crates/oxyn-data,
+    crates/oxyn-driver: the contract that a third-party driver links against
+
+Each crate's Cargo.toml states its license in its `license` field.
+
+External contributions are accepted under the Contributor License Agreement
+in CLA.md.
+
+Oxyn ships third-party code under its own licenses. The application lists
+them under Settings > About, from a file generated at build time by
+script/licences-tierces.

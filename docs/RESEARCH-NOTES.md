@@ -1634,3 +1634,51 @@ Faits sur lesquels repose [ADR-0044](adr/0044-licence-gpl-et-contrat-apache.md).
 |---|---|---|
 | Dépôt | `so-keyldzn/oxyn`, privé, licence détectée par GitHub : Apache-2.0 avant ce changement | `gh repo view so-keyldzn/oxyn` |
 | Ancienne valeur de `repository` | `https://github.com/keyldzn/oxyn`, qui ne se résout pas | `gh repo view keyldzn/oxyn` : « Could not resolve to a Repository » |
+
+### Le texte de la GPL
+
+| Fait | Valeur | Source |
+|---|---|---|
+| `LICENSE-GPL` | GNU General Public License, version 3, 29 June 2007 ; 674 lignes ; SHA-256 `3972dc9744f6499f0f9b2dbf76696f2ae7ad8af9b23dde66d6af86c9dfb36986` | téléchargé tel quel depuis <https://www.gnu.org/licenses/gpl-3.0.txt> le 2026-09-25 |
+
+### Compatibilité avec la GPLv3 des licences acceptées
+
+Relevé dans la liste de la FSF, <https://www.gnu.org/licenses/license-list.html>,
+le 2026-09-25. L'ancre est celle de l'entrée dans la page.
+
+| Licence SPDX | Entrée FSF | Verdict |
+|---|---|---|
+| `Apache-2.0` | `#apache2` | compatible avec la GPLv3 (pas avec la GPLv2) |
+| `Apache-2.0 WITH LLVM-exception` | — | l'exception ajoute des permissions à Apache-2.0 et n'en retire aucune |
+| `MIT` | `#Expat`, `#X11License` | compatible |
+| `MIT-0` | `#Expat0` | compatible, comme `#Zero-BSD` |
+| `BSD-2-Clause` | `#FreeBSD` | compatible |
+| `BSD-3-Clause` | `#ModifiedBSD` | compatible |
+| `ISC` | `#ISC` | compatible |
+| `Zlib` | `#ZLib` | compatible |
+| `Unicode-3.0` | `#Unicodev3` | compatible avec toutes les versions de la GPL |
+| `CC0-1.0` | `#CC0` | compatible |
+| `MPL-2.0` | `#MPL-2.0` | compatible par la section 3.3, sauf fichier marqué « Incompatible With Secondary Licenses » |
+| `BSL-1.0` | `#boost` | compatible |
+| `NCSA` | `#NCSA` | compatible |
+| `CDLA-Permissive-2.0` | absente de la liste | voir ci-dessous |
+| `0BSD` (npm) | `#Zero-BSD` | compatible |
+| `Unlicense` (npm) | `#Unlicense` | compatible |
+| `Python-2.0` (npm) | `#Python` | compatible (versions 2.0.1, 2.1.1 et suivantes) |
+| `CC-BY-4.0` (npm) | `#ccby` | compatible avec toutes les versions de la GPL, et à ne pas employer pour du logiciel |
+| `OFL-1.1` (npm) | `#SILOFL` | licence libre pour polices. Sa seule exigence inhabituelle, vendre la police avec un logiciel et non seule, est « inoffensive » selon la FSF |
+
+**`CDLA-Permissive-2.0`**, lu dans le texte SPDX
+(<https://github.com/spdx/license-list-data>, `text/CDLA-Permissive-2.0.txt`,
+le 2026-09-25). La licence porte sur des données. Sa seule condition de partage
+est la § 2.1 : « makes available the text of this agreement with the shared
+Data ». La § 3.1 n'impose rien aux résultats. C'est une mention à reproduire,
+ce que la GPLv3 permet d'exiger (§ 7 b). **Cette conclusion est la nôtre, pas
+celle de la FSF.** Les mentions tierces de l'application reproduisent ce texte.
+
+**`MPL-2.0` dans le graphe Rust.** Les crates concernées sont `cssparser`
+0.36.0, `cssparser-macros` 0.6.1, `dtoa-short` 0.3.5, `option-ext` 0.2.0 et
+`selectors` 0.36.1, toutes tirées par Tauri. Aucun de leurs fichiers `.rs` ne
+porte la mention « Incompatible With Secondary Licenses ». La recherche a été
+faite dans `~/.cargo/registry/src` le 2026-09-25 ; les seules occurrences sont
+dans le texte de la licence elle-même, qui cite la mention en modèle.
