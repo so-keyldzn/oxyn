@@ -5,6 +5,7 @@
 //! Bound values never appear here — they are never stored.
 
 use oxyn_core::HistoryStatusFilter;
+use oxyn_store::ActorKind;
 use oxyn_store::documents::{DocumentPage, DocumentSummary};
 use oxyn_store::history::{HistoryConnectionPage, HistoryPage, HistorySummary};
 use serde::{Deserialize, Serialize};
@@ -221,6 +222,9 @@ pub struct HistoryRow {
     pub connection: Option<String>,
     /// A result that may still be retained; its buffer can have expired.
     pub result: Option<String>,
+    /// Submitted by an agent: a copy keeps saying so
+    /// ([ADR-0023](../../../../docs/adr/0023-fournisseurs-declares-et-provenance.md)).
+    pub from_agent: bool,
 }
 
 impl From<HistorySummary> for HistoryRow {
@@ -237,6 +241,7 @@ impl From<HistorySummary> for HistoryRow {
             reconciled: summary.reconciled_at.is_some(),
             connection: summary.connection.map(|id| id.to_string()),
             result: summary.result.map(|id| id.to_string()),
+            from_agent: summary.actor_kind == ActorKind::Agent,
         }
     }
 }
@@ -267,6 +272,8 @@ pub struct HistoryDetail {
     pub status: String,
     pub error: Option<String>,
     pub needs_inspection: bool,
+    /// Submitted by an agent: the console it is copied into says so.
+    pub from_agent: bool,
 }
 
 impl From<oxyn_store::HistoryEntry> for HistoryDetail {
@@ -279,6 +286,7 @@ impl From<oxyn_store::HistoryEntry> for HistoryDetail {
             status: entry.record.status.as_str().to_owned(),
             error: entry.record.error,
             needs_inspection,
+            from_agent: entry.record.actor_kind == ActorKind::Agent,
         }
     }
 }

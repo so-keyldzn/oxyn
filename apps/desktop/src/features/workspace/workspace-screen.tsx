@@ -511,12 +511,14 @@ export function WorkspaceScreen({
           >
             <RetainedResultTab
               connection={tab.connection}
+              connectionName={open.name}
               result={tab.result}
               succeeded={tab.succeeded}
               // An agent's statement opens only with its provenance, from the
-              // assistant itself (ADR-0023): no unmarked copy from here.
+              // assistant itself (ADR-0023): no unmarked copy from here. A
+              // write that needs inspection offers none either (I-13).
               onOpenCopy={
-                tab.history
+                tab.history && !tab.history.needsInspection
                   ? () => {
                       if (tab.history) void openHistoryCopy(tab.history)
                     }

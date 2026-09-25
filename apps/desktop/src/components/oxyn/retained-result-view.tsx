@@ -55,6 +55,7 @@ export function RetainedResultView({
   fetchPage,
   onRetry,
   onOpenCopy,
+  destination,
 }: {
   state: RetainedResultState
   fetchPage: FetchPage
@@ -62,6 +63,8 @@ export function RetainedResultView({
   onRetry?: () => void
   /** Opens the statement in a console, unrun. */
   onOpenCopy?: () => void
+  /** The connection that console opens on, named before the click. */
+  destination: string
 }) {
   switch (state.status) {
     case "loading":
@@ -91,7 +94,7 @@ export function RetainedResultView({
           {onOpenCopy ? (
             <EmptyContent>
               <Button size="sm" variant="outline" onClick={onOpenCopy}>
-                Open the statement in a console
+                Open a copy of the statement in <bdi>{destination}</bdi>
               </Button>
             </EmptyContent>
           ) : null}

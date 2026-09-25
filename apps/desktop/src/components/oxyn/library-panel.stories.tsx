@@ -21,6 +21,7 @@ const history: Array<HistoryRow> = [
     reconciled: false,
     connection: CURRENT,
     result: "018f0000-0000-7000-8000-00000000aaaa",
+    fromAgent: false,
   },
   {
     id: 11,
@@ -34,6 +35,7 @@ const history: Array<HistoryRow> = [
     reconciled: false,
     connection: "018f0000-0000-7000-8000-000000000002",
     result: "018f0000-0000-7000-8000-00000000bbbb",
+    fromAgent: true,
   },
 ]
 
@@ -90,6 +92,7 @@ const meta = {
     onNext: fn(),
     onRefresh: fn(),
     currentConnection: CURRENT,
+    currentConnectionName: "billing replica",
     onOpenHistory: fn(),
     onOpenResult: fn(),
     onReconcile: fn(),
@@ -110,7 +113,39 @@ export const History: Story = {
     await userEvent.click(copies[0]!)
     await expect(args.onOpenHistory).toHaveBeenCalledWith(history[0])
     await expect(canvas.getByText("Needs inspection")).toBeVisible()
+    // The agent's statement says so in the list, before any copy.
+    await expect(canvas.getAllByText("AI ·")).toHaveLength(1)
     await expect(canvas.queryByText(new RegExp(CURRENT))).toBeNull()
+  },
+}
+
+/**
+ * A copy names the connection it opens on, which is not the one the entry
+ * lists: the history row ran on another connection than this workspace's.
+ */
+export const OpenCopyNamesTheDestination: Story = {
+  args: {
+    currentConnectionName: "billing staging",
+    state: {
+      status: "history",
+      entries: [{ ...history[0]!, connectionName: "billing primary" }],
+    },
+  },
+  play: async ({ canvas, args }) => {
+    await userEvent.click(
+      canvas.getByRole("button", { name: "Open copy in billing staging" })
+    )
+    await expect(args.onOpenHistory).toHaveBeenCalledTimes(1)
+  },
+}
+
+/** Saved queries name the destination the same way. */
+export const SavedOpenCopyNamesTheDestination: Story = {
+  args: { view: "saved", state: { status: "saved", entries: saved } },
+  play: async ({ canvas }) => {
+    await expect(
+      canvas.getAllByRole("button", { name: "Open copy in billing replica" })
+    ).toHaveLength(2)
   },
 }
 

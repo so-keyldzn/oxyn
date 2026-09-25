@@ -116,6 +116,8 @@ export const HistoryRow = z.object({
   connection: z.string().nullable(),
   /** A result that may still be retained; its buffer can have expired. */
   result: z.string().nullable(),
+  /** Submitted by an agent: a copy keeps saying so (ADR-0023). */
+  fromAgent: z.boolean(),
 })
 export type HistoryRow = z.infer<typeof HistoryRow>
 
@@ -132,6 +134,8 @@ export const HistoryDetail = z.object({
   status: z.string(),
   error: z.string().nullable(),
   needsInspection: z.boolean(),
+  /** Submitted by an agent: the console it is copied into says so. */
+  fromAgent: z.boolean(),
 })
 export type HistoryDetail = z.infer<typeof HistoryDetail>
 
