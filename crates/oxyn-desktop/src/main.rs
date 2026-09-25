@@ -83,12 +83,10 @@ fn main() -> Result<()> {
     let builder = builder.menu(commands::recovery::application_menu);
     builder
         .plugin(tauri_plugin_dialog::init())
+        .manage(backend)
+        // One closure: a second `setup` replaces the first, it does not chain.
         .setup(move |app| {
             dialog.attach(app.handle().clone());
-            Ok(())
-        })
-        .manage(backend)
-        .setup(move |app| {
             if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
                 window.set_title(window_title(temporary))?;
             }
