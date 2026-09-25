@@ -267,6 +267,63 @@ fn a_confirmation_after_the_minimum_delay_runs() {
 }
 
 #[test]
+fn a_queued_dialog_gets_its_second_from_when_it_is_shown() {
+    let fixture = Fixture::new(Environment::Production, Timing::HOST);
+    let first = fixture.held("DELETE FROM t");
+    let second = fixture.held("INSERT INTO t VALUES (2)");
+    let third = fixture.held("INSERT INTO t VALUES (3)");
+
+    // The first dialog stays on screen after the backend stopped waiting for
+    // it, as one past its deadline does.
+    fixture
+        .host
+        .answer(Answer::ConfirmAfter(Duration::from_millis(1_500)));
+    let waiting = fixture.runtime.spawn({
+        let backend = fixture.backend.clone();
+        async move { backend.decide(first, true).await }
+    });
+    fixture.runtime.block_on(async {
+        tokio::time::timeout(Duration::from_secs(10), fixture.host.wait_shown(1))
+            .await
+            .expect("the first dialog opens");
+    });
+    waiting.abort();
+    let _ = fixture.runtime.block_on(waiting);
+
+    // Asked now, shown once the first closes, confirmed 200 ms later: well
+    // over a second after the request, well under one after the display.
+    fixture
+        .host
+        .answer(Answer::ConfirmAfter(Duration::from_millis(200)));
+    let decided = fixture.decide(second);
+    assert!(
+        matches!(decided, CommandOutcome::Denied { .. }),
+        "{decided:?}"
+    );
+    assert!(
+        fixture
+            .backend
+            .inner
+            .executor
+            .approvals()
+            .peek(second)
+            .is_none(),
+        "a refusal like any other"
+    );
+
+    // The same guard for each dialog of the queue, and no more.
+    fixture
+        .host
+        .answer(Answer::ConfirmAfter(Duration::from_millis(1_200)));
+    assert!(matches!(
+        fixture.decide(third),
+        CommandOutcome::Executed { .. }
+    ));
+    assert_eq!(fixture.host.shown().len(), 3);
+    assert_eq!(fixture.rows(), 2, "only the third insert ran");
+}
+
+#[test]
 fn a_command_held_on_development_asks_once_its_connection_is_production() {
     let fixture = Fixture::new(Environment::Development, PROMPT);
     // Held for its missing WHERE, on development.

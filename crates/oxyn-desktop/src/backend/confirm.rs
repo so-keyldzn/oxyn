@@ -13,9 +13,12 @@
 //!   that could not open, an abandoned answer channel;
 //! * a confirmation under [`Timing::min_delay`] refuses: on macOS the
 //!   confirming button answers Enter, and a script may open the dialog while
-//!   the user is typing;
+//!   the user is typing. The delay counts from when the host **shows** the
+//!   dialog, not from when it was asked: a dialog queued behind one still on
+//!   screen appears late, and the user must get the same second to read it;
 //! * past [`Timing::deadline`] the decision is refused, and the late answer of
-//!   the dialog left on screen is ignored;
+//!   the dialog left on screen is ignored — the host shows the next dialog
+//!   once that one is closed;
 //! * one critical dialog at a time: another critical decision meanwhile is
 //!   refused at once, **without** being consumed — a script must not be able
 //!   to spoil the user's legitimate decision by opening a dialog first.
@@ -44,18 +47,33 @@ pub(crate) use scripted::{Answer, ScriptedConfirm};
 pub(crate) use text::{Confirmation, SecretsShown, Severity};
 
 /// The host's side of a critical decision: shows a [`Confirmation`], answers
-/// whether its confirming button was pressed.
+/// whether its confirming button was pressed, and since when it was on screen.
 ///
 /// A boundary with the host, not an indirection: [`NativeDialog`] draws it,
 /// the tests script it, and nothing here opens a window.
 pub(crate) trait HostConfirm: Send + Sync {
     /// Awaited from an async context only: the dialog is drawn on the main
     /// thread, which a synchronous Tauri command would be holding (I-05).
-    fn confirm(&self, confirmation: Confirmation) -> HostReply;
+    ///
+    /// The host shows one of these dialogs at a time: a dialog still on
+    /// screen — left there past its deadline — keeps this one waiting.
+    /// Neither dropping the reply before it is shown, nor reaching `deadline`
+    /// while it waits, ever shows it.
+    fn confirm(&self, confirmation: Confirmation, deadline: tokio::time::Instant) -> HostReply;
 }
 
-/// The host's answer to come: `true` only for the confirming button.
-pub(crate) type HostReply = std::pin::Pin<Box<dyn std::future::Future<Output = bool> + Send>>;
+/// The host's answer to come.
+pub(crate) type HostReply = std::pin::Pin<Box<dyn std::future::Future<Output = Reply> + Send>>;
+
+/// What the host's dialog answered.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Reply {
+    /// The confirming button, pressed on a dialog shown at `shown` — later
+    /// than it was asked when another dialog held the screen.
+    Confirmed { shown: tokio::time::Instant },
+    /// Anything else: Cancel, closing, a dialog that could not open.
+    Refused,
+}
 
 /// How long a confirmation must at least, and may at most, take.
 #[derive(Debug, Clone, Copy)]
@@ -125,24 +143,32 @@ struct Slot<'a> {
 }
 
 impl Slot<'_> {
-    /// Shows the confirmation; `true` only for a confirmation given after the
-    /// minimum delay and before the deadline.
+    /// Shows the confirmation; `true` only for a confirmation given at least
+    /// the minimum delay after the dialog was shown, and before the deadline.
+    ///
+    /// The deadline counts from the request: it bounds the decision, which
+    /// must not be granted hours later by a dialog that waited its turn.
     async fn ask(self, confirmation: Confirmation) -> bool {
         let Timing {
             min_delay,
             deadline,
         } = self.owner.timing;
-        let opened = tokio::time::Instant::now();
-        let answer = tokio::time::timeout(deadline, self.owner.host.confirm(confirmation)).await;
+        let deadline = tokio::time::Instant::now() + deadline;
+        let answer =
+            tokio::time::timeout_at(deadline, self.owner.host.confirm(confirmation, deadline))
+                .await;
         match answer {
-            Ok(true) if opened.elapsed() >= min_delay => true,
-            Ok(true) => {
+            Ok(Reply::Confirmed { shown }) if shown.elapsed() >= min_delay => true,
+            Ok(Reply::Confirmed { .. }) => {
                 tracing::warn!("a critical confirmation came too fast to have been read: refused");
                 false
             }
-            Ok(false) => false,
+            Ok(Reply::Refused) => false,
             Err(_) => {
-                tracing::info!("a critical confirmation went unanswered: refused");
+                tracing::info!(
+                    "a critical confirmation went unanswered, or waited for an earlier dialog \
+                     still on screen: refused"
+                );
                 false
             }
         }
