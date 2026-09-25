@@ -1,6 +1,6 @@
-import { describe, expect, it } from "vitest"
+import { afterEach, describe, expect, it, vi } from "vitest"
 
-import { grammarOf, highlight } from "./code-highlight"
+import { cachedTokens, grammarOf, highlight } from "./code-highlight"
 import { svgDataUrl, svgSize, withoutConfiguration } from "./mermaid-render"
 import { cellNumber, chartData, chartPlan } from "./result-chart-model"
 import type { ResultColumn } from "@/lib/ipc/types"
@@ -111,18 +111,45 @@ describe("code colouring", () => {
     expect(grammarOf("__proto__")).toBeNull()
   })
 
+  afterEach(() => vi.restoreAllMocks())
+
+  const joined = (lines: Awaited<ReturnType<typeof highlight>>) =>
+    lines?.map((line) => line.map((token) => token.content).join("")).join("\n")
+
   it("returns tokens coloured by the app's variables, text unchanged", async () => {
+    // A still clock: shiki's time limit cannot cut a line, however loaded the
+    // machine running the suite. The cut is tested apart, below.
+    vi.spyOn(Date, "now").mockReturnValue(0)
     const text = "SELECT '<b>x</b>' AS v -- note\nFROM t"
     const lines = await highlight("sql", text)
     expect(lines).not.toBeNull()
-    expect(
-      lines
-        ?.map((line) => line.map((token) => token.content).join(""))
-        .join("\n")
-    ).toBe(text)
+    expect(joined(lines)).toBe(text)
     const colours = new Set(lines?.flat().map((token) => token.color))
     expect(colours).toContain("var(--primary-text)")
     expect(colours).toContain("var(--success)")
     expect(lines?.flat().some((token) => token.italic)).toBe(true)
+    expect(cachedTokens("sql", text)).toBe(lines)
+  })
+
+  it("never caches a block shiki cut short as if it were complete", async () => {
+    // Loaded before the clock runs away: the cut must fall in the block.
+    await highlight("sql", "SELECT 1")
+    const text = "SELECT a, b, c FROM t WHERE a = 1 -- the end, in italics"
+    let clock = 0
+    // Each read of the clock moves it on 125 ms: vscode-textmate stops the
+    // line past shiki's 500 ms, as it would on a starved machine.
+    vi.spyOn(Date, "now").mockImplementation(() => (clock += 125))
+    const cut = await highlight("sql", text)
+
+    expect(joined(cut)).toBe(text)
+    expect(cut?.flat().some((token) => token.italic)).toBe(false)
+    expect(cachedTokens("sql", text)).toBeNull()
+
+    // The clock back to normal: tokenised again, whole, and kept.
+    vi.restoreAllMocks()
+    vi.spyOn(Date, "now").mockReturnValue(0)
+    const whole = await highlight("sql", text)
+    expect(whole?.flat().some((token) => token.italic)).toBe(true)
+    expect(cachedTokens("sql", text)).toBe(whole)
   })
 })

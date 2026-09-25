@@ -23,6 +23,13 @@ export type CodeLines = Array<Array<CodeToken>>
 /** Beyond this a block is shown as text: tokenising runs on the UI thread. */
 export const HIGHLIGHT_MAX_CHARS = 50_000
 
+/**
+ * shiki's `tokenizeTimeLimit`, per line, against a runaway pattern: a line
+ * past it is returned with its end uncoloured. Set here rather than left to
+ * shiki's default, because `highlight` reasons on its value.
+ */
+const TOKENIZE_TIME_LIMIT_MS = 500
+
 const GRAMMARS = {
   sql: () => import("shiki/langs/sql.mjs"),
   json: () => import("shiki/langs/json.mjs"),
@@ -219,7 +226,19 @@ export async function highlight(
   try {
     const core = await loadHighlighter()
     await ensureGrammar(core, grammar)
-    const result = core.codeToTokens(text, { lang: grammar, theme: "oxyn" })
+    // shiki 4.4.3 drops vscode-textmate's `stoppedEarly`: whether a line was
+    // cut short is not in its result. vscode-textmate stops a line once
+    // `Date.now()` has moved more than the limit since the line began, so a
+    // block tokenised within the limit, by the same clock, was cut nowhere.
+    // Past it, the lines are shown but never cached as complete: the next
+    // view tokenises again.
+    const started = Date.now()
+    const result = core.codeToTokens(text, {
+      lang: grammar,
+      theme: "oxyn",
+      tokenizeTimeLimit: TOKENIZE_TIME_LIMIT_MS,
+    })
+    const complete = Date.now() - started <= TOKENIZE_TIME_LIMIT_MS
     const lines: CodeLines = result.tokens.map((line) =>
       line.map((token) => ({
         content: token.content,
@@ -228,6 +247,7 @@ export async function highlight(
         italic: ((token.fontStyle ?? 0) & 1) === 1,
       }))
     )
+    if (!complete) return lines
     if (cache.size >= CACHE_SIZE) {
       const oldest = cache.keys().next()
       if (!oldest.done) cache.delete(oldest.value)
