@@ -51,7 +51,7 @@ function modifiedConsole() {
       transaction: null,
     }),
     text: () => text,
-    flush: () => Promise.resolve(),
+    flush: () => Promise.resolve(true),
     save: () =>
       new Promise<boolean>((resolve) => {
         saves.push(resolve)

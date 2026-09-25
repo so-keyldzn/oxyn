@@ -53,8 +53,8 @@ export interface ConsoleHandle {
   closeReasons: () => CloseReasons
   /** The text as typed, to carry into the next connection's first console. */
   text: () => string
-  /** Writes the pending draft now. */
-  flush: () => Promise<void>
+  /** Writes the pending draft now; `false` if the text is not in the store. */
+  flush: () => Promise<boolean>
   /** Saves the named copy — or a new copy in conflict. */
   save: () => Promise<boolean>
   /** Closes the document and cancels what runs. Resolves `false` if it stayed. */
