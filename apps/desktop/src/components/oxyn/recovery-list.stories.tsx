@@ -3,6 +3,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite"
 import { expect, fn, userEvent } from "storybook/test"
 
 import { RecoveryList } from "./recovery-list"
+import { platform } from "@/lib/actions/platform"
 import type { DocumentEntry } from "@/lib/ipc/library"
 
 const entries: Array<DocumentEntry> = [
@@ -300,6 +301,10 @@ export const SkipForNow: Story = {
     await expect(args.onRestore).not.toHaveBeenCalled()
     await expect(
       canvas.getByRole("button", { name: /Back to connections/ })
-    ).toHaveAttribute("aria-keyshortcuts", "Escape Meta+BracketLeft")
+    ).toHaveAttribute(
+      "aria-keyshortcuts",
+      // ⌘[ on macOS; Alt+← elsewhere, never a Meta key the user has not got.
+      platform === "mac" ? "Escape Meta+[" : "Escape Alt+ArrowLeft"
+    )
   },
 }

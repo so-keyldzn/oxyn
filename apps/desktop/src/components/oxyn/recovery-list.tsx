@@ -28,7 +28,14 @@ import {
 } from "@/components/ui/field"
 import { Kbd } from "@/components/ui/kbd"
 import { Skeleton } from "@/components/ui/skeleton"
+import { ariaKeys } from "@/lib/actions/manifest"
 import type { DocumentEntry } from "@/lib/ipc/library"
+
+/**
+ * Escape, then the registry's `Back` — `Meta+[` on macOS, `Alt+ArrowLeft`
+ * elsewhere: announcing ⌘ where Ctrl is pressed names a key that does nothing.
+ */
+const BACK_KEYS = ["Escape", ariaKeys("nav.back")].filter(Boolean).join(" ")
 
 export type RecoveryState =
   | { status: "loading" }
@@ -122,7 +129,7 @@ export function RecoveryList({
                 size="xs"
                 variant="ghost"
                 onClick={onBack}
-                aria-keyshortcuts="Escape Meta+BracketLeft"
+                aria-keyshortcuts={BACK_KEYS}
               >
                 <HugeiconsIcon
                   icon={ArrowLeft01Icon}
