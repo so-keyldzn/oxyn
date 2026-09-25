@@ -3445,3 +3445,7 @@ mod export_tests;
 #[cfg(test)]
 #[path = "production_read_tests.rs"]
 mod production_read_tests;
+
+#[cfg(test)]
+#[path = "agent_transaction_tests.rs"]
+mod agent_transaction_tests;

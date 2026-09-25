@@ -398,6 +398,7 @@ pub struct ExecRequest {
     pub intent: StatementIntent,     // déclaré ; reclassifié par oxyn-exec, cf. §8
     pub risk: MutationRisk,          // déclaré ; idem
     pub limits: ExecLimits,
+    pub transaction_control: bool,   // BEGIN, COMMIT, ROLLBACK… ; reclassifié, cf. §7.2
 }
 
 pub struct ExecLimits {
@@ -747,8 +748,13 @@ Quatre règles gouvernent cette table, et leur **ordre** compte :
    l'approbation avec **son** motif, parce que « `DELETE` sans `WHERE` » se lit mieux
    que « écriture par un agent ».
 
-Un complément, hors de la table :
+Deux compléments, hors de la table :
 
+* **Un agent ne pilote pas une transaction.** `BEGIN`, `COMMIT`, `ROLLBACK`,
+  `SAVEPOINT`, `RELEASE` sont classés `Read`, et passent pour un humain ; la
+  reclassification les signale à part (`ExecRequest::transaction_control`), et
+  le gate les refuse à un agent partout : sur une session partagée, ils
+  régleraient la transaction de l'utilisateur ([SECURITY](SECURITY.md#marquage-des-connexions)).
 * **Une lecture de production part en lecture seule.** Le gate l'autorise sans
   confirmation ; `oxyn-exec` pose alors `limits.read_only`, à l'envoi comme à
   l'approbation, pour qu'une fonction qui écrit derrière un `SELECT` soit

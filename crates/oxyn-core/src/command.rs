@@ -677,6 +677,18 @@ impl Command {
         }
     }
 
+    /// Does the command begin, end or mark a transaction on its session?
+    ///
+    /// Only an [`Execute`](Self::Execute) can, and only as its reclassified
+    /// request says: see [`ExecRequest::transaction_control`].
+    #[must_use]
+    pub fn controls_transaction(&self) -> bool {
+        match self {
+            Self::Execute { request, .. } => request.transaction_control,
+            _ => false,
+        }
+    }
+
     /// La commande s'exécute-t-elle **contre le serveur** ?
     ///
     /// Distingue ce qui traverse la frontière externe de ce qui reste dans le
