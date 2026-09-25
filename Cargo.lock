@@ -4136,6 +4136,7 @@ dependencies = [
  "oxyn-core",
  "oxyn-data",
  "oxyn-driver",
+ "oxyn-driver-postgres",
  "oxyn-driver-sqlite",
  "oxyn-query",
  "oxyn-store",

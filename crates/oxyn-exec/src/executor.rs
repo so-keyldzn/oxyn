@@ -457,6 +457,8 @@ impl Executor {
 
         // 2. L'environnement de la connexion visée, pas celui qu'on annonce.
         let env = self.environment_of(&command);
+        let retained = self.policy.retained_environment(&command, env);
+        let command = bounded_to(command, retained);
 
         // 3. Le point de passage unique.
         let decision = self.policy.authorize(&actor, &command, env);
@@ -570,10 +572,13 @@ impl Executor {
         command: CommandId,
         cancel: &CancelToken,
     ) -> Result<Outcome> {
-        let attente = self.approvals.take(command)?;
+        let mut attente = self.approvals.take(command)?;
         let connection = attente.command.target_connection();
 
+        // The connection may have been marked production while waiting.
         let env = self.environment_of(&attente.command);
+        let retained = self.policy.retained_environment(&attente.command, env);
+        attente.command = bounded_to(attente.command, retained);
         let decision = self.policy.authorize(&attente.actor, &attente.command, env);
 
         if let Decision::Deny { reason } = &decision {
@@ -2515,6 +2520,34 @@ fn reclassified(command: Command) -> Command {
     }
 }
 
+/// Bounds a read aimed at production to a read-only execution.
+///
+/// A read passes the gate without confirmation, yet a `SELECT` that calls a
+/// `VOLATILE` function — directly or through a view — writes, and no reading
+/// of the text can tell. Only the server can refuse it: on production the read
+/// leaves bounded to read-only, and the driver opens a read-only transaction
+/// for it (I-02). A write keeps the bounds its caller lifted: it was confirmed
+/// under the connection's name before reaching here.
+fn bounded_to(command: Command, env: Environment) -> Command {
+    match command {
+        Command::Execute {
+            connection,
+            session,
+            mut request,
+        } => {
+            if env.is_production() && !request.is_mutating() {
+                request.limits.read_only = true;
+            }
+            Command::Execute {
+                connection,
+                session,
+                request,
+            }
+        }
+        autre => autre,
+    }
+}
+
 /// Le câblage d'un [`Executor`].
 pub struct ExecutorBuilder {
     drivers: Arc<DriverRegistry>,
@@ -3408,3 +3441,7 @@ mod connection_tests;
 #[cfg(test)]
 #[path = "export_tests.rs"]
 mod export_tests;
+
+#[cfg(test)]
+#[path = "production_read_tests.rs"]
+mod production_read_tests;

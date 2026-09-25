@@ -30,3 +30,9 @@ serveur-partage = { max-threads = 1 }
 filter = 'package(oxyn-driver-postgres)'
 test-group = 'serveur-partage'
 slow-timeout = { period = "300s", terminate-after = 1 }
+
+# Les lectures de production éprouvées à travers le bus créent un schéma et un
+# rôle du même nom sur le même serveur d'essai.
+[[profile.default.overrides]]
+filter = 'package(oxyn-exec) & test(/production_read_tests::server::/)'
+test-group = 'serveur-partage'

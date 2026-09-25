@@ -34,6 +34,9 @@ uuid.workspace = true
 # chemin nominal de l'historique — durée et lignes — sans serveur.
 arrow.workspace = true
 oxyn-driver-sqlite.workspace = true
+# A production read calling a writing function must be refused by the server,
+# through the bus: only a real PostgreSQL can show it (issue #11).
+oxyn-driver-postgres.workspace = true
 rstest.workspace = true
 # A SQLite file whose rollback journal shows an INSERT already writing: the
 # Stop-during-a-write test waits on it, not on a delay.

@@ -178,6 +178,18 @@ pub trait PolicyGate: Send + Sync {
     /// doit pas pouvoir dégrader la protection.
     fn authorize(&self, actor: &Actor, cmd: &Command, env: Environment) -> Decision;
 
+    /// The environment `authorize` judges `cmd` in, when the caller announces
+    /// `announced`.
+    ///
+    /// What the executor bounds after the decision — a production read goes
+    /// out read-only — must rest on this very reckoning, not on a copy fed by
+    /// another registry that may lag. The default knows no marking but the
+    /// announced one.
+    fn retained_environment(&self, cmd: &Command, announced: Environment) -> Environment {
+        let _ = cmd;
+        announced
+    }
+
     /// Nom de la politique, pour le journal d'audit.
     fn name(&self) -> &'static str {
         "policy"
@@ -416,6 +428,11 @@ impl PolicyGate for DefaultPolicy {
         }
 
         Decision::Allow
+    }
+
+    fn retained_environment(&self, cmd: &Command, announced: Environment) -> Environment {
+        // The inherent method: one computation, whichever way it is reached.
+        Self::retained_environment(self, cmd, announced)
     }
 
     fn name(&self) -> &'static str {
