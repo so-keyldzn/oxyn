@@ -165,11 +165,17 @@ impl Layouts {
 
     /// Every console some window holds.
     fn claimed(&self) -> HashSet<DocumentId> {
+        self.claimed_except(None)
+    }
+
+    /// Every console a window other than `window` holds, or every window's.
+    fn claimed_except(&self, window: Option<WindowKey>) -> HashSet<DocumentId> {
         self.state
             .lock()
             .windows
-            .values()
-            .flat_map(|entry| entry.layout.consoles.iter().copied())
+            .iter()
+            .filter(|(key, _)| Some(**key) != window)
+            .flat_map(|(_, entry)| entry.layout.consoles.iter().copied())
             .collect()
     }
 
@@ -192,7 +198,11 @@ impl Layouts {
         let Some(entry) = state.windows.get_mut(&key) else {
             return false;
         };
-        entry.layout.active_document = active.filter(|active| consoles.contains(active));
+        let active = active.filter(|active| consoles.contains(active));
+        if entry.layout.consoles == consoles && entry.layout.active_document == active {
+            return false;
+        }
+        entry.layout.active_document = active;
         entry.layout.consoles = consoles;
         true
     }
@@ -265,8 +275,9 @@ impl Backend {
     /// The consoles the webview of `window` shows, in tab order, and the one
     /// in front. Written at once.
     ///
-    /// A document another window's console writes is left out: one console,
-    /// one window.
+    /// A document another window's console writes, or another window's line
+    /// lists, is left out: one console, one window. A list that did not
+    /// change writes nothing.
     ///
     /// # Errors
     /// A list past the bound, or the write refused.
@@ -282,10 +293,12 @@ impl Backend {
                 WindowLayout::MAX_CONSOLES
             )));
         }
+        let elsewhere = self.inner.layouts.claimed_except(Some(window));
         let mut seen = HashSet::new();
         let mine: Vec<_> = consoles
             .into_iter()
             .filter(|document| seen.insert(*document))
+            .filter(|document| !elsewhere.contains(document))
             .filter(|document| self.inner.windows.check_document(window, *document).is_ok())
             .collect();
         if !self.inner.layouts.set_consoles(window, mine, active) {
@@ -346,9 +359,11 @@ impl Backend {
             .collect();
         let room = WindowLayout::MAX_CONSOLES.saturating_sub(restored.len());
         restored.extend(unclaimed.into_iter().take(room));
+        // Taken by this window now: the copies no window claimed become its
+        // own, before any save.
         Ok(restored
             .into_iter()
-            .filter(|(id, _)| self.inner.windows.check_document(window, *id).is_ok())
+            .filter(|(id, _)| self.inner.windows.claim_document(window, *id).is_ok())
             .map(|(_, entry)| entry)
             .collect())
     }

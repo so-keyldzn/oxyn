@@ -60,6 +60,11 @@ impl Backend {
     ) -> Result<WindowKey, IpcError> {
         let key = restored.as_ref().map(|layout| WindowKey::of(layout.window));
         let key = self.inner.windows.reserve(initial, key)?;
+        // Its consoles are its own from the start, before any save: another
+        // window's script cannot list them as its own (ADR-0043).
+        for document in restored.iter().flat_map(|layout| &layout.consoles) {
+            let _ = self.inner.windows.claim_document(key, *document);
+        }
         self.inner.layouts.register(key, restored);
         Ok(key)
     }

@@ -164,60 +164,52 @@ impl<'a> Windows<'a> {
         self.store.with_connection(|connection| {
             let transaction = connection.unchecked_transaction()?;
             let rows = {
-                let mut select = transaction.prepare(
-                    "SELECT w.id, w.ordinal, w.x, w.y, w.width, w.height, w.maximized,
+                // Bornée : un fichier qui porte des milliers de lignes ne
+                // retarde pas le lancement ; le reste est oublié plus bas.
+                let mut select = transaction.prepare(&format!(
+                    "SELECT w.rowid, w.id, w.ordinal, w.x, w.y, w.width, w.height, w.maximized,
                             w.object_location, w.active_document
                      FROM workspace_windows w
-                     WHERE w.workspace_id = ?1
-                       AND (w.app_session_id = ?2 OR NOT EXISTS (
-                           SELECT 1 FROM app_sessions s
-                           WHERE s.id = w.app_session_id
-                             AND s.closed_at IS NULL AND s.heartbeat_at >= ?3))
-                     ORDER BY w.ordinal, w.id",
-                )?;
+                     WHERE w.workspace_id = ?1 AND {ADOPTABLE}
+                     ORDER BY w.ordinal, w.id
+                     LIMIT {READ_WINDOWS}"
+                ))?;
                 select
-                    .query_map(params![workspace, session, cutoff], |row| {
-                        Ok(Row {
-                            id: row.get(0)?,
-                            ordinal: row.get(1)?,
-                            x: row.get(2)?,
-                            y: row.get(3)?,
-                            width: row.get(4)?,
-                            height: row.get(5)?,
-                            maximized: row.get(6)?,
-                            object_location: row.get(7)?,
-                            active_document: row.get(8)?,
-                        })
-                    })?
+                    .query_map(params![workspace, session, cutoff], Row::of)?
                     .collect::<rusqlite::Result<Vec<_>>>()?
             };
-            let mut layouts = Vec::new();
-            let mut dropped = 0usize;
+            let mut layouts: Vec<WindowLayout> = Vec::new();
+            let mut unreadable = 0usize;
             for row in rows {
-                let raw_id = row.id.clone();
+                let rowid = row.rowid;
+                if layouts.len() == WindowLayout::MAX_WINDOWS {
+                    break;
+                }
                 let Some(mut layout) = row.read() else {
-                    dropped += 1;
-                    forget(&transaction, &raw_id)?;
+                    unreadable += 1;
+                    transaction.execute(
+                        "DELETE FROM workspace_windows WHERE rowid = ?1",
+                        params![rowid],
+                    )?;
                     continue;
                 };
-                if layouts.len() == WindowLayout::MAX_WINDOWS {
-                    dropped += 1;
-                    forget(&transaction, &raw_id)?;
-                    continue;
-                }
-                let (consoles, surplus) = consoles(&transaction, &raw_id)?;
-                if !surplus.is_empty() {
+                let (consoles, surplus) = consoles(&transaction, rowid)?;
+                if surplus {
                     tracing::warn!(
-                        surplus = surplus.len(),
                         "a restored window lists more consoles than kept; the rest stay in the library"
                     );
-                    for document in &surplus {
-                        transaction.execute(
-                            "DELETE FROM workspace_window_consoles
-                             WHERE window_id = ?1 AND document_id = ?2",
-                            params![raw_id, document],
-                        )?;
-                    }
+                    transaction.execute(
+                        "DELETE FROM workspace_window_consoles
+                         WHERE window_id = (SELECT id FROM workspace_windows WHERE rowid = ?1)
+                           AND rowid NOT IN (
+                               SELECT c.rowid FROM workspace_window_consoles c
+                               JOIN documents d ON d.id = c.document_id
+                               WHERE c.window_id = (SELECT id FROM workspace_windows WHERE rowid = ?1)
+                                 AND d.is_open = 1
+                               ORDER BY c.position, c.document_id
+                               LIMIT ?2)",
+                        params![rowid, WindowLayout::MAX_CONSOLES],
+                    )?;
                 }
                 layout.consoles = consoles;
                 if layout
@@ -227,11 +219,21 @@ impl<'a> Windows<'a> {
                     layout.active_document = None;
                 }
                 transaction.execute(
-                    "UPDATE workspace_windows SET app_session_id = ?2 WHERE id = ?1",
-                    params![raw_id, session],
+                    "UPDATE workspace_windows SET app_session_id = ?2 WHERE rowid = ?1",
+                    params![rowid, session],
                 )?;
                 layouts.push(layout);
             }
+            // Ce qui dépasse la borne, adoptable et non repris, est oublié en
+            // une requête : les lignes reprises portent désormais `session`.
+            let beyond = transaction.execute(
+                &format!(
+                    "DELETE FROM workspace_windows AS w
+                     WHERE w.workspace_id = ?1 AND w.app_session_id <> ?2 AND {ADOPTABLE}"
+                ),
+                params![workspace, session, cutoff],
+            )?;
+            let dropped = unreadable.saturating_add(beyond);
             if dropped > 0 {
                 tracing::warn!(
                     dropped,
@@ -244,28 +246,58 @@ impl<'a> Windows<'a> {
     }
 }
 
-/// Une ligne telle que le fichier la rend, avant tout contrôle.
+/// Une ligne qu'un lancement peut adopter : la sienne, ou celle d'un
+/// lancement terminé — fermé, abandonné, ou disparu. `w` est la ligne, `?2`
+/// la session qui adopte, `?3` le seuil d'abandon.
+const ADOPTABLE: &str = "(w.app_session_id = ?2 OR NOT EXISTS (
+    SELECT 1 FROM app_sessions s
+    WHERE s.id = w.app_session_id AND s.closed_at IS NULL AND s.heartbeat_at >= ?3))";
+
+/// Les lignes lues au plus : de quoi remplacer des lignes illisibles jusqu'à
+/// la borne de 16, sans lire un fichier gonflé en entier.
+const READ_WINDOWS: usize = 64;
+
+/// Une ligne telle que le fichier la rend, avant tout contrôle. Chaque
+/// colonne est lue sans échouer : un fichier retouché peut avoir perdu
+/// `STRICT`, et une valeur mal typée rend la ligne illisible, pas la lecture.
 struct Row {
-    id: String,
-    ordinal: i64,
+    rowid: i64,
+    id: Option<String>,
+    ordinal: Option<i64>,
     x: Option<f64>,
     y: Option<f64>,
-    width: f64,
-    height: f64,
-    maximized: i64,
+    width: Option<f64>,
+    height: Option<f64>,
+    maximized: Option<i64>,
     object_location: Option<String>,
     active_document: Option<String>,
 }
 
 impl Row {
+    fn of(row: &rusqlite::Row<'_>) -> rusqlite::Result<Self> {
+        Ok(Self {
+            rowid: row.get(0)?,
+            id: row.get(1).ok(),
+            ordinal: row.get(2).ok(),
+            x: row.get(3).ok().flatten(),
+            y: row.get(4).ok().flatten(),
+            width: row.get(5).ok(),
+            height: row.get(6).ok(),
+            maximized: row.get(7).ok(),
+            object_location: row.get(8).ok().flatten(),
+            active_document: row.get(9).ok().flatten(),
+        })
+    }
+
     /// Relit la ligne, sans ses consoles. `None` quand même l'identité de la
     /// fenêtre ne se relit pas : il n'y a alors rien à restaurer.
     fn read(self) -> Option<WindowLayout> {
-        let window = self.id.parse::<WindowId>().ok()?;
+        let window = self.id?.parse::<WindowId>().ok()?;
         let position = |value: Option<f64>| {
             value.filter(|value| value.is_finite() && value.abs() <= WindowGeometry::MAX_EXTENT)
         };
-        let size = |value: f64| {
+        let size = |value: Option<f64>| {
+            let value = value.unwrap_or(0.0);
             if value.is_finite() {
                 value.clamp(0.0, WindowGeometry::MAX_EXTENT)
             } else {
@@ -280,13 +312,13 @@ impl Row {
             });
         Some(WindowLayout {
             window,
-            ordinal: u32::try_from(self.ordinal.max(0)).unwrap_or(u32::MAX),
+            ordinal: u32::try_from(self.ordinal.unwrap_or(0).max(0)).unwrap_or(u32::MAX),
             geometry: WindowGeometry {
                 x: position(self.x),
                 y: position(self.y),
                 width: size(self.width),
                 height: size(self.height),
-                maximized: self.maximized != 0,
+                maximized: self.maximized.unwrap_or(0) != 0,
             },
             object_location,
             active_document: self
@@ -297,43 +329,35 @@ impl Row {
     }
 }
 
-/// Les consoles d'une fenêtre, dans l'ordre des onglets, bornées, et celles
-/// qui dépassent la borne, telles que le fichier les nomme. Seuls les documents encore
-/// ouverts reviennent : une console fermée n'a rien à rouvrir.
+/// Les consoles d'une fenêtre, dans l'ordre des onglets, bornées, et s'il en
+/// reste au-delà de la borne. Seuls les documents encore ouverts reviennent :
+/// une console fermée n'a rien à rouvrir. Lecture bornée à une ligne de plus
+/// que la borne, qui suffit à savoir qu'il y a un surplus.
 fn consoles(
     transaction: &rusqlite::Transaction<'_>,
-    window: &str,
-) -> Result<(Vec<DocumentId>, Vec<String>)> {
+    window: i64,
+) -> Result<(Vec<DocumentId>, bool)> {
     let mut select = transaction.prepare(
         "SELECT c.document_id FROM workspace_window_consoles c
          JOIN documents d ON d.id = c.document_id
-         WHERE c.window_id = ?1 AND d.is_open = 1
-         ORDER BY c.position, c.document_id",
+         WHERE c.window_id = (SELECT id FROM workspace_windows WHERE rowid = ?1)
+           AND d.is_open = 1
+         ORDER BY c.position, c.document_id
+         LIMIT ?2",
     )?;
     let ids = select
-        .query_map(params![window], |row| row.get::<_, String>(0))?
+        .query_map(params![window, WindowLayout::MAX_CONSOLES + 1], |row| {
+            Ok(row.get::<_, String>(0).ok())
+        })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    let mut kept = Vec::new();
-    let mut surplus = Vec::new();
-    for id in ids {
-        let Ok(document) = id.parse::<DocumentId>() else {
-            continue;
-        };
-        if kept.len() == WindowLayout::MAX_CONSOLES {
-            surplus.push(id);
-        } else {
-            kept.push(document);
-        }
-    }
+    let surplus = ids.len() > WindowLayout::MAX_CONSOLES;
+    let kept = ids
+        .into_iter()
+        .take(WindowLayout::MAX_CONSOLES)
+        .flatten()
+        .filter_map(|id| id.parse::<DocumentId>().ok())
+        .collect();
     Ok((kept, surplus))
-}
-
-fn forget(transaction: &rusqlite::Transaction<'_>, window: &str) -> Result<()> {
-    transaction.execute(
-        "DELETE FROM workspace_windows WHERE id = ?1",
-        params![window],
-    )?;
-    Ok(())
 }
 
 #[cfg(test)]

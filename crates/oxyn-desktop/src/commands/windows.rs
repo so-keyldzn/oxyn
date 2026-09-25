@@ -214,6 +214,12 @@ pub async fn report_window_consoles(
     consoles: WindowConsoles,
 ) -> Result<(), IpcError> {
     let window = caller(&backend, &webview)?;
+    if consoles.documents.len() > WindowLayout::MAX_CONSOLES {
+        return Err(IpcError::invalid(format!(
+            "A window keeps at most {} consoles",
+            WindowLayout::MAX_CONSOLES
+        )));
+    }
     let documents = consoles
         .documents
         .iter()
