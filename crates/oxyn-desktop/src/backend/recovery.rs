@@ -208,6 +208,7 @@ impl Backend {
                 tracing::warn!(%error, "the session close could not be recorded");
             } else {
                 local.closed.store(true, Ordering::SeqCst);
+                tracing::info!(session = %local.session, "session close recorded");
             }
         })
         .await;
@@ -235,10 +236,18 @@ impl Backend {
     pub(crate) async fn shutdown(&self) {
         let local = &self.inner.workbench.local;
         let channel = local.shutdown.lock().clone();
-        if let Some(channel) = channel {
-            let flushed = local.flushed.notified();
-            if channel.send(ShutdownSignal::FlushDrafts).is_ok() {
-                let _ = tokio::time::timeout(FLUSH_GRACE, flushed).await;
+        // The close is recorded all the same: a webview that cannot answer
+        // must not keep the window open, and its drafts are at most 250 ms
+        // old (ADR-0024). The line says which drafts may be missing.
+        match channel {
+            None => tracing::warn!("no webview subscribed to the shutdown; drafts not flushed"),
+            Some(channel) => {
+                let flushed = local.flushed.notified();
+                if channel.send(ShutdownSignal::FlushDrafts).is_err() {
+                    tracing::warn!("the webview could not be asked to flush its drafts");
+                } else if tokio::time::timeout(FLUSH_GRACE, flushed).await.is_err() {
+                    tracing::warn!("the webview did not confirm its drafts were flushed");
+                }
             }
         }
         match tokio::time::timeout(WRITES_GRACE, self.close_session_after_local_writes()).await {
@@ -311,6 +320,68 @@ mod tests {
         let workspace = backend.inner.executor.workspace();
         let (_, previous) = store.sessions().begin(workspace).expect("next launch");
         assert_eq!(previous, PreviousShutdown::Clean);
+    }
+
+    /// The reported defect: an ordinary close, then recovery at every launch.
+    #[test]
+    fn an_ordinary_shutdown_is_not_offered_recovery_at_the_next_launch() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("a test runtime starts");
+        let _guard = runtime.enter();
+        let store = Arc::new(Store::open_in_memory().expect("in-memory store"));
+        let secrets = Arc::new(oxyn_secrets::MemorySecretStore::new());
+
+        let first = Backend::assemble(Arc::clone(&store), secrets.clone()).expect("launch");
+        assert!(first.begin_shutdown());
+        runtime
+            .block_on(async {
+                tokio::time::timeout(Duration::from_secs(30), first.shutdown()).await
+            })
+            .expect("the shutdown is bounded");
+        assert!(first.shutdown_finished());
+        // Long enough for an unrecorded close to read as a crash.
+        exit_and_age(&store, first);
+
+        let next = Backend::assemble(store, secrets).expect("relaunch");
+        assert!(!next.recovery_status().abnormal);
+    }
+
+    /// The case recovery exists for: a process killed without its close.
+    #[test]
+    fn a_killed_launch_is_offered_recovery_once() {
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("a test runtime starts");
+        let _guard = runtime.enter();
+        let store = Arc::new(Store::open_in_memory().expect("in-memory store"));
+        let secrets = Arc::new(oxyn_secrets::MemorySecretStore::new());
+
+        // `kill -9`: no shutdown, and the heartbeat stops with the process.
+        let killed = Backend::assemble(Arc::clone(&store), secrets.clone()).expect("launch");
+        exit_and_age(&store, killed);
+
+        let relaunch = Backend::assemble(Arc::clone(&store), secrets.clone()).expect("relaunch");
+        assert!(relaunch.recovery_status().abnormal);
+        runtime.block_on(relaunch.shutdown());
+        exit_and_age(&store, relaunch);
+
+        let next = Backend::assemble(store, secrets).expect("the launch after");
+        assert!(
+            !next.recovery_status().abnormal,
+            "a crash already announced does not come back after an ordinary close"
+        );
+    }
+
+    /// Ends a launch, then ages its heartbeat past the abandonment threshold.
+    fn exit_and_age(store: &Store, launch: Backend) {
+        let session = launch.inner.workbench.local.session;
+        drop(launch);
+        store
+            .mark_session_stale_for_tests(session)
+            .expect("aged heartbeat");
     }
 
     #[test]

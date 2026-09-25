@@ -18,6 +18,12 @@
 //! deux instances d'Oxyn sur le même store se déclareraient mutuellement
 //! anormales. C'est le battement qui les sépare.
 //!
+//! # Un plantage s'annonce une fois
+//!
+//! Le lancement qui constate une session abandonnée la marque `reported_at`.
+//! Sans ce marquage, elle restait abandonnée pour toujours, et chaque lancement
+//! suivant — fermetures propres comprises — rouvrait l'écran de reprise.
+//!
 //! # Ce que ce module ne fait pas
 //!
 //! Il ne retient pas le pid. Le vérifier demanderait ce que la politique
@@ -93,7 +99,7 @@ impl<'a> Sessions<'a> {
         let id = AppSessionId::new();
         self.store.with_connection(|connection| {
             let transaction = connection.unchecked_transaction()?;
-            let verdict = previous(&transaction, workspace, cutoff)?;
+            let verdict = previous(&transaction, workspace, cutoff, now)?;
             transaction.execute(
                 "INSERT INTO app_sessions (id, workspace_id, started_at, heartbeat_at, closed_at)
                  VALUES (?1, ?2, ?3, ?3, NULL)",
@@ -180,18 +186,24 @@ impl Store {
 }
 
 /// Ce que les sessions déjà inscrites disent du lancement précédent.
+///
+/// Une session abandonnée n'est annoncée **qu'une fois** : le constat la marque
+/// `reported_at`, dans la transaction de `begin`. Sans cela, un plantage
+/// unique rendait anormaux tous les lancements suivants, et l'écran de reprise
+/// ne distinguait plus rien.
 fn previous(
     connection: &rusqlite::Connection,
     workspace: WorkspaceId,
     cutoff: DateTime<Utc>,
+    now: DateTime<Utc>,
 ) -> Result<PreviousShutdown> {
-    let abandonnee: i64 = connection.query_row(
-        "SELECT COUNT(*) FROM app_sessions
-         WHERE workspace_id = ?1 AND closed_at IS NULL AND heartbeat_at < ?2",
-        params![workspace.to_string(), cutoff],
-        |row| row.get(0),
+    let annoncees = connection.execute(
+        "UPDATE app_sessions SET reported_at = ?3
+         WHERE workspace_id = ?1 AND closed_at IS NULL AND reported_at IS NULL
+           AND heartbeat_at < ?2",
+        params![workspace.to_string(), cutoff, now],
     )?;
-    if abandonnee > 0 {
+    if annoncees > 0 {
         return Ok(PreviousShutdown::Abnormal);
     }
     let connues: i64 = connection.query_row(
@@ -278,6 +290,51 @@ mod tests {
             PreviousShutdown::Clean,
             "une session au battement récent est vivante, pas plantée"
         );
+    }
+
+    /// Le défaut observé : un plantage ancien rendait la reprise permanente.
+    #[test]
+    fn un_arret_anormal_n_est_annonce_qu_une_fois() {
+        let (store, atelier) = atelier();
+        let (plantee, _) = store.sessions().begin(atelier).expect("ouverture");
+        vieillir(&store, plantee, ABANDONED_AFTER + Duration::seconds(1));
+
+        let (relance, verdict) = store.sessions().begin(atelier).expect("relance");
+        assert_eq!(verdict, PreviousShutdown::Abnormal);
+        store
+            .sessions()
+            .close(relance)
+            .expect("fermeture ordinaire");
+
+        let (_, verdict) = store.sessions().begin(atelier).expect("seconde relance");
+        assert_eq!(
+            verdict,
+            PreviousShutdown::Clean,
+            "le plantage a déjà été annoncé, et la dernière session s'est fermée"
+        );
+    }
+
+    #[test]
+    fn une_session_annoncee_garde_sa_fermeture_absente() {
+        let (store, atelier) = atelier();
+        let (plantee, _) = store.sessions().begin(atelier).expect("ouverture");
+        vieillir(&store, plantee, ABANDONED_AFTER + Duration::seconds(1));
+        store.sessions().begin(atelier).expect("relance");
+
+        let (fermee, annoncee): (Option<String>, Option<String>) = store
+            .with_connection(|connection| {
+                Ok(connection.query_row(
+                    "SELECT closed_at, reported_at FROM app_sessions WHERE id = ?1",
+                    params![plantee.to_string()],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )?)
+            })
+            .expect("lecture");
+        assert!(
+            fermee.is_none(),
+            "un plantage ne devient pas un arrêt propre"
+        );
+        assert!(annoncee.is_some());
     }
 
     #[test]

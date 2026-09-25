@@ -5,6 +5,11 @@
 **Précise :** [ADR-0016](0016-autosauvegarde-bornee.md), sur ce que le workspace
 écrit en plus de ses brouillons.
 
+> **Précisé par [ADR-0038](0038-un-plantage-s-annonce-une-fois.md).** Une
+> session abandonnée n'est annoncée qu'une fois (`reported_at`), et ⌘Q passe
+> par l'arrêt ordonné. Sans ces deux points, la reprise s'affichait après chaque
+> fermeture de l'application installée.
+
 ## Contexte
 
 [UX-SPEC](../UX-SPEC.md#restauration-après-un-arrêt-brutal) décrit l'écran de
