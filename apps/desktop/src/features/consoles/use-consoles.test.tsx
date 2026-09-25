@@ -62,6 +62,7 @@ function modifiedConsole() {
       text = sql
     },
     focus: () => undefined,
+    rename: () => undefined,
   } satisfies ConsoleHandle
   return { handle, saves }
 }
@@ -88,7 +89,10 @@ async function startSave(
 describe("closing a modified console", () => {
   it("keeps the console open when a cancelled save answers late", async () => {
     const { hook, key, handle, saves } = await openConsoles()
-    act(() => hook.result.current.requestClose(key))
+    act(() => {
+      // Settles when the close is decided; these tests decide it themselves.
+      void hook.result.current.requestClose(key)
+    })
     expect(hook.result.current.closing?.key).toBe(key)
 
     await startSave(hook)
@@ -110,11 +114,17 @@ describe("closing a modified console", () => {
 
   it("does not let a late answer settle a newer close request", async () => {
     const { hook, key, handle, saves } = await openConsoles()
-    act(() => hook.result.current.requestClose(key))
+    act(() => {
+      // Settles when the close is decided; these tests decide it themselves.
+      void hook.result.current.requestClose(key)
+    })
     await startSave(hook)
     await act(() => hook.result.current.decideClose("cancel"))
 
-    act(() => hook.result.current.requestClose(key))
+    act(() => {
+      // Settles when the close is decided; these tests decide it themselves.
+      void hook.result.current.requestClose(key)
+    })
     const request = hook.result.current.closing
     expect(request).toEqual(expect.objectContaining({ key, busy: false }))
 
