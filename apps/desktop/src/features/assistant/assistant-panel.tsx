@@ -42,7 +42,7 @@ import { declaredEfforts, effortToSend } from "./reasoning-effort"
 import type { ExchangeNode } from "./thread"
 import { useAssistantAvailable } from "./use-assistant-available"
 import { useMentionSearch } from "./mention-search"
-import { orphanThreadsQuery } from "./queries"
+import { orphanThreadsQuery, prunedHistoryQuery } from "./queries"
 import { ToolRows } from "./tool-rows"
 import { ErdBlock } from "./erd-block"
 import { AssistantEntryButton } from "@/components/oxyn/assistant-entry-button"
@@ -93,6 +93,7 @@ export function AssistantPanel({
   const entry = useAssistantAvailable(open)
   const state = useAssistant(open.connection)
   const orphanThreads = useQuery(orphanThreadsQuery)
+  const prunedHistory = useQuery(prunedHistoryQuery)
   // From the local catalog and library: no model completes a name.
   const mentionSource = useMentionSearch(open.connection)
   const { chosenKey, pin: pinned } = usePinState(open.connection)
@@ -367,7 +368,11 @@ export function AssistantPanel({
           void orphanThreads.refetch()
         }}
         // A connection deleted in settings says nothing to this panel.
-        onHistoryShown={() => void orphanThreads.refetch()}
+        onHistoryShown={() => {
+          void orphanThreads.refetch()
+          void prunedHistory.refetch()
+        }}
+        pruned={prunedHistory.data ?? null}
         orphans={
           orphanThreads.isError
             ? { status: "error", message: orphanThreads.error.message }

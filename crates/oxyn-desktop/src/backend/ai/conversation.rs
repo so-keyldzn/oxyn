@@ -48,8 +48,8 @@ use crate::backend::Inner;
 use crate::ipc::ai::{
     AgentExit, AgentSettingAnswer, AgentSettingChange, AgentSettingsView, AgentStart, AiEvent,
     AiUpdate, AskRequest, AskStarted, ContextSummary, Cut, Destination, DestinationChoice, Ending,
-    FailureCategory, MemoryReset, Money, OrphanThreadSummary, PlanEntry, SignInHelp, SignInMethod,
-    ThreadSummary, ThreadView, ToolStatus, error_class, preset_of, preset_sign_in,
+    FailureCategory, MemoryReset, Money, OrphanThreadSummary, PlanEntry, PrunedHistory, SignInHelp,
+    SignInMethod, ThreadSummary, ThreadView, ToolStatus, error_class, preset_of, preset_sign_in,
 };
 use crate::ipc::ai::{SampleApproval, SampleRequest};
 use crate::ipc::{CatalogAddress, IpcError, RelationField};
@@ -1125,6 +1125,13 @@ impl Backend {
         );
         all.sort_by_key(|summary| std::cmp::Reverse(summary.updated_at_ms));
         all
+    }
+
+    /// What this launch's prune removed from the history; `None` when nothing
+    /// went, or before the prune ended. In memory, never read from disk.
+    #[must_use]
+    pub fn ai_pruned_history(&self) -> Option<PrunedHistory> {
+        *self.inner.ai.pruned.lock()
     }
 
     /// The conversations of this workspace whose connection was deleted.

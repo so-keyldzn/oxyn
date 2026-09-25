@@ -201,6 +201,34 @@ pub struct ThreadSummary {
     pub running: bool,
 }
 
+/// What the launch removed from the workspace's assistant history, and by
+/// which rule: the policy's own numbers, so the panel never restates them.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PrunedHistory {
+    /// Conversations deleted, whole.
+    pub conversations: u32,
+    pub max_conversations: u32,
+    pub max_age_days: Option<u32>,
+    pub max_bytes: u64,
+}
+
+impl PrunedHistory {
+    /// `None` when the prune removed nothing: there is nothing to say.
+    #[must_use]
+    pub fn of(
+        report: oxyn_store::PruneReport,
+        policy: oxyn_store::RetentionPolicy,
+    ) -> Option<Self> {
+        (!report.is_empty()).then_some(Self {
+            conversations: report.conversations,
+            max_conversations: policy.max_conversations,
+            max_age_days: policy.max_age_days,
+            max_bytes: policy.max_bytes,
+        })
+    }
+}
+
 /// A conversation whose connection was deleted: listed, never reopened or
 /// changed from here.
 #[derive(Debug, Clone, Serialize)]

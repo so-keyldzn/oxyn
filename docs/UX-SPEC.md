@@ -1124,18 +1124,35 @@ Supprimer une connexion n'efface pas ses conversations, qui gardent le nom de la
 connexion : ce que l'utilisateur a demandé ne disparaît pas avec l'outil qui a
 servi à le demander. La boîte de suppression de la connexion **le dit avant**
 la suppression : ses conversations restent dans le workspace, sous son nom, et
-restent listées, en lecture seule, dans le panneau de l'assistant.
+restent listées, en lecture seule, dans le panneau de l'assistant. Si
+l'écriture d'une conversation échoue, la question part quand même, et le
+panneau dit que ce fil n'est gardé que dans la fenêtre.
 
-Elles s'y relisent dans la liste « Conversations », sous un volet replié
+Au lancement, Oxyn élague l'historique de l'assistant à son budget
+([PERFORMANCE](PERFORMANCE.md) : 200 conversations, 90 jours d'inactivité,
+32 Mio de transcription). Quand l'élagage a retiré au moins une conversation,
+la liste « Conversations » le dit, **pendant tout ce lancement**, par une
+note sobre au-dessus des fils : combien ont été retirées, et la règle, avec les
+nombres que le backend a appliqués — jamais une copie écrite dans l'interface.
+Un fil disparu sans un mot se lit comme un défaut ; un fil retiré par une
+règle dite se lit comme la règle. La note ne propose aucune action : ce qui
+est élagué est supprimé, et rien ne le rend. Sans rien d'élagué, rien n'est
+affiché.
+
+Les conversations d'une connexion supprimée sont listées dans la liste
+« Conversations », sous un volet replié
 **From deleted connections**, qui n'existe que s'il en reste au moins une.
 Chaque ligne donne le titre, le nom qu'avait la connexion, la date de dernière
 activité et le nombre d'échanges. La liste est en **lecture seule** : aucune
 ligne ne s'ouvre, ne se renomme ni ne se supprime, et rien n'en part vers un
 modèle — la connexion qui donnait son niveau de confidentialité à ces échanges
 n'existe plus. Elle couvre tout le workspace, 64 conversations au plus, et se
-relit à chaque affichage de l'historique. Ces conversations restent soumises à
-l'élagage du lancement, comme les autres. Si l'écriture échoue, la question part quand même, et le
-panneau dit que ce fil n'est gardé que dans la fenêtre.
+relit à chaque affichage de l'historique. Un identifiant de cette liste ne
+permet pas de supprimer le fil au nom d'une autre connexion : la suppression
+porte la connexion dans sa condition. Ces conversations restent soumises à
+l'élagage du lancement, comme les autres. Le contenu des échanges ne s'y
+relit pas encore, et le panneau de l'assistant n'existe que sur une connexion
+ouverte : sans aucune connexion, la liste n'est pas accessible.
 
 ### Une proposition n'est jamais exécutée par le fait de l'être
 

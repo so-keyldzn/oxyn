@@ -11,7 +11,18 @@ export const aiKeys = {
   presets: ["ai", "presets"] as const,
   detected: (preset: string) => ["ai", "detected", preset] as const,
   orphans: ["ai", "orphans"] as const,
+  pruned: ["ai", "pruned"] as const,
 }
+
+/**
+ * What the launch's prune removed. Settled once it is known: a launch prunes
+ * once, and a `null` read before the prune ended is read again.
+ */
+export const prunedHistoryQuery = queryOptions({
+  queryKey: aiKeys.pruned,
+  queryFn: () => ai.prunedHistory(),
+  staleTime: 0,
+})
 
 /**
  * The conversations of connections deleted since, for the history panel.

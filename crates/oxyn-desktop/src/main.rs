@@ -171,6 +171,7 @@ fn main() -> Result<()> {
             commands::ai::ai_cancel,
             commands::ai::ai_threads,
             commands::ai::ai_orphan_threads,
+            commands::ai::ai_pruned_history,
             commands::ai::ai_open_thread,
             commands::ai::ai_rename_thread,
             commands::ai::ai_delete_thread,

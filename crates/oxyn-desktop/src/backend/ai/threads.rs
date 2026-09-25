@@ -96,6 +96,8 @@ pub(crate) struct AiState {
     /// the panel's start and a question asked at the same moment would each
     /// see none, and launch two agents where the user asked for one.
     pub(crate) launching: tokio::sync::Mutex<()>,
+    /// What this launch's prune removed, for the history panel to say.
+    pub(crate) pruned: Mutex<Option<crate::ipc::ai::PrunedHistory>>,
 }
 
 /// An external agent launched ahead of its first question.

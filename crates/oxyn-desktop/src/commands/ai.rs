@@ -31,8 +31,8 @@ use crate::backend::Backend;
 use crate::ipc::ai::{
     AgentDraft, AgentPresetDraft, AgentSettingAnswer, AgentSettingChange, AgentStart,
     AgentStartRequest, AiUpdate, AskRequest, AskStarted, DeclaredProvider, DestinationChoice,
-    ExternalAgent, ModelChoice, OrphanThreadSummary, ProposalTarget, ProviderDraft, SampleRequest,
-    SchemaProposal, ThreadSummary, ThreadView, shell_quote,
+    ExternalAgent, ModelChoice, OrphanThreadSummary, ProposalTarget, ProviderDraft, PrunedHistory,
+    SampleRequest, SchemaProposal, ThreadSummary, ThreadView, shell_quote,
 };
 use crate::ipc::{CatalogAddress, IpcError};
 
@@ -213,6 +213,12 @@ pub async fn ai_threads(
     connection: String,
 ) -> Result<Vec<ThreadSummary>, IpcError> {
     Ok(backend.ai_threads(self::connection(&connection)?).await)
+}
+
+/// In memory only, and synchronous for that: what the launch's prune removed.
+#[tauri::command]
+pub fn ai_pruned_history(backend: State<'_, Backend>) -> Option<PrunedHistory> {
+    backend.ai_pruned_history()
 }
 
 /// A read, and the only thing a webview can do with these: a thread whose
