@@ -20,6 +20,11 @@ export interface SessionState {
   restored: Array<DocumentEntry>
   /** The recovery screen was offered once this launch; never twice. */
   recoveryOffered: boolean
+  /**
+   * The saved object tab was not chosen on the recovery screen: no workspace
+   * reopens it this launch. It stays saved — declining erases nothing.
+   */
+  objectPlaceDeclined: boolean
 }
 
 export const session = createStore<SessionState>({
@@ -27,6 +32,7 @@ export const session = createStore<SessionState>({
   sqlDraft: "SELECT 1;",
   restored: [],
   recoveryOffered: false,
+  objectPlaceDeclined: false,
 })
 
 // The Rust sessions outlive a reload of the webview; this store does not.
@@ -80,6 +86,10 @@ export function takeRestoredWorkingCopies() {
   if (restored.length > 0)
     session.setState((state) => ({ ...state, restored: [] }))
   return restored
+}
+
+export function declineObjectPlace(declined: boolean) {
+  session.setState((state) => ({ ...state, objectPlaceDeclined: declined }))
 }
 
 export function markRecoveryOffered() {

@@ -93,12 +93,23 @@ impl Backend {
         &self,
         change: PreferencesChange,
     ) -> Result<PreferencesSaved, IpcError> {
+        self.save_preferences(|preferences| change.apply(preferences))
+            .await
+    }
+
+    /// Applies `change` to what is applied now and saves it under the next
+    /// revision: the one path every preference write takes, the display
+    /// settings' and the restored object's alike.
+    pub(super) async fn save_preferences(
+        &self,
+        change: impl FnOnce(&mut WorkspacePreferences),
+    ) -> Result<PreferencesSaved, IpcError> {
         self.ensure_preferences_loaded().await?;
         let state = &self.inner.settings.preferences;
         let snapshot = {
             let mut applied = state.applied.lock();
             let mut next = applied.clone();
-            change.apply(&mut next.preferences);
+            change(&mut next.preferences);
             next.revision = applied
                 .revision
                 .checked_add(1)
@@ -157,6 +168,19 @@ impl Backend {
     #[must_use]
     pub fn format_options(&self) -> FormatOptions {
         format_options_of(&self.inner.settings.preferences.applied.lock().preferences)
+    }
+
+    /// The preferences applied now, read from the store on the first call.
+    pub(super) async fn applied_preferences(&self) -> Result<WorkspacePreferences, IpcError> {
+        self.ensure_preferences_loaded().await?;
+        Ok(self
+            .inner
+            .settings
+            .preferences
+            .applied
+            .lock()
+            .preferences
+            .clone())
     }
 
     async fn ensure_preferences_loaded(&self) -> Result<(), IpcError> {

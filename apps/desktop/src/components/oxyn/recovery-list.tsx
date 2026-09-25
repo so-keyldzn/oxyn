@@ -35,6 +35,19 @@ export type RecoveryState =
   | { status: "error"; error: BackendFailure }
   | { status: "ready"; entries: Array<DocumentEntry> }
 
+/** The object tab saved last, offered beside the working copies. */
+export interface RecoverableObject {
+  /** The relation's name: text, never markup. */
+  name: string
+  /** The sub-view it showed, as its tab reads. */
+  section: string
+  /**
+   * Its connection's name, or what is known of it: deleted only when a list
+   * read in full lacks it, never while the list loads or failed.
+   */
+  connection: string
+}
+
 /** What the screen may assert: only a crash it observed (ADR-0021). */
 function openingNotice(abnormal: boolean, empty: boolean) {
   if (abnormal && empty)
@@ -50,6 +63,10 @@ function openingNotice(abnormal: boolean, empty: boolean) {
  *
  * Restoring puts text back in consoles and nothing else: no connection opens,
  * no statement runs. The restore action is disabled without a selection.
+ *
+ * The object tab saved last is offered too: restored, it reopens as a place
+ * once its connection is chosen, and reads nothing until asked. Not chosen,
+ * it stays saved.
  */
 export function RecoveryList({
   abnormal,
@@ -57,6 +74,9 @@ export function RecoveryList({
   state,
   selected,
   onToggle,
+  object = null,
+  objectSelected = false,
+  onToggleObject,
   hasPrevious,
   hasNext,
   onPrevious,
@@ -74,6 +94,9 @@ export function RecoveryList({
   state: RecoveryState
   selected: ReadonlySet<string>
   onToggle: (entry: DocumentEntry) => void
+  object?: RecoverableObject | null
+  objectSelected?: boolean
+  onToggleObject?: () => void
   hasPrevious: boolean
   hasNext: boolean
   onPrevious: () => void
@@ -85,9 +108,10 @@ export function RecoveryList({
   backLabel: string
   onBack: () => void
 }) {
-  const count = selected.size
+  const count = selected.size + (object && objectSelected ? 1 : 0)
   const keptId = React.useId()
   const entryId = React.useId()
+  const objectId = React.useId()
   return (
     <div className="mx-auto flex w-full max-w-2xl flex-col gap-4 p-6">
       <header className="flex flex-col gap-1">
@@ -190,6 +214,40 @@ export function RecoveryList({
           </FieldGroup>
         </FieldSet>
       )}
+
+      {object ? (
+        <FieldSet>
+          <FieldLegend variant="label">Object tab</FieldLegend>
+          <FieldGroup className="gap-0 rounded-md border">
+            <Field orientation="horizontal" className="gap-3 px-3 py-2">
+              <Checkbox
+                id={objectId}
+                checked={objectSelected}
+                onCheckedChange={() => onToggleObject?.()}
+                aria-describedby={`${objectId}-where`}
+              />
+              <FieldLabel
+                htmlFor={objectId}
+                className="min-w-0 cursor-pointer font-normal"
+              >
+                <span dir="auto" className="truncate">
+                  {object.name}
+                </span>
+              </FieldLabel>
+              <span
+                id={`${objectId}-where`}
+                className="truncate text-xs text-muted-foreground"
+              >
+                {object.section} · {object.connection}
+              </span>
+            </Field>
+          </FieldGroup>
+          <p className="text-xs text-muted-foreground">
+            Reopens where it was once you choose its connection. Nothing is read
+            until you ask.
+          </p>
+        </FieldSet>
+      ) : null}
 
       {/* Wraps: at 420 px the two decisions do not fit beside the pager, and
           without wrapping « Restore » was pushed past the window's edge. */}

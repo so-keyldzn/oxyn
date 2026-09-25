@@ -32,12 +32,16 @@ import { useConsoles } from "@/features/consoles/use-consoles"
 import { LibrarySidebar } from "@/features/library/library-sidebar"
 import { RetainedResultTab } from "@/features/library/retained-result-tab"
 import { inspectObject } from "@/features/metadata/inspection"
-import { setSqlDraft } from "@/features/session"
+import { session, setSqlDraft } from "@/features/session"
 import {
   changePreferences,
   preferencesStore,
 } from "@/features/settings/preferences"
 import { CatalogSidebar } from "@/features/workspace/catalog-sidebar"
+import {
+  savedObjectPlace,
+  saveObjectPlace,
+} from "@/features/workspace/object-location"
 import { ObjectView } from "@/features/workspace/object-view"
 import type { ObjectViewHandle } from "@/features/workspace/object-view"
 import {
@@ -52,6 +56,7 @@ import { useCompact } from "@/features/workspace/use-compact"
 import { usePanelPreferences } from "@/features/workspace/use-panel-preferences"
 import { library } from "@/lib/ipc/library"
 import type { HistoryRow } from "@/lib/ipc/library"
+import type { SectionChoice } from "@/lib/ipc/location"
 import type {
   CatalogAddress,
   CatalogNode,
@@ -64,6 +69,8 @@ interface ObjectTab {
   key: string
   node: CatalogNode
   target?: OpenTarget
+  /** Brought back from the last session: nothing is read until asked. */
+  restored?: SectionChoice
 }
 
 interface ResultTab {
@@ -168,6 +175,24 @@ export function WorkspaceScreen({
   const [definitionWidth, setDefinitionWidth] = React.useState<number>(
     DEFINITION_WIDTH.initial
   )
+  // The sub-view each object tab shows, reported by its view.
+  const sections = React.useRef(new Map<string, SectionChoice>())
+
+  // The object tab shown last is kept for the next launch, and forgotten
+  // when the last one closes (UX-SPEC « L'état vit dans le workspace »).
+  const keepPlace = React.useCallback(
+    (tab: ObjectTab | undefined) =>
+      void saveObjectPlace(
+        open.connection,
+        tab
+          ? {
+              address: tab.node.address,
+              section: sections.current.get(tab.key) ?? "data",
+            }
+          : null
+      ),
+    [open.connection]
+  )
 
   const activate = React.useCallback(
     (key: string) => {
@@ -176,15 +201,38 @@ export function WorkspaceScreen({
       // A mounted object does not announce itself again: the inspector
       // follows the tab shown.
       const object = objectsRef.current.find((tab) => tab.key === key)
-      if (object)
+      if (object) {
         inspectObject({
           connection: open.connection,
           address: object.node.address,
         })
-      else inspectObject(null)
+        keepPlace(object)
+      } else inspectObject(null)
     },
-    [open.connection]
+    [open.connection, keepPlace]
   )
+
+  // The object tab the last session left on this connection comes back as a
+  // place: its view reads nothing until the user asks. Unless the recovery
+  // screen was told otherwise, which keeps it saved all the same.
+  React.useEffect(() => {
+    if (session.state.objectPlaceDeclined) return
+    let current = true
+    void savedObjectPlace().then((saved) => {
+      if (!current || saved?.connection !== open.connection) return
+      const key = objectKey(saved.address)
+      if (objectsRef.current.some((tab) => tab.key === key)) return
+      sections.current.set(key, saved.section)
+      setObjects((tabs) => [
+        ...tabs,
+        { key, node: relatedNode(saved.address), restored: saved.section },
+      ])
+      setActive((shown) => shown ?? key)
+    })
+    return () => {
+      current = false
+    }
+  }, [open.connection])
   const work = useConsoles({ open, onActivate: activate })
   work.activeRef.current = lastConsole.current
 
@@ -244,6 +292,11 @@ export function WorkspaceScreen({
     if (key.startsWith("console:")) {
       work.requestClose(key)
       return
+    }
+    if (key.startsWith("object:")) {
+      const remaining = objectsRef.current.filter((tab) => tab.key !== key)
+      sections.current.delete(key)
+      keepPlace(remaining[remaining.length - 1])
     }
     setObjects((current) => current.filter((tab) => tab.key !== key))
     setRetained((current) => current.filter((tab) => tab.key !== key))
@@ -484,6 +537,11 @@ export function WorkspaceScreen({
               handleRef={(handle) => {
                 if (handle) objectHandles.current.set(tab.key, handle)
                 else objectHandles.current.delete(tab.key)
+              }}
+              restored={tab.restored}
+              onPlaceChange={(section) => {
+                sections.current.set(tab.key, section)
+                keepPlace(tab)
               }}
               // The value panel shows the selected row. At wide width the
               // column is where the preference left it; this action exists

@@ -166,6 +166,7 @@ pub fn subscribe_events(backend: State<'_, Backend>, channel: Channel<ExecutionE
 pub mod ai;
 pub mod consoles;
 pub mod library;
+pub mod location;
 pub mod metadata;
 pub mod recovery;
 pub mod results;

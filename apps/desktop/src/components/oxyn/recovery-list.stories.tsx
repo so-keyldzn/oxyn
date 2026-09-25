@@ -51,10 +51,18 @@ const meta = {
   },
   render: function Render(args) {
     const [selected, setSelected] = React.useState(args.selected)
+    const [objectSelected, setObjectSelected] = React.useState(
+      args.objectSelected ?? false
+    )
     return (
       <RecoveryList
         {...args}
         selected={selected}
+        objectSelected={objectSelected}
+        onToggleObject={() => {
+          setObjectSelected((chosen) => !chosen)
+          args.onToggleObject?.()
+        }}
         onToggle={(entry) => {
           setSelected((current) => {
             const next = new Set(current)
@@ -220,6 +228,65 @@ export const Narrow: Story = {
     await expect(restore.getBoundingClientRect().right).toBeLessThanOrEqual(
       room.right + 1
     )
+  },
+}
+
+/**
+ * The object tab saved last is offered beside the working copies, chosen by
+ * default and counted in the action. It names its sub-view and connection;
+ * unticking it leaves it saved.
+ */
+export const WithAnObjectTab: Story = {
+  args: {
+    object: {
+      name: 'invoices"; DROP TABLE audit; --',
+      section: "Relations, incoming",
+      connection: "billing replica",
+    },
+    objectSelected: true,
+    onToggleObject: fn(),
+  },
+  play: async ({ canvas, args }) => {
+    const box = canvas.getByRole("checkbox", {
+      name: 'invoices"; DROP TABLE audit; --',
+    })
+    await expect(box).toBeChecked()
+    await expect(box).toHaveAccessibleDescription(
+      "Relations, incoming · billing replica"
+    )
+    await expect(
+      canvas.getByText(/Nothing is read until you ask/)
+    ).toBeVisible()
+    await expect(
+      canvas.getByRole("button", { name: "Restore 3 selected items" })
+    ).toBeEnabled()
+
+    await userEvent.click(box)
+    await expect(args.onToggleObject).toHaveBeenCalled()
+    await expect(
+      canvas.getByRole("button", { name: "Restore 2 selected items" })
+    ).toBeEnabled()
+    await expect(args.onRestore).not.toHaveBeenCalled()
+  },
+}
+
+/** Its connection was deleted since: said, not guessed. */
+export const ObjectTabOfADeletedConnection: Story = {
+  args: {
+    state: { status: "ready", entries: [] },
+    selected: new Set(),
+    object: {
+      name: "invoices",
+      section: "Data",
+      connection: "A deleted connection",
+    },
+    objectSelected: true,
+  },
+  play: async ({ canvas }) => {
+    await expect(canvas.getByText("Data · A deleted connection")).toBeVisible()
+    await expect(
+      canvas.getByRole("button", { name: "Restore 1 selected item" })
+    ).toBeEnabled()
   },
 }
 

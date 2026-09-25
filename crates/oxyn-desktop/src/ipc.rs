@@ -677,6 +677,7 @@ mod tests {
 pub mod ai;
 pub mod consoles;
 pub mod library;
+pub mod location;
 pub mod metadata;
 pub mod recovery;
 pub mod results;

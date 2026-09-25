@@ -154,6 +154,9 @@ fn main() -> Result<()> {
             commands::settings::delete_connection,
             commands::settings::decide_connection_change,
             commands::settings::connection_marking,
+            // The restored object tab
+            commands::location::read_object_location,
+            commands::location::write_object_location,
             // AI: declarations, conversation, schema-change proposal
             commands::ai::ai_providers,
             commands::ai::ai_external_agents,
