@@ -352,7 +352,7 @@ pub(crate) fn classify_json_error(err: &serde_json::Error) -> &'static str {
 ///
 /// La troncature respecte les frontières de caractères : couper au milieu d'un
 /// codet UTF-8 paniquerait, et le corps vient du réseau (I-09).
-fn sanitize(body: &str, key: Option<&ApiKey>) -> String {
+pub(crate) fn sanitize(body: &str, key: Option<&ApiKey>) -> String {
     let expurge = redact_key(body.trim(), key);
     if expurge.len() <= MAX_MESSAGE_LEN {
         return expurge;

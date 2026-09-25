@@ -9,6 +9,7 @@ use futures::stream::BoxStream;
 use oxyn_core::CancelToken;
 
 use super::decode::ChunkDecoder;
+use crate::secret::ApiKey;
 use crate::stream::{ByteStream, events_stream};
 use crate::types::ChatEvent;
 
@@ -16,8 +17,9 @@ use crate::types::ChatEvent;
 pub(crate) fn openai_events(
     bytes: ByteStream,
     cancel: CancelToken,
+    key: Option<ApiKey>,
 ) -> BoxStream<'static, ChatEvent> {
-    events_stream(bytes, ChunkDecoder::new(), cancel)
+    events_stream(bytes, ChunkDecoder::new(), cancel, key)
 }
 
 #[cfg(test)]
@@ -50,6 +52,7 @@ mod tests {
                 "data: [DONE]\n\n",
             ]),
             CancelToken::new(),
+            None,
         );
         assert_eq!(
             collecter(flux),
@@ -71,6 +74,7 @@ mod tests {
                 "tent\":\"bonjour\"}}]}\n\ndata: [DONE]\n\n",
             ]),
             CancelToken::new(),
+            None,
         );
         let evenements = collecter(flux);
         assert!(
@@ -96,6 +100,7 @@ mod tests {
         let evenements = collecter(openai_events(
             Box::pin(futures::stream::iter(octets)),
             CancelToken::new(),
+            None,
         ));
         assert_eq!(
             evenements,
@@ -121,7 +126,7 @@ mod tests {
             Ok(Bytes::from_static(morceau.as_bytes()))
         });
 
-        let evenements = collecter(openai_events(Box::pin(octets), jeton));
+        let evenements = collecter(openai_events(Box::pin(octets), jeton, None));
         assert!(
             !evenements
                 .iter()

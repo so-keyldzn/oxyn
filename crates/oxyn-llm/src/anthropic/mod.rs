@@ -408,6 +408,7 @@ impl LlmProvider for AnthropicProvider {
             Box::pin(octets),
             decode::MessageDecoder::new(),
             cancel.clone(),
+            Some(self.api_key.clone()),
         ))
     }
 }
