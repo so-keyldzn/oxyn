@@ -16,12 +16,10 @@ import {
   FieldGroup,
   FieldLabel,
 } from "@/components/ui/field"
-import { Input } from "@/components/ui/input"
 import {
   InputGroup,
   InputGroupAddon,
   InputGroupButton,
-  InputGroupInput,
 } from "@/components/ui/input-group"
 import { Kbd } from "@/components/ui/kbd"
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
@@ -36,6 +34,7 @@ import type {
   PrivacyTier,
 } from "@/lib/ipc/types"
 import { cn } from "@/lib/utils"
+import { InputGroupTextInput, TextInput } from "./text-field"
 
 export interface FormValues {
   name: string
@@ -292,7 +291,7 @@ export function ConnectionForm({
                       *
                     </span>
                   </FieldLabel>
-                  <Input
+                  <TextInput
                     id="connection-name"
                     value={field.state.value}
                     onBlur={field.handleBlur}
@@ -536,7 +535,7 @@ function DriverField({
     case "path":
       control = (
         <InputGroup>
-          <InputGroupInput
+          <InputGroupTextInput
             id={id}
             value={value}
             onChange={(event) => onChange(event.target.value)}
@@ -544,7 +543,6 @@ function DriverField({
             placeholder="/path/to/database.sqlite"
             aria-required={required || undefined}
             aria-describedby={describedBy}
-            spellCheck={false}
             dir="auto"
           />
           {onBrowse ? (
@@ -569,7 +567,7 @@ function DriverField({
       break
     default:
       control = (
-        <Input
+        <TextInput
           id={id}
           // A port is digits, not a number input: a scrolled wheel must not
           // change it, and a spinner means nothing for 5432.
@@ -583,7 +581,6 @@ function DriverField({
           aria-invalid={invalidPort || undefined}
           aria-describedby={describedBy}
           autoComplete={spec.secret ? "new-password" : "off"}
-          spellCheck={false}
           className={spec.kind.type === "number" ? "tabular-nums" : undefined}
         />
       )

@@ -10,7 +10,6 @@ import { Bubble, BubbleContent } from "@/components/ui/bubble"
 import { Button } from "@/components/ui/button"
 import { Kbd } from "@/components/ui/kbd"
 import { Message, MessageContent } from "@/components/ui/message"
-import { Textarea } from "@/components/ui/textarea"
 import {
   Tooltip,
   TooltipContent,
@@ -19,6 +18,7 @@ import {
 import type { Versions } from "@/features/assistant/thread"
 import type { MentionView } from "@/lib/ipc/ai"
 import type { CatalogAddress } from "@/lib/ipc/types"
+import { TextArea } from "./text-field"
 
 /**
  * A question the user asked, with what can be done with it.
@@ -94,7 +94,7 @@ export function AssistantQuestion({
               void submit()
             }}
           >
-            <Textarea
+            <TextArea
               ref={field}
               aria-label="Edit your question"
               dir="auto"

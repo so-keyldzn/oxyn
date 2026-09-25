@@ -31,6 +31,7 @@ import { Item } from "@/components/ui/item"
 import { Skeleton } from "@/components/ui/skeleton"
 import { cn } from "cn"
 import type { DriverChoice } from "@/lib/ipc/types"
+import { TEXT_FIELD_ATTRIBUTES } from "./text-field"
 
 /**
  * Up to this many types, every one is a tile. Beyond, the tiles become a
@@ -114,6 +115,7 @@ function DriverSearch({
       <CommandInput
         placeholder="Search database types…"
         aria-label="Search database types"
+        {...TEXT_FIELD_ATTRIBUTES}
       />
       <CommandList className="max-h-80">
         <CommandEmpty>No database type matches.</CommandEmpty>

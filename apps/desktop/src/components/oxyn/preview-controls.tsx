@@ -15,7 +15,6 @@ import {
   InputGroup,
   InputGroupAddon,
   InputGroupButton,
-  InputGroupInput,
   InputGroupText,
 } from "@/components/ui/input-group"
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
@@ -35,6 +34,7 @@ import type {
   PreviewSortKey,
 } from "@/lib/ipc/metadata"
 import { cn } from "@/lib/utils"
+import { InputGroupTextInput } from "./text-field"
 
 /** The state of the preview area, as the notice needs it. */
 export type PreviewStatus =
@@ -415,7 +415,7 @@ export function PreviewControls({
                 WHERE
               </InputGroupText>
             </InputGroupAddon>
-            <InputGroupInput
+            <InputGroupTextInput
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
               onKeyDown={(event) => {
@@ -429,7 +429,6 @@ export function PreviewControls({
               }}
               placeholder="status = 'active' AND amount > 100"
               aria-label="Preview filter predicate"
-              spellCheck={false}
               className="font-mono"
             />
             <InputGroupAddon align="inline-end">

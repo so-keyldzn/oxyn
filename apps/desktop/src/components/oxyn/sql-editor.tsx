@@ -5,6 +5,7 @@ import { HighlightStyle, syntaxHighlighting } from "@codemirror/language"
 import { Prec } from "@codemirror/state"
 import { EditorView, keymap } from "@codemirror/view"
 import { tags } from "@lezer/highlight"
+import { TEXT_FIELD_DOM_ATTRIBUTES } from "./text-field"
 
 function dialectFor(driver: string) {
   switch (driver) {
@@ -162,6 +163,8 @@ export function SqlEditor({
       EditorView.contentAttributes.of({
         "aria-label": "SQL editor",
         tabindex: "0",
+        // No correction nor typographic quotes in SQL (ADR-0041 § 8).
+        ...TEXT_FIELD_DOM_ATTRIBUTES,
       }),
       EditorView.updateListener.of((update) => {
         if (update.selectionSet)

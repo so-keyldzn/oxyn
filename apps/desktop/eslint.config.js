@@ -14,7 +14,41 @@ export default [
       "@typescript-eslint/array-type": "off",
       "@typescript-eslint/require-await": "off",
       "pnpm/json-enforce-catalog": "off",
+      // A text field without spellcheck, autocorrect and autocapitalize off
+      // lets macOS turn ' into ’ in a connection string (ADR-0041 § 8). The
+      // generated fields are wrapped once, in `text-field.tsx`.
+      "no-restricted-imports": [
+        "error",
+        {
+          paths: [
+            {
+              name: "@/components/ui/input",
+              message: "Use TextInput from @/components/oxyn/text-field.",
+            },
+            {
+              name: "@/components/ui/textarea",
+              message: "Use TextArea from @/components/oxyn/text-field.",
+            },
+            {
+              name: "@/components/ui/input-group",
+              importNames: ["InputGroupInput", "InputGroupTextarea"],
+              message:
+                "Use InputGroupTextInput or InputGroupTextArea from @/components/oxyn/text-field.",
+            },
+          ],
+          patterns: [
+            {
+              group: ["**/ui/input", "**/ui/textarea"],
+              message: "Use the fields of @/components/oxyn/text-field.",
+            },
+          ],
+        },
+      ],
     },
+  },
+  {
+    files: ["src/components/oxyn/text-field.tsx"],
+    rules: { "no-restricted-imports": "off" },
   },
   {
     ignores: [

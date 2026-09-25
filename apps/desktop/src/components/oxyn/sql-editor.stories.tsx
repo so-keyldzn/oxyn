@@ -48,6 +48,10 @@ type Story = StoryObj<typeof meta>
 export const PostgreSQL: Story = {
   play: async ({ canvas, args }) => {
     const editor = canvas.getByRole("textbox")
+    // macOS neither corrects SQL nor curls its quotes (ADR-0041 § 8).
+    await expect(editor).toHaveAttribute("spellcheck", "false")
+    await expect(editor).toHaveAttribute("autocorrect", "off")
+    await expect(editor).toHaveAttribute("autocapitalize", "off")
     await userEvent.click(editor)
     await userEvent.keyboard(mod("{Enter}"))
     await waitFor(() => expect(args.onRun).toHaveBeenCalledTimes(1))

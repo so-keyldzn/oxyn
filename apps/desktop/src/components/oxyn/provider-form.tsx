@@ -22,8 +22,6 @@ import {
   FieldGroup,
   FieldLabel,
 } from "@/components/ui/field"
-import { Input } from "@/components/ui/input"
-import { Textarea } from "@/components/ui/textarea"
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
 import { Spinner } from "@/components/ui/spinner"
 import { Switch } from "@/components/ui/switch"
@@ -34,6 +32,7 @@ import type {
   ProviderDraft,
   ProviderKind,
 } from "@/lib/ipc/ai"
+import { TextArea, TextInput } from "./text-field"
 
 /** What the form works on: a new declaration, or one already saved. */
 export type FormTarget =
@@ -245,7 +244,7 @@ export function ProviderForm({
           {(field) => (
             <Field data-invalid={invalid(field.state.meta.errors)}>
               <FieldLabel htmlFor="provider-label">Name</FieldLabel>
-              <Input
+              <TextInput
                 ref={nameRef}
                 id="provider-label"
                 value={field.state.value}
@@ -270,10 +269,9 @@ export function ProviderForm({
                   {(field) => (
                     <Field data-invalid={invalid(field.state.meta.errors)}>
                       <FieldLabel htmlFor="agent-command">Program</FieldLabel>
-                      <Input
+                      <TextInput
                         id="agent-command"
                         className="font-mono"
-                        spellCheck={false}
                         placeholder="claude-agent-acp"
                         value={field.state.value}
                         aria-invalid={invalid(field.state.meta.errors)}
@@ -289,10 +287,9 @@ export function ProviderForm({
                   {(field) => (
                     <Field>
                       <FieldLabel htmlFor="agent-args">Arguments</FieldLabel>
-                      <Textarea
+                      <TextArea
                         id="agent-args"
                         className="font-mono"
-                        spellCheck={false}
                         rows={3}
                         placeholder={"--acp"}
                         value={field.state.value}
@@ -326,10 +323,9 @@ export function ProviderForm({
                   {(field) => (
                     <Field data-invalid={invalid(field.state.meta.errors)}>
                       <FieldLabel htmlFor="agent-env">Environment</FieldLabel>
-                      <Textarea
+                      <TextArea
                         id="agent-env"
                         className="font-mono"
-                        spellCheck={false}
                         autoComplete="off"
                         rows={2}
                         placeholder="NAME=value"
@@ -372,10 +368,9 @@ export function ProviderForm({
                       <FieldLabel htmlFor="provider-endpoint">
                         Endpoint
                       </FieldLabel>
-                      <Input
+                      <TextInput
                         id="provider-endpoint"
                         className="font-mono"
-                        spellCheck={false}
                         inputMode="url"
                         placeholder={
                           KINDS.find((entry) => entry.kind === kind)
@@ -412,10 +407,9 @@ export function ProviderForm({
                       <FieldLabel htmlFor="provider-model">
                         Default model
                       </FieldLabel>
-                      <Input
+                      <TextInput
                         id="provider-model"
                         className="font-mono"
-                        spellCheck={false}
                         maxLength={128}
                         value={field.state.value}
                         aria-invalid={invalid(field.state.meta.errors)}
@@ -431,11 +425,10 @@ export function ProviderForm({
                   {(field) => (
                     <Field>
                       <FieldLabel htmlFor="provider-key">API key</FieldLabel>
-                      <Input
+                      <TextInput
                         id="provider-key"
                         type="password"
                         autoComplete="off"
-                        spellCheck={false}
                         value={field.state.value}
                         onChange={(event) =>
                           field.handleChange(event.target.value)
