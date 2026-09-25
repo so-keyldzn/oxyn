@@ -7,6 +7,7 @@ import { Channel, isTauri } from "@tauri-apps/api/core"
 import { z } from "zod"
 
 import { call, guarded, Nothing } from "./client"
+import { Environment, TransactionState } from "./types"
 
 export const RecoveryStatus = z.object({
   /** Observed at startup: only then may the screen say Oxyn did not close normally. */
@@ -16,7 +17,26 @@ export const RecoveryStatus = z.object({
 })
 export type RecoveryStatus = z.infer<typeof RecoveryStatus>
 
-export const ShutdownSignal = z.object({ type: z.literal("flushDrafts") })
+/** A console session whose transaction holds the exit (ADR-0043). */
+export const ExitTransaction = z.object({
+  session: z.string(),
+  /** What `run_console` takes. Never shown: the name is. */
+  connection: z.string(),
+  connectionName: z.string(),
+  environment: Environment,
+  /** `open` or `unknown`: an idle session is not listed. */
+  state: TransactionState,
+})
+export type ExitTransaction = z.infer<typeof ExitTransaction>
+
+export const ShutdownSignal = z.discriminatedUnion("type", [
+  z.object({ type: z.literal("flushDrafts") }),
+  z.object({
+    type: z.literal("resolveTransactions"),
+    transactions: z.array(ExitTransaction),
+  }),
+  z.object({ type: z.literal("exitCancelled") }),
+])
 export type ShutdownSignal = z.infer<typeof ShutdownSignal>
 
 export const recovery = {
@@ -32,6 +52,12 @@ export const recovery = {
   },
 
   shutdownFlushed: () => call("shutdown_flushed", Nothing),
+
+  /** The dialog of `resolveTransactions` is shown: the exit waits for it. */
+  shutdownAcknowledged: () => call("shutdown_acknowledged", Nothing),
+
+  /** Abandons an exit held by a transaction; nothing was flushed. */
+  cancelExit: () => call("cancel_exit", Nothing),
 
   /** The ordered exit of ⌘Q, asked by `File ▸ Exit`: takes nothing, chooses nothing. */
   requestExit: () => call("request_exit", Nothing),

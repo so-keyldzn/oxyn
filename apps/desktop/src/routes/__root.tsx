@@ -18,6 +18,7 @@ import { useActionRuntime } from "@/features/actions/use-action-runtime"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { subscribeToShutdown } from "@/features/consoles/draft-registry"
 import { ProviderSettings } from "@/features/assistant/provider-settings"
+import { ExitTransactionsHost } from "@/features/recovery/exit-transactions-host"
 import { openConnection, session } from "@/features/session"
 import {
   SettingsDialog,
@@ -108,6 +109,8 @@ function RootComponent() {
             openConnection={open}
             onOpenConnectionChanged={openConnection}
           />
+          {/* An exit held by an open transaction asks here (ADR-0043). */}
+          <ExitTransactionsHost />
         </Toaster>
       </TooltipProvider>
       <TanStackDevtools

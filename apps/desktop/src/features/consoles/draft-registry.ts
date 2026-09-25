@@ -1,3 +1,4 @@
+import { holdExit, releaseExit } from "@/features/recovery/exit-transactions"
 import { recovery } from "@/lib/ipc/recovery"
 
 // Drafts waiting for their typing pause, by console. The window close asks
@@ -36,13 +37,25 @@ export function subscribeToShutdown() {
   if (subscribed) return
   subscribed = true
   recovery
-    // One signal today, `flushDrafts`: every message asks for the same thing.
-    .subscribeShutdown(() => {
-      // A failed draft is not confirmed: the backend then says so in its
-      // journal, and records the close after its grace all the same (ADR-0040).
-      void flushAllDrafts().then((flushed) => {
-        if (flushed) void recovery.shutdownFlushed().catch(() => undefined)
-      })
+    .subscribeShutdown((signal) => {
+      switch (signal.type) {
+        case "flushDrafts":
+          // A failed draft is not confirmed: the backend then says so in its
+          // journal, and records the close after its grace all the same
+          // (ADR-0040).
+          void flushAllDrafts().then((flushed) => {
+            if (flushed) void recovery.shutdownFlushed().catch(() => undefined)
+          })
+          return
+        case "resolveTransactions":
+          // Acknowledged first: past two seconds without it, the backend
+          // takes this webview for frozen and exits (ADR-0043).
+          void recovery.shutdownAcknowledged().catch(() => undefined)
+          holdExit(signal.transactions)
+          return
+        case "exitCancelled":
+          releaseExit()
+      }
     })
     .catch(() => {
       // Outside the desktop application there is no backend to close.

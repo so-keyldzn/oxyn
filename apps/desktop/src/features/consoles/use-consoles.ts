@@ -6,7 +6,9 @@ import {
   consoleTitle,
   cycleConsole,
   needsCloseDecision,
+  tabTitle,
 } from "@/features/consoles/console-model"
+import { publishConsoleLabels } from "@/features/consoles/console-labels"
 import type { CloseReasons } from "@/features/consoles/console-model"
 import type {
   ConsoleHandle,
@@ -511,6 +513,21 @@ export function useConsoles({
       }
     }
   }, [requests])
+
+  // The names the exit dialog shows for these consoles' sessions.
+  React.useEffect(() => {
+    const labels: Record<string, string> = {}
+    for (const entry of entries) {
+      if (!entry.session) continue
+      const shown = meta[entry.key]
+      labels[entry.session.session] = tabTitle({
+        title: shown?.title ?? entry.seed.title,
+        fromAgent: shown?.fromAgent ?? entry.seed.fromAgent,
+      })
+    }
+    publishConsoleLabels([], labels)
+    return () => publishConsoleLabels(Object.keys(labels), {})
+  }, [entries, meta])
 
   return {
     entries,
