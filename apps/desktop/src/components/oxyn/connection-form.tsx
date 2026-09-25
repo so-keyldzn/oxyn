@@ -59,7 +59,8 @@ export interface ConnectionPrefill {
 function initialValues(
   driver: DriverChoice,
   existing: ConnectionDetails | undefined,
-  prefill: ConnectionPrefill | undefined
+  prefill: ConnectionPrefill | undefined,
+  dropped: Readonly<Record<string, string>> | undefined
 ): FormValues {
   const values: Record<string, string> = {}
   const copied = existing?.values ?? prefill?.values
@@ -74,7 +75,9 @@ function initialValues(
         copied[field.key] ?? (field.kind.type === "bool" ? "false" : "")
     } else {
       values[field.key] =
-        field.default ?? (field.kind.type === "bool" ? "false" : "")
+        dropped?.[field.key] ??
+        field.default ??
+        (field.kind.type === "bool" ? "false" : "")
     }
   }
   return {
@@ -213,6 +216,7 @@ export function ConnectionForm({
   onDirtyChange,
   onValuesChange,
   stickyActions = false,
+  dropped,
 }: {
   driver: DriverChoice
   existing?: ConnectionDetails
@@ -232,11 +236,16 @@ export function ConnectionForm({
   onDirtyChange?: (dirty: boolean) => void
   onValuesChange?: (values: FormValues) => void
   stickyActions?: boolean
+  /**
+   * Values a new connection starts with, by field key — a dropped database
+   * file fills its path field. A secret field is never prefilled (I-03).
+   */
+  dropped?: Readonly<Record<string, string>>
 }) {
   const editing = existing !== undefined
   const busy = submitting || testing
   const form = useForm({
-    defaultValues: initialValues(driver, existing, prefill),
+    defaultValues: initialValues(driver, existing, prefill, dropped),
     onSubmit: ({ value }) => onSubmit(draftFrom(driver, value)),
   })
   const values = useStore(form.store, (state) => state.values)

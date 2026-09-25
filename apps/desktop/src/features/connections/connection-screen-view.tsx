@@ -94,6 +94,11 @@ export interface ConnectionScreenViewProps {
   formError?: BackendFailure | null
   onSubmit: (draft: ConnectionDraft) => void
   onBrowse?: (field: FormField) => Promise<string | null>
+  /**
+   * Values the form starts with — a dropped database file's path. `key`
+   * changes with each drop, so the same driver's form restarts from them.
+   */
+  prefill?: { key: number; values: Readonly<Record<string, string>> } | null
 
   /** The form's values are being opened and closed, without being saved. */
   testing: boolean
@@ -157,6 +162,7 @@ export function ConnectionScreenView(props: ConnectionScreenViewProps) {
     formError,
     onSubmit,
     onBrowse,
+    prefill,
     testing,
     testResult,
     testError,
@@ -369,9 +375,10 @@ export function ConnectionScreenView(props: ConnectionScreenViewProps) {
                     error={testError ?? null}
                   />
                   <ConnectionForm
-                    key={driver.id}
-                    prefill={duplicate?.prefill}
+                    key={`${driver.id}:${prefill?.key ?? ""}`}
                     driver={driver}
+                    prefill={duplicate?.prefill}
+                    dropped={prefill?.values}
                     submitting={submitting}
                     testing={testing}
                     aborting={cancelling}

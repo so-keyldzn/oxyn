@@ -11,6 +11,10 @@ import type { PendingConnectionApproval } from "@/features/connections/connectio
 import type { ConnectionPrefill } from "@/components/oxyn/connection-form"
 import { copyConnection } from "@/features/connections/copy-connection"
 import { duplicatePrefill } from "@/features/connections/duplicate-connection"
+import {
+  clearConnectionOffer,
+  connectionOffer,
+} from "@/features/connections/connection-offer"
 import { useTypedSecrets } from "@/features/connections/typed-secrets"
 import type { WithoutSecrets } from "@/features/connections/typed-secrets"
 import { closeConnection, openConnection, session } from "@/features/session"
@@ -96,6 +100,24 @@ export function ConnectionScreen() {
     of: string
     prefill: ConnectionPrefill
   } | null>(null)
+  // A dropped database file: its driver's form, the file already in it.
+  // Taken once, so coming back to this screen later does not replay it.
+  const offer = useStore(connectionOffer)
+  const [prefill, setPrefill] = React.useState<{
+    key: number
+    values: Record<string, string>
+  } | null>(null)
+  React.useEffect(() => {
+    if (!offer || !drivers.data) return
+    clearConnectionOffer()
+    const choice = drivers.data.find((known) => known.id === offer.driver)
+    // Rust offers only a registered driver; a list read before a change of
+    // build would still not have it, and then nothing is offered.
+    if (!choice) return
+    setDuplicate(null)
+    setPrefill({ key: offer.id, values: { [offer.field]: offer.path } })
+    setDriver(choice)
+  }, [offer, drivers.data])
   const [approval, setApproval] =
     React.useState<PendingConnectionApproval | null>(null)
   const [cancelling, setCancelling] = React.useState(false)
@@ -264,6 +286,7 @@ export function ConnectionScreen() {
       const source = await settingsBackend.connectionDetails(connection.id)
       connect.reset()
       test.reset()
+      setPrefill(null)
       setDuplicate({
         of: connection.name,
         prefill: duplicatePrefill(choice, source),
@@ -333,12 +356,14 @@ export function ConnectionScreen() {
         connect.reset()
         test.reset()
         setDuplicate(null)
+        setPrefill(null)
         setDriver(choice)
       }}
       onLeaveDriver={() => {
         connect.reset()
         test.reset()
         setDuplicate(null)
+        setPrefill(null)
         setDriver(null)
       }}
       opening={reconnect.isPending ? reconnect.variables.id : null}
@@ -368,6 +393,7 @@ export function ConnectionScreen() {
       }}
       onDraftChange={test.reset}
       onBrowse={browse}
+      prefill={prefill}
       cancelling={cancelling}
       onCancelOpening={cancelOpening}
       approval={approval}
