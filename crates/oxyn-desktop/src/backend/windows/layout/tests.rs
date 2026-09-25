@@ -210,3 +210,42 @@ fn an_agent_cannot_write_a_layout() {
         .expect("answered");
     assert!(matches!(outcome, oxyn_exec::Outcome::Denied { .. }));
 }
+
+/// A console restored in one window is its own before any save: another
+/// window's script cannot list it and take it for the next launch.
+#[test]
+fn a_restored_console_cannot_be_taken_by_another_window() {
+    let runtime = runtime();
+    let _guard = runtime.enter();
+    let backend = Backend::open_temporary().expect("temporary backend");
+    let document = working_copy(&runtime, &backend);
+    let restored = WindowLayout {
+        window: oxyn_core::WindowId::new(),
+        ordinal: 0,
+        geometry: WindowGeometry {
+            x: None,
+            y: None,
+            width: 1280.0,
+            height: 820.0,
+            maximized: false,
+        },
+        object_location: None,
+        active_document: None,
+        consoles: vec![document],
+    };
+    backend
+        .reserve_restored_window(true, Some(restored))
+        .expect("restored");
+    let intruder = placed(&backend, false);
+    runtime
+        .block_on(backend.report_window_consoles(intruder, vec![document], None))
+        .expect("answered");
+
+    assert!(
+        backend
+            .inner
+            .layouts
+            .snapshot(intruder)
+            .is_some_and(|layout| layout.consoles.is_empty())
+    );
+}

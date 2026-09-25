@@ -719,7 +719,10 @@ la seconde apporte la disposition persistée, la restauration par fenêtre et
   ligne liste la quitte (`ON CONFLICT (document_id)`) ; c'est le registre qui
   empêche une fenêtre de prendre la console d'une autre, en écartant de son
   rapport tout document qu'une autre fenêtre écrit.
-- **La lecture adopte en une transaction.** Une ligne dont l'identifiant ne
+- **La lecture adopte en une transaction**, bornée à 64 lignes lues et à 257
+  consoles par fenêtre. Chaque colonne se lit sans échouer : un fichier
+  retouché peut avoir perdu `STRICT`, et une valeur mal typée ne coûte que sa
+  ligne ou sa colonne. Une ligne dont l'identifiant ne
   se relit pas, et celles au-delà de 16, sont retirées du fichier ; les
   consoles au-delà de 256 aussi, journalisées, leurs documents laissés dans la
   bibliothèque. Une console dont le document est fermé ou supprimé ne revient
@@ -736,8 +739,11 @@ la seconde apporte la disposition persistée, la restauration par fenêtre et
 - **L'appartenance vient de la webview** : `report_window_consoles` porte les
   documents des consoles de tous les workspaces de la fenêtre, affichés ou
   retenus, dans l'ordre des onglets, et celui du premier plan. Le front
-  n'envoie qu'une liste changée, une fois par tour de rendu. Rust écarte ce
-  qu'une autre fenêtre écrit.
+  n'envoie qu'une liste changée, une fois par tour de rendu ; Rust n'écrit
+  pas une liste inchangée. Rust écarte ce qu'une autre fenêtre écrit ou ce
+  que sa ligne liste : les consoles d'une fenêtre restaurée lui appartiennent
+  dès le lancement, avant toute sauvegarde, et les copies orphelines à la
+  première fenêtre dès qu'elle les reçoit.
 - **`restored_consoles`** rend les copies qu'une fenêtre rouvre : les siennes,
   dans l'ordre des onglets, puis — pour la première fenêtre du lancement, une
   fois — les copies ouvertes qu'aucune fenêtre ne réclame, lues dans la

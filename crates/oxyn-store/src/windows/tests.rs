@@ -293,3 +293,49 @@ fn une_console_fermee_ne_revient_pas() {
     assert_eq!(adopted.first().map(|l| l.consoles.len()), Some(0));
     assert_eq!(adopted.first().and_then(|l| l.active_document), None);
 }
+
+/// Un fichier retouché peut avoir perdu `STRICT` : une valeur mal typée ne
+/// coûte que sa ligne, oubliée sans revenir au lancement suivant, ou que sa
+/// colonne.
+#[test]
+fn une_colonne_mal_typee_ne_coute_que_sa_ligne() {
+    let (store, workspace) = atelier();
+    let (session, _) = store.sessions().begin(workspace).expect("lancement");
+    let kept = layout(Vec::new());
+    store
+        .with_connection(|connection| {
+            connection.execute_batch(
+                "DROP TABLE workspace_window_consoles;
+                 DROP TABLE workspace_windows;
+                 CREATE TABLE workspace_windows (id, workspace_id, app_session_id, ordinal,
+                     x, y, width, height, maximized, object_location, active_document,
+                     revision, updated_at);
+                 CREATE TABLE workspace_window_consoles (window_id, document_id, position);",
+            )?;
+            connection.execute(
+                "INSERT INTO workspace_windows VALUES (42, ?1, 'personne', 0, 1, 2, 800, 600, 0, NULL, NULL, 1, 'hier')",
+                params![workspace.to_string()],
+            )?;
+            connection.execute(
+                "INSERT INTO workspace_windows VALUES (?1, ?2, 'personne', 1, NULL, NULL, 'large', 600, 0, NULL, NULL, 1, 'hier')",
+                params![kept.window.to_string(), workspace.to_string()],
+            )?;
+            Ok(())
+        })
+        .expect("fichier retouché");
+
+    let adopted = store.windows().adopt(workspace, session).expect("adoption");
+    // Un identifiant qui n'est pas du texte : illisible, oublié. Une largeur
+    // qui n'est pas un nombre : ramenée au minimum par le desktop.
+    assert_eq!(
+        adopted
+            .iter()
+            .map(|l| (l.window, l.geometry.width))
+            .collect::<Vec<_>>(),
+        vec![(kept.window, 0.0)]
+    );
+    assert_eq!(
+        sql::<i64>(&store, "SELECT COUNT(*) FROM workspace_windows"),
+        1
+    );
+}
