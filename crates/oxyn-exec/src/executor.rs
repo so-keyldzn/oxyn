@@ -925,8 +925,8 @@ impl Executor {
                 // decided under the connection's tier, in `oxyn-ai`.
                 let catalog = self.catalog(*connection).ok_or_else(|| {
                     OxynError::Config(
-                        "this connection has no catalog loaded yet: the user must open it in \
-                         the explorer first"
+                        "this connection is not open, so it has no catalog: the user must \
+                         connect to it first"
                             .into(),
                     )
                 })?;

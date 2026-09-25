@@ -10,7 +10,9 @@
 //! 1. the tier is read **now**, from the store: anything but `Sampled` is a
 //!    refusal, and no screen opens ([I-04](../../../../../../CLAUDE.md#i-04));
 //! 2. the relation and the columns are looked up in the local catalog — names
-//!    the catalog does not know are refused, never guessed;
+//!    the catalog does not know are refused, never guessed. A relation listed
+//!    whose columns the cache does not hold has them read first, as the
+//!    agent, through the bus: a metadata read, no row;
 //! 3. the approval screen opens — the one the user's own pin opens, naming the
 //!    agent that asks — and the call waits, bounded by
 //!    [`samples::ASK_LIFETIME`] and by the question's stop;
@@ -59,6 +61,7 @@ use oxyn_exec::DispatchReport;
 use oxyn_store::EgressRecord;
 
 use super::{AgentSink, ForgetResult, REQUEST_WITHDRAWN, StoredTier, announce_call, egress_reach};
+use crate::backend::ai::catalog_fill::CatalogFill;
 use crate::backend::ai::samples::{self, Recipient, RecipientKind, SampleAsks};
 use crate::backend::ai::threads::Thread;
 use crate::ipc::ai::{AiEvent, SampleRequest};
@@ -124,6 +127,15 @@ fn denied(reason: impl Into<String>) -> DispatchOutcome {
     }
 }
 
+/// Why [`resolve`] found no fields to offer.
+enum Unresolved {
+    /// Listed, but its columns are not in the cache: to read, then resolve
+    /// again.
+    NotDescribed(CatalogPath),
+    /// Refused, with the reason the agent is given.
+    Refused(String),
+}
+
 /// The relation the agent named, its path, and the fields offered.
 ///
 /// A name, never a pattern: equal to the catalog's, under the namespace when
@@ -133,7 +145,7 @@ fn resolve(
     namespace: Option<&str>,
     relation: &str,
     requested: &[String],
-) -> Result<(CatalogPath, Vec<RelationField>), String> {
+) -> Result<(CatalogPath, Vec<RelationField>), Unresolved> {
     let found: Vec<_> = cache
         .iter_relations()
         .filter(|(summary, _)| {
@@ -142,7 +154,7 @@ fn resolve(
         })
         .collect();
     let [(summary, described)] = found.as_slice() else {
-        return Err(if found.is_empty() {
+        return Err(Unresolved::Refused(if found.is_empty() {
             format!(
                 "`{relation}` is not in Oxyn's catalog of this connection; call describe_schema \
                  for its exact name. Nothing was asked."
@@ -151,22 +163,19 @@ fn resolve(
             format!(
                 "several objects are named `{relation}`; name its namespace. Nothing was asked."
             )
-        });
+        }));
     };
     let Some(described) = described else {
-        return Err(format!(
-            "the columns of `{relation}` are not in Oxyn's catalog yet; the user can open it in \
-             the explorer. Nothing was asked."
-        ));
+        return Err(Unresolved::NotDescribed(summary.path()));
     };
     if let Some(unknown) = requested
         .iter()
         .find(|column| !described.fields.iter().any(|field| &field.name == *column))
     {
-        return Err(format!(
+        return Err(Unresolved::Refused(format!(
             "`{unknown}` is not a column of `{relation}`; call describe_schema for its exact \
              name. Nothing was asked."
-        ));
+        )));
     }
     let fields = described
         .fields
@@ -230,9 +239,38 @@ impl AgentSink {
             return denied("this connection has no catalog yet; nothing was asked");
         };
         let resolved = resolve(&catalog.read(), namespace.as_deref(), &relation, &columns);
+        let resolved = match resolved {
+            Err(Unresolved::NotDescribed(path)) => {
+                // The agent-bound sink: the read is the agent's, as its
+                // `describe_schema` completions are.
+                let fill = CatalogFill {
+                    sink: &self.sink,
+                    actor,
+                    connection,
+                    catalog: Arc::clone(&catalog),
+                };
+                if fill.describe(&path, cancel).await.is_err() {
+                    // The server's words stay out of the prompt and the log:
+                    // they may name what the agent did not.
+                    tracing::debug!("the columns of a sampled relation were not read");
+                    return denied(format!(
+                        "the columns of `{relation}` could not be read from the server. \
+                         Nothing was asked."
+                    ));
+                }
+                resolve(&catalog.read(), namespace.as_deref(), &relation, &columns)
+            }
+            other => other,
+        };
         let (path, fields) = match resolved {
             Ok(resolved) => resolved,
-            Err(reason) => return denied(reason),
+            Err(Unresolved::Refused(reason)) => return denied(reason),
+            Err(Unresolved::NotDescribed(_)) => {
+                return denied(format!(
+                    "the columns of `{relation}` could not be read from the server. \
+                     Nothing was asked."
+                ));
+            }
         };
         let offered: Vec<String> = fields.iter().map(|field| field.name.clone()).collect();
         let open = match sampling.asks.open(connection, offered) {

@@ -22,7 +22,7 @@ fn relation(name: &str) -> CatalogPath {
 
 /// Two related tables with rows, a local provider declared — and the tree
 /// never expanded: the catalog holds no table.
-fn unexpanded(tier: PrivacyTier) -> Fixture {
+pub(super) fn unexpanded(tier: PrivacyTier) -> Fixture {
     let runtime = runtime();
     let backend = {
         let _guard = runtime.enter();
