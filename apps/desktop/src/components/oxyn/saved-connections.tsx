@@ -28,15 +28,12 @@ import {
   EmptyTitle,
 } from "@/components/ui/empty"
 import { Item, ItemGroup } from "@/components/ui/item"
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupInput,
-} from "@/components/ui/input-group"
+import { InputGroup, InputGroupAddon } from "@/components/ui/input-group"
 import { Kbd } from "@/components/ui/kbd"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
 import type { ConnectionSummary } from "@/lib/ipc/settings"
+import { InputGroupTextInput } from "./text-field"
 
 /**
  * Beyond this many connections the list is filtered and folded: a workspace
@@ -263,7 +260,7 @@ export function SavedConnections({
   return (
     <div className="flex flex-col gap-3">
       <InputGroup>
-        <InputGroupInput
+        <InputGroupTextInput
           type="search"
           value={query}
           onChange={(event) => setQuery(event.target.value)}

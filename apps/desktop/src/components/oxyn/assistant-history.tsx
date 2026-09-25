@@ -31,7 +31,6 @@ import {
   EmptyMedia,
   EmptyTitle,
 } from "@/components/ui/empty"
-import { Input } from "@/components/ui/input"
 import { Item } from "@/components/ui/item"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
@@ -41,6 +40,7 @@ import { AssistantPrunedNote } from "@/components/oxyn/assistant-pruned-note"
 import type { HistoryState } from "@/features/assistant/conversation-store"
 import type { PrunedHistory, ThreadSummary } from "@/lib/ipc/ai"
 import { cn } from "@/lib/utils"
+import { TextInput } from "./text-field"
 
 const UNTITLED = "Untitled conversation"
 
@@ -95,7 +95,7 @@ function Row({
             }
           }}
         >
-          <Input
+          <TextInput
             autoFocus
             dir="auto"
             aria-label={`New title for ${label}`}

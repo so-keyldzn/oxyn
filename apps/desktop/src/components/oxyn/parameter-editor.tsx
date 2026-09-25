@@ -5,10 +5,10 @@ import { Add01Icon, Delete02Icon } from "@hugeicons/core-free-icons"
 
 import { Alert, AlertDescription } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
 import { MAX_PARAMETERS, PARAMETER_KINDS } from "@/lib/ipc/consoles"
 import type { ParameterKind, ParameterRefusal } from "@/lib/ipc/consoles"
+import { TextInput } from "./text-field"
 
 /** One positional value. `id` survives the removal of a neighbour. */
 export interface ParameterRow {
@@ -126,7 +126,7 @@ export function ParameterEditor({
                     </NativeSelectOption>
                   ))}
                 </NativeSelect>
-                <Input
+                <TextInput
                   ref={faulty ? faultyRef : undefined}
                   aria-label={`Parameter ${position} value`}
                   aria-invalid={faulty}
@@ -137,7 +137,6 @@ export function ParameterEditor({
                   readOnly={row.type === "null"}
                   placeholder={row.type === "null" ? "NULL" : undefined}
                   autoComplete="off"
-                  spellCheck={false}
                   onChange={(event) =>
                     update(row.id, { text: event.target.value })
                   }

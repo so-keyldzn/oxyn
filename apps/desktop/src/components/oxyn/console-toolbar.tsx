@@ -21,7 +21,6 @@ import {
   DropdownMenuShortcut,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu"
-import { Input } from "@/components/ui/input"
 import { Kbd, KbdGroup } from "@/components/ui/kbd"
 import { Spinner } from "@/components/ui/spinner"
 import {
@@ -30,6 +29,7 @@ import {
   TooltipTrigger,
 } from "@/components/ui/tooltip"
 import { cn } from "@/lib/utils"
+import { TextInput } from "./text-field"
 
 /** Where the named copy stands. `conflict` keeps the local text and offers a copy. */
 export type SaveState =
@@ -263,7 +263,7 @@ export function ConsoleToolbar({
         <label htmlFor={titleId} className="text-xs text-muted-foreground">
           Query name
         </label>
-        <Input
+        <TextInput
           id={titleId}
           value={title}
           dir="auto"

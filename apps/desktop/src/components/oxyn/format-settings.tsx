@@ -9,7 +9,6 @@ import {
   FieldLegend,
   FieldSet,
 } from "@/components/ui/field"
-import { Input } from "@/components/ui/input"
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import type {
@@ -17,6 +16,7 @@ import type {
   DisplayPreferences,
   PreferencesChange,
 } from "@/lib/ipc/settings"
+import { TextInput } from "./text-field"
 
 // Previews, not explanations: « 4 823 917 » says at a glance what a sentence
 // says badly. Written here rather than formatted in JavaScript — the front
@@ -77,11 +77,10 @@ export function FormatSettings({
     <FieldGroup>
       <Field data-invalid={tooLong || undefined}>
         <FieldLabel htmlFor="format-null-text">Missing value marker</FieldLabel>
-        <Input
+        <TextInput
           id="format-null-text"
           value={nullText}
           aria-invalid={tooLong || undefined}
-          spellCheck={false}
           onChange={(event) => {
             const next = event.target.value
             setNullText(next)

@@ -288,6 +288,54 @@ Lots, dans l'ordre :
    champs, `⌘R`, zoom de page et pincement neutralisés, correction et
    guillemets typographiques coupés dans les champs, liens externes vers le
    navigateur du système (ADR-0041).
+   **Fait le 2026-09-25**, sauf `open_external`, reporté (ci-dessous) :
+   - `apps/desktop/src/lib/browser-defaults.ts`, posé une fois par
+     `routes/__root.tsx`, annule par `preventDefault` seul le menu de page hors
+     d'un champ de texte, `⌘R`, `⌘⇧R`, `Ctrl+R`, `F5`, `Mod` + `=`, `-`, `0`
+     (lus par `event.code`), les touches et boutons 4 et 5 de retour, `Alt+←`
+     et `Alt+→` hors macOS, et le pincement (`wheel` avec `ctrlKey`,
+     `gesturestart`, `gesturechange`) hors d'une zone `data-own-zoom` — le
+     diagramme `erd`. Le lot 2 reprend ces combinaisons au manifeste comme
+     neutralisées (ADR-0041 § 8) : d'ici là, ce module les tient seul ;
+   - champs : `components/oxyn/text-field.tsx` enveloppe `Input`, `Textarea`,
+     `InputGroupInput` et `InputGroupTextarea` de `components/ui` avec
+     `spellCheck`, `autoCorrect`, `autoCapitalize` coupés et `autoComplete`
+     à `off` par défaut ; ESLint (`no-restricted-imports`, donc `make front`)
+     refuse les champs non enveloppés. L'éditeur SQL
+     (`contentAttributes`), le composeur de l'assistant et la recherche du
+     choix de driver reçoivent les mêmes attributs ;
+   - `crates/oxyn-desktop/src/webview_guard.rs` : la fenêtre `main` est
+     déclarée `"create": false` et construite dans `setup` par
+     `WebviewWindowBuilder::from_config`, avec `on_navigation` (refus hors de
+     l'origine de l'application : `devUrl` en développement, `tauri://localhost`
+     ou `http(s)://tauri.localhost` sous Windows) et `on_new_window` (refus
+     toujours). `allowLinkPreview` passe à `false`. Aucune permission ajoutée ;
+   - sélection : inchangée, `styles.css` la tenait déjà comme ADR-0041 § 8 le
+     décrit ;
+   - en passant : `main.rs` appelait deux fois `tauri::Builder::setup`, qui
+     **remplace** le précédent au lieu de s'y ajouter (`tauri` 2.11.5,
+     `src/app.rs`) ; le premier, qui donnait au dialogue natif d'ADR-0037 son
+     `AppHandle`, ne s'exécutait pas, et toute confirmation critique était
+     refusée. Les deux sont fusionnés.
+
+   Écarts et reports du lot 1 :
+   - **`open_external` reporté** (arbitrage du 2026-09-25) : aucun lien
+     qu'Oxyn déclare n'existe encore, et la commande n'aurait pas d'appelant.
+     Elle exigera une dépendance — `clippy.toml` interdit
+     `std::process::Command::new` —, donc `/versions`. **Ce qui la
+     débloque** : le premier lien externe qu'Oxyn rend (documentation) ;
+   - l'attribution de React Flow (`erd-diagram.tsx`) est un `<a href>` externe
+     rendu dans la webview, contre ADR-0041 § 8. Son clic est désormais
+     refusé par `on_navigation` et ne fait rien ; `open_external` lui rendra
+     une destination ;
+   - `Ctrl+P` et `Ctrl+F` de WebView2 ne sont pas absorbés : ils reviennent au
+     répartiteur (lot 2) et à `⌘P` (lot 5) ;
+   - points à vérifier n° 4 (guillemets typographiques de macOS malgré
+     `autocorrect="off"`), 5 (pincement sous WKWebView et WebKitGTK) et 6
+     (`preventDefault` contre les raccourcis de WebView2) : toujours non
+     vérifiés à la main ; les tests couvrent les écouteurs, pas le moteur. À
+     vérifier aussi dans `make desktop-dev` : l'ouverture de la fenêtre par
+     `from_config` et le refus d'un clic sur l'attribution de React Flow.
 2. **Registre d'actions** — `actions.json` et `registry.ts`, écouteur clavier
    unique, raccordement des boutons existants ; barre native macOS
    (`menu.rs`, `subscribe_menu`, `set_menu_state`), qui remplace

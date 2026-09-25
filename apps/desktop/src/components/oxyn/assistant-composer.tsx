@@ -22,6 +22,7 @@ import type { EditorState, LexicalEditor, LexicalNode } from "lexical"
 import { MentionMenuPlugin } from "./assistant-mention-menu"
 import type { MentionResults } from "./assistant-mention-menu"
 import { $isMentionNode, MentionNode } from "./assistant-mention-node"
+import { TEXT_FIELD_ATTRIBUTES } from "./text-field"
 import {
   InputGroup,
   InputGroupAddon,
@@ -269,6 +270,7 @@ function ComposerBody({
                 // Readable, and reachable, while nothing can be asked.
                 tabIndex={0}
                 aria-disabled={disabledReason !== null || undefined}
+                {...TEXT_FIELD_ATTRIBUTES}
                 className={cn(
                   "max-h-40 min-h-14 w-full overflow-y-auto px-2.5 py-2 text-base break-words whitespace-pre-wrap outline-none md:text-sm",
                   disabledReason !== null && "cursor-default"

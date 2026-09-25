@@ -29,16 +29,13 @@ import {
   EmptyHeader,
   EmptyTitle,
 } from "@/components/ui/empty"
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupInput,
-} from "@/components/ui/input-group"
+import { InputGroup, InputGroupAddon } from "@/components/ui/input-group"
 import { Spinner } from "@/components/ui/spinner"
 import { Toggle } from "@/components/ui/toggle"
 import type { CatalogSearchHit } from "@/lib/ipc/metadata"
 import type { CatalogAddress, CatalogNode, PrivacyTier } from "@/lib/ipc/types"
 import { cn } from "@/lib/utils"
+import { InputGroupTextInput } from "./text-field"
 
 /**
  * What decides whether an object can be pinned to the assistant's question.
@@ -518,7 +515,7 @@ export function CatalogTree({
             <HugeiconsIcon icon={Search01Icon} strokeWidth={2} />
           )}
         </InputGroupAddon>
-        <InputGroupInput
+        <InputGroupTextInput
           value={filter}
           onChange={(event) => setFilter(event.target.value)}
           placeholder="Filter loaded objects"

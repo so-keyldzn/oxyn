@@ -12,7 +12,6 @@ import {
   InputGroup,
   InputGroupAddon,
   InputGroupButton,
-  InputGroupInput,
 } from "@/components/ui/input-group"
 import { Kbd, KbdGroup } from "@/components/ui/kbd"
 import { Spinner } from "@/components/ui/spinner"
@@ -23,6 +22,7 @@ import {
 } from "@/components/ui/tooltip"
 import type { FindAnswer } from "@/lib/ipc/results"
 import { cn } from "@/lib/utils"
+import { InputGroupTextInput } from "./text-field"
 
 export type FindDirection = "first" | "next" | "previous"
 
@@ -115,7 +115,7 @@ export function ResultFindBar({
             <HugeiconsIcon icon={Search01Icon} strokeWidth={2} />
           )}
         </InputGroupAddon>
-        <InputGroupInput
+        <InputGroupTextInput
           value={needle}
           onChange={(event) => setNeedle(event.target.value)}
           onKeyDown={(event) => {

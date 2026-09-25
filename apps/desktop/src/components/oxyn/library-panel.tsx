@@ -35,11 +35,7 @@ import {
   EmptyHeader,
   EmptyTitle,
 } from "@/components/ui/empty"
-import {
-  InputGroup,
-  InputGroupAddon,
-  InputGroupInput,
-} from "@/components/ui/input-group"
+import { InputGroup, InputGroupAddon } from "@/components/ui/input-group"
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
@@ -54,6 +50,7 @@ import type {
   HistoryStatusChoice,
 } from "@/lib/ipc/library"
 import { cn } from "@/lib/utils"
+import { InputGroupTextInput } from "./text-field"
 
 /** `results` is the history of runs carrying a result reference. */
 export type LibraryView = "history" | "saved" | "results"
@@ -263,7 +260,7 @@ export function LibraryPanel({
         <InputGroupAddon>
           <HugeiconsIcon icon={Search01Icon} strokeWidth={2} />
         </InputGroupAddon>
-        <InputGroupInput
+        <InputGroupTextInput
           aria-label="Search"
           placeholder="Search"
           value={search}

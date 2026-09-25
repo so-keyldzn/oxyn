@@ -13,10 +13,10 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { Field, FieldDescription, FieldLabel } from "@/components/ui/field"
-import { Input } from "@/components/ui/input"
 import { Spinner } from "@/components/ui/spinner"
 import type { ConnectionSummary } from "@/lib/ipc/settings"
 import type { SavedConnection } from "@/lib/ipc/types"
+import { TextInput } from "./text-field"
 
 /**
  * Deleting a saved connection, built not to be confirmed by reflex
@@ -114,12 +114,11 @@ export function DeleteConnectionDialog<
           <FieldLabel htmlFor={nameId}>
             Type the connection name to confirm
           </FieldLabel>
-          <Input
+          <TextInput
             id={nameId}
             value={typed}
             onChange={(event) => setTyped(event.target.value)}
             autoComplete="off"
-            spellCheck={false}
             disabled={deleting}
           />
           <FieldDescription>

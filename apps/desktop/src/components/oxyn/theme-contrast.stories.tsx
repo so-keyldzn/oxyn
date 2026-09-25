@@ -3,8 +3,8 @@ import { expect, userEvent, waitFor, within } from "storybook/test"
 
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
-import { Input } from "@/components/ui/input"
 import { Switch } from "@/components/ui/switch"
+import { TextInput } from "./text-field"
 
 /**
  * The theme's control contrast, measured in the browser (WCAG 1.4.11, 3:1).
@@ -116,7 +116,7 @@ function Surfaces() {
           className={`flex items-center gap-4 p-4 ${surface.className}`}
         >
           <Checkbox aria-label={`Checkbox on ${surface.name}`} />
-          <Input
+          <TextInput
             aria-label={`Field on ${surface.name}`}
             className="w-48"
             defaultValue=""
