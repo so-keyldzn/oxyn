@@ -41,7 +41,6 @@ mod wire;
 
 use std::fmt;
 use std::pin::pin;
-use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::future::{Either, select};
@@ -52,20 +51,12 @@ use reqwest::{Client, RequestBuilder, Url};
 use serde_json::Value;
 
 use crate::error::LlmError;
+use crate::http;
 use crate::provider::{self, LlmProvider, ProviderId};
 use crate::reach;
 use crate::secret::{ApiKey, redact_key};
 use crate::stream::{describe_stream_error, events_stream};
 use crate::types::{ChatEvent, ChatRequest, ModelInfo};
-
-/// Délai d'établissement de la connexion TCP et TLS.
-///
-/// Ne borne **que** la mise en relation, pour la même raison que du côté
-/// compatible OpenAI : une génération peut durer des minutes.
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// En-tête `User-Agent` envoyé à ce fournisseur.
-const USER_AGENT: &str = concat!("oxyn/", env!("CARGO_PKG_VERSION"));
 
 /// Point d'accès de l'API d'Anthropic.
 pub const ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com";
@@ -143,14 +134,7 @@ impl AnthropicProvider {
             provider: id.clone(),
             detail: format!("cannot parse the base URL: {err}"),
         })?;
-        let client = Client::builder()
-            .connect_timeout(CONNECT_TIMEOUT)
-            .user_agent(USER_AGENT)
-            .build()
-            .map_err(|err| LlmError::Config {
-                provider: id,
-                detail: format!("cannot build the HTTP client: {err}"),
-            })?;
+        let client = http::client(&id)?;
         Ok(Self {
             base_url: provider::normalize_base_url(analysee),
             api_key: api_key.into(),
@@ -288,11 +272,7 @@ impl AnthropicProvider {
     /// il est tronqué et débarrassé de la clé par
     /// [`LlmError::from_response`].
     async fn failure(&self, response: reqwest::Response) -> LlmError {
-        let statut = response.status().as_u16();
-        // Un corps illisible ne doit pas masquer le statut, qui est la donnée
-        // qui décide de la reprise.
-        let corps = response.text().await.unwrap_or_default();
-        LlmError::from_response(ProviderId::anthropic(), statut, &corps, Some(&self.api_key))
+        http::failure(&ProviderId::anthropic(), response, Some(&self.api_key)).await
     }
 
     /// Envoie une requête et rend sa réponse, en cédant à l'annulation.

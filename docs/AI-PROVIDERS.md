@@ -76,6 +76,12 @@ données quittent la machine, ou non.
 > classement local/distant se fait sur l'hôte réel **après résolution**, jamais
 > sur la présence de `localhost` dans l'URL, et il se re-vérifie à chaque
 > changement de configuration.
+>
+> **Aucune redirection HTTP n'est suivie ; un `3xx` est une erreur.** Un `307`
+> ou un `308` renverrait l'invite, et une clé que la pile HTTP ne sait pas
+> retirer (`x-api-key`, `api-key`), vers une origine que personne n'a classée.
+> L'erreur demande de pointer l'URL de base sur l'adresse finale, sans recopier
+> la destination.
 
 ## Un agent externe : la portée n'est pas inconnue, elle est **inconnaissable**
 
