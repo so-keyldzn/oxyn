@@ -184,3 +184,53 @@ fn a_cursor_between_statements_runs_nothing() {
     assert_eq!(byte_offset("😀", 1), None, "inside a surrogate pair");
     assert_eq!(byte_offset("a", 5), None);
 }
+
+#[test]
+fn a_console_starts_with_the_state_its_session_reported_and_learns_the_next_one() {
+    // ADR-0039 §4: the initial state is read, not assumed; the next one
+    // arrives as an execution event the front can parse.
+    let runtime = runtime();
+    let _guard = runtime.enter();
+    let backend = Backend::open_temporary().expect("temporary backend");
+    let open = open(&runtime, &backend);
+    assert_eq!(
+        open.console.transaction_state,
+        crate::ipc::TransactionStateView::Idle,
+        "a fresh SQLite connection is in autocommit"
+    );
+    let connection: ConnectionId = open.connection.parse().expect("connection id");
+    let session: SessionId = open.console.session.parse().expect("console session");
+
+    let mut events = backend.subscribe();
+    let id = CommandId::new();
+    runtime
+        .block_on(backend.run_console(
+            id,
+            connection,
+            session,
+            run(RunTarget::All, "BEGIN", Vec::new()),
+        ))
+        .expect("BEGIN runs");
+    let mut forwarded = Vec::new();
+    while let Ok(event) = events.try_recv() {
+        if event.command == id
+            && let Some(kind) = crate::ipc::ExecutionEventKind::of(&event.event)
+        {
+            forwarded.push(serde_json::to_value(kind).expect("serialisable"));
+        }
+    }
+    let state = forwarded
+        .iter()
+        .position(|kind| kind["type"] == "transactionState")
+        .expect("the state is forwarded, not dropped by the bridge");
+    assert_eq!(forwarded[state]["state"], "open");
+    assert_eq!(forwarded[state]["session"], open.console.session.as_str());
+    let terminal = forwarded
+        .iter()
+        .position(|kind| kind["type"] == "completed")
+        .expect("completed");
+    assert!(
+        state < terminal,
+        "the state comes before the terminal event"
+    );
+}

@@ -15,8 +15,9 @@ import { closeMessage } from "@/features/consoles/console-model"
 import type { CloseReasons } from "@/features/consoles/console-model"
 
 /**
- * The decision a console close needs when it would lose text or stop a
- * statement (ADR-0015).
+ * The decision a console close needs when it would lose text, stop a
+ * statement (ADR-0015), or roll back a transaction its session reported open
+ * or could not rule out (ADR-0039) — the message then names the connection.
  *
  * `Cancel` takes the focus and Enter on the body does nothing: discarding
  * work is never the reflex answer. In conflict the save writes a new copy and

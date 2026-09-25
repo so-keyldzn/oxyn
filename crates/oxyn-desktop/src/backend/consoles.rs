@@ -106,8 +106,12 @@ impl Backend {
             .executor
             .dispatch_as(id, Actor::Human, Command::Connect { connection }, &cancel)
             .await;
-        let session = match outcome {
-            Ok(Outcome::Connected { session, .. }) => session,
+        let (session, transaction_state) = match outcome {
+            Ok(Outcome::Connected {
+                session,
+                transaction_state,
+                ..
+            }) => (session, transaction_state),
             Ok(Outcome::NeedsApproval { command, .. }) => {
                 inner.executor.reject(command);
                 return Err(IpcError::invalid(
@@ -127,14 +131,18 @@ impl Backend {
             self.close_console(connection, session).await?;
             return Err(IpcError::invalid("Opening the console was cancelled."));
         }
-        self.console_session(session, config.read_only)
+        self.console_session(session, config.read_only, transaction_state)
     }
 
     /// What a console may know about its session.
+    ///
+    /// The transaction state is the one the executor read while opening it,
+    /// through the bus (ADR-0039 §4): the bridge calls no driver itself.
     pub(crate) fn console_session(
         &self,
         session: SessionId,
         read_only: bool,
+        transaction_state: oxyn_core::TransactionState,
     ) -> Result<ConsoleSession, IpcError> {
         let capabilities = self
             .inner
@@ -147,6 +155,7 @@ impl Backend {
             session: session.to_string(),
             capabilities: ipc::capability_names(capabilities),
             read_only: read_only || capabilities.contains(Capabilities::READ_ONLY_SESSION),
+            transaction_state: transaction_state.into(),
         })
     }
 

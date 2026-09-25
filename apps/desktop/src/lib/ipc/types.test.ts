@@ -93,6 +93,20 @@ describe("execution events", () => {
     const orphan = { type: "cancelled" }
     expect(ExecutionEvent.safeParse(orphan).success).toBe(false)
   })
+
+  it("reads a transaction state and refuses one it does not know", () => {
+    // `TransactionStateView` in ipc.rs: camelCase unit variants.
+    const parsed = ExecutionEvent.parse({
+      command: "c1",
+      type: "transactionState",
+      session: "s1",
+      state: "open",
+    })
+    expect(parsed).toMatchObject({ session: "s1", state: "open" })
+    expect(
+      ExecutionEvent.safeParse({ ...parsed, state: "aborted" }).success
+    ).toBe(false)
+  })
 })
 
 describe("optional fields", () => {

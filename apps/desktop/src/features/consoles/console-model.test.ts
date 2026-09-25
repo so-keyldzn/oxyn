@@ -9,6 +9,7 @@ import {
   tabState,
   tabTitle,
   titleTooLong,
+  transactionNotice,
 } from "./console-model"
 
 describe("console model", () => {
@@ -28,16 +29,46 @@ describe("console model", () => {
   it("asks before losing text or stopping a statement", () => {
     const quiet = {
       title: "q.sql",
+      connection: "orders",
       conflict: false,
       hasSavedCopy: true,
       unsaved: false,
       running: false,
+      transaction: null,
     }
     expect(needsCloseDecision(quiet)).toBe(false)
     expect(needsCloseDecision({ ...quiet, running: true })).toBe(true)
     const message = closeMessage({ ...quiet, unsaved: true, running: true })
     expect(message).toContain("Closing discards this text.")
     expect(message).toContain("does not undo committed database changes")
+  })
+
+  it("asks before rolling back a transaction, naming the connection", () => {
+    const quiet = {
+      title: "q.sql",
+      connection: "orders",
+      conflict: false,
+      hasSavedCopy: true,
+      unsaved: false,
+      running: false,
+      transaction: null,
+    } as const
+    for (const transaction of ["open", "unknown"] as const) {
+      const reasons = { ...quiet, transaction }
+      expect(needsCloseDecision(reasons)).toBe(true)
+      const message = closeMessage(reasons)
+      expect(message).toContain("orders")
+      expect(message).toContain("rolls it back")
+    }
+  })
+
+  it("shows a transaction only where the session can hold one", () => {
+    expect(transactionNotice("open", true)).toBe("open")
+    expect(transactionNotice("unknown", true)).toBe("unknown")
+    expect(transactionNotice(undefined, true)).toBe("unknown")
+    expect(transactionNotice("idle", true)).toBeNull()
+    for (const state of ["open", "unknown", "idle", undefined] as const)
+      expect(transactionNotice(state, false)).toBeNull()
   })
 
   it("says where the saved copy stands", () => {

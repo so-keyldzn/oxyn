@@ -1,7 +1,7 @@
 import { createStore } from "@tanstack/react-store"
 
 import { backend } from "./client"
-import type { ExecutionEvent } from "./types"
+import type { ExecutionEvent, TransactionState } from "./types"
 
 /** What the front knows about a command while it runs. */
 export interface CommandProgress {
@@ -33,8 +33,54 @@ export const executionProgress = createStore<Record<string, CommandProgress>>(
 /** A monotonic counter bumped when the catalog changed on the backend. */
 export const catalogVersion = createStore(0)
 
-export function watch(command: string) {
+/**
+ * The last transaction state each session reported, by session id
+ * (ADR-0039). Changed by events only — never when a `BEGIN` or a `COMMIT` is
+ * submitted: the engine may have rolled back on its own.
+ */
+export const transactionStates = createStore<Record<string, TransactionState>>(
+  {}
+)
+
+/**
+ * The session of each run that has not reported its state yet, by command.
+ *
+ * Apart from `executionProgress`, which forgets a command when its answer
+ * arrives: the events travel on another channel, and may come after it. An
+ * entry leaves when the run reports a state or ends; the rest — runs refused
+ * before reaching the session — leave with their session.
+ */
+const awaitingState: Record<string, string> = {}
+
+/** Records what a session reported at opening. */
+export function recordTransactionState(
+  session: string,
+  state: TransactionState
+) {
+  transactionStates.setState((all) =>
+    all[session] === state ? all : { ...all, [session]: state }
+  )
+}
+
+/** Drops what is known about a closed session. */
+export function forgetSession(session: string) {
+  for (const [command, owner] of Object.entries(awaitingState))
+    if (owner === session) delete awaitingState[command]
+  transactionStates.setState((all) => {
+    if (!(session in all)) return all
+    const { [session]: _removed, ...rest } = all
+    return rest
+  })
+}
+
+/**
+ * Starts tracking a run. `session` is the one it runs on, when the caller
+ * knows it: a run abandoned by the backend ends on `cancelled` without
+ * reporting a state, and its session then becomes `unknown`.
+ */
+export function watch(command: string, session: string | null = null) {
   executionProgress.setState((all) => ({ ...all, [command]: EMPTY }))
+  if (session !== null) awaitingState[command] = session
 }
 
 export function forget(command: string) {
@@ -48,6 +94,23 @@ export function applyEvent(event: ExecutionEvent) {
   if (event.type === "catalogUpdated") {
     catalogVersion.setState((version) => version + 1)
     return
+  }
+  if (event.type === "transactionState") {
+    delete awaitingState[event.command]
+    recordTransactionState(event.session, event.state)
+    return
+  }
+  if (
+    event.type === "cancelled" ||
+    event.type === "completed" ||
+    event.type === "failed"
+  ) {
+    const session = awaitingState[event.command]
+    delete awaitingState[event.command]
+    // Events of one run arrive in order: a `cancelled` with no state before
+    // it is an abandoned run, whose session nobody read (ADR-0039 §3).
+    if (event.type === "cancelled" && session !== undefined)
+      recordTransactionState(session, "unknown")
   }
   executionProgress.setState((all) => {
     const current = all[event.command]

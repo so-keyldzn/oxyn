@@ -544,6 +544,42 @@ pub enum ExecutionEventKind {
     },
     Cancelled,
     CatalogUpdated,
+    /// The state a session reported once an execution on it ended
+    /// ([ADR-0039](../../../docs/adr/0039-etat-de-transaction-d-une-session.md)).
+    /// It belongs to the session, not to the command: the front keeps the
+    /// last one per session.
+    #[serde(rename_all = "camelCase")]
+    TransactionState {
+        session: String,
+        state: TransactionStateView,
+    },
+}
+
+/// A session's transaction state, as the front learns it.
+///
+/// Its own type rather than `oxyn_core::TransactionState`: the core one is
+/// `non_exhaustive`, and a variant it gains must reach the front's schema in
+/// the same commit ([ADR-0031](../../../docs/adr/0031-validation-des-reponses-ipc.md))
+/// instead of travelling as a value the schema refuses.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub enum TransactionStateView {
+    Idle,
+    Open,
+    Unknown,
+}
+
+impl From<oxyn_core::TransactionState> for TransactionStateView {
+    fn from(state: oxyn_core::TransactionState) -> Self {
+        use oxyn_core::TransactionState;
+        match state {
+            TransactionState::Idle => Self::Idle,
+            TransactionState::Open => Self::Open,
+            // `Unknown`, and any state this bridge has not learnt yet: never
+            // shown as `Idle` (ADR-0039 §1).
+            _ => Self::Unknown,
+        }
+    }
 }
 
 impl ExecutionEventKind {
@@ -574,6 +610,10 @@ impl ExecutionEventKind {
             },
             Event::Cancelled => Self::Cancelled,
             Event::CatalogUpdated => Self::CatalogUpdated,
+            Event::TransactionState { session, state } => Self::TransactionState {
+                session: session.to_string(),
+                state: (*state).into(),
+            },
             #[allow(unreachable_patterns)]
             _ => return None,
         })

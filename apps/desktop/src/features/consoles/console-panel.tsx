@@ -18,6 +18,7 @@ import type { SessionContextState } from "@/components/oxyn/session-context-pick
 import { SqlEditor, targetOf } from "@/components/oxyn/sql-editor"
 import type { EditorTarget } from "@/components/oxyn/sql-editor"
 import type { ExecutionSummary } from "@/components/oxyn/status-bar"
+import { transactionNotice } from "@/features/consoles/console-model"
 import type {
   CloseReasons,
   ConsoleActivity,
@@ -43,7 +44,7 @@ import type {
   RunTarget,
   SessionPlace,
 } from "@/lib/ipc/consoles"
-import { catalogVersion } from "@/lib/ipc/events"
+import { catalogVersion, transactionStates } from "@/lib/ipc/events"
 import { results } from "@/lib/ipc/results"
 import type { OpenConnection, ResultColumn } from "@/lib/ipc/types"
 
@@ -159,6 +160,15 @@ export function ConsolePanel({
   const view = React.useRef<EditorView | null>(null)
 
   const canRun = capabilities.includes("SQL") && !doc.closing
+  // The last state the session reported — never one guessed from a `BEGIN`
+  // being submitted (ADR-0039 §5).
+  const declaresTransactions = capabilities.includes("TRANSACTIONS")
+  const reported = useStore(transactionStates, (all) =>
+    session ? all[session.session] : undefined
+  )
+  const transaction = session
+    ? transactionNotice(reported, declaresTransactions)
+    : null
   const withContext = capabilities.includes("SESSION_CONTEXT")
   const version = useStore(catalogVersion)
   const choices = useQuery({
@@ -223,13 +233,15 @@ export function ConsolePanel({
     setNotice(null)
     // Known here and nowhere else: the rows of a plan look like any others.
     setExplained(explain)
-    execution.start((id) =>
-      consoles.run(id, open.connection, session.session, {
-        sql: doc.text,
-        target: runTarget,
-        parameters,
-        explain,
-      })
+    execution.start(
+      (id) =>
+        consoles.run(id, open.connection, session.session, {
+          sql: doc.text,
+          target: runTarget,
+          parameters,
+          explain,
+        }),
+      { session: declaresTransactions ? session.session : null }
     )
   }
 
@@ -308,17 +320,27 @@ export function ConsolePanel({
   const latest = React.useRef({
     doc,
     execution,
+    transaction,
+    connection: open.name,
     run: () => run(targetNow()),
   })
-  latest.current = { doc, execution, run: () => run(targetNow()) }
+  latest.current = {
+    doc,
+    execution,
+    transaction,
+    connection: open.name,
+    run: () => run(targetNow()),
+  }
   React.useEffect(() => {
     const handle: ConsoleHandle = {
       closeReasons: () => ({
         title: latest.current.doc.title || "Untitled query",
+        connection: latest.current.connection,
         conflict: latest.current.doc.conflict,
         hasSavedCopy: latest.current.doc.hasSavedCopy,
         unsaved: latest.current.doc.unsaved,
         running: latest.current.execution.running,
+        transaction: latest.current.transaction,
       }),
       text: () => latest.current.doc.text,
       flush: () => latest.current.doc.flush(),
@@ -530,6 +552,7 @@ export function ConsolePanel({
             onCancelWrite={doc.cancelWrite}
             onSave={() => void (doc.conflict ? undefined : doc.save())}
             onSaveAsNew={() => void doc.saveAsNew()}
+            transaction={transaction}
             context={
               withContext ? (
                 <SessionContextPicker

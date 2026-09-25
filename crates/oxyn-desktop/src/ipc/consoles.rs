@@ -23,6 +23,9 @@ pub struct ConsoleSession {
     /// Whether writes are refused on this session, by the connection or the
     /// session itself.
     pub read_only: bool,
+    /// What the session reported at opening; execution events carry it on
+    /// ([ADR-0039](../../../../docs/adr/0039-etat-de-transaction-d-une-session.md) §4).
+    pub transaction_state: super::TransactionStateView,
 }
 
 /// Where a session resolves unqualified names, as the session reports it.

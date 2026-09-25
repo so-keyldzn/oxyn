@@ -2,6 +2,8 @@
 // close needs a decision, what the save line says. Kept apart from React so
 // the rules are tested without a screen.
 
+import type { TransactionState } from "@/lib/ipc/types"
+
 /** What a console is busy with, by priority on its tab. */
 export type ConsoleActivity =
   "idle" | "running" | "approval" | "saving" | "closing"
@@ -30,23 +32,58 @@ export function tabState(info: Pick<ConsoleTabInfo, "activity" | "unsaved">) {
   return info.unsaved ? "unsaved" : null
 }
 
+/**
+ * What the console bar says about its session's transaction (ADR-0039 §5):
+ * `open`, `unknown` on a session that declares `TRANSACTIONS`, and nothing
+ * otherwise — no dimmed marker suggesting a transaction where none can be.
+ * A session that declares it but reported nothing yet is `unknown`, never
+ * `idle`.
+ */
+export function transactionNotice(
+  state: TransactionState | undefined,
+  declaresTransactions: boolean
+): "open" | "unknown" | null {
+  if (!declaresTransactions) return null
+  if (state === "idle") return null
+  return state === "open" ? "open" : "unknown"
+}
+
 export interface CloseReasons {
   title: string
+  /** The connection the console's session belongs to, named by the dialog. */
+  connection: string
   /** The stored document moved elsewhere. */
   conflict: boolean
   hasSavedCopy: boolean
   unsaved: boolean
   running: boolean
+  /** What `transactionNotice` says: closing rolls back what is open. */
+  transaction: "open" | "unknown" | null
 }
 
 /** Closing immediately is safe only when nothing would be lost or stopped. */
 export function needsCloseDecision(reasons: CloseReasons) {
-  return reasons.conflict || reasons.unsaved || reasons.running
+  return (
+    reasons.conflict ||
+    reasons.unsaved ||
+    reasons.running ||
+    reasons.transaction !== null
+  )
 }
 
 /** The dialog text, composed from what closing would do (ADR-0015). */
 export function closeMessage(reasons: CloseReasons) {
   const parts: Array<string> = []
+  // First: of everything a close can lose, uncommitted writes are what no
+  // saved copy brings back (ADR-0039 §5).
+  if (reasons.transaction === "open")
+    parts.push(
+      `A transaction is open on ${reasons.connection}. Closing this console rolls it back: its uncommitted changes will be lost.`
+    )
+  if (reasons.transaction === "unknown")
+    parts.push(
+      `The transaction state on ${reasons.connection} is unknown. If a transaction is open, closing this console rolls it back: its uncommitted changes will be lost.`
+    )
   if (reasons.conflict)
     parts.push(
       "The stored document changed elsewhere and will be left untouched."
