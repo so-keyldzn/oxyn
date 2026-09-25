@@ -399,6 +399,25 @@ export const DonutLongLabelsNarrow: Story = {
   },
 }
 
+/** A long total in a narrow panel: written smaller, inside the hole. */
+export const DonutTotalNarrow: Story = {
+  args: { data: averages, initialChoice: "donut-total" },
+  ...narrow,
+  play: async ({ canvas, canvasElement }) => {
+    await marks(canvasElement, ".recharts-pie-sector")
+    await legendApart(canvasElement)
+    const figure = await canvas.findByText("1,479.681")
+    const box = canvasElement
+      .querySelector("[data-slot=chart]")
+      ?.getBoundingClientRect()
+    // The hole is 48 % of a radius of 80 % of half the box.
+    const hole = (box?.width ?? 0) * 0.8 * 0.48
+    const width = figure.getBoundingClientRect().width
+    await expect(width).toBeGreaterThan(hole / 2)
+    await expect(width).toBeLessThan(hole)
+  },
+}
+
 export const RadialLongLabelsNarrow: Story = {
   args: { data: averages, initialChoice: "radial" },
   ...narrow,
@@ -476,6 +495,7 @@ export const DonutLongLabelsNarrowLight: Story = {
   ...DonutLongLabelsNarrow,
   ...light,
 }
+export const DonutTotalNarrowLight: Story = { ...DonutTotalNarrow, ...light }
 export const RadialLongLabelsNarrowLight: Story = {
   ...RadialLongLabelsNarrow,
   ...light,

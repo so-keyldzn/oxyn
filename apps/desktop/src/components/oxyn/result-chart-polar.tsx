@@ -106,6 +106,16 @@ function WithLegend({
  */
 const POLAR_BOX = "aspect-square w-full max-w-[250px] min-w-40 shrink-0"
 
+/**
+ * The gallery's size for text written in the hole, or less, so that it fits
+ * `width`: the hole narrows with the panel, and a total of nine characters in
+ * `text-3xl` spilled onto the ring. SVG text does not wrap; 0.62 em is a wide
+ * digit of the interface font.
+ */
+function fittedSize(text: string, width: number, max: number): number {
+  return Math.min(max, width / (Math.max(1, text.length) * 0.62))
+}
+
 /** chart-pie-simple, chart-pie-donut, chart-pie-donut-text, with chart-pie-legend. */
 function PieDrawing({ shape, data }: { shape: ChartShape; data: ChartData }) {
   const slices = slicesOf(data, "share")
@@ -131,31 +141,41 @@ function PieDrawing({ shape, data }: { shape: ChartShape; data: ChartData }) {
             {shape === "donut-total" ? (
               <Label
                 content={({ viewBox }) => {
-                  if (viewBox && "cx" in viewBox && "cy" in viewBox)
-                    return (
-                      <text
+                  if (!(viewBox && "cx" in viewBox && "cy" in viewBox))
+                    return null
+                  const figure = total.toLocaleString()
+                  const name = data.series[0]?.name ?? ""
+                  // Recharts hands the label no radius (`innerRadius` is 0):
+                  // the box is square, so `cx` is half its side, the outer
+                  // radius 80 % of it, the hole 48 % of that; the text keeps
+                  // a margin inside the hole's diameter.
+                  const hole = viewBox.cx * 0.8 * 0.48 * 2 * 0.85
+                  const size = fittedSize(figure, hole, 30)
+                  return (
+                    <text
+                      x={viewBox.cx}
+                      y={viewBox.cy}
+                      textAnchor="middle"
+                      dominantBaseline="middle"
+                    >
+                      <tspan
                         x={viewBox.cx}
                         y={viewBox.cy}
-                        textAnchor="middle"
-                        dominantBaseline="middle"
+                        fontSize={size}
+                        className="fill-foreground font-bold"
                       >
-                        <tspan
-                          x={viewBox.cx}
-                          y={viewBox.cy}
-                          className="fill-foreground text-3xl font-bold"
-                        >
-                          {total.toLocaleString()}
-                        </tspan>
-                        <tspan
-                          x={viewBox.cx}
-                          y={viewBox.cy + 24}
-                          className="fill-muted-foreground"
-                        >
-                          {data.series[0]?.name}
-                        </tspan>
-                      </text>
-                    )
-                  return null
+                        {figure}
+                      </tspan>
+                      <tspan
+                        x={viewBox.cx}
+                        y={viewBox.cy + size / 2 + 10}
+                        fontSize={fittedSize(name, hole, 12)}
+                        className="fill-muted-foreground"
+                      >
+                        {name}
+                      </tspan>
+                    </text>
+                  )
                 }}
               />
             ) : null}
