@@ -2,6 +2,30 @@ import type { Meta, StoryObj } from "@storybook/react-vite"
 import { expect, fn, userEvent, waitFor, within } from "storybook/test"
 
 import { AssistantMarkdown } from "./assistant-markdown"
+import { highlight } from "./code-highlight"
+import { renderMermaid } from "./mermaid-render"
+import { preloadBeforeStories } from "./story-preload"
+
+// shiki with the two grammars these stories colour, and mermaid with the two
+// diagram types they draw, loaded and compiled before the first story is
+// timed. The samples differ from the stories' own blocks: each story still
+// waits for its block to be coloured or drawn, it no longer pays for loading
+// the libraries that do it.
+preloadBeforeStories(() =>
+  Promise.all([
+    highlight("sql", "SELECT 1"),
+    highlight("json", "{}"),
+    renderMermaid("flowchart LR\n  a --> b", true),
+    renderMermaid("sequenceDiagram\n  a->>b: c", false),
+  ])
+)
+
+// With the libraries loaded, what is left is one block to tokenise or one
+// diagram to lay out: milliseconds, yet seconds on a machine under heavy load,
+// past `waitFor`'s default second. The bound stays under the story's 15 s
+// budget, so a block that never renders fails on its own message rather than
+// on the test's timeout.
+const RENDERED_WITHIN = { timeout: 10_000 }
 
 const meta = {
   title: "Oxyn/Assistant/Rich blocks",
@@ -37,11 +61,9 @@ export const Highlighted: Story = {
   play: async ({ canvasElement, args }) => {
     const canvas = within(canvasElement)
     const code = canvas.getByLabelText("Proposed SQL")
-    // Shiki and its grammar load on demand: on a cold module cache the first
-    // colouring takes seconds, well past `waitFor`'s default second.
     await waitFor(
       () => expect(code).toHaveAttribute("data-highlighted", "true"),
-      { timeout: 15_000 }
+      RENDERED_WITHIN
     )
     await expect(code.querySelector("b")).toBeNull()
     await expect(code).toHaveTextContent("<b>not HTML</b>")
@@ -91,7 +113,7 @@ export const MermaidDiagram: Story = {
     const image = await canvas.findByRole(
       "img",
       { name: "Diagram drawn from the mermaid source of this answer" },
-      { timeout: 15_000 }
+      RENDERED_WITHIN
     )
     await expect(image.getAttribute("src")).toMatch(
       /^data:image\/svg\+xml;base64,/
@@ -122,7 +144,7 @@ export const MermaidInvalid: Story = {
       await canvas.findByText(
         "This diagram could not be drawn.",
         {},
-        { timeout: 15_000 }
+        RENDERED_WITHIN
       )
     ).toBeVisible()
     await expect(canvas.getByLabelText("Diagram source")).toHaveTextContent(
@@ -149,9 +171,7 @@ export const MermaidWithDirective: Story = {
       await canvas.findByText(
         /configuration lines .* were ignored/,
         {},
-        {
-          timeout: 15_000,
-        }
+        RENDERED_WITHIN
       )
     ).toBeVisible()
     await expect(
