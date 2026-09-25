@@ -286,9 +286,12 @@ export const menuBehaviours: Record<string, ActionBehaviour> = {
     "Rename the console from its tab in the workspace",
     (state) => (state.console ? true : { reason: "Only a console is renamed" })
   ),
-  "tab.openInNewWindow": notYet(
+  "tab.openInNewWindow": onTarget(
     "tab",
-    "Not available yet: Oxyn opens a single window"
+    (source) => source.actions.openInNewWindow,
+    "Open it in a new window from its tab in the workspace",
+    (state) =>
+      state.moveBlocked === null ? true : { reason: state.moveBlocked }
   ),
   "tab.revealInLibrary": onTarget(
     "tab",

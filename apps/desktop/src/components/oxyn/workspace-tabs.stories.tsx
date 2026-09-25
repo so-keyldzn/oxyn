@@ -271,6 +271,11 @@ function menuFor(key: string): TabMenuTarget {
       count: tabs.length,
       toTheRight: tabs.length - index - 1,
       saved: key === "console:2",
+      // The last console runs a statement: it stays in its window.
+      moveBlocked:
+        key === "console:3"
+          ? "Wait for the statement to finish, or stop it"
+          : null,
     },
     actions: {
       close: () => close(key),
@@ -280,6 +285,7 @@ function menuFor(key: string): TabMenuTarget {
       duplicate: fn(),
       rename: fn(),
       revealInLibrary: key.startsWith("console:") ? fn() : undefined,
+      openInNewWindow: fn(),
     },
   }
 }
@@ -316,10 +322,10 @@ export const TabMenu: Story = {
     const right = page.getByRole("menuitem", { name: /Close to the right/ })
     await expect(right).toHaveAttribute("aria-disabled", "true")
     await expect(right).toHaveTextContent("No tab is to the right")
-    // Not yet possible, and said so rather than hidden.
-    await expect(
-      page.getByRole("menuitem", { name: /Open in new window/ })
-    ).toHaveTextContent("Oxyn opens a single window")
+    // Refused while its statement runs, and said so rather than hidden.
+    const move = page.getByRole("menuitem", { name: /Open in new window/ })
+    await expect(move).toHaveAttribute("aria-disabled", "true")
+    await expect(move).toHaveTextContent("Wait for the statement to finish")
     await userEvent.click(page.getByRole("menuitem", { name: "Close others" }))
     await expect(closeOthers).toHaveBeenCalledWith("console:3")
     await waitFor(() => expect(page.queryByRole("menu")).toBeNull())

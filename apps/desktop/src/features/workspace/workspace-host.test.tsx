@@ -20,6 +20,10 @@ vi.mock("@/lib/ipc/client", () => ({
   backend: { disconnect: calls.disconnect },
   newCommandId: () => "command",
 }))
+// Its schemas import the mocked `consoles` module; nothing here moves a tab.
+vi.mock("@/lib/ipc/windows", () => ({
+  windows: { openInNewWindow: vi.fn(), reportConsoles: vi.fn() },
+}))
 vi.mock("@/lib/ipc/consoles", () => ({ consoles: { close: calls.close } }))
 vi.mock("@/lib/ipc/library", () => ({
   library: { listDocuments: () => Promise.resolve({ entries: [] }) },

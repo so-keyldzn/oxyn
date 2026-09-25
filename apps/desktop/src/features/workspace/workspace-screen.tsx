@@ -75,7 +75,9 @@ import { useCompact } from "@/features/workspace/use-compact"
 import { usePanelPreferences } from "@/features/workspace/use-panel-preferences"
 import { useActionSource } from "@/lib/actions/context"
 import { actionKeys } from "@/lib/actions/manifest"
+import { BackendError } from "@/lib/ipc/client"
 import { library } from "@/lib/ipc/library"
+import { windows } from "@/lib/ipc/windows"
 import type { HistoryRow } from "@/lib/ipc/library"
 import type { SectionChoice } from "@/lib/ipc/location"
 import type {
@@ -590,6 +592,51 @@ export function WorkspaceScreen({
     const keys = tabs.map((tab) => tab.key)
     setTabOrder(moveItem(keys, keys.indexOf(key), to))
   }
+  /**
+   * `Open in new window`: a console moves with its session; an object tab
+   * moves as a place, which the new window opens without reading anything
+   * until it is shown (ADR-0043).
+   */
+  const moveToWindow = async (key: string) => {
+    if (key.startsWith("console:")) {
+      await work.moveToNewWindow(key)
+      return
+    }
+    const object = objectsRef.current.find((tab) => tab.key === key)
+    if (!object) return
+    try {
+      await windows.openInNewWindow({
+        type: "object",
+        connection: open.connection,
+        place: {
+          address: object.node.address,
+          section: sections.current.get(key) ?? "data",
+        },
+      })
+    } catch (error) {
+      toast.add({
+        title: "The tab could not open in a new window",
+        description:
+          error instanceof BackendError ? error.message : String(error),
+        type: "warning",
+      })
+      return
+    }
+    await closeTab(key)
+  }
+
+  /** Why a tab cannot move to a new window now, or `null`. */
+  const moveBlocked = (key: string): string | null => {
+    if (key.startsWith("object:")) return null
+    const entry = work.entries.find((item) => item.key === key)
+    const handle = work.handles.current.get(key)
+    if (!entry || !handle)
+      return "Only a console or an object opens in a new window"
+    if (!entry.session) return "Attach the console to a connection first"
+    const carried = handle.handoff()
+    return "blocked" in carried ? carried.blocked : null
+  }
+
   // The target of a tab's context menu: the same functions as the tab's
   // cross, ⌘W, the console's « Query name » field and the library switch
   // (I-01).
@@ -606,6 +653,7 @@ export function WorkspaceScreen({
         count: tabs.length,
         toTheRight: right.length,
         saved: handle?.closeReasons().hasSavedCopy ?? false,
+        moveBlocked: moveBlocked(key),
       },
       actions: {
         close: () => void closeTab(key),
@@ -624,6 +672,7 @@ export function WorkspaceScreen({
         // la bibliothèque) — the library opens; it cannot yet be told which
         // saved query to show.
         revealInLibrary: isConsole ? () => setLeftView("library") : undefined,
+        openInNewWindow: () => void moveToWindow(key),
       },
     }
   }
@@ -815,6 +864,7 @@ export function WorkspaceScreen({
               onCancelAttach={work.cancelOpening}
               seed={entry.seed}
               initialNotice={entry.notice}
+              initialResult={entry.initialResult ?? null}
               active={visible && entry.key === active}
               onMeta={work.onMeta}
               onSummary={work.setSummary}

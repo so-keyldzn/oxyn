@@ -2,6 +2,10 @@ import { createStore } from "@tanstack/react-store"
 
 import type { DocumentEntry } from "@/lib/ipc/library"
 import type { OpenConnection } from "@/lib/ipc/types"
+import type { ConsoleHandoff } from "@/lib/ipc/windows"
+
+/** A console moved here from another window, with its session. */
+export type MovedConsole = Extract<ConsoleHandoff, { type: "console" }>
 
 /**
  * Workspaces a window keeps connected at once (ADR-0046). A guard, not a
@@ -40,6 +44,11 @@ export interface SessionState {
    */
   launchCopies: Array<DocumentEntry> | null
   /**
+   * The console `Open in new window` moved here, until the workspace of its
+   * connection opens it as its first console (ADR-0043).
+   */
+  moved: MovedConsole | null
+  /**
    * The recovery screen was offered once this launch; never twice. Per
    * window: each webview has its own store.
    */
@@ -58,6 +67,7 @@ export const session = createStore<SessionState>({
   sqlDraftFrom: null,
   restored: [],
   launchCopies: null,
+  moved: null,
   recoveryOffered: false,
   objectPlaceDeclined: false,
 })
@@ -227,6 +237,18 @@ export function takeRestoredWorkingCopies() {
 
 export function declineObjectPlace(declined: boolean) {
   session.setState((state) => ({ ...state, objectPlaceDeclined: declined }))
+}
+
+export function setMovedConsole(moved: MovedConsole | null) {
+  session.setState((state) => ({ ...state, moved }))
+}
+
+/** The moved console, for the workspace whose first console is its session. */
+export function takeMovedConsole(consoleSession: string) {
+  const moved = session.state.moved
+  if (moved?.open.console.session !== consoleSession) return null
+  session.setState((state) => ({ ...state, moved: null }))
+  return moved
 }
 
 /** The copies the recovery screen offers this window at launch, or none. */

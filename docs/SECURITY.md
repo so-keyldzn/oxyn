@@ -190,8 +190,9 @@ Ce qui entre dans Oxyn et n'est pas fiable, par ordre de sous-estimation :
    en tire : ouvrir des fenêtres jusqu'à la borne, fermer la sienne, retenir
    ou annuler sa propre fermeture, réécrire la liste de ses propres consoles
    pour le prochain lancement (`report_window_consoles`, 256 au plus, jamais
-   un document qu'une autre fenêtre écrit). Elle n'atteint rien d'une autre
-   fenêtre.
+   un document qu'une autre fenêtre écrit), déplacer l'une de ses propres
+   consoles vers une fenêtre neuve (`open_in_new_window`, qui ne prend ni
+   libellé ni fenêtre cible). Elle n'atteint rien d'une autre fenêtre.
    Une réserve, qui tient à un secret : `start_dragging` et
    `internal_toggle_maximize` de Tauri acceptent le libellé d'une autre
    fenêtre (`tauri` 2.11.5, `src/window/plugin.rs`, `get_window`). Aucune

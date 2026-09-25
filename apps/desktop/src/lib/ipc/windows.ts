@@ -6,7 +6,10 @@ import { Channel, isTauri } from "@tauri-apps/api/core"
 import { z } from "zod"
 
 import { Nothing, call, guarded } from "./client"
+import { ParameterInput } from "./consoles"
 import { DocumentEntry } from "./library"
+import type { ObjectPlace } from "./location"
+import { OpenConnection } from "./types"
 
 export const WindowSignal = z.discriminatedUnion("type", [
   /** Close asked on this window, not the last, and no transaction holds it. */
@@ -24,6 +27,42 @@ export const WindowConsoles = z.object({
   active: z.string().nullable(),
 })
 export type WindowConsoles = z.infer<typeof WindowConsoles>
+
+/** The result a moved console shows: the new window reads the same buffer. */
+export const HandedResult = z.object({
+  result: z.string(),
+  rows: z.number().int().nonnegative(),
+  complete: z.boolean(),
+  truncated: z.boolean(),
+  cancelled: z.boolean(),
+  elapsedMs: z.number().int().nonnegative(),
+})
+export type HandedResult = z.infer<typeof HandedResult>
+
+/** `Open in new window` on a tab: a console with its session, or a place. */
+export type HandoffRequest =
+  | {
+      type: "console"
+      connection: string
+      session: string
+      document: string
+      result: HandedResult | null
+      parameters: Array<ParameterInput>
+    }
+  | { type: "object"; connection: string; place: ObjectPlace }
+
+/** What a window built by `Open in new window` adopts, once. */
+export const ConsoleHandoff = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("console"),
+    open: OpenConnection,
+    document: z.string(),
+    result: HandedResult.nullable(),
+    parameters: z.array(ParameterInput),
+  }),
+  z.object({ type: z.literal("object"), open: OpenConnection }),
+])
+export type ConsoleHandoff = z.infer<typeof ConsoleHandoff>
 
 export const windows = {
   /** `New window`: an empty window on the connection screen, 16 at most. */
@@ -53,4 +92,11 @@ export const windows = {
    * consoles, then — first window only, once — those no window claims.
    */
   restoredConsoles: () => call("restored_consoles", z.array(DocumentEntry)),
+
+  /** Moves a tab to a new window; the console keeps its session. */
+  openInNewWindow: (request: HandoffRequest) =>
+    call("open_in_new_window", Nothing, { request }),
+
+  /** What this window received from `Open in new window`, once. */
+  takeHandoff: () => call("take_console_handoff", ConsoleHandoff.nullable()),
 }

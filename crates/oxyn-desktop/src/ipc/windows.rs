@@ -3,6 +3,10 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::ipc::OpenConnection;
+use crate::ipc::consoles::ParameterInput;
+use crate::ipc::location::ObjectPlace;
+
 /// What the backend tells one window, on that window's own channel.
 ///
 /// A notice, never data: the window reads what it shows again through the
@@ -33,4 +37,63 @@ pub enum WindowSignal {
 pub struct WindowConsoles {
     pub documents: Vec<String>,
     pub active: Option<String>,
+}
+
+/// `Open in new window` on a tab: what moves (ADR-0043, « Déplacer une
+/// console »).
+///
+/// **No `Debug` derive**: a console's bound values travel with it, and a
+/// `{request:?}` added later would print them (I-03).
+#[derive(Deserialize)]
+#[serde(tag = "type", rename_all = "camelCase", deny_unknown_fields)]
+pub enum HandoffRequest {
+    /// A console: its session, its document, the result it shows and its
+    /// bound values move; nothing runs again.
+    #[serde(rename_all = "camelCase")]
+    Console {
+        connection: String,
+        session: String,
+        document: String,
+        result: Option<HandedResult>,
+        parameters: Vec<ParameterInput>,
+    },
+    /// An object tab: the new window opens its connection and the same place,
+    /// read through the bus like a selection.
+    #[serde(rename_all = "camelCase")]
+    Object {
+        connection: String,
+        place: ObjectPlace,
+    },
+}
+
+/// The result a moved console shows: the new window reads the same
+/// `ResultBuffer`, nothing is executed again (I-06).
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct HandedResult {
+    pub result: String,
+    pub rows: u64,
+    pub complete: bool,
+    pub truncated: bool,
+    pub cancelled: bool,
+    pub elapsed_ms: u64,
+}
+
+/// What the new window adopts, once: its workspace, and the console or the
+/// place it receives. Held in memory only, never written; dropped with the
+/// window if it closes first.
+///
+/// **No `Debug` derive**, for the bound values it carries (I-03).
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+pub enum ConsoleHandoff {
+    #[serde(rename_all = "camelCase")]
+    Console {
+        open: OpenConnection,
+        document: String,
+        result: Option<HandedResult>,
+        parameters: Vec<ParameterInput>,
+    },
+    #[serde(rename_all = "camelCase")]
+    Object { open: OpenConnection },
 }

@@ -36,6 +36,7 @@ pub(crate) use self::confirm::{HostConfirm, NativeDialog};
 pub(crate) use self::exit::ExitStep;
 pub(crate) use self::windows::{CloseStep, WindowKey};
 use crate::credentials::KeyringCredentials;
+use crate::ipc::consoles::ConsoleSession;
 use crate::ipc::{
     self, CommandOutcome, ConnectResponse, ConnectionDraft, ConnectionTest, DriverChoice, IpcError,
     OpenConnection, ResultColumn,
@@ -93,6 +94,8 @@ pub(crate) struct Inner {
     pub(crate) windows: windows::WindowRegistry,
     /// Where each window stands and what it holds, for the workspace file.
     pub(crate) layouts: windows::Layouts,
+    /// The tabs moved to a new window, until its webview adopts them.
+    pub(crate) handoffs: windows::Handoffs,
 }
 
 // Not derived: `Executor` and `Store` reach connection configurations, and a
@@ -304,6 +307,7 @@ impl Backend {
                 object_operations: object_operations::ReviewSessions::default(),
                 windows: windows::WindowRegistry::default(),
                 layouts,
+                handoffs: windows::Handoffs::default(),
             }),
         };
         backend.start_heartbeat();
@@ -621,6 +625,26 @@ impl Backend {
         config: ConnectionConfig,
         cancel: &CancelToken,
     ) -> Result<OpenConnection, IpcError> {
+        let session = self.catalog_session(&config, cancel).await?;
+        // The first console gets its own session: catalog and preview work
+        // stay out of its transaction, and it may change context where the
+        // catalog's session may not (ADR-0015, ADR-0019).
+        let console = match self.open_console(CommandId::new(), config.id).await {
+            Ok(console) => console,
+            Err(error) => {
+                let _ = self.close_console(config.id, session).await;
+                return Err(error);
+            }
+        };
+        self.workspace_of(&config, session, console)
+    }
+
+    /// The session of a workspace's catalog and previews: `Command::Connect`.
+    pub(crate) async fn catalog_session(
+        &self,
+        config: &ConnectionConfig,
+        cancel: &CancelToken,
+    ) -> Result<SessionId, IpcError> {
         let inner = &self.inner;
         let outcome = inner
             .executor
@@ -643,16 +667,18 @@ impl Backend {
         let Outcome::Connected { session, .. } = outcome else {
             return Err(IpcError::invalid("The executor did not open a session"));
         };
-        // The first console gets its own session: catalog and preview work
-        // stay out of its transaction, and it may change context where the
-        // catalog's session may not (ADR-0015, ADR-0019).
-        let console = match self.open_console(CommandId::new(), config.id).await {
-            Ok(console) => console,
-            Err(error) => {
-                let _ = self.close_console(config.id, session).await;
-                return Err(error);
-            }
-        };
+        Ok(session)
+    }
+
+    /// What a workspace may know about its connection, its catalog's session
+    /// and its first console.
+    pub(crate) fn workspace_of(
+        &self,
+        config: &ConnectionConfig,
+        session: SessionId,
+        console: ConsoleSession,
+    ) -> Result<OpenConnection, IpcError> {
+        let inner = &self.inner;
         let capabilities = inner
             .executor
             .sessions()

@@ -51,10 +51,13 @@ import type {
   ParameterRefusal,
   RunTarget,
   SessionPlace,
+  ParameterInput,
 } from "@/lib/ipc/consoles"
 import { catalogVersion, transactionStates } from "@/lib/ipc/events"
 import { results } from "@/lib/ipc/results"
 import type { CatalogNode, OpenConnection, ResultColumn } from "@/lib/ipc/types"
+import type { HandedResult } from "@/lib/ipc/windows"
+import type { ResultState } from "@/components/oxyn/result-panel"
 
 /** What the workspace may ask of a console it does not render itself. */
 export interface ConsoleHandle {
@@ -69,6 +72,13 @@ export interface ConsoleHandle {
   close: (discard: boolean) => Promise<boolean>
   /** Cancels the named save or close under way; its answer still resolves. */
   cancelWrite: () => void
+  /**
+   * What `Open in new window` carries — the result shown and the bound
+   * values — or why the console cannot move now (ADR-0043).
+   */
+  handoff: () =>
+    | { blocked: string }
+    | { result: HandedResult | null; parameters: Array<ParameterInput> }
   /** Puts text at the cursor, replacing the selection. Never runs it. */
   insert: (sql: string, notice: string | null) => void
   /** Names the query as its « Query name » field would; nothing is saved. */
@@ -112,6 +122,7 @@ export function ConsolePanel({
   onCancelAttach,
   seed,
   initialNotice,
+  initialResult = null,
   active,
   onMeta,
   onSummary,
@@ -129,6 +140,8 @@ export function ConsolePanel({
   onCancelAttach: () => void
   seed: ConsoleSeed
   initialNotice: string | null
+  /** The result a console moved from another window shows, read again. */
+  initialResult?: ResultState | null
   active: boolean
   onMeta: (key: string, meta: ConsoleMeta) => void
   onSummary: (summary: ExecutionSummary) => void
@@ -138,7 +151,10 @@ export function ConsolePanel({
   const capabilities = session?.capabilities ?? NO_CAPABILITIES
   const execution = useExecution({
     serverCancel: capabilities.includes("SERVER_SIDE_CANCEL"),
+    initial: initialResult,
   })
+  /** An export of this console's result runs: the console does not move. */
+  const [exporting, setExporting] = React.useState(false)
   // Seeded values (« Related rows », say) are bound, never written into the
   // SQL: the console shows them in its Parameters panel, already open.
   const [rows, setRows] = React.useState<Array<ParameterRow>>(() =>
@@ -345,6 +361,8 @@ export function ConsolePanel({
     transaction,
     connection: open.name,
     run: () => run(targetNow()),
+    rows,
+    exporting,
   })
   latest.current = {
     doc,
@@ -352,6 +370,8 @@ export function ConsolePanel({
     transaction,
     connection: open.name,
     run: () => run(targetNow()),
+    rows,
+    exporting,
   }
   React.useEffect(() => {
     const handle: ConsoleHandle = {
@@ -365,6 +385,36 @@ export function ConsolePanel({
         transaction: latest.current.transaction,
       }),
       text: () => latest.current.doc.text,
+      handoff: () => {
+        const { doc: now, execution: slot, exporting: busy } = latest.current
+        // Its outcome comes back to this webview: moved in flight, it would
+        // reach a window that no longer holds the console (ADR-0043).
+        if (slot.running)
+          return { blocked: "Wait for the statement to finish, or stop it" }
+        if (slot.approval)
+          return { blocked: "Decide on the pending confirmation first" }
+        if (busy) return { blocked: "Wait for the export to finish" }
+        if (now.saving || now.closing)
+          return { blocked: "Wait for the current save to finish" }
+        const shown = slot.state
+        return {
+          result:
+            shown.status === "populated"
+              ? {
+                  result: shown.result,
+                  rows: shown.rows,
+                  complete: shown.complete,
+                  truncated: shown.truncated,
+                  cancelled: shown.cancelled,
+                  elapsedMs: shown.elapsedMs ?? 0,
+                }
+              : null,
+          parameters: latest.current.rows.map((row) => ({
+            type: row.type,
+            text: row.text,
+          })),
+        }
+      },
       flush: () => latest.current.doc.flush(),
       save: () =>
         latest.current.doc.conflict
@@ -473,6 +523,7 @@ export function ConsolePanel({
         result={resultId}
         exportable={exportable}
         reason="Only a complete result can be exported."
+        onExportingChange={setExporting}
       />
     ),
     [open.connection, resultId, exportable]

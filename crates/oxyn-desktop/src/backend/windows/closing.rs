@@ -173,6 +173,8 @@ impl Backend {
     /// outcome becomes unknown stays flagged in history, never replayed
     /// ([I-13](../../../../../CLAUDE.md#i-13)).
     pub(crate) async fn release_window(&self, window: WindowKey) {
+        // A move it never adopted goes with it, bound values included.
+        drop(self.inner.handoffs.take(window));
         let owned = self.inner.windows.forget(window);
         for command in owned.commands {
             self.drop_command(command).await;

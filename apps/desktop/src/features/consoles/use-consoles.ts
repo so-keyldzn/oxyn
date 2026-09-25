@@ -21,8 +21,13 @@ import {
 import type { ConsoleSeed } from "@/features/consoles/use-console-document"
 import {
   session as sessionStore,
+  takeMovedConsole,
   takeRestoredWorkingCopies,
 } from "@/features/session"
+import type { ResultState } from "@/components/oxyn/result-panel"
+import { results } from "@/lib/ipc/results"
+import { windows } from "@/lib/ipc/windows"
+import type { HandedResult } from "@/lib/ipc/windows"
 import { BackendError, backend, newCommandId } from "@/lib/ipc/client"
 import { consoles } from "@/lib/ipc/consoles"
 import type { ConsoleSession } from "@/lib/ipc/consoles"
@@ -46,6 +51,8 @@ export interface ConsoleEntry {
   origin: string | null
   seed: ConsoleSeed
   notice: string | null
+  /** The result a console moved from another window shows, read again. */
+  initialResult?: ResultState | null
 }
 
 /** What a new console starts with; a new document unless one is resumed. */
@@ -161,7 +168,8 @@ export function useConsoles({
   const add = async (
     session: ConsoleSession | null,
     input: SeedInput,
-    origin: string | null = open.connection
+    origin: string | null = open.connection,
+    initialResult: ResultState | null = null
   ) => {
     counter.current += 1
     const key = `console:${counter.current}`
@@ -175,6 +183,7 @@ export function useConsoles({
       origin,
       notice: input.notice ?? null,
       seed: consoleSeed(input, document, consoleTitle(counter.current)),
+      initialResult,
     }
     setEntries((all) => [...all, entry])
     onActivate(key)
@@ -502,6 +511,13 @@ export function useConsoles({
     if (started.current) return
     started.current = true
     void (async () => {
+      // Moved here by `Open in new window`: the same session, document,
+      // bound values and result — nothing runs again (ADR-0043).
+      const moved = takeMovedConsole(open.console.session)
+      if (moved && (await adoptMoved(moved))) {
+        setReady(true)
+        return
+      }
       const { sqlDraft, sqlDraftFrom } = sessionStore.state
       await add(open.console, {
         text: sqlDraft,
@@ -514,6 +530,78 @@ export function useConsoles({
     })()
     // Once per workspace: the screen is keyed by the connection's session.
   }, [])
+
+  /** Opens the moved console as this workspace's first; `false` if it cannot. */
+  const adoptMoved = async (moved: {
+    document: string
+    result: HandedResult | null
+    parameters: ConsoleSeed["parameters"]
+  }) => {
+    try {
+      const document = await library.openDocument(moved.document)
+      const shown = moved.result ? await handedResult(moved.result) : null
+      await add(
+        open.console,
+        {
+          ...resumeSeed(document),
+          parameters: moved.parameters,
+          notice: "Moved from another window. Nothing was executed.",
+        },
+        open.connection,
+        shown
+      )
+      return true
+    } catch (error) {
+      setNotice(failure(error))
+      return false
+    }
+  }
+
+  /**
+   * Moves a console to a new window, with its session: its transaction,
+   * its context, its result and its bound values follow; nothing runs again
+   * and nothing is closed (ADR-0043). The draft is written first.
+   */
+  const moveToNewWindow = async (key: string) => {
+    const handle = handles.current.get(key)
+    const entry = entriesRef.current.find((item) => item.key === key)
+    if (!handle || !entry) return
+    if (!entry.session) {
+      setNotice("Attach this console to a connection before moving it.")
+      return
+    }
+    const carried = handle.handoff()
+    if ("blocked" in carried) {
+      setNotice(`${carried.blocked} before moving the console.`)
+      return
+    }
+    if (!(await handle.flush())) {
+      setNotice("The console's text could not be written; it stays here.")
+      return
+    }
+    try {
+      await windows.openInNewWindow({
+        type: "console",
+        connection: open.connection,
+        session: entry.session.session,
+        document: entry.seed.document,
+        result: carried.result,
+        parameters: carried.parameters,
+      })
+    } catch (error) {
+      setNotice(failure(error))
+      return
+    }
+    // Gone from here without closing: its session now belongs to the new
+    // window, and this view's hold on the result is released as it unmounts.
+    forgetSession(entry.session.session)
+    const rest = entriesRef.current.filter((item) => item.key !== key)
+    entriesRef.current = rest
+    setEntries(rest)
+    setMeta(({ [key]: _gone, ...others }) => others)
+    const last = rest[rest.length - 1]
+    if (last) onActivate(last.key)
+  }
 
   // Working copies chosen on the recovery screen, whenever they are chosen —
   // at startup, or from this workspace and back. Each opens offline: text
@@ -613,6 +701,7 @@ export function useConsoles({
     decideClose,
     windowCloseCosts,
     closeAll,
+    moveToNewWindow,
     /** A closed console can be brought back by ⌘⇧T. */
     reopenable: closedConsoles.length > 0,
     reopen,
@@ -621,5 +710,26 @@ export function useConsoles({
     openHistoryCopy,
     openDocumentCopy,
     resume,
+  }
+}
+
+/** What the panel draws for a moved result; its columns read again. */
+async function handedResult(handed: HandedResult): Promise<ResultState | null> {
+  const columns = await results.resultColumns(handed.result)
+  // Expired meanwhile: the console arrives without it, like any released
+  // result, and the hold taken for this window is let go.
+  if (!columns) {
+    void backend.forgetResult(handed.result).catch(() => undefined)
+    return null
+  }
+  return {
+    status: "populated",
+    result: handed.result,
+    columns,
+    rows: handed.rows,
+    complete: handed.complete,
+    truncated: handed.truncated,
+    cancelled: handed.cancelled,
+    elapsedMs: handed.elapsedMs,
   }
 }

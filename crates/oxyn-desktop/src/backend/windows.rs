@@ -26,9 +26,11 @@ use crate::ipc::recovery::ShutdownSignal;
 use crate::ipc::windows::WindowSignal;
 
 pub(crate) use self::closing::CloseStep;
+pub(crate) use self::handoff::Handoffs;
 pub(crate) use self::layout::Layouts;
 
 mod closing;
+mod handoff;
 mod layout;
 
 /// The most windows open at once.
@@ -421,6 +423,38 @@ impl WindowRegistry {
             Some(_) => Err(elsewhere("console")),
             None => Err(IpcError::invalid("This session is not open in this window")),
         }
+    }
+
+    /// Moves a console to another window: its session, its document, and the
+    /// connection held for it. Under one lock, so no command sees the console
+    /// owned by neither window, nor by both.
+    ///
+    /// # Errors
+    /// The session is not `from`'s on `connection`, or another window writes
+    /// the document.
+    pub(crate) fn hand_over(
+        &self,
+        from: WindowKey,
+        to: WindowKey,
+        connection: ConnectionId,
+        session: SessionId,
+        document: DocumentId,
+    ) -> Result<(), IpcError> {
+        let mut state = self.state.lock();
+        if state.sessions.get(&session) != Some(&(from, connection)) {
+            return Err(elsewhere("console"));
+        }
+        if state
+            .documents
+            .get(&document)
+            .is_some_and(|owner| *owner != from)
+        {
+            return Err(IpcError::invalid("This query is open in another window"));
+        }
+        state.sessions.insert(session, (to, connection));
+        state.documents.insert(document, to);
+        state.connections.entry(to).or_default().insert(connection);
+        Ok(())
     }
 
     /// Forgets a closed session.
