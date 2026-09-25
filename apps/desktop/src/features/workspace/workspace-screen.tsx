@@ -120,7 +120,7 @@ function relatedNode(address: CatalogAddress): CatalogNode {
  * Every tab stays mounted while another is shown: a console keeps its editor
  * and its result, an object its preview. Hidden (`visible` false, while the
  * start screen is shown over it), the workspace keeps everything, takes no
- * shortcut and raises no dialog.
+ * shortcut, raises no dialog and reads no preview.
  *
  * Text meant for a console — from the assistant, say — goes through
  * `openInConsole` (`features/consoles/open-in-console.ts`): it lands in the
@@ -563,6 +563,7 @@ export function WorkspaceScreen({
             <ObjectView
               open={open}
               node={tab.node}
+              active={visible && tab.key === active}
               initialTab={tab.target}
               handleRef={(handle) => {
                 if (handle) objectHandles.current.set(tab.key, handle)

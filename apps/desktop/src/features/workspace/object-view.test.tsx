@@ -102,6 +102,7 @@ function renderView(props: Partial<React.ComponentProps<typeof ObjectView>>) {
       <ObjectView
         open={open}
         node={node}
+        active
         definitionWidth={424}
         onDefinitionWidthChange={() => undefined}
         {...props}
@@ -151,5 +152,28 @@ describe("a restored object tab", () => {
     renderView({})
     expect(previewVisible).toHaveBeenCalledWith(true)
     expect(screen.queryByText("Restored from your last session")).toBeNull()
+  })
+})
+
+describe("a hidden object tab", () => {
+  it("never calls its preview visible, whatever its sub-view", () => {
+    // Behind another tab, or in a hidden workspace: its Data sub-view is
+    // still mounted, and a write must not read it (ADR-0022).
+    const { rerender } = renderView({ active: false })
+    expect(previewVisible).toHaveBeenCalled()
+    expect(previewVisible).not.toHaveBeenCalledWith(true)
+
+    rerender(
+      <QueryClientProvider client={new QueryClient()}>
+        <ObjectView
+          open={open}
+          node={node}
+          active
+          definitionWidth={424}
+          onDefinitionWidthChange={() => undefined}
+        />
+      </QueryClientProvider>
+    )
+    expect(previewVisible).toHaveBeenLastCalledWith(true)
   })
 })
