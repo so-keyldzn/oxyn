@@ -159,6 +159,7 @@ todo:
 # --- Le socle -----------------------------------------------------------------
 socle: hooks
 	@python3 .claude/test_verifier_socle.py
+	@python3 script/test_livraison.py
 	@python3 .claude/verifier_socle.py
 
 hooks:

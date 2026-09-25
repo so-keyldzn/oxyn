@@ -1,0 +1,101 @@
+#!/usr/bin/env python3
+"""Le geste du workflow de livraison qui crée la release GitHub.
+
+`.github/workflows/livraison.yml` promet en tête que le tag porte la version de
+`crates/oxyn-desktop/tauri.conf.json`. Écrite en shell dans le workflow, la
+promesse n'était pas vérifiée, et rien ne pouvait le tester sans pousser un
+tag. Elle vit donc ici, testée par `script/test_livraison.py`.
+
+    livraison brouillon <tag> <dépôt>            vérifie le tag, puis crée ou
+                                                 retrouve le brouillon
+
+**Le tag.** Il vaut exactement `v` suivi de la version configurée, suffixe de
+préversion compris : `0.1.0-rc.1` ⇔ `v0.1.0-rc.1`. Rien n'est corrigé en
+silence — ni le tag, ni la version : un écart est une erreur humaine, et c'est
+à l'humain de dire lequel des deux est juste. Une version à suffixe crée un
+brouillon marqué préversion.
+
+`gh` est lu dans `$GH` s'il est défini — c'est ce qui permet aux tests de le
+simuler.
+"""
+
+from __future__ import annotations
+
+import json
+import os
+import subprocess
+import sys
+from pathlib import Path
+
+RACINE = Path(__file__).resolve().parents[1]
+CONFIG_TAURI = RACINE / "crates" / "oxyn-desktop" / "tauri.conf.json"
+
+
+class Refus(Exception):
+    """Une condition du contrat n'est pas remplie : le job doit échouer."""
+
+
+def gh(*args: str) -> subprocess.CompletedProcess[str]:
+    commande = [os.environ.get("GH", "gh"), *args]
+    return subprocess.run(commande, capture_output=True, text=True, check=False)
+
+
+def version_configuree(config: Path) -> str:
+    try:
+        version = json.loads(config.read_text(encoding="utf-8")).get("version")
+    except (OSError, ValueError) as erreur:
+        raise Refus(f"{config} illisible : {erreur}") from erreur
+    if not isinstance(version, str) or not version:
+        raise Refus(f"{config} : pas de champ `version`")
+    # Tauri accepte aussi un chemin vers un package.json : le tag se comparerait
+    # alors à un nom de fichier.
+    if version.endswith(".json"):
+        raise Refus(f"{config} : `version` renvoie à {version}, non pris en charge ici")
+    return version
+
+
+def verifier_tag(tag: str, config: Path) -> bool:
+    """Refuse un tag qui n'est pas `v<version>` ; dit si c'est une préversion."""
+    version = version_configuree(config)
+    attendu = f"v{version}"
+    if tag != attendu:
+        raise Refus(
+            f"le tag {tag} ne correspond pas à la version {version} de {config.name} : "
+            f"attendu {attendu}. Rien n'est créé ; corriger le tag ou la version."
+        )
+    # Le suffixe de préversion précède `+` ; un tiret dans les métadonnées de
+    # build (`1.0.0+build-1`) ne fait pas une préversion.
+    return "-" in version.split("+", 1)[0]
+
+
+def brouillon(tag: str, depot: str, config: Path) -> None:
+    preversion = verifier_tag(tag, config)
+    if gh("release", "view", tag, "--repo", depot).returncode != 0:
+        # `--verify-tag` : la release ne s'attache qu'à un tag qui existe déjà
+        # sur le dépôt, jamais à un tag que gh créerait lui-même.
+        options = ["--draft", "--verify-tag", "--generate-notes", "--title", f"Oxyn {tag}"]
+        if preversion:
+            options.append("--prerelease")
+        creation = gh("release", "create", tag, "--repo", depot, *options)
+        if creation.returncode != 0:
+            raise Refus(f"création du brouillon {tag} impossible : {creation.stderr.strip()}")
+    print(f"Brouillon {tag} prêt.")
+
+
+def main(args: list[str]) -> int:
+    config = Path(os.environ.get("OXYN_CONFIG_TAURI", CONFIG_TAURI))
+    try:
+        match args:
+            case ["brouillon", tag, depot]:
+                brouillon(tag, depot, config)
+            case _:
+                print(__doc__, file=sys.stderr)
+                return 2
+    except Refus as refus:
+        print(f"livraison : {refus}", file=sys.stderr)
+        return 1
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))
