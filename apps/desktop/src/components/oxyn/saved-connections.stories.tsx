@@ -241,7 +241,9 @@ export const ContextMenuOfAClosedConnection: Story = {
     ).toBeNull()
     const refresh = page.getByRole("menuitem", { name: /Refresh catalog/ })
     await expect(refresh).toHaveAttribute("aria-disabled", "true")
-    await expect(refresh).toHaveTextContent("Connect to read its catalog")
+    await expect(refresh).toHaveTextContent(
+      "Connect it first, from the start screen"
+    )
     await userEvent.click(page.getByRole("menuitem", { name: "Duplicate" }))
     await expect(menuActions.duplicate).toHaveBeenCalled()
     await waitFor(() => expect(page.queryByRole("menu")).toBeNull())
@@ -267,7 +269,9 @@ export const ContextMenuOfTheOpenConnection: Story = {
     await expect(page.queryByRole("menuitem", { name: "Connect" })).toBeNull()
     const remove = page.getByRole("menuitem", { name: /Delete/ })
     await expect(remove).toHaveAttribute("aria-disabled", "true")
-    await expect(remove).toHaveTextContent("Disconnect it to delete it")
+    await expect(remove).toHaveTextContent(
+      "Disconnect it first, from this menu"
+    )
     await expect(
       page.getByRole("menuitem", { name: "Refresh catalog" })
     ).not.toHaveAttribute("aria-disabled", "true")

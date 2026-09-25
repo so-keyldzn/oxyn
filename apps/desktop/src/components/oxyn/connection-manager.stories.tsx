@@ -58,17 +58,26 @@ export const ConnectionInUse: Story = {
 }
 
 const changeEnvironment = fn()
+const disconnect = fn()
+const refreshCatalog = fn()
 
 /**
- * The context menu of a row: `Edit…` is the button, `Change environment…`
- * what the host gives. What the settings do not do — open a connection,
- * refresh its catalog — is greyed with its reason, as on any other surface;
- * the connection in use greys `Delete…` with the button's reason.
+ * The context menu of a row, as Settings wires it: `Edit…` is the button,
+ * `Disconnect`, `Refresh catalog` and `Change environment…` what the host
+ * gives. What Settings cannot do says where it is done — a console and a
+ * duplicate from the start screen —; the connection in use greys `Delete…`
+ * until it is disconnected, from the same menu.
  */
 export const ContextMenu: Story = {
   args: {
     openConnectionIds: [summaries[0]!.id],
-    menuActions: () => ({ changeEnvironment, copy: fn() }),
+    menuActions: (connection) => ({
+      disconnect: connection.id === summaries[0]!.id ? disconnect : undefined,
+      refreshCatalog:
+        connection.id === summaries[0]!.id ? refreshCatalog : undefined,
+      changeEnvironment,
+      copy: fn(),
+    }),
   },
   play: async ({ canvas, args }) => {
     const page = within(document.body)
@@ -78,16 +87,32 @@ export const ContextMenu: Story = {
     })
     await page.findByRole("menu")
     await expect(page.queryByRole("menuitem", { name: /^Connect/ })).toBeNull()
-    const refresh = page.getByRole("menuitem", { name: /^Refresh catalog/ })
-    await expect(refresh).toHaveAttribute("aria-disabled", "true")
-    await expect(refresh).toHaveTextContent(
-      "Not available for this connection here"
+    await expect(
+      page.getByRole("menuitem", { name: /^Refresh catalog/ })
+    ).not.toHaveAttribute("aria-disabled", "true")
+    const newConsole = page.getByRole("menuitem", { name: /^New console/ })
+    await expect(newConsole).toHaveAttribute("aria-disabled", "true")
+    await expect(newConsole).toHaveTextContent(
+      "Show its workspace from the start screen, then press ⌘T"
     )
+    await expect(
+      page.getByRole("menuitem", { name: /^Duplicate/ })
+    ).toHaveTextContent("Duplicate it from the start screen's connection list")
     const remove = page.getByRole("menuitem", { name: /^Delete/ })
     await expect(remove).toHaveAttribute("aria-disabled", "true")
-    await expect(remove).toHaveTextContent("Disconnect it to delete it")
+    await expect(remove).toHaveTextContent(
+      "Disconnect it first, from this menu"
+    )
+    await userEvent.click(page.getByRole("menuitem", { name: "Disconnect" }))
+    await expect(disconnect).toHaveBeenCalled()
+    await waitFor(() => expect(page.queryByRole("menu")).toBeNull())
+
+    await userEvent.pointer({
+      keys: "[MouseRight]",
+      target: canvas.getByText("billing"),
+    })
     await userEvent.click(
-      page.getByRole("menuitem", { name: "Change environment…" })
+      await page.findByRole("menuitem", { name: "Change environment…" })
     )
     await expect(changeEnvironment).toHaveBeenCalled()
     await waitFor(() => expect(page.queryByRole("menu")).toBeNull())
@@ -97,6 +122,9 @@ export const ContextMenu: Story = {
       target: canvas.getByText("scratch"),
     })
     await page.findByRole("menu")
+    await expect(
+      page.getByRole("menuitem", { name: /^Connect/ })
+    ).toHaveTextContent("Connect from the start screen")
     await userEvent.click(page.getByRole("menuitem", { name: "Delete…" }))
     await expect(args.onDelete).toHaveBeenCalledWith(summaries[2])
     await waitFor(() => expect(page.queryByRole("menu")).toBeNull())

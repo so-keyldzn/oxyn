@@ -1,5 +1,6 @@
 import * as React from "react"
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query"
+import { useNavigate } from "@tanstack/react-router"
 import { createStore, useStore } from "@tanstack/react-store"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { Alert02Icon } from "@hugeicons/core-free-icons"
@@ -15,8 +16,10 @@ import type { BackendFailure } from "@/components/oxyn/backend-error-alert"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Skeleton } from "@/components/ui/skeleton"
 import { copyConnection } from "@/features/connections/copy-connection"
+import { useRefreshCatalogOf } from "@/features/connections/refresh-catalog"
 import { useTypedSecrets } from "@/features/connections/typed-secrets"
 import { LIBRARY_QUERY_KEY } from "@/features/library/library-refresh"
+import { closeConnection, session } from "@/features/session"
 import type { WithoutSecrets } from "@/features/connections/typed-secrets"
 import { BackendError, backend, newCommandId } from "@/lib/ipc/client"
 import { settingsBackend } from "@/lib/ipc/settings"
@@ -73,6 +76,8 @@ export function ConnectionsSettings({
   onUnsavedEditChange?: (unsaved: boolean) => void
 }) {
   const queryClient = useQueryClient()
+  const navigate = useNavigate()
+  const refreshCatalogOf = useRefreshCatalogOf()
   const typedSecrets = useTypedSecrets()
   const connections = useQuery({
     queryKey: ["connections"],
@@ -331,10 +336,29 @@ export function ConnectionsSettings({
         onEdit={(connection) => startEditing(connection)}
         onDelete={startDeleting}
         onRetry={() => void connections.refetch()}
-        menuActions={(connection) => ({
-          changeEnvironment: () => startEditing(connection, true),
-          copy: () => void copyConnection(connection),
-        })}
+        menuActions={(connection) => {
+          const open = openConnections.find(
+            (held) => held.connection === connection.id
+          )
+          return {
+            // The start screen's `Disconnect`: drafts written, then the
+            // sessions closed (`WorkspaceHost`). The shown workspace gives
+            // way to the start screen, as its own `Disconnect` does.
+            disconnect: open
+              ? () => {
+                  const shown =
+                    session.state.open?.connection === open.connection
+                  closeConnection(open.connection)
+                  if (shown) void navigate({ to: "/" })
+                }
+              : undefined,
+            refreshCatalog: open
+              ? () => void refreshCatalogOf(open)
+              : undefined,
+            changeEnvironment: () => startEditing(connection, true),
+            copy: () => void copyConnection(connection),
+          }
+        }}
       />
       <DeleteConnectionDialog
         connection={review ? null : deleting}

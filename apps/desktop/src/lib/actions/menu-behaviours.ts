@@ -35,22 +35,6 @@ type TargetKey =
 
 type SourceOf<TKey extends TargetKey> = NonNullable<ActionSources[TKey]>
 
-/**
- * Why an entry is greyed on a surface that did not give its handler. Said by
- * surface, since what is missing is the surface's, not the target's.
- */
-const NOT_WIRED: Record<TargetKey, string> = {
-  grid: "Not available for this result",
-  tab: "Not available for this tab",
-  editorMenu: "Not available in this editor",
-  connection: "Not available for this connection here",
-  libraryEntry: "Not available for this entry",
-  assistant: "Not available for this message",
-  erd: "Not available in this diagram",
-  catalogNode: "Not available in this catalog view",
-  objectOperation: "Catalog operations are not available here",
-}
-
 const NOT_REWRITTEN = { reason: "The SQL you wrote is never rewritten" }
 const COPY_LIMIT = MAX_COPY_ROWS.toLocaleString("en-US")
 
@@ -60,17 +44,19 @@ const COPY_LIMIT = MAX_COPY_ROWS.toLocaleString("en-US")
  * Absent when the menu is not this surface's, or when `check` says the
  * target is not one the entry applies to — the cases UX-SPEC fixes (« Une
  * action, un libellé, un raccourci »). A handler the surface did not give
- * never hides an entry: it is greyed with what is missing, so two targets of
- * the same kind always offer the same menu.
+ * never hides an entry: it is greyed with `missing`, which says what the
+ * entry cannot do here **and where it is done** — never « not available
+ * here », which leaves the user nowhere to go. Two targets of the same kind
+ * always offer the same menu.
  */
 function onTarget<TKey extends TargetKey>(
   key: TKey,
   pick: (source: SourceOf<TKey>) => (() => void) | undefined,
+  missing: string | ((state: SourceOf<TKey>["state"]) => string),
   check: (
     state: SourceOf<TKey>["state"],
     context: ActionContext
-  ) => Availability = () => true,
-  missing: string = NOT_WIRED[key]
+  ) => Availability = () => true
 ): ActionBehaviour {
   return {
     enabled: (context) => {
@@ -78,7 +64,10 @@ function onTarget<TKey extends TargetKey>(
       if (!source) return "absent"
       const state = check(source.state, context)
       if (state !== true) return state
-      return pick(source) ? true : { reason: missing }
+      if (pick(source)) return true
+      return {
+        reason: typeof missing === "string" ? missing : missing(source.state),
+      }
     },
     run: (context) => {
       const source = context.sources[key] as SourceOf<TKey> | undefined
@@ -122,6 +111,7 @@ function copyRows(format: CopyRowsFormat): ActionBehaviour {
       const copy = source.actions.copyRows
       return copy ? () => copy(format) : undefined
     },
+    "Select the rows and press ⌘C, or export the result",
     (state) => {
       if (state.selectedRows === 0) return { reason: "Nothing is selected" }
       if (state.selectedRows > MAX_COPY_ROWS)
@@ -161,7 +151,8 @@ function valueFilter(): ActionBehaviour {
  */
 function previewEntry(
   declared: "filterable" | "sortable",
-  pick: (actions: GridMenuActions) => (() => void) | undefined
+  pick: (actions: GridMenuActions) => (() => void) | undefined,
+  missing: string
 ): ActionBehaviour {
   return {
     enabled: (context) => {
@@ -169,7 +160,7 @@ function previewEntry(
       if (!grid) return "absent"
       const shape = previewShape(grid.state, declared)
       if (shape !== true) return shape
-      return pick(grid.actions) ? true : { reason: NOT_WIRED.grid }
+      return pick(grid.actions) ? true : { reason: missing }
     },
     run: (context) => {
       const grid = context.sources.grid
@@ -179,10 +170,14 @@ function previewEntry(
 }
 
 function sort(descending: boolean): ActionBehaviour {
-  return previewEntry("sortable", (actions) => {
-    const apply = actions.sort
-    return apply ? () => apply(descending) : undefined
-  })
+  return previewEntry(
+    "sortable",
+    (actions) => {
+      const apply = actions.sort
+      return apply ? () => apply(descending) : undefined
+    },
+    "Write an ORDER BY in a console to sort these rows"
+  )
 }
 
 function copyAs(form: CopyAsForm): ActionBehaviour {
@@ -192,6 +187,7 @@ function copyAs(form: CopyAsForm): ActionBehaviour {
       const copy = source.actions.copyAs
       return copy ? () => copy(form) : undefined
     },
+    "Copy it from the workspace's catalog",
     (state) => {
       if (!state.relation) return "absent"
       if (form === "ddl" && !state.definition)
@@ -209,6 +205,7 @@ function operation(kind: OperationKind): ActionBehaviour {
       const review = source.actions.review
       return review ? () => review(kind) : undefined
     },
+    "Do it from the object in the workspace's catalog",
     (state) => {
       const offer = state.offers[kind]
       if (offer.state === "absent") return "absent"
@@ -218,11 +215,14 @@ function operation(kind: OperationKind): ActionBehaviour {
   )
 }
 
+const EDITOR_KEYS = { cut: "⌘X", copy: "⌘C", paste: "⌘V" } as const
+
 /** Cut, Copy and Paste of the editor's own menu. */
 function editorClipboard(action: "cut" | "copy" | "paste"): ActionBehaviour {
   return onTarget(
     "editorMenu",
     (source) => source.actions[action],
+    `Press ${EDITOR_KEYS[action]} in the editor`,
     (state) => {
       if (action !== "copy" && state.readOnly)
         return { reason: "This editor is read-only" }
@@ -241,6 +241,7 @@ function editorRun(
   return onTarget(
     "editorMenu",
     (source) => source.actions[pick],
+    "Run it with the console's Run button",
     (state, context) => {
       if (state.readOnly) return "absent"
       if (needsSelection && !state.selection)
@@ -257,24 +258,32 @@ export const menuBehaviours: Record<string, ActionBehaviour> = {
   "tab.closeOthers": onTarget(
     "tab",
     (source) => source.actions.closeOthers,
+    "Close the other tabs from their own tabs",
     (state) => (state.count > 1 ? true : { reason: "No other tab is open" })
   ),
   "tab.closeRight": onTarget(
     "tab",
     (source) => source.actions.closeRight,
+    "Close the tabs to the right from their own tabs",
     (state) =>
       state.toTheRight > 0 ? true : { reason: "No tab is to the right" }
   ),
-  "tab.closeAll": onTarget("tab", (source) => source.actions.closeAll),
+  "tab.closeAll": onTarget(
+    "tab",
+    (source) => source.actions.closeAll,
+    "Close the tabs from their own tabs"
+  ),
   "tab.duplicate": onTarget(
     "tab",
     (source) => source.actions.duplicate,
+    "Duplicate the console from its tab in the workspace",
     (state) =>
       state.console ? true : { reason: "Only a console is duplicated" }
   ),
   "tab.rename": onTarget(
     "tab",
     (source) => source.actions.rename,
+    "Rename the console from its tab in the workspace",
     (state) => (state.console ? true : { reason: "Only a console is renamed" })
   ),
   "tab.openInNewWindow": notYet(
@@ -284,6 +293,7 @@ export const menuBehaviours: Record<string, ActionBehaviour> = {
   "tab.revealInLibrary": onTarget(
     "tab",
     (source) => source.actions.revealInLibrary,
+    "Find it in the library, from the sidebar",
     (state) => {
       if (!state.console)
         return { reason: "Only a console is saved in the library" }
@@ -296,6 +306,7 @@ export const menuBehaviours: Record<string, ActionBehaviour> = {
   "grid.copyValue": onTarget(
     "grid",
     (source) => source.actions.copyValue,
+    "Select the cell and press ⌘C",
     (state) => (state.target === "cell" ? true : "absent")
   ),
   "grid.copyRows.tsv": copyRows("tsv"),
@@ -304,7 +315,11 @@ export const menuBehaviours: Record<string, ActionBehaviour> = {
   "grid.copyRows.markdown": copyRows("markdown"),
   "grid.copyRows.insert": copyRows("insert"),
   "grid.copyRows.inList": copyRows("inList"),
-  "grid.inspectValue": onTarget("grid", (source) => source.actions.inspect),
+  "grid.inspectValue": onTarget(
+    "grid",
+    (source) => source.actions.inspect,
+    "Inspect values from a console's or a preview's grid"
+  ),
   "grid.filterByValue": valueFilter(),
   "grid.excludeValue": valueFilter(),
   "grid.filterNull": valueFilter(),
@@ -313,6 +328,7 @@ export const menuBehaviours: Record<string, ActionBehaviour> = {
   "grid.hideColumn": onTarget(
     "grid",
     (source) => source.actions.hideColumn,
+    "Hide columns from a console's or a preview's grid",
     lastColumnStays
   ),
   "grid.openReferencedRow": notYet(
@@ -338,23 +354,37 @@ export const menuBehaviours: Record<string, ActionBehaviour> = {
     },
     run: (context) => context.sources.grid?.actions.sendToAssistant?.(),
   },
-  "column.filter": previewEntry("filterable", (actions) => actions.filter),
+  "column.filter": previewEntry(
+    "filterable",
+    (actions) => actions.filter,
+    "Type a condition in the preview's WHERE field"
+  ),
   "column.hide": onTarget(
     "grid",
     (source) => source.actions.hideColumn,
+    "Hide columns from a console's or a preview's grid",
     lastColumnStays
   ),
   "column.freeze": notYet(
     "grid",
     "Not available yet: the grid cannot freeze a column"
   ),
-  "column.autosize": onTarget("grid", (source) => source.actions.autosize),
-  "column.copyName": onTarget("grid", (source) => source.actions.copyName),
+  "column.autosize": onTarget(
+    "grid",
+    (source) => source.actions.autosize,
+    "Drag the column's edge to resize it"
+  ),
+  "column.copyName": onTarget(
+    "grid",
+    (source) => source.actions.copyName,
+    "Copy the name from the table's Structure tab"
+  ),
   // The loaded rows only, never the column: the rest is not in memory, and
   // is not read for a copy (I-06).
   "column.copyValues": onTarget(
     "grid",
     (source) => source.actions.copyValues,
+    "Select the column's cells and press ⌘C",
     (state) => {
       if (state.loadedRows === 0) return { reason: "No row is loaded" }
       if (state.loadedRows > MAX_COPY_ROWS)
@@ -374,6 +404,7 @@ export const menuBehaviours: Record<string, ActionBehaviour> = {
   "editor.openObject": onTarget(
     "editorMenu",
     (source) => source.actions.openObject,
+    "Open it from the catalog",
     (state) =>
       state.objectUnderCursor
         ? true
@@ -399,6 +430,7 @@ export const menuBehaviours: Record<string, ActionBehaviour> = {
   "connection.connect": onTarget(
     "connection",
     (source) => source.actions.connect,
+    "Connect from the start screen",
     (state) => {
       if (state.open) return "absent"
       return state.busy ? { reason: "The connection is busy" } : true
@@ -407,6 +439,7 @@ export const menuBehaviours: Record<string, ActionBehaviour> = {
   "connection.disconnect": onTarget(
     "connection",
     (source) => source.actions.disconnect,
+    "Disconnect from the start screen or from its workspace",
     (state) => {
       if (!state.open) return "absent"
       return state.busy ? { reason: "The connection is busy" } : true
@@ -415,31 +448,48 @@ export const menuBehaviours: Record<string, ActionBehaviour> = {
   "connection.newConsole": onTarget(
     "connection",
     (source) => source.actions.newConsole,
+    (state) =>
+      state.open
+        ? "Show its workspace from the start screen, then press ⌘T"
+        : "Connect from the start screen: a workspace opens on a console",
     (state) => (state.busy ? { reason: "The connection is busy" } : true)
   ),
   "connection.refreshCatalog": onTarget(
     "connection",
     (source) => source.actions.refreshCatalog,
-    (state) => (state.open ? true : { reason: "Connect to read its catalog" })
+    "Refresh it from its workspace's catalog",
+    (state) =>
+      state.open ? true : { reason: "Connect it first, from the start screen" }
   ),
-  "connection.edit": onTarget("connection", (source) => source.actions.edit),
+  "connection.edit": onTarget(
+    "connection",
+    (source) => source.actions.edit,
+    "Edit it in Settings › Connections"
+  ),
   "connection.duplicate": onTarget(
     "connection",
-    (source) => source.actions.duplicate
+    (source) => source.actions.duplicate,
+    "Duplicate it from the start screen's connection list"
   ),
   "connection.changeEnvironment": onTarget(
     "connection",
-    (source) => source.actions.changeEnvironment
+    (source) => source.actions.changeEnvironment,
+    "Change it in Settings › Connections"
   ),
   // What the front already holds, never a secret (I-03): the parameters and
   // the secret's reference do not cross the IPC.
-  "connection.copy": onTarget("connection", (source) => source.actions.copy),
+  "connection.copy": onTarget(
+    "connection",
+    (source) => source.actions.copy,
+    "Copy it from the start screen's connection list"
+  ),
   "connection.delete": onTarget(
     "connection",
     (source) => source.actions.delete,
+    "Delete it in Settings › Connections",
     (state) => {
       // As the button: the connection in use is left first.
-      if (state.open) return { reason: "Disconnect it to delete it" }
+      if (state.open) return { reason: "Disconnect it first, from this menu" }
       return state.busy ? { reason: "The connection is busy" } : true
     }
   ),
@@ -447,6 +497,7 @@ export const menuBehaviours: Record<string, ActionBehaviour> = {
   "library.openEntry": onTarget(
     "libraryEntry",
     (source) => source.actions.open,
+    "Open it with the entry's Open copy button",
     (state) =>
       state.awaitingInspection
         ? { reason: "A write awaiting inspection opens no editable copy" }
@@ -455,15 +506,15 @@ export const menuBehaviours: Record<string, ActionBehaviour> = {
   "library.rename": onTarget(
     "libraryEntry",
     (source) => source.actions.rename,
+    "Not available yet: a saved query cannot be renamed in one step",
     // A history row is no file: there is nothing to rename or point at.
-    (state) => (state.file ? true : "absent"),
-    "Not available yet: a saved query cannot be renamed in one step"
+    (state) => (state.file ? true : "absent")
   ),
   "library.duplicate": onTarget(
     "libraryEntry",
     (source) => source.actions.duplicate,
-    (state) => (state.file ? true : "absent"),
-    "Not available yet: a saved query cannot be duplicated in one step"
+    "Not available yet: a saved query cannot be duplicated in one step",
+    (state) => (state.file ? true : "absent")
   ),
   // Only a saved query is a file to reveal; a history row has none.
   "library.reveal": {
@@ -476,48 +527,67 @@ export const menuBehaviours: Record<string, ActionBehaviour> = {
   "library.copyPath": onTarget(
     "libraryEntry",
     (source) => source.actions.copyPath,
-    (state) => (state.file ? true : "absent"),
-    "Not available yet: the library does not give the file's path"
+    "Not available yet: the library does not give the file's path",
+    (state) => (state.file ? true : "absent")
   ),
-  "library.delete": onTarget("libraryEntry", (source) => source.actions.delete),
+  "library.delete": onTarget(
+    "libraryEntry",
+    (source) => source.actions.delete,
+    "Only a saved query is deleted: from the Saved list"
+  ),
 
   "assistant.copyAnswer": onTarget(
     "assistant",
-    (source) => source.actions.copyAnswer
+    (source) => source.actions.copyAnswer,
+    "Copy it with the button under the answer"
   ),
   "assistant.copyMarkdown": onTarget(
     "assistant",
-    (source) => source.actions.copyMarkdown
+    (source) => source.actions.copyMarkdown,
+    "Copy it with the button under the answer"
   ),
   "assistant.regenerate": onTarget(
     "assistant",
     (source) => source.actions.regenerate,
+    "Regenerate it with the button under the answer",
     (state) =>
       state.answering ? { reason: "An answer is being written" } : true
   ),
   "assistant.editQuestion": onTarget(
     "assistant",
     (source) => source.actions.editQuestion,
+    "Edit it from the question in the conversation",
     (state) =>
       state.answering ? { reason: "An answer is being written" } : true
   ),
   // A code block is copied or put in a console; it never runs from here (I-07).
   "assistant.copyCode": onTarget(
     "assistant",
-    (source) => source.actions.copyCode
+    (source) => source.actions.copyCode,
+    "Copy it with the button on the code block"
   ),
   "assistant.openInConsole": onTarget(
     "assistant",
     (source) => source.actions.openInConsole,
+    "Open it with the button on the code block",
     (state) => state.openSql ?? true
   ),
   "assistant.openObject": onTarget(
     "assistant",
-    (source) => source.actions.openObject
+    (source) => source.actions.openObject,
+    "Open it from the catalog"
   ),
 
-  "erd.openTable": onTarget("erd", (source) => source.actions.openTable),
-  "erd.copyName": onTarget("erd", (source) => source.actions.copyName),
+  "erd.openTable": onTarget(
+    "erd",
+    (source) => source.actions.openTable,
+    "Open it from the catalog"
+  ),
+  "erd.copyName": onTarget(
+    "erd",
+    (source) => source.actions.copyName,
+    "Copy its name from the catalog's menu"
+  ),
   "erd.relayout": notYet(
     "erd",
     "Not available yet: the diagram is laid out once"
@@ -530,6 +600,7 @@ export const menuBehaviours: Record<string, ActionBehaviour> = {
   "catalog.openData": onTarget(
     "catalogNode",
     (source) => source.actions.openData,
+    "Open it from the workspace's catalog",
     (state) => {
       if (!state.relation) return "absent"
       return state.holdsRecords ? true : { reason: "This object holds no rows" }
@@ -538,11 +609,13 @@ export const menuBehaviours: Record<string, ActionBehaviour> = {
   "catalog.viewStructure": onTarget(
     "catalogNode",
     (source) => source.actions.viewStructure,
+    "Open it from the workspace's catalog",
     (state) => (state.relation ? true : "absent")
   ),
   "catalog.viewDdl": onTarget(
     "catalogNode",
     (source) => source.actions.viewDdl,
+    "Open it from the workspace's catalog",
     (state) => (state.relation ? true : "absent")
   ),
   // Only where a console's session context can be this schema (UX-SPEC,
@@ -550,11 +623,13 @@ export const menuBehaviours: Record<string, ActionBehaviour> = {
   "catalog.newConsoleOnSchema": onTarget(
     "catalogNode",
     (source) => source.actions.newConsoleOnSchema,
+    "Open a console in the workspace with ⌘T",
     (state) => (state.schemaContext ? true : "absent")
   ),
   "catalog.copyQualifiedName": onTarget(
     "catalogNode",
     (source) => source.actions.copyQualifiedName,
+    "Copy it from the workspace's catalog",
     (state) => (state.relation ? true : "absent")
   ),
   "catalog.copyAs.quotedName": copyAs("quotedName"),
@@ -564,16 +639,19 @@ export const menuBehaviours: Record<string, ActionBehaviour> = {
   "catalog.refresh": onTarget(
     "catalogNode",
     (source) => source.actions.refresh,
+    "Refresh it from the workspace's catalog",
     (state) => (state.relation ? "absent" : true)
   ),
   "catalog.collapseAll": onTarget(
     "catalogNode",
     (source) => source.actions.collapseAll,
+    "Collapse the levels from the workspace's catalog",
     (state) => (state.expanded ? true : { reason: "Nothing is expanded" })
   ),
   "catalog.pin": onTarget(
     "catalogNode",
     (source) => source.actions.pin,
+    "Pin it from the workspace's catalog",
     (state) => state.pin
   ),
   "object.rename": operation("rename"),

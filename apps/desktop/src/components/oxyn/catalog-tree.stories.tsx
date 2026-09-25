@@ -247,7 +247,8 @@ export const NoSearchHit: Story = {
  * The menu hands the node over: the qualified name is the backend's, never
  * assembled here from a hostile segment (I-10). A tree given neither the
  * composed copies nor a session's operations still lists them, greyed with
- * what is missing: two tables never offer two different menus.
+ * what is missing and where it is done: two tables never offer two
+ * different menus.
  */
 export const ContextMenu: Story = {
   args: { onOpen: fn(), onCopyName: fn(), onRefresh: fn() },
@@ -263,7 +264,7 @@ export const ContextMenu: Story = {
       const entry = menu.getByRole("menuitem", { name })
       await expect(entry).toHaveAttribute("aria-disabled", "true")
       await expect(entry).toHaveTextContent(
-        "Catalog operations are not available here."
+        "No session here to run it: do it from the object in the workspace's catalog."
       )
     }
     await userEvent.click(menu.getByRole("menuitem", { name: /^Copy as/ }))
@@ -271,7 +272,9 @@ export const ContextMenu: Story = {
       name: /^INSERT template/,
     })
     await expect(insert).toHaveAttribute("aria-disabled", "true")
-    await expect(insert).toHaveTextContent("Not available in this catalog view")
+    await expect(insert).toHaveTextContent(
+      "Copy it from the workspace's catalog"
+    )
     // The submenu first, then the menu.
     await userEvent.keyboard("{Escape}{Escape}")
     await waitFor(() => expect(menu.queryByRole("menu")).toBeNull())
