@@ -3,14 +3,13 @@ import type { Meta, StoryObj } from "@storybook/react-vite"
 import { expect, fn, userEvent, waitFor } from "storybook/test"
 
 import { SqlEditor } from "./sql-editor"
+import { modKey } from "@/lib/actions/platform"
 
-// The editor's shortcuts are CodeMirror `Mod-` bindings: ⌘ on macOS, Ctrl
-// elsewhere, decided by `/Mac/.test(navigator.platform)` in
-// @codemirror/view 6.43.11. Pressing ⌘ unconditionally ran nothing under
-// Linux — failing the stories that expect a run, and passing for the wrong
-// reason those that expect none.
-const MOD = /Mac/.test(navigator.platform) ? "Meta" : "Control"
-const mod = (keys: string) => `{${MOD}>}${keys}{/${MOD}}`
+// ⌘ on macOS, Ctrl elsewhere: the registry's dispatcher, installed by the
+// preview as in the window, reads it from the platform. Pressing ⌘
+// unconditionally would run nothing on the Linux runners — passing for the
+// wrong reason the stories that expect nothing.
+const mod = (keys: string) => `{${modKey}>}${keys}{/${modKey}}`
 
 const meta = {
   title: "Oxyn/SqlEditor",
@@ -20,9 +19,6 @@ const meta = {
       "-- Invoices unpaid for more than 30 days\nSELECT c.name, i.amount, i.issued_at\nFROM invoices AS i\nJOIN customers AS c ON c.id = i.customer_id\nWHERE i.paid_at IS NULL\n  AND i.issued_at < now() - interval '30 days'\nORDER BY i.issued_at;",
     driver: "postgres",
     onChange: fn(),
-    onRun: fn(),
-    onRunAll: fn(),
-    onSave: fn(),
     onCancel: fn(),
   },
   render: function Render(args) {
@@ -46,19 +42,12 @@ export default meta
 type Story = StoryObj<typeof meta>
 
 export const PostgreSQL: Story = {
-  play: async ({ canvas, args }) => {
+  play: async ({ canvas }) => {
     const editor = canvas.getByRole("textbox")
     // macOS neither corrects SQL nor curls its quotes (ADR-0041 § 8).
     await expect(editor).toHaveAttribute("spellcheck", "false")
     await expect(editor).toHaveAttribute("autocorrect", "off")
     await expect(editor).toHaveAttribute("autocapitalize", "off")
-    await userEvent.click(editor)
-    await userEvent.keyboard(mod("{Enter}"))
-    await waitFor(() => expect(args.onRun).toHaveBeenCalledTimes(1))
-    // No selection: the statement under the cursor is the target.
-    await expect(args.onRun).toHaveBeenCalledWith(
-      expect.objectContaining({ kind: "statement" })
-    )
   },
 }
 
@@ -68,46 +57,53 @@ export const RunningEscapeCancels: Story = {
     await userEvent.click(canvas.getByRole("textbox"))
     await userEvent.keyboard("{Escape}")
     await waitFor(() => expect(args.onCancel).toHaveBeenCalled())
-    // While running, ⌘↵ does not start a second statement.
-    await userEvent.keyboard(mod("{Enter}"))
-    await expect(args.onRun).not.toHaveBeenCalled()
-  },
-}
-
-export const SelectionAndShortcuts: Story = {
-  play: async ({ canvas, args }) => {
-    await userEvent.click(canvas.getByRole("textbox"))
-    await userEvent.keyboard(mod("a"))
-    await userEvent.keyboard(mod("{Enter}"))
-    await waitFor(() =>
-      expect(args.onRun).toHaveBeenCalledWith(
-        expect.objectContaining({ kind: "selection", start: 0 })
-      )
-    )
-    await userEvent.keyboard(mod("{Shift>}{Enter}{/Shift}"))
-    await waitFor(() => expect(args.onRunAll).toHaveBeenCalledTimes(1))
-    await userEvent.keyboard(mod("s"))
-    await waitFor(() => expect(args.onSave).toHaveBeenCalledTimes(1))
   },
 }
 
 /**
- * A read-only view of a stored query: selection and copy work, and no
- * shortcut runs or saves it (docs/UX-SPEC.md, « Consultation locale des
- * requêtes »). ⌘↵ there would execute a text the user only meant to read.
+ * ⌘/ comments the line in the editor — the zone with the focus wins over
+ * the global `Keyboard shortcuts` — and runs once: the registry stops the
+ * key before CodeMirror's own binding.
  */
-export const ReadOnlyRunsNothing: Story = {
-  args: { readOnly: true },
+export const CommandSlashTogglesTheComment: Story = {
   play: async ({ canvas, args }) => {
-    const editor = canvas.getByRole("textbox")
-    await userEvent.click(editor)
-    await userEvent.keyboard(mod("a"))
-    await userEvent.keyboard(mod("{Enter}"))
-    await userEvent.keyboard(mod("{Shift>}{Enter}{/Shift}"))
-    await userEvent.keyboard(mod("s"))
-    await expect(args.onRun).not.toHaveBeenCalled()
-    await expect(args.onRunAll).not.toHaveBeenCalled()
-    await expect(args.onSave).not.toHaveBeenCalled()
+    // The cursor starts on the first line, a comment: ⌘/ uncomments it.
+    await userEvent.click(canvas.getByRole("textbox"))
+    await userEvent.keyboard(mod("/"))
+    await waitFor(() =>
+      expect(args.onChange).toHaveBeenLastCalledWith(
+        expect.stringMatching(/^Invoices unpaid/)
+      )
+    )
+    await expect(args.onChange).toHaveBeenCalledTimes(1)
+  },
+}
+
+/** ⌘F searches the text of the editor that has the focus. */
+export const CommandFFindsInTheEditor: Story = {
+  play: async ({ canvas, canvasElement }) => {
+    await userEvent.click(canvas.getByRole("textbox"))
+    await userEvent.keyboard(mod("f"))
+    await waitFor(() =>
+      expect(canvasElement.querySelector(".cm-search")).not.toBeNull()
+    )
+  },
+}
+
+/**
+ * A read-only view of a stored query: selection and copy work, and nothing
+ * changes its text (docs/UX-SPEC.md, « Consultation locale des requêtes »).
+ * ⌘↵ there is refused by the registry, which reads `data-read-only`.
+ */
+export const ReadOnlyChangesNothing: Story = {
+  args: { readOnly: true },
+  play: async ({ canvas, args, canvasElement }) => {
+    await userEvent.click(canvas.getByRole("textbox"))
+    await userEvent.keyboard(mod("/"))
+    await expect(args.onChange).not.toHaveBeenCalled()
+    await expect(
+      canvasElement.querySelector('[data-action-zone="editor"]')
+    ).toHaveAttribute("data-read-only", "true")
   },
 }
 

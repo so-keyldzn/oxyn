@@ -1,5 +1,4 @@
 import * as React from "react"
-import { useHotkey } from "@tanstack/react-hotkeys"
 import { useDebouncedCallback } from "@tanstack/react-pacer"
 import { createStore, useStore } from "@tanstack/react-store"
 
@@ -15,6 +14,7 @@ import { SettingsDialogView } from "@/features/settings/settings-dialog-view"
 import type { SettingsSection } from "@/features/settings/settings-dialog-view"
 import type { PreferencesChange } from "@/lib/ipc/settings"
 import type { OpenConnection } from "@/lib/ipc/types"
+import { useActionSource } from "@/lib/actions/context"
 
 export type { SettingsSection } from "@/features/settings/settings-dialog-view"
 
@@ -63,10 +63,8 @@ export function SettingsDialog({
   const { preferences, save, loadError } = useStore(preferencesStore)
   const [unsavedEdit, setUnsavedEdit] = React.useState(false)
 
-  useHotkey("Mod+,", () => openSettings(), {
-    preventDefault: true,
-    ignoreInputs: false,
-  })
+  // `Settings…` of the registry: ⌘, and the menu bar, from every screen.
+  useActionSource("settings", {}, { open: () => openSettings() })
 
   // The absent-value label is typed: one save when typing pauses, not one
   // revision per keystroke. Every other control saves on its gesture.

@@ -343,6 +343,35 @@ Lots, dans l'ordre :
    d'[ADR-0038](adr/0038-un-plantage-s-annonce-une-fois.md) traité en Rust ;
    barre `menubar` sous Windows et Linux, avec `File ▸ Exit` et la commande
    `request_exit` (ADR-0041 § 5).
+   **Fait le 2026-09-25.** `apps/desktop/src/lib/actions/` (manifeste,
+   comportements, répartiteur, modèle de menu), barre native lue par
+   `crates/oxyn-desktop/src/menu.rs`, `subscribe_menu`, `set_menu_state`,
+   `request_exit` ; `@tanstack/react-hotkeys` retiré. Tenu par
+   `manifest.test.ts` (identifiants, unicité par zone, combinaisons
+   interdites, `⌘W` au seul `Close tab`), `keyboard.test.ts` (zones, AZERTY,
+   cyrillique, `⌥`, composition, dialogue, barre native), les stories
+   `Oxyn/AppMenubar` et `Oxyn/SqlEditor`, et les tests de `menu.rs`. Écarts
+   et restes :
+   - la barre ne porte pas encore `New window`, `Open Recent ▸`, `Save as…`,
+     `Export…`, `Text size ▸`, `Theme ▸`, `Format`, ni le menu `Help`
+     (`Documentation` attend `open_external`, lot 1 ; `Keyboard shortcuts`,
+     déclarée sans place ni comportement, la feuille du lot 5) ;
+   - `Settings…` n'a pas de place fixée par UX-SPEC hors macOS : il est mis
+     dans `File`, au-dessus d'`Exit` ;
+   - l'élément natif de Quit s'appelle désormais `app.quit`, l'identifiant de
+     l'action, et non plus `oxyn-quit` que citent ADR-0038 et ADR-0043 ;
+   - `Échap` reste traité par les écouteurs de l'écran de connexion, de son
+     formulaire, des connexions enregistrées et de l'écran de reprise, en
+     phase de bouillonnement : le répartiteur, en capture, le prendrait à une
+     liste ou à un menu ouverts. Seuls `⌘[` et `Alt+←` y passent au registre ;
+   - les `kbd` écrits à la main ailleurs que dans la console, les onglets et
+     l'en-tête du workspace restent à lire au manifeste (lot 5) ;
+   - les rechargements `⌘R` / `F5` ne sont pas déclarés au manifeste : ils
+     relèvent du lot 1 ;
+   - sous macOS, que `⌘W` ferme l'onglet et non la fenêtre dépend de
+     l'ordre de livraison d'une frappe entre WKWebView et la barre (ADR-0041,
+     point à vérifier n° 1), qu'aucun test automatique n'atteint : procédure
+     d'essai manuel dans la PR du lot.
 3. **Menus contextuels** — grille et en-têtes de colonne, onglets, éditeur SQL,
    connexions enregistrées, bibliothèque, assistant, ERD ; compléments du
    catalogue.

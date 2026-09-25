@@ -364,7 +364,9 @@ export const ResultPanel = React.memo(function ResultPanel({
         )
       }
       return (
-        <div className="flex h-full min-h-0 flex-col">
+        // The registry's `grid` zone: ⌘F there reaches the find field of
+        // the toolbar (docs/adr/0041-registre-d-actions-menus-et-raccourcis.md).
+        <div data-action-zone="grid" className="flex h-full min-h-0 flex-col">
           {planNote}
           {toolbar}
           <ResultGrid

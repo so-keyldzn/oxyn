@@ -175,7 +175,6 @@ export function LibraryEntryView({
             <SqlEditor
               value={text}
               onChange={ignore}
-              onRun={ignore}
               driver={driver}
               readOnly
             />

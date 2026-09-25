@@ -4,6 +4,7 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query"
 
 import { Toaster } from "@/components/ui/toast"
 import { TooltipProvider } from "@/components/ui/tooltip"
+import { useActionRuntime } from "@/features/actions/use-action-runtime"
 
 import "../src/styles.css"
 
@@ -16,6 +17,9 @@ const withAppShell: Decorator = (Story, context) => {
   React.useLayoutEffect(() => {
     document.documentElement.classList.toggle("dark", dark)
   }, [dark])
+  // The registry's keyboard dispatcher and focus zones, as in the window: a
+  // shortcut a story presses goes where the application would send it.
+  useActionRuntime()
   const [queryClient] = React.useState(
     () => new QueryClient({ defaultOptions: { queries: { retry: false } } })
   )

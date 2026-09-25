@@ -1,6 +1,5 @@
 import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
-import { useHotkeys } from "@tanstack/react-hotkeys"
 import { useNavigate, useSearch } from "@tanstack/react-router"
 import { useStore } from "@tanstack/react-store"
 
@@ -25,6 +24,7 @@ import { library } from "@/lib/ipc/library"
 import type { DocumentEntry } from "@/lib/ipc/library"
 import { recovery } from "@/lib/ipc/recovery"
 import { settingsBackend } from "@/lib/ipc/settings"
+import { useActionSource } from "@/lib/actions/context"
 
 function failureOf(error: unknown): BackendFailure {
   return error instanceof BackendError
@@ -130,10 +130,18 @@ export function RecoveryScreen() {
     markRecoveryOffered()
     void navigate({ to: hasWorkspace ? "/workspace" : "/" })
   }
-  useHotkeys([
-    { hotkey: "Escape", callback: back },
-    { hotkey: "Mod+[", callback: back },
-  ])
+  // ⌘[ is the registry's `Back` (ADR-0041). Esc stays with the screen, in
+  // the bubble phase, so that a list or a menu it would close sees it first.
+  useActionSource("navigation", {}, { back })
+  React.useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if (event.defaultPrevented || event.key !== "Escape") return
+      event.preventDefault()
+      back()
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  })
 
   return (
     <main className="flex h-full min-h-0 flex-col bg-background">

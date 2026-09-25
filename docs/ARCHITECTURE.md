@@ -62,6 +62,7 @@ s'énonce désormais en [I-08](../CLAUDE.md#i-08) — aucune crate hors
 ```
 apps/desktop/                     # le front : pnpm, Vite, TanStack Start (SPA)
 ├── src/lib/ipc/                  # le SEUL module qui appelle `invoke` ; types miroirs d'ipc.rs
+├── src/lib/actions/              # registre d'actions : manifeste, comportements, clavier (ADR-0041)
 ├── src/components/ui/            # généré par `shadcn add` (Base UI), jamais retouché à la main
 ├── src/components/oxyn/          # composants Oxyn : grille, arbre, éditeur, approbation…
 │                                 #   chacun avec ses stories, qui sont aussi ses tests
@@ -74,6 +75,7 @@ crates/oxyn-desktop/              # l'hôte Tauri, binaire `oxyn-desktop`
 ├── src/ipc.rs + ipc/             # ce qui traverse la frontière, plus étroit que le domaine
 ├── src/catalog.rs                # arbre du catalogue et commande d'expansion
 ├── src/credentials.rs            # le seul point qui lit ou écrit le trousseau
+├── src/menu.rs                   # barre native macOS, lue au manifeste du front ; aucune Command
 ├── capabilities/main.json        # permissions de la webview
 └── tauri.conf.json               # CSP de production ; tauri.dev.json5 la relâche en dev
 ```

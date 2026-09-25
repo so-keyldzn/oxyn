@@ -13,6 +13,8 @@ import {
   rangeRows,
 } from "@/components/oxyn/grid-selection"
 import type { GridPosition } from "@/components/oxyn/grid-selection"
+import { platform } from "@/lib/actions/platform"
+import { hasMod, keyOf } from "@/lib/actions/shortcut"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
 import {
@@ -489,8 +491,11 @@ export const ResultGrid = React.memo(function ResultGrid({
 
   const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (rowCount === 0 || shown.length === 0) return
-    const mod = event.metaKey || event.ctrlKey
-    if (mod && event.key.toLowerCase() === "c") {
+    // ⌘ on macOS, Ctrl elsewhere — never either: ⌃C is not a copy on a Mac
+    // (docs/adr/0041-registre-d-actions-menus-et-raccourcis.md, point 3). The
+    // letter comes from `event.code` when the layout is not Latin.
+    const mod = hasMod(event, platform)
+    if (mod && keyOf(event) === "c") {
       event.preventDefault()
       void copy(event.shiftKey)
       return

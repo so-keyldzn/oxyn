@@ -4,6 +4,7 @@ import { expect, fn, userEvent, waitFor } from "storybook/test"
 import { invoiceColumns, syntheticPages } from "./fixtures"
 import { ResultGrid } from "./result-grid"
 import type { FetchPage } from "./result-grid"
+import { modKey } from "@/lib/actions/platform"
 import type { Cell, ResultColumn } from "@/lib/ipc/types"
 
 /** A result served from a cell function, for the wide and odd cases. */
@@ -138,7 +139,7 @@ export const JumpToTheEnd: Story = {
   play: async ({ canvas }) => {
     const grid = canvas.getByRole("grid")
     grid.focus()
-    await userEvent.keyboard("{Meta>}{End}{/Meta}")
+    await userEvent.keyboard(`{${modKey}>}{End}{/${modKey}}`)
     // The last page is fetched directly, without loading what lies before.
     // By its row header: the text alone also matches that row's `id` cell,
     // which holds the same number, and the query then fails as ambiguous.
@@ -173,7 +174,7 @@ export const FirstAndLastRowsAreInReach: Story = {
     ).toBeLessThanOrEqual(1)
 
     grid.focus()
-    await userEvent.keyboard("{Meta>}{End}{/Meta}")
+    await userEvent.keyboard(`{${modKey}>}{End}{/${modKey}}`)
     const lastIndex = 5_000 + 1
     await waitFor(() => expect(rowAt(lastIndex)).not.toBeNull(), {
       timeout: 3000,
@@ -241,7 +242,7 @@ export const CopyRefusesATruncatedValue: Story = {
     await expect(
       canvas.getAllByRole("gridcell", { selected: true })
     ).toHaveLength(7)
-    await userEvent.keyboard("{Meta>}c{/Meta}")
+    await userEvent.keyboard(`{${modKey}>}c{/${modKey}}`)
     await waitFor(() =>
       expect(canvas.getByRole("status")).toHaveTextContent(
         /Not copied: 1 selected value is truncated/

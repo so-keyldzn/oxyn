@@ -3,9 +3,11 @@ import CodeMirror from "@uiw/react-codemirror"
 import { PostgreSQL, SQLite, StandardSQL, sql } from "@codemirror/lang-sql"
 import { HighlightStyle, syntaxHighlighting } from "@codemirror/language"
 import { Prec } from "@codemirror/state"
-import { EditorView, keymap } from "@codemirror/view"
+import { EditorView, keymap, runScopeHandlers } from "@codemirror/view"
 import { tags } from "@lezer/highlight"
 import { TEXT_FIELD_DOM_ATTRIBUTES } from "./text-field"
+
+import { setZoneHandle } from "@/lib/actions/context"
 
 function dialectFor(driver: string) {
   switch (driver) {
@@ -87,11 +89,31 @@ export function targetOf(view: EditorView): EditorTarget {
 }
 
 /**
+ * Runs the editor's own binding for `key` with the command key held, as
+ * CodeMirror reads it (`/Mac/.test(navigator.platform)`, @codemirror/view
+ * 6.43.11).
+ */
+function runModBinding(view: EditorView, key: string, code: string) {
+  const mac = /Mac/.test(navigator.platform)
+  view.focus()
+  runScopeHandlers(
+    view,
+    new KeyboardEvent("keydown", { key, code, metaKey: mac, ctrlKey: !mac }),
+    "editor"
+  )
+}
+
+/**
  * The SQL console editor.
  *
- * `⌘↵` runs what the selection or cursor targets, `⌘⇧↵` runs everything, `⌘S`
- * saves, `Esc` cancels while running. The text is sent as written — it is the
- * user's SQL, not a statement Oxyn composes (I-10).
+ * Its surface is the `editor` zone of the action registry
+ * (docs/adr/0041-registre-d-actions-menus-et-raccourcis.md): `⌘↵`, `⌘⇧↵`
+ * and `⌘S` are the console's actions, bound once by the registry's
+ * dispatcher; `⌘/` and `⌘F` reach CodeMirror's comment and search through the
+ * zone's handle, the dispatcher stopping the key before CodeMirror's own
+ * binding so that it runs once. `Esc` cancels while running, here: it
+ * belongs to the zone, and a completion list takes it first. The text is sent
+ * as written — it is the user's SQL, not a statement Oxyn composes (I-10).
  */
 export function SqlEditor({
   value,
@@ -99,9 +121,6 @@ export function SqlEditor({
   driver,
   running = false,
   readOnly = false,
-  onRun,
-  onRunAll,
-  onSave,
   onCancel,
   onTargetChange,
   onBlur,
@@ -113,9 +132,6 @@ export function SqlEditor({
   driver: string
   running?: boolean
   readOnly?: boolean
-  onRun: (target: EditorTarget) => void
-  onRunAll?: () => void
-  onSave?: () => void
   onCancel?: () => void
   onTargetChange?: (kind: EditorTarget["kind"]) => void
   /** Focus left the editor: a pending draft is written now (ADR-0024). */
@@ -127,25 +143,28 @@ export function SqlEditor({
   // Handlers change every render; the keymap is built once and reads the
   // latest through a ref, so CodeMirror does not reconfigure on each keystroke.
   const handlers = React.useRef({
-    onRun,
-    onRunAll,
-    onSave,
     onCancel,
     onTargetChange,
     onBlur,
     running,
-    readOnly,
   })
   handlers.current = {
-    onRun,
-    onRunAll,
-    onSave,
     onCancel,
     onTargetChange,
     onBlur,
     running,
-    readOnly,
   }
+  const zone = React.useRef<HTMLDivElement>(null)
+  const [view, setView] = React.useState<EditorView | null>(null)
+  React.useEffect(() => {
+    const element = zone.current
+    if (!element || !view) return
+    setZoneHandle(element, {
+      find: () => runModBinding(view, "f", "KeyF"),
+      toggleComment: () => runModBinding(view, "/", "Slash"),
+    })
+    return () => setZoneHandle(element, null)
+  }, [view])
 
   const extensions = React.useMemo(
     () => [
@@ -180,37 +199,6 @@ export function SqlEditor({
       }),
       Prec.highest(
         keymap.of([
-          // A read-only editor offers selection and copy, and no shortcut that
-          // runs or writes (docs/UX-SPEC.md, « Consultation locale des
-          // requêtes »): ⌘↵ on a library view must submit nothing.
-          {
-            key: "Mod-Enter",
-            preventDefault: true,
-            run: (view) => {
-              if (handlers.current.readOnly) return true
-              if (!handlers.current.running)
-                handlers.current.onRun(targetOf(view))
-              return true
-            },
-          },
-          {
-            key: "Mod-Shift-Enter",
-            preventDefault: true,
-            run: () => {
-              if (handlers.current.readOnly) return true
-              if (!handlers.current.running) handlers.current.onRunAll?.()
-              return true
-            },
-          },
-          {
-            key: "Mod-s",
-            preventDefault: true,
-            run: () => {
-              if (handlers.current.readOnly) return true
-              handlers.current.onSave?.()
-              return true
-            },
-          },
           {
             key: "Escape",
             run: () => {
@@ -227,24 +215,35 @@ export function SqlEditor({
   )
 
   return (
-    <CodeMirror
-      value={value}
-      onChange={onChange}
-      extensions={extensions}
-      theme="none"
-      height="100%"
-      autoFocus={autoFocus}
-      readOnly={readOnly}
-      onCreateEditor={onEditor}
-      className="h-full min-h-0 overflow-hidden"
-      basicSetup={{
-        lineNumbers: true,
-        highlightActiveLine: true,
-        foldGutter: false,
-        autocompletion: true,
-        bracketMatching: true,
-        closeBrackets: true,
-      }}
-    />
+    <div
+      ref={zone}
+      data-action-zone="editor"
+      // A read-only view runs nothing: the registry's Run reads this.
+      data-read-only={readOnly || undefined}
+      className="h-full min-h-0"
+    >
+      <CodeMirror
+        value={value}
+        onChange={onChange}
+        extensions={extensions}
+        theme="none"
+        height="100%"
+        autoFocus={autoFocus}
+        readOnly={readOnly}
+        onCreateEditor={(created) => {
+          setView(created)
+          onEditor?.(created)
+        }}
+        className="h-full min-h-0 overflow-hidden"
+        basicSetup={{
+          lineNumbers: true,
+          highlightActiveLine: true,
+          foldGutter: false,
+          autocompletion: true,
+          bracketMatching: true,
+          closeBrackets: true,
+        }}
+      />
+    </div>
   )
 }

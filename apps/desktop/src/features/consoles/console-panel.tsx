@@ -36,6 +36,7 @@ import {
 import { useResultDensity } from "@/features/settings/use-result-density"
 import { ExportMenu } from "@/features/workspace/export-menu"
 import { useExecution } from "@/features/workspace/use-execution"
+import { useActionSource } from "@/lib/actions/context"
 import { BackendError, backend, newCommandId } from "@/lib/ipc/client"
 import { consoles } from "@/lib/ipc/consoles"
 import type {
@@ -524,6 +525,27 @@ export function ConsolePanel({
   )
   const elapsedMs = useElapsed(active ? execution.startedAt : null)
 
+  // The active console is what Query's entries, ⌘↵, ⌘⇧↵, ⌘S and the
+  // palette run: the same functions as its buttons (ADR-0041, I-01).
+  useActionSource(
+    "console",
+    active
+      ? {
+          canRun,
+          running: execution.running,
+          cancelling: execution.cancelling,
+          writing: doc.saveState.status === "saving" || doc.closing,
+        }
+      : null,
+    {
+      run: () => void run(targetNow()),
+      runAll: () => void run({ kind: "all" }),
+      explain: () => void run(targetNow(), true),
+      cancel: execution.cancel,
+      save: () => void (doc.conflict ? undefined : doc.save()),
+    }
+  )
+
   return (
     <>
       <ConsoleView
@@ -612,9 +634,6 @@ export function ConsolePanel({
             driver={open.driver}
             running={execution.running}
             readOnly={doc.closing}
-            onRun={(editorTarget) => void run(editorTarget)}
-            onRunAll={() => void run({ kind: "all" })}
-            onSave={() => void (doc.conflict ? undefined : doc.save())}
             onCancel={execution.cancel}
             onTargetChange={setTarget}
             onBlur={() => void doc.flush()}

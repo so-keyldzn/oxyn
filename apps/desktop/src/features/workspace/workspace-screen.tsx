@@ -1,5 +1,4 @@
 import * as React from "react"
-import { useHotkeys } from "@tanstack/react-hotkeys"
 import { useStore } from "@tanstack/react-store"
 
 import { visibleAssistantField } from "@/components/oxyn/assistant-composer"
@@ -57,6 +56,8 @@ import {
 } from "@/features/workspace/result-requests"
 import { useCompact } from "@/features/workspace/use-compact"
 import { usePanelPreferences } from "@/features/workspace/use-panel-preferences"
+import { useActionSource } from "@/lib/actions/context"
+import { actionKeys } from "@/lib/actions/manifest"
 import { library } from "@/lib/ipc/library"
 import type { HistoryRow } from "@/lib/ipc/library"
 import type { SectionChoice } from "@/lib/ipc/location"
@@ -365,52 +366,54 @@ export function WorkspaceScreen({
   )
 
   const onConsole = active?.startsWith("console:") ?? false
-  useHotkeys(
-    [
-      { hotkey: "Mod+T", callback: () => void work.openConsole() },
-      {
-        hotkey: "Mod+W",
-        callback: () => {
-          if (active) closeTab(active)
-        },
-      },
-      { hotkey: "Mod+J", callback: focusConsole },
-      {
-        hotkey: "Control+Tab",
-        callback: () => {
-          const next = work.cycle(onConsole ? lastConsole.current : null, 1)
-          if (next) activate(next)
-        },
-      },
-      {
-        hotkey: "Control+Shift+Tab",
-        callback: () => {
-          const next = work.cycle(onConsole ? lastConsole.current : null, -1)
-          if (next) activate(next)
-        },
-      },
-      { hotkey: "Mod+1", callback: () => setLeftView("catalog") },
-      {
-        // The object on screen only: a console or a result has no preview.
-        hotkey: "Mod+2",
-        callback: () => {
-          if (active) objectHandles.current.get(active)?.focusPreview()
-        },
-      },
-      { hotkey: "Mod+Shift+H", callback: () => setLeftView("library") },
-      {
-        hotkey: "Mod+Alt+B",
-        callback: () => {
-          if (aside.length > 0) setAsideOpen(!asideOpen)
-        },
-      },
-    ],
-    // Dialogs own the keyboard while open: a shortcut behind them is a click
-    // the user did not see. A hidden workspace owns no shortcut.
+  const cycleTab = (step: 1 | -1) => {
+    const next = work.cycle(onConsole ? lastConsole.current : null, step)
+    if (next) activate(next)
+  }
+  // Filled by the layout, which owns the compact sidebar's state.
+  const toggleSidebar = React.useRef<(() => void) | null>(null)
+  // What the registry's actions run here: the menu bar, the keyboard and the
+  // palette reach the workspace through this, never around it (ADR-0041).
+  // A hidden workspace publishes nothing, and a dialog — the close of a
+  // console among them — holds the focus, which the registry reads as the
+  // `modal` zone: a shortcut behind either is a click the user did not see.
+  useActionSource(
+    "workspace",
+    visible
+      ? {
+          activeTab: active,
+          tabCount: objects.length + work.entries.length + retained.length,
+          consoleCount: work.entries.length,
+          objectActive:
+            active !== null && objects.some((tab) => tab.key === active),
+          hasAside: aside.length > 0,
+          hasAssistant,
+        }
+      : null,
     {
-      preventDefault: true,
-      ignoreInputs: false,
-      enabled: visible && work.closing === null,
+      openConsole: () => void work.openConsole(),
+      closeActiveTab: () => {
+        if (active) closeTab(active)
+      },
+      nextTab: () => cycleTab(1),
+      previousTab: () => cycleTab(-1),
+      showCatalog: () => setLeftView("catalog"),
+      showLibrary: () => setLeftView("library"),
+      // The object on screen only: a console or a result has no preview.
+      focusPreview: () => {
+        if (active) objectHandles.current.get(active)?.focusPreview()
+      },
+      focusConsole,
+      toggleSidebar: () => toggleSidebar.current?.(),
+      toggleAside: () => {
+        if (aside.length > 0) setAsideOpen(!asideOpen)
+      },
+      openAssistant: () => {
+        setAsideActive("assistant")
+        setAsideOpen(true)
+        setFocusAssistant((count) => count + 1)
+      },
+      switchConnection: onSwitchConnection,
     }
   )
 
@@ -482,6 +485,7 @@ export function WorkspaceScreen({
         }
         sidebarOpen={sidebarOpen}
         onSidebarOpenChange={setSidebarOpen}
+        sidebarToggleRef={toggleSidebar}
         leftView={leftView}
         onLeftViewChange={setLeftView}
         connectionName={open.name}
@@ -668,8 +672,9 @@ export function WorkspaceScreen({
               <Button size="sm" onClick={() => void work.openConsole()}>
                 New console
                 <KbdGroup>
-                  <Kbd>⌘</Kbd>
-                  <Kbd>T</Kbd>
+                  {actionKeys("console.new").map((key) => (
+                    <Kbd key={key}>{key}</Kbd>
+                  ))}
                 </KbdGroup>
               </Button>
             </EmptyContent>

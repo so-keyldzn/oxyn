@@ -68,7 +68,6 @@ function consoleParts({
         driver="postgres"
         running={bar.running}
         readOnly={bar.readOnly && !bar.canRun}
-        onRun={fn()}
       />
     ),
     results: results ?? (
