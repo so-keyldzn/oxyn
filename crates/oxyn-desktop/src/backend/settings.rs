@@ -27,6 +27,10 @@ pub(crate) struct SettingsState {
     /// decision answers. Kept here: an edit may carry retyped secrets, which
     /// the webview has no reason to hold again.
     pub(crate) pending_changes: Mutex<HashMap<CommandId, PendingChange>>,
+    /// Held while a connection change is computed and saved, or checked
+    /// against the saved configuration and applied: two approvals must not
+    /// both pass the check, nor a direct save slip between check and save.
+    pub(crate) decisions: tokio::sync::Mutex<()>,
 }
 
 // Not derived: a pending edit carries secrets in clear (I-03).

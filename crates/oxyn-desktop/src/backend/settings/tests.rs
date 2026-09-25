@@ -506,6 +506,175 @@ fn a_moved_production_connection_keeps_its_secret_until_the_move_is_approved() {
     assert!(left_in_keyring(&backend, &before).password().is_none());
 }
 
+/// A production connection on `db.internal` whose password is `old`, and
+/// `edits` held on it, all computed from that same saved state.
+fn held_edits(
+    runtime: &tokio::runtime::Runtime,
+    backend: &Backend,
+    edits: Vec<ConnectionEdit>,
+) -> (ConnectionConfig, Vec<CommandId>) {
+    let config = saved(runtime, backend, Environment::Production);
+    let ask = |change: ConnectionEdit| match runtime
+        .block_on(backend.update_connection(CommandId::new(), config.id, change))
+        .expect("policy answers")
+    {
+        ConnectionChange::Approval { command, .. } => {
+            command.parse::<CommandId>().expect("a minted id")
+        }
+        other => panic!("a production edit needs approval, got {other:?}"),
+    };
+    let first = ask(retyped("old"));
+    runtime
+        .block_on(backend.decide_connection_change(first, true))
+        .expect("approved");
+    let held = edits.into_iter().map(ask).collect();
+    (backend.config(config.id).expect("saved"), held)
+}
+
+/// The password retyped, on the same host.
+fn retyped(password: &str) -> ConnectionEdit {
+    let mut change = edit(Environment::Production);
+    change
+        .secrets
+        .insert("password".to_owned(), password.to_owned());
+    change
+}
+
+/// Another host, with the password typed for it.
+fn moved(host: &str, password: &str) -> ConnectionEdit {
+    let mut change = retyped(password);
+    change.values.insert("host".to_owned(), host.to_owned());
+    change
+}
+
+fn host(backend: &Backend, connection: ConnectionId) -> Option<String> {
+    backend
+        .config(connection)
+        .expect("saved")
+        .params
+        .get("host")
+        .cloned()
+}
+
+fn refused_as_stale(outcome: Result<Option<ConnectionChange>, crate::ipc::IpcError>) {
+    let error = outcome.expect_err("an edit computed on a state since replaced is refused");
+    assert!(
+        error
+            .message
+            .contains("changed after this change was requested"),
+        "the refusal says why: {}",
+        error.message
+    );
+}
+
+/// Approved second, the retype would bring the old host back — and with it
+/// the keyring entry the move just emptied: a connection without secrets,
+/// and no message.
+#[test]
+fn an_edit_approved_after_a_move_it_did_not_see_is_refused() {
+    let runtime = runtime();
+    let _guard = runtime.enter();
+    let backend = Backend::open_temporary().expect("temporary backend");
+    let (config, held) = held_edits(
+        &runtime,
+        &backend,
+        vec![moved("db.other.example", "moved"), retyped("retyped")],
+    );
+    let [move_to, retype] = held[..] else {
+        panic!("two held edits");
+    };
+
+    runtime
+        .block_on(backend.decide_connection_change(move_to, true))
+        .expect("the move is approved");
+    refused_as_stale(runtime.block_on(backend.decide_connection_change(retype, true)));
+
+    assert_eq!(
+        host(&backend, config.id).as_deref(),
+        Some("db.other.example")
+    );
+    assert_eq!(
+        password(&backend, config.id).as_deref(),
+        Some("moved"),
+        "the connection keeps the secret typed for where it points"
+    );
+    assert!(
+        runtime
+            .block_on(backend.decide_connection_change(retype, true))
+            .is_err(),
+        "a refused edit no longer awaits a decision"
+    );
+}
+
+/// The other order: a retype changes the keyring, not the saved
+/// configuration, so the move still applies to what its preview showed — and,
+/// moving, forgets the entry the retype wrote for the old host.
+#[test]
+fn a_move_approved_after_a_retype_applies_and_forgets_the_old_entry() {
+    let runtime = runtime();
+    let _guard = runtime.enter();
+    let backend = Backend::open_temporary().expect("temporary backend");
+    let (config, held) = held_edits(
+        &runtime,
+        &backend,
+        vec![moved("db.other.example", "moved"), retyped("retyped")],
+    );
+    let [move_to, retype] = held[..] else {
+        panic!("two held edits");
+    };
+
+    runtime
+        .block_on(backend.decide_connection_change(retype, true))
+        .expect("the retype is approved");
+    assert_eq!(password(&backend, config.id).as_deref(), Some("retyped"));
+    runtime
+        .block_on(backend.decide_connection_change(move_to, true))
+        .expect("the move is approved: the saved configuration did not change");
+
+    assert_eq!(
+        host(&backend, config.id).as_deref(),
+        Some("db.other.example")
+    );
+    assert_eq!(password(&backend, config.id).as_deref(), Some("moved"));
+    assert!(
+        left_in_keyring(&backend, &config).password().is_none(),
+        "the password retyped for the old host does not follow the move"
+    );
+}
+
+/// Approved second, a move computed before the first one would bring its
+/// origin's host back into a preview that never showed it.
+#[test]
+fn a_move_approved_after_another_move_is_refused() {
+    let runtime = runtime();
+    let _guard = runtime.enter();
+    let backend = Backend::open_temporary().expect("temporary backend");
+    let (config, held) = held_edits(
+        &runtime,
+        &backend,
+        vec![
+            moved("db.first.example", "first"),
+            moved("db.second.example", "second"),
+        ],
+    );
+    let [first, second] = held[..] else {
+        panic!("two held edits");
+    };
+
+    runtime
+        .block_on(backend.decide_connection_change(second, true))
+        .expect("the later move is approved first");
+    let after_second = backend.config(config.id).expect("saved");
+    refused_as_stale(runtime.block_on(backend.decide_connection_change(first, true)));
+
+    assert_eq!(
+        backend.config(config.id).expect("saved"),
+        after_second,
+        "nothing of the refused move was saved"
+    );
+    assert_eq!(password(&backend, config.id).as_deref(), Some("second"));
+}
+
 #[test]
 fn a_new_host_with_a_retyped_password_keeps_nothing_else_of_the_old_entry() {
     let runtime = runtime();

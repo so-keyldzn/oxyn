@@ -49,12 +49,24 @@ use crate::ipc::{IpcError, SavedConnection};
 /// No `Debug` derive: an edit carries the secrets the user retyped (I-03).
 pub(crate) enum PendingChange {
     Update {
+        /// The saved configuration the edit was computed from.
+        origin: Box<ConnectionConfig>,
         config: Box<ConnectionConfig>,
         secrets: SecretsEdit,
     },
     Delete {
         config: Box<ConnectionConfig>,
     },
+}
+
+impl PendingChange {
+    /// The saved configuration the change was computed from, and previewed on.
+    fn origin(&self) -> &ConnectionConfig {
+        match self {
+            Self::Update { origin, .. } => origin,
+            Self::Delete { config } => config,
+        }
+    }
 }
 
 /// What a saved edit does to the connection's keyring entry.
@@ -104,6 +116,9 @@ impl Backend {
         connection: ConnectionId,
         edit: ConnectionEdit,
     ) -> Result<ConnectionChange, IpcError> {
+        // Saved directly, an edit must not land between an approval's check
+        // and its save: the approval would overwrite it unseen.
+        let _serial = self.inner.settings.decisions.lock().await;
         let current = self.read_config(connection).await?;
         let (config, secrets) = self.edited(&current, edit)?;
         let inner = &self.inner;
@@ -131,6 +146,7 @@ impl Backend {
                     PendingChange::Update {
                         config: Box::new(config),
                         secrets,
+                        origin: Box::new(current.clone()),
                     },
                 );
                 Ok(approval(command, reason, preview, &current.name))
@@ -150,6 +166,7 @@ impl Backend {
         id: CommandId,
         connection: ConnectionId,
     ) -> Result<ConnectionChange, IpcError> {
+        let _serial = self.inner.settings.decisions.lock().await;
         let config = self.read_config(connection).await?;
         let inner = &self.inner;
         let cancel = self.track(id)?;
@@ -207,6 +224,46 @@ impl Backend {
             inner.executor.reject(command);
             return Ok(None);
         }
+        // One approval at a time: another one saved between this check and
+        // this save would make the check vouch for a state that is gone.
+        let _serial = inner.settings.decisions.lock().await;
+        let connection = pending.origin().id;
+        let saved = self
+            .on_blocking_pool(move |backend| {
+                backend
+                    .inner
+                    .executor
+                    .store()
+                    .connections()
+                    .get(connection)
+                    .map_err(|error| IpcError::invalid(format!("reading the connection: {error}")))
+            })
+            .await;
+        let saved = match saved {
+            Ok(saved) => saved,
+            Err(error) => {
+                inner
+                    .settings
+                    .pending_changes
+                    .lock()
+                    .insert(command, pending);
+                return Err(error);
+            }
+        };
+        // Computed and previewed on a configuration that is no longer the
+        // saved one, the change would silently undo what was saved since —
+        // an older host back, or the keyring entry a move just emptied back
+        // in use. A retype on the same destination changes the keyring, not
+        // the configuration: a move approved after it still does what its
+        // preview showed, and forgets that entry as any move does.
+        if saved.as_ref() != Some(pending.origin()) {
+            inner.executor.reject(command);
+            return Err(IpcError::invalid(format!(
+                "\"{}\" changed after this change was requested, so it was not applied. \
+                 Open the connection again and redo the change on its current settings.",
+                pending.origin().name
+            )));
+        }
         // Refused, the change stays pending rather than losing what it holds.
         let cancel = match self.track(command) {
             Ok(cancel) => cancel,
@@ -221,9 +278,12 @@ impl Backend {
         };
         let outcome = inner.executor.approve("human", command, &cancel).await?;
         match (outcome, pending) {
-            (Outcome::ConnectionSaved { .. }, PendingChange::Update { config, secrets }) => {
-                Ok(Some(self.finish_update(&config, secrets).await))
-            }
+            (
+                Outcome::ConnectionSaved { .. },
+                PendingChange::Update {
+                    config, secrets, ..
+                },
+            ) => Ok(Some(self.finish_update(&config, secrets).await)),
             (Outcome::ConnectionDeleted { .. }, PendingChange::Delete { config }) => {
                 self.finish_delete(&config).await;
                 Ok(Some(ConnectionChange::Deleted))
