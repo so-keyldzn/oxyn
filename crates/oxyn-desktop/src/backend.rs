@@ -91,6 +91,8 @@ pub(crate) struct Inner {
     /// The windows, and what each one owns: its sessions, commands, results
     /// and assistants (ADR-0043).
     pub(crate) windows: windows::WindowRegistry,
+    /// Where each window stands and what it holds, for the workspace file.
+    pub(crate) layouts: windows::Layouts,
 }
 
 // Not derived: `Executor` and `Store` reach connection configurations, and a
@@ -99,6 +101,35 @@ impl std::fmt::Debug for Backend {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("Backend").finish_non_exhaustive()
     }
+}
+
+/// The windows a finished launch left, adopted for this one (ADR-0043).
+///
+/// An unreadable file costs the layout, never the launch: one window opens,
+/// as before migration 18. When the file holds none, the first window takes
+/// the object tab the preferences held.
+fn adopt_layouts(
+    store: &Store,
+    workspace: oxyn_core::WorkspaceId,
+    session: oxyn_core::AppSessionId,
+) -> windows::Layouts {
+    let adopted = store
+        .windows()
+        .adopt(workspace, session)
+        .unwrap_or_else(|error| {
+            tracing::warn!(%error, "window layouts unreadable; opening one window");
+            Vec::new()
+        });
+    let inherited = if adopted.is_empty() {
+        store
+            .preferences()
+            .load(workspace)
+            .ok()
+            .and_then(|snapshot| snapshot.preferences.object_location)
+    } else {
+        None
+    };
+    windows::Layouts::new(adopted, inherited)
 }
 
 impl Backend {
@@ -230,12 +261,14 @@ impl Backend {
         // Observed, then recorded, before anything else writes: a session
         // begun later would count itself (ADR-0021).
         let local = recovery::LocalWork::begin(&store, workspace)?;
+        let layouts = adopt_layouts(&store, workspace, local.session);
 
         let executor = Executor::builder(Arc::clone(&store), gate)
             .with_drivers(Arc::clone(&drivers))
             .with_credentials(Arc::clone(&credentials) as Arc<_>)
             .with_workspace(workspace)
             .with_memory_budget(memory_budget)
+            .with_app_session(local.session)
             .build();
 
         let known = executor
@@ -270,6 +303,7 @@ impl Backend {
                 results: results::ResultsState::default(),
                 object_operations: object_operations::ReviewSessions::default(),
                 windows: windows::WindowRegistry::default(),
+                layouts,
             }),
         };
         backend.start_heartbeat();

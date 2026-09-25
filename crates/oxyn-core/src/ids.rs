@@ -188,6 +188,11 @@ define_uuid_ids! {
     /// une relance ou une reprise en ouvre une nouvelle sans changer de fil.
     /// Confondre les deux ferait repartir l'historique à chaque relance.
     ConversationId,
+
+    /// Une fenêtre du workspace, choisie par l'application de bureau et
+    /// gardée d'un lancement à l'autre avec sa disposition
+    /// ([ADR-0043](../../docs/adr/0043-multi-fenetre.md)).
+    WindowId,
 }
 
 /// Identifiant stable d'un driver, par **protocole** et non par produit.

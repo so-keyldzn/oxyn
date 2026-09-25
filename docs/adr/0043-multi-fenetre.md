@@ -702,6 +702,66 @@ la seconde apporte la disposition persistée, la restauration par fenêtre et
   sessions fermées, donc ses transactions annulées, avec une ligne `warn` par
   transaction. Ses documents restent ouverts.
 
+### Précisions de mise en œuvre, 2026-09-26 (lot 7, disposition et restauration)
+
+- **La migration 18 est celle écrite plus haut**, avec un index
+  `workspace_windows_order (workspace_id, ordinal)`. `oxyn-store/src/windows.rs`
+  l'écrit (`save`, `remove`) et la relit (`adopt`). `WindowLayout` et
+  `WindowLayoutChange` vivent dans `oxyn-core`, sans type de Tauri
+  ([I-08](../../CLAUDE.md#i-08)). La ligne nomme le lancement qui l'écrit :
+  l'exécuteur reçoit l'`AppSessionId` du lancement (`with_app_session`) et le
+  passe au store. `WindowLayout::validate` refuse, avant le fichier, une
+  taille ou une position qui n'est pas un nombre fini, plus de 256 consoles,
+  une console en double ou une console au premier plan qui n'en est pas une.
+- **Une console jamais enregistrée n'est pas écrite** : sa ligne de
+  `documents` n'existe pas encore, et la clé étrangère la refuserait. Elle
+  rejoint la disposition à sa première sauvegarde. Une console qu'une autre
+  ligne liste la quitte (`ON CONFLICT (document_id)`) ; c'est le registre qui
+  empêche une fenêtre de prendre la console d'une autre, en écartant de son
+  rapport tout document qu'une autre fenêtre écrit.
+- **La lecture adopte en une transaction.** Une ligne dont l'identifiant ne
+  se relit pas, et celles au-delà de 16, sont retirées du fichier ; les
+  consoles au-delà de 256 aussi, journalisées, leurs documents laissés dans la
+  bibliothèque. Une console dont le document est fermé ou supprimé ne revient
+  pas. Une taille qui n'est pas un nombre fini vaut `0`, ramenée au minimum du
+  gabarit par le desktop ; une position hors bornes vaut absente.
+- **Le rectangle est en pixels logiques** : position extérieure et taille
+  intérieure, divisées par l'échelle de la fenêtre. Il est confronté à la
+  zone utile de chaque écran branché, chacune à sa propre échelle. Une
+  fenêtre réduite dans le Dock garde le rectangle qu'elle avait. Il s'écrit à
+  la construction de la fenêtre, une seconde après le dernier `Moved` ou
+  `Resized`, et avant l'arrêt ordonné, qui attend cette écriture comme les
+  autres écritures locales. Le Quit du Dock ne la fait pas : le dernier
+  rectangle stabilisé fait foi.
+- **L'appartenance vient de la webview** : `report_window_consoles` porte les
+  documents des consoles de tous les workspaces de la fenêtre, affichés ou
+  retenus, dans l'ordre des onglets, et celui du premier plan. Le front
+  n'envoie qu'une liste changée, une fois par tour de rendu. Rust écarte ce
+  qu'une autre fenêtre écrit.
+- **`restored_consoles`** rend les copies qu'une fenêtre rouvre : les siennes,
+  dans l'ordre des onglets, puis — pour la première fenêtre du lancement, une
+  fois — les copies ouvertes qu'aucune fenêtre ne réclame, lues dans la
+  bibliothèque par pages de 200, seize au plus ; au-delà, elles restent dans
+  la bibliothèque. Après une fermeture ordinaire, `routes/index.tsx` les
+  confie à `restoreWorkingCopies`, sans question. Après un arrêt anormal,
+  l'écran de reprise de chaque fenêtre ne propose qu'elles, et celles qui ne
+  sont pas choisies quittent aussitôt la ligne de la fenêtre. Un rechargement
+  de la webview les rend aussi : ce sont les consoles qu'elle tenait.
+- **`recoveryOffered` et `objectPlaceDeclined` restent dans `session.ts`** :
+  ce magasin appartient à la webview, donc déjà à la fenêtre. Les déplacer au
+  registre n'aurait rien ajouté. Toutes les fenêtres construites au lancement
+  voient l'arrêt anormal ; seule la première dit l'écriture interrompue.
+- **`read_object_location` et `write_object_location` visent la fenêtre
+  appelante.** La première fenêtre construite quand le fichier n'en tient
+  aucune reprend la valeur des préférences ; le champ des préférences n'est
+  plus écrit.
+- **La ligne est retirée** quand une fenêtre non dernière se ferme, que ce
+  soit par confirmation ou parce que sa webview ne répond pas. La sortie ne
+  retire rien : c'est ce qu'elle doit rendre.
+- **La politique refuse `WriteWindowLayout` à un agent**, dans `policy.rs`,
+  à côté du refus des préférences. Le test est côté desktop
+  (`backend/windows/layout/tests.rs`).
+
 ## Conséquences
 
 * **+** Deux connexions, ou deux consoles, se regardent côte à côte, sur deux

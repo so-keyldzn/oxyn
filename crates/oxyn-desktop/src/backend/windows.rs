@@ -14,7 +14,7 @@
 
 use std::collections::{HashMap, HashSet};
 
-use oxyn_core::{CommandId, ConnectionId, DocumentId, Event, ResultId, SessionId};
+use oxyn_core::{CommandId, ConnectionId, DocumentId, Event, ResultId, SessionId, WindowId};
 use oxyn_exec::ExecEvent;
 use parking_lot::Mutex;
 use tauri::ipc::Channel;
@@ -26,8 +26,10 @@ use crate::ipc::recovery::ShutdownSignal;
 use crate::ipc::windows::WindowSignal;
 
 pub(crate) use self::closing::CloseStep;
+pub(crate) use self::layout::Layouts;
 
 mod closing;
+mod layout;
 
 /// The most windows open at once.
 ///
@@ -53,6 +55,16 @@ impl WindowKey {
     /// The Tauri label of this window.
     pub(crate) fn label(self) -> String {
         format!("{LABEL_PREFIX}{}", self.0.simple())
+    }
+
+    /// The identity the workspace file keeps for this window.
+    pub(crate) const fn id(self) -> WindowId {
+        WindowId::from_uuid(self.0)
+    }
+
+    /// The key of a window the workspace file kept.
+    pub(crate) fn of(id: WindowId) -> Self {
+        Self(id.into_uuid())
     }
 
     /// The key a label names, if it is one of ours.
@@ -175,17 +187,26 @@ fn elsewhere(what: &str) -> IpcError {
 impl WindowRegistry {
     /// Reserves a new window, before it is built: the bound is checked here,
     /// under the lock, so two `New window` at once cannot both pass it.
+    /// `restored` is the key the workspace file kept for it; a new window
+    /// gets a fresh one.
     ///
     /// # Errors
-    /// Past [`MAX_WINDOWS`].
-    pub(crate) fn reserve(&self, initial: bool) -> Result<WindowKey, IpcError> {
+    /// Past [`MAX_WINDOWS`], or a restored key already registered.
+    pub(crate) fn reserve(
+        &self,
+        initial: bool,
+        restored: Option<WindowKey>,
+    ) -> Result<WindowKey, IpcError> {
         let mut state = self.state.lock();
         if state.windows.len() >= MAX_WINDOWS {
             return Err(IpcError::invalid(format!(
                 "Oxyn opens at most {MAX_WINDOWS} windows. Close one first."
             )));
         }
-        let key = WindowKey::new();
+        let key = restored.unwrap_or_else(WindowKey::new);
+        if state.window(key).is_some() {
+            return Err(IpcError::invalid("This window is already open"));
+        }
         state.windows.push(Window {
             key,
             initial,
@@ -278,6 +299,18 @@ impl WindowRegistry {
     /// Whether this window was built at launch.
     pub(crate) fn is_initial(&self, key: WindowKey) -> bool {
         self.state.lock().window(key).is_some_and(|w| w.initial)
+    }
+
+    /// Whether this window is the first built at launch and still open: the
+    /// one that speaks for the whole launch — the interrupted write, the
+    /// working copies no window claims (ADR-0043).
+    pub(crate) fn is_first(&self, key: WindowKey) -> bool {
+        self.state
+            .lock()
+            .windows
+            .iter()
+            .find(|window| window.initial)
+            .is_some_and(|window| window.key == key)
     }
 
     // ---- Focus ------------------------------------------------------------

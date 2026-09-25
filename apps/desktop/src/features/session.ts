@@ -33,7 +33,16 @@ export interface SessionState {
    * § Restauration sélective au démarrage).
    */
   restored: Array<DocumentEntry>
-  /** The recovery screen was offered once this launch; never twice. */
+  /**
+   * After an abnormal shutdown, the working copies this window offers on the
+   * recovery screen: its own consoles, and for the first window those no
+   * window claims (ADR-0043). `null` outside that screen at launch.
+   */
+  launchCopies: Array<DocumentEntry> | null
+  /**
+   * The recovery screen was offered once this launch; never twice. Per
+   * window: each webview has its own store.
+   */
   recoveryOffered: boolean
   /**
    * The saved object tab was not chosen on the recovery screen: no workspace
@@ -48,6 +57,7 @@ export const session = createStore<SessionState>({
   sqlDraft: "SELECT 1;",
   sqlDraftFrom: null,
   restored: [],
+  launchCopies: null,
   recoveryOffered: false,
   objectPlaceDeclined: false,
 })
@@ -217,6 +227,11 @@ export function takeRestoredWorkingCopies() {
 
 export function declineObjectPlace(declined: boolean) {
   session.setState((state) => ({ ...state, objectPlaceDeclined: declined }))
+}
+
+/** The copies the recovery screen offers this window at launch, or none. */
+export function setLaunchCopies(launchCopies: Array<DocumentEntry> | null) {
+  session.setState((state) => ({ ...state, launchCopies }))
 }
 
 export function markRecoveryOffered() {

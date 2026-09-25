@@ -94,6 +94,7 @@ pub mod query;
 pub mod stats;
 pub mod transaction;
 pub mod value;
+pub mod window_layout;
 
 pub use ai::{
     AiProviderConfig, AiProviderKind, ExternalAgentConfig, MAX_PROVENANCE_BYTES, Provenance,
@@ -107,7 +108,7 @@ pub use error::{ErrorClass, OxynError, Result};
 pub use event::Event;
 pub use ids::{
     AgentId, AgentSessionId, AppSessionId, CommandId, ConnectionId, ConversationId, DocumentId,
-    DriverId, IdParseError, ResultId, SessionId, StatementHandle, WorkspaceId,
+    DriverId, IdParseError, ResultId, SessionId, StatementHandle, WindowId, WorkspaceId,
 };
 pub use policy::{ConnectionFacts, Decision, DefaultPolicy, PolicyGate, Preview};
 pub use preview::{PreviewShape, PreviewSort};
@@ -117,6 +118,7 @@ pub use query::{
 pub use stats::ExecStats;
 pub use transaction::TransactionState;
 pub use value::{ParameterParseError, ParameterType, ScalarValue};
+pub use window_layout::{WindowGeometry, WindowLayout, WindowLayoutChange};
 
 /// Ce qu'on importe d'un coup quand on travaille avec le domaine.
 ///

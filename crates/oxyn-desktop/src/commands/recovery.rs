@@ -7,7 +7,9 @@ use tauri::ipc::Channel;
 use tauri::{AppHandle, Manager as _, RunEvent, State, Webview, WindowEvent};
 
 use crate::backend::{Backend, ExitStep, WindowKey};
-use crate::commands::windows::{bring_to_front, caller, close_requested, forget_window};
+use crate::commands::windows::{
+    bring_to_front, caller, close_requested, forget_window, place_all, window_moved,
+};
 use crate::ipc::IpcError;
 use crate::ipc::recovery::{RecoveryStatus, ShutdownSignal};
 use crate::logging::FileJournal;
@@ -173,6 +175,11 @@ fn on_window_event(
                 bar.refocus(Some(label));
             }
         }
+        WindowEvent::Moved(_) | WindowEvent::Resized(_) => {
+            if let Ok(window) = backend.inner.windows.key_of(label) {
+                window_moved(app, &backend, window);
+            }
+        }
         // Destroyed by a path that did not release it — the system, a crash
         // of the webview: what it held is let go all the same.
         WindowEvent::Destroyed => {
@@ -212,6 +219,10 @@ pub(crate) fn begin_exit(app: &AppHandle, journal: Option<&FileJournal>) {
         if !backend.begin_shutdown() {
             return;
         }
+        // Each window where it stands now, before the shutdown waits for
+        // local writes: the layouts are among them.
+        place_all(&app, &backend);
+        backend.save_layouts().await;
         backend.shutdown().await;
         if let Some(journal) = journal {
             let _ = tokio::task::spawn_blocking(move || journal.flush(JOURNAL_GRACE)).await;

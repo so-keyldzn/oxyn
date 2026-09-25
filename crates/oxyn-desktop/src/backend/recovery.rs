@@ -42,7 +42,7 @@ const SESSIONS_GRACE: Duration = Duration::from_secs(5);
 
 /// This launch, what the previous one left, and the local writes in flight.
 pub(crate) struct LocalWork {
-    session: AppSessionId,
+    pub(crate) session: AppSessionId,
     previous: PreviousShutdown,
     unresolved_write: bool,
     pending: Arc<PendingWrites>,
@@ -115,6 +115,7 @@ pub(crate) const fn is_local_write(command: &Command) -> bool {
             | Command::WriteDocument { .. }
             | Command::SaveAiProvider { .. }
             | Command::RemoveAiProvider { .. }
+            | Command::WriteWindowLayout { .. }
     )
 }
 
@@ -159,17 +160,17 @@ impl Backend {
 
     /// What the recovery screen may assert: observed at startup, never re-read.
     ///
-    /// Only the window built at launch may offer it: it speaks of how the
-    /// previous launch ended, which a window opened later by `New window`
-    /// did not witness, and one screen per window would offer the same
-    /// copies twice (ADR-0043).
+    /// Only the windows built at launch may offer it, each for its own
+    /// consoles: it speaks of how the previous launch ended, which a window
+    /// opened later by `New window` did not witness. The interrupted write
+    /// is the history's, not a window's: only the first says it (ADR-0043).
     #[must_use]
     pub fn recovery_status(&self, window: WindowKey) -> RecoveryStatus {
         let local = &self.inner.workbench.local;
         let initial = self.inner.windows.is_initial(window);
         RecoveryStatus {
             abnormal: initial && local.previous.needs_recovery(),
-            unresolved_write: initial && local.unresolved_write,
+            unresolved_write: self.inner.windows.is_first(window) && local.unresolved_write,
         }
     }
 

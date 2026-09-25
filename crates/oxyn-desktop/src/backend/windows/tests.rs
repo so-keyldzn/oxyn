@@ -15,8 +15,8 @@ use super::{Answer, Closing, MAX_WINDOWS, Stream, WindowKey, WindowRegistry};
 
 fn two() -> (WindowRegistry, WindowKey, WindowKey) {
     let registry = WindowRegistry::default();
-    let left = registry.reserve(true).expect("a first window");
-    let right = registry.reserve(false).expect("a second window");
+    let left = registry.reserve(true, None).expect("a first window");
+    let right = registry.reserve(false, None).expect("a second window");
     (registry, left, right)
 }
 
@@ -48,9 +48,15 @@ fn a_label_derives_from_the_key_and_nothing_else_is_a_window() {
 fn at_most_sixteen_windows_and_the_seventeenth_says_why() {
     let registry = WindowRegistry::default();
     let keys: Vec<WindowKey> = (0..MAX_WINDOWS)
-        .map(|index| registry.reserve(index == 0).expect("within the bound"))
+        .map(|index| {
+            registry
+                .reserve(index == 0, None)
+                .expect("within the bound")
+        })
         .collect();
-    let refused = registry.reserve(false).expect_err("the 17th is refused");
+    let refused = registry
+        .reserve(false, None)
+        .expect_err("the 17th is refused");
     assert!(
         refused.message.contains("at most 16 windows"),
         "{}",
@@ -59,7 +65,7 @@ fn at_most_sixteen_windows_and_the_seventeenth_says_why() {
     assert_eq!(registry.len(), MAX_WINDOWS);
     let _ = registry.forget(keys[3]);
     assert!(
-        registry.reserve(false).is_ok(),
+        registry.reserve(false, None).is_ok(),
         "a closed window frees its place"
     );
 }

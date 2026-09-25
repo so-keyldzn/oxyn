@@ -1,10 +1,9 @@
 //! What the restored object tab protects: a place that comes back without a
 //! read, and a vanished object whose place is never erased.
 
-use oxyn_core::{Actor, CancelToken, Command, ConnectionId, ObjectSection, WorkspacePreferences};
-use oxyn_exec::Outcome;
+use oxyn_core::{ConnectionId, ObjectLocation, ObjectSection, WindowGeometry};
 
-use crate::backend::Backend;
+use crate::backend::{Backend, WindowKey};
 use crate::ipc::CatalogAddress;
 use crate::ipc::location::{ObjectPlace, SectionChoice};
 use crate::ipc::settings::PreferencesChange;
@@ -30,21 +29,33 @@ fn place(relation: &str, section: SectionChoice) -> ObjectPlace {
     }
 }
 
-/// What the store holds, read through the bus as a restart would.
-fn stored(runtime: &tokio::runtime::Runtime, backend: &Backend) -> WorkspacePreferences {
-    let outcome = runtime
-        .block_on(backend.inner.executor.dispatch(
-            Actor::Human,
-            Command::ReadWorkspacePreferences {
-                workspace: backend.inner.executor.workspace(),
-            },
-            &CancelToken::new(),
-        ))
-        .expect("stored state");
-    let Outcome::WorkspacePreferences { snapshot } = outcome else {
-        panic!("a preference read answers with a snapshot");
-    };
-    snapshot.preferences
+/// A window placed on screen: its line is written from then on.
+fn window(backend: &Backend) -> WindowKey {
+    let key = backend.test_window();
+    backend.inner.layouts.place(
+        key,
+        WindowGeometry {
+            x: None,
+            y: None,
+            width: 1280.0,
+            height: 820.0,
+            maximized: false,
+        },
+    );
+    key
+}
+
+/// What the workspace file holds for the window, read as a restart would.
+fn stored(backend: &Backend) -> Option<ObjectLocation> {
+    let executor = &backend.inner.executor;
+    executor
+        .store()
+        .windows()
+        .adopt(executor.workspace(), backend.inner.workbench.local.session)
+        .expect("stored layouts")
+        .into_iter()
+        .next()
+        .and_then(|layout| layout.object_location)
 }
 
 fn journal_kinds(backend: &Backend) -> Vec<String> {
@@ -65,18 +76,17 @@ fn a_restored_location_and_its_sub_tab_come_back_without_reading_anything() {
     let runtime = runtime();
     let _guard = runtime.enter();
     let backend = Backend::open_temporary().expect("temporary backend");
+    let key = window(&backend);
     // Never opened, never saved: a place needs no session, and reading it
     // back must not need one either.
     let connection = ConnectionId::new();
 
     let written = place(HOSTILE, SectionChoice::Indexes);
     runtime
-        .block_on(backend.write_object_location(connection, Some(written.clone())))
+        .block_on(backend.write_object_location(key, connection, Some(written.clone())))
         .expect("saved");
 
-    let location = stored(&runtime, &backend)
-        .object_location
-        .expect("the place is in the workspace");
+    let location = stored(&backend).expect("the place is in the workspace");
     assert_eq!(location.connection, connection);
     assert_eq!(location.section, ObjectSection::Indexes);
     assert!(
@@ -84,10 +94,7 @@ fn a_restored_location_and_its_sub_tab_come_back_without_reading_anything() {
         "stored as readable text, not an opaque key (I-11)"
     );
 
-    let restored = runtime
-        .block_on(backend.read_object_location())
-        .expect("readable")
-        .expect("a place");
+    let restored = backend.read_object_location(key).expect("a place");
     assert_eq!(restored.place, written);
     assert_eq!(
         restored.connection,
@@ -96,10 +103,7 @@ fn a_restored_location_and_its_sub_tab_come_back_without_reading_anything() {
     );
 
     for kind in journal_kinds(&backend) {
-        assert!(
-            kind.ends_with("WorkspacePreferences"),
-            "restoring a place ran {kind}"
-        );
+        assert!(kind == "WriteWindowLayout", "restoring a place ran {kind}");
     }
 }
 
@@ -108,19 +112,17 @@ fn a_restored_object_that_vanished_is_explained_and_never_erased() {
     let runtime = runtime();
     let _guard = runtime.enter();
     let backend = Backend::open_temporary().expect("temporary backend");
+    let key = window(&backend);
     let connection = ConnectionId::new();
     // No catalog holds it: the object is gone, or was never loaded here.
     let vanished = place("dropped_last_week", SectionChoice::IncomingRelations);
     runtime
-        .block_on(backend.write_object_location(connection, Some(vanished.clone())))
+        .block_on(backend.write_object_location(key, connection, Some(vanished.clone())))
         .expect("saved");
 
     for _ in 0..2 {
         assert_eq!(
-            runtime
-                .block_on(backend.read_object_location())
-                .expect("readable")
-                .map(|saved| saved.place),
+            backend.read_object_location(key).map(|saved| saved.place),
             Some(vanished.clone()),
             "reading does not check the catalog, and never forgets"
         );
@@ -133,10 +135,10 @@ fn a_restored_object_that_vanished_is_explained_and_never_erased() {
         .expect("another preference saved");
     // Another connection's tab closing forgets its own place only.
     runtime
-        .block_on(backend.write_object_location(ConnectionId::new(), None))
+        .block_on(backend.write_object_location(key, ConnectionId::new(), None))
         .expect("saved");
     assert!(
-        stored(&runtime, &backend).object_location.is_some(),
+        stored(&backend).is_some(),
         "the place survives other writes"
     );
 
@@ -144,26 +146,23 @@ fn a_restored_object_that_vanished_is_explained_and_never_erased() {
     // not this one.
     let long = "t".repeat(oxyn_core::ObjectLocation::MAX_PATH_BYTES + 1);
     runtime
-        .block_on(
-            backend.write_object_location(
-                ConnectionId::new(),
-                Some(place(&long, SectionChoice::Data)),
-            ),
-        )
+        .block_on(backend.write_object_location(
+            key,
+            ConnectionId::new(),
+            Some(place(&long, SectionChoice::Data)),
+        ))
         .expect("saved");
     assert_eq!(
-        stored(&runtime, &backend)
-            .object_location
-            .map(|location| location.connection),
+        stored(&backend).map(|location| location.connection),
         Some(connection),
         "an oversized name elsewhere leaves this place alone"
     );
 
     // The user closing the tab is what forgets it.
     runtime
-        .block_on(backend.write_object_location(connection, None))
+        .block_on(backend.write_object_location(key, connection, None))
         .expect("saved");
-    assert_eq!(stored(&runtime, &backend).object_location, None);
+    assert_eq!(stored(&backend), None);
 }
 
 #[test]
@@ -171,9 +170,11 @@ fn a_place_that_is_not_a_relation_is_refused_and_changes_nothing() {
     let runtime = runtime();
     let _guard = runtime.enter();
     let backend = Backend::open_temporary().expect("temporary backend");
+    let key = window(&backend);
     let connection = ConnectionId::new();
     runtime
         .block_on(backend.write_object_location(
+            key,
             connection,
             Some(place("invoices", SectionChoice::Structure)),
         ))
@@ -189,14 +190,11 @@ fn a_place_that_is_not_a_relation_is_refused_and_changes_nothing() {
     };
     assert!(
         runtime
-            .block_on(backend.write_object_location(connection, Some(schema)))
+            .block_on(backend.write_object_location(key, connection, Some(schema)))
             .is_err()
     );
     assert_eq!(
-        runtime
-            .block_on(backend.read_object_location())
-            .expect("readable")
-            .map(|saved| saved.place),
+        backend.read_object_location(key).map(|saved| saved.place),
         Some(place("invoices", SectionChoice::Structure))
     );
 }
