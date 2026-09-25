@@ -1,6 +1,6 @@
 # ADR-0040 — Une sortie que macOS ne laisse pas retenir inscrit sa fermeture
 
-**Statut :** proposé · **Date :** 2026-09-25
+**Statut :** accepté · **Date :** 2026-09-25
 
 **Précise :** [ADR-0038](0038-un-plantage-s-annonce-une-fois.md), sur
 l'alternative « inscrire la fermeture dans `RunEvent::Exit` », qu'il écartait.

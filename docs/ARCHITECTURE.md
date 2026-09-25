@@ -1035,8 +1035,13 @@ qu'un lecteur ne peut pas savoir lequel croire. Le report de MySQL/MariaDB et so
 calendrier sont à la
 [phase 2 du plan](IMPLEMENTATION-PLAN.md#phase-2--les-protocoles-qui-comptent) ; le
 critère du `SELECT` de 10 M de lignes, à sa
-[phase 1](IMPLEMENTATION-PLAN.md#phase-1--premier-trajet-visible) ; ce que ses phases
-ne plaçaient pas encore y est recopié en tête des phases, non tranché. Le principe qui
+[phase 1](IMPLEMENTATION-PLAN.md#phase-1--premier-trajet-visible). Ce que ses phases
+ne plaçaient pas y a été rangé le 2026-09-25 : le client SQL qui se suffit à lui-même
+en fin de [phase 2](IMPLEMENTATION-PLAN.md#phase-2--les-protocoles-qui-comptent),
+MongoDB, Redis et Elasticsearch en
+[phase 3 bis](IMPLEMENTATION-PLAN.md#phase-3-bis--au-delà-du-relationnel),
+l'élargissement en [phase 4](IMPLEMENTATION-PLAN.md#phase-4--extension-et-isolation).
+Le principe qui
 guidait ce découpage reste celui-ci : **chaque phase livre un outil complet en soi**.
 
 ---

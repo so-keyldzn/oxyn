@@ -66,7 +66,7 @@ Pour localiser les planches et leurs états avant implémentation, consulter
 | [0037](adr/0037-dialogue-natif-pour-les-confirmations-critiques.md) | Une décision critique se confirme dans un dialogue natif de l'hôte, jamais dans la webview | proposé |
 | [0038](adr/0038-un-plantage-s-annonce-une-fois.md) | Un plantage s'annonce une fois, et ⌘Q passe par l'arrêt ordonné | accepté |
 | [0039](adr/0039-etat-de-transaction-d-une-session.md) | Une session rend l'état de transaction qu'elle a constaté, et la console ne montre que celui-là | proposé |
-| [0040](adr/0040-inscrire-la-fermeture-d-une-sortie-forcee.md) | Une sortie que macOS ne laisse pas retenir inscrit sa fermeture | proposé |
+| [0040](adr/0040-inscrire-la-fermeture-d-une-sortie-forcee.md) | Une sortie que macOS ne laisse pas retenir inscrit sa fermeture | accepté |
 
 Les ADR restent `proposé` jusqu'au premier commit de code qui les met en œuvre.
 

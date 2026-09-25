@@ -1483,18 +1483,11 @@ Le reste — le contenu de chaque phase et sa porte de sortie — est **proposé
 demande validation. Il n'a pas valeur d'autorité tant que le premier commit de
 code ne l'a pas éprouvé.
 
-> **Ce que le §11 d'ARCHITECTURE ordonnait et que ces phases ne placent pas**,
-> recopié à son retrait le 2026-09-25 pour ne pas le perdre. Rien n'y est
-> tranché : ces éléments attendent d'être rangés dans une phase, ou abandonnés
-> explicitement.
-> - avant l'IA, un client SQL qui se suffit à lui-même : DuckDB, ClickHouse,
->   export, historique, **édition de données avec prévisualisation du DML** ;
-> - après l'IA, une phase « au-delà du relationnel » — MongoDB, Redis,
->   Elasticsearch/OpenSearch — placée **avant** les plugins parce que c'est là
->   que le modèle de capacités et `QueryLanguage` sont mis à l'épreuve : s'ils
->   sont mal conçus, mieux vaut le découvrir maintenant qu'au vingtième driver ;
-> - en élargissement : Neo4j, Qdrant, Cassandra, DynamoDB, Influx, agents
->   restants, diagrammes ER, dictionnaires de données, comparaison de versions.
+Ce que l'ancien §11 d'ARCHITECTURE ordonnait sans que ces phases le placent a
+été rangé le 2026-09-25 : le client SQL qui se suffit à lui-même en fin de
+[phase 2](#phase-2--les-protocoles-qui-comptent), les protocoles non
+relationnels en [phase 3 bis](#phase-3-bis--au-delà-du-relationnel),
+l'élargissement en [phase 4](#phase-4--extension-et-isolation).
 
 ## Phase 0 — Charpente
 
@@ -1570,6 +1563,26 @@ alors que deux drivers livrés, PostgreSQL et SQLite, suffisent à éprouver les
 porte de sortie de la phase 2 n'est **pas franchie** : elle nomme trois drivers,
 et ce report ne la réduit pas à deux.
 
+**Proposé — le client SQL qui se suffit à lui-même.** Rangé ici le 2026-09-25
+depuis l'ancien §11 d'ARCHITECTURE, qui le plaçait avant l'IA : à ce stade,
+Oxyn est un bon client SQL sans une ligne d'IA.
+
+- `oxyn-driver-duckdb` et `oxyn-driver-clickhouse` — **à écrire**, par
+  [`/driver`](../.claude/commands/driver.md) ;
+- l'export d'un résultat — **existe** : CSV, JSON et Arrow IPC, écrits en flux
+  depuis le `ResultBuffer` (`crates/oxyn-data/src/export.rs`), offerts par
+  `ExportMenu` sous la console, l'aperçu Data et le résultat retenu ;
+- l'historique des exécutions — **existe** : la table `query_history`
+  (`crates/oxyn-store/src/history.rs`), séparée des brouillons et des requêtes
+  sauvegardées par [ADR-0014](adr/0014-documents-et-historique.md) ;
+- l'édition de données avec aperçu du DML — **à écrire**. Ce qui existe est
+  l'aperçu Data d'une table, en lecture seule
+  (`apps/desktop/src/features/workspace/object-view.tsx`,
+  [ADR-0020](adr/0020-apercu-trie-filtre-parcouru.md),
+  [ADR-0028](adr/0028-pas-dordre-par-defaut-pas-de-page-sans-ordre-total.md)) :
+  c'est la surface où l'édition se posera. Ni l'édition ni le DML montré avant
+  envoi n'existent.
+
 ## Phase 3 — Le workspace IA
 
 - `oxyn-ai` : fournisseurs local et distant, point de passage unique ;
@@ -1612,13 +1625,41 @@ port. **Ce qui le débloque** : la fin des travaux en cours sur l'assistant
 (`commands/ai.rs`, `backend/ai`), puis un commit par chemin, avec les tests du
 § 4 de l'ADR. **Échéance** : au plus tard le 2026-10-31.
 
+## Phase 3 bis — Au-delà du relationnel
+
+Proposée le 2026-09-25, reprise de l'ancien §11 d'ARCHITECTURE. Numérotée
+« 3 bis » pour ne déplacer ni l'ancre ni les renvois de la phase 4.
+
+- `oxyn-driver-mongodb`, `oxyn-driver-redis`, `oxyn-driver-elasticsearch` —
+  OpenSearch parle le protocole d'Elasticsearch, il n'a pas de driver à lui
+  ([ADR-0003](adr/0003-driver-capabilities.md)).
+
+**Pourquoi ici, avant les plugins.** C'est ici que le modèle de capacités
+([ADR-0003](adr/0003-driver-capabilities.md)) et `QueryLanguage` sont mis à
+l'épreuve : Redis n'a pas de schéma, Elasticsearch pas de SQL, MongoDB pas de
+colonnes fixes. S'ils sont mal conçus, mieux vaut le découvrir maintenant
+qu'au vingtième driver — et avant que la phase 4 n'ouvre ces traits aux
+plugins, où une erreur se supporte indéfiniment. Le sidecar reste en phase 4
+([ADR-0007](adr/0007-driver-sidecar.md)) : un driver de cette phase qui en
+aurait besoin rouvrirait cet ADR.
+
+**Porte de sortie** proposée : les trois drivers passent la
+[liste de contrôle driver](../.claude/checklists/revue-driver.md), et aucune
+surface de l'interface ni aucun agent ne teste le nom d'un driver pour savoir
+quoi offrir — seulement ses `Capabilities` et ses `QueryLanguage`. Une capacité
+ou un langage qu'il a fallu ajouter pour eux est consigné dans un ADR qui
+précise [ADR-0003](adr/0003-driver-capabilities.md), pas glissé dans le trait.
+
 ## Phase 4 — Extension et isolation
 
 **[ADR]** Ce qui a été délibérément reporté ici :
 
 - `oxyn-plugin` : hôte wasmtime, interfaces WIT ([ADR-0005](adr/0005-wasm-plugins.md)) ;
 - `oxyn-driverd` : sidecar pour Oracle, Couchbase, SDK cloud ([ADR-0007](adr/0007-driver-sidecar.md)) ;
-- élargissement aux familles NoSQL, vectorielle, graphe, séries temporelles.
+- élargissement aux familles NoSQL, vectorielle, graphe, séries temporelles —
+  Neo4j, Qdrant, Cassandra, DynamoDB, Influx — et, repris de l'ancien §11
+  d'ARCHITECTURE le 2026-09-25, les agents restants, les diagrammes ER, les
+  dictionnaires de données et la comparaison de versions.
 
 **Condition d'entrée**, et non de sortie : au moins six drivers natifs livrés.
 Ouvrir une frontière d'extension sur des traits que trop peu d'implémentations
@@ -1842,6 +1883,12 @@ porte `remplacé` ([ADR-0029](adr/0029-interface-tauri-shadcn.md)).
 | [0030](adr/0030-outils-oxyn-exposes-a-un-agent-externe.md) | proposé | **écart code/ADR** : le § 2 bis promet une écriture par question, `WriteGate` applique « une demande en attente à la fois » (`nothing_runs_while_a_request_waits_even_from_an_earlier_question`) — à arbitrer |
 
 ADR-0035 était déjà `accepté` ; ADR-0036, écrit le jour même, n'a pas été revu.
+
+**Depuis la revue.** [ADR-0040](adr/0040-inscrire-la-fermeture-d-une-sortie-forcee.md)
+passe `accepté` le 2026-09-25, une fois son code fusionné (PR #59), selon le
+même critère : `a_forced_exit_records_the_close_and_is_not_offered_recovery` et
+`a_forced_exit_over_a_pending_write_is_bounded_and_leaves_the_close_unwritten`
+(`oxyn-desktop/src/backend/recovery.rs`) le tiennent.
 
 **Ce qui reste signalé, sans être corrigé ici.** Plusieurs ADR acceptés citent
 encore `oxyn-app` ou GPUI comme lieu d'implémentation (0021, 0023, 0026, 0029) :
