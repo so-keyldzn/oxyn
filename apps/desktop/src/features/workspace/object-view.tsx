@@ -45,6 +45,12 @@ import type {
   OpenConnection,
 } from "@/lib/ipc/types"
 
+/** What the workspace asks of the object on screen. */
+export type ObjectViewHandle = {
+  /** Shows Data and focuses its grid (`⌘2`); nothing without a preview. */
+  focusPreview: () => void
+}
+
 /**
  * A selected table or view: its rows, structure, indexes, constraints,
  * relations and definition, each loaded when its tab is opened.
@@ -62,6 +68,7 @@ export function ObjectView({
   initialTab,
   onOpenRelated,
   onOpenInConsole,
+  handleRef,
 }: {
   open: OpenConnection
   node: CatalogNode
@@ -80,11 +87,24 @@ export function ObjectView({
     /** A value is still missing: the console says so before running. */
     needsValues?: boolean
   ) => void
+  handleRef?: React.Ref<ObjectViewHandle>
 }) {
   const dataUnavailable = previewUnavailable(open, node.holdsRecords)
   const previewable = dataUnavailable === null
   const [tab, setTab] = React.useState<ObjectTab>(() =>
     initialObjectTab(initialTab, previewable)
+  )
+  const [gridFocusRequest, setGridFocusRequest] = React.useState(0)
+  React.useImperativeHandle(
+    handleRef,
+    () => ({
+      focusPreview: () => {
+        if (!previewable) return
+        setTab("data")
+        setGridFocusRequest((count) => count + 1)
+      },
+    }),
+    [previewable]
   )
   const [direction, setDirection] = React.useState<"outgoing" | "incoming">(
     () => (unsupportedReason(open, "incoming") ? "outgoing" : "incoming")
@@ -190,6 +210,7 @@ export function ObjectView({
       onTabChange={setTab}
       dataUnavailable={dataUnavailable}
       onEscape={tab === "data" && preview.running ? preview.cancel : undefined}
+      gridFocusRequest={gridFocusRequest}
       toolbar={
         tab === "data" && previewable ? (
           <PreviewToolbar

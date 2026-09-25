@@ -38,6 +38,7 @@ import {
 } from "@/features/settings/preferences"
 import { CatalogSidebar } from "@/features/workspace/catalog-sidebar"
 import { ObjectView } from "@/features/workspace/object-view"
+import type { ObjectViewHandle } from "@/features/workspace/object-view"
 import {
   objectOpenRequests,
   takeObjectOpenRequests,
@@ -160,6 +161,7 @@ export function WorkspaceScreen({
   const lastConsole = React.useRef<string | null>(null)
   const objectsRef = React.useRef(objects)
   objectsRef.current = objects
+  const objectHandles = React.useRef(new Map<string, ObjectViewHandle>())
 
   const activate = React.useCallback(
     (key: string) => {
@@ -305,6 +307,13 @@ export function WorkspaceScreen({
         },
       },
       { hotkey: "Mod+1", callback: () => setLeftView("catalog") },
+      {
+        // The object on screen only: a console or a result has no preview.
+        hotkey: "Mod+2",
+        callback: () => {
+          if (active) objectHandles.current.get(active)?.focusPreview()
+        },
+      },
       { hotkey: "Mod+Shift+H", callback: () => setLeftView("library") },
       {
         hotkey: "Mod+Alt+B",
@@ -466,6 +475,10 @@ export function WorkspaceScreen({
               open={open}
               node={tab.node}
               initialTab={tab.target}
+              handleRef={(handle) => {
+                if (handle) objectHandles.current.set(tab.key, handle)
+                else objectHandles.current.delete(tab.key)
+              }}
               onOpenRelated={(address) => openObject(relatedNode(address))}
               onOpenInConsole={(sql, title, parameters, needsValues) =>
                 void work.openConsole({
