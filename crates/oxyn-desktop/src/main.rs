@@ -15,12 +15,12 @@ mod ipc;
 mod logging;
 #[cfg(test)]
 mod sentinel_tests;
+mod webview_guard;
 
 use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
-use tauri::Manager as _;
 
 use crate::backend::{Backend, NativeDialog};
 use crate::logging::FileJournal;
@@ -87,9 +87,7 @@ fn main() -> Result<()> {
         // One closure: a second `setup` replaces the first, it does not chain.
         .setup(move |app| {
             dialog.attach(app.handle().clone());
-            if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
-                window.set_title(window_title(temporary))?;
-            }
+            webview_guard::open_window(app, MAIN_WINDOW, window_title(temporary))?;
             Ok(())
         })
         // Grouped by feature. A feature module adds its block here and nowhere
