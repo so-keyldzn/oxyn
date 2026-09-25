@@ -291,14 +291,18 @@ fn an_unknown_outcome_is_listed_again_and_never_replayed() {
     bench.ok("BEGIN");
     bench.ok("INSERT INTO parent VALUES (7)");
     let mut events = bench.backend.subscribe();
-    // What a `COMMIT` in flight, or one that ended without a published state,
-    // leaves behind.
-    bench
-        .backend
-        .inner
-        .workbench
-        .consoles
-        .running(bench.console);
+    // A `COMMIT` sent and not answered: its outcome is not known.
+    let consoles = &bench.backend.inner.workbench.consoles;
+    let _in_flight = consoles.run_on(bench.console);
+    // A late event of the previous statement does not make it look settled.
+    consoles.apply(Ok(oxyn_exec::ExecEvent::new(
+        CommandId::new(),
+        Some(bench.connection),
+        oxyn_core::Event::TransactionState {
+            session: bench.console,
+            state: oxyn_core::TransactionState::Idle,
+        },
+    )));
 
     assert_eq!(bench.exit_step(), ExitStep::Asked);
     assert_eq!(bench.exit_step(), ExitStep::Asked);

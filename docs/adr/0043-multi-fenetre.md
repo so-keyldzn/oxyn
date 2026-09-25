@@ -491,8 +491,9 @@ pas la dernière, la même étape porte sur ses seules sessions.
 celui que `Outcome::Connected` porte à l'ouverture de la console, puis celui de
 chaque `Event::TransactionState` publié à la fin d'une exécution
 ([ADR-0039](0039-etat-de-transaction-d-une-session.md) § 3 et § 4). Une
-session dont une instruction de console est en cours compte comme `Unknown`
-jusqu'à ce que sa fin publie un état ; des événements manqués par un abonné en
+session dont une instruction de console est en cours — envoyée par
+`run_console` ou approuvée par `decide` — compte comme `Unknown` jusqu'à sa
+réponse, quel que soit l'événement qui arrive entre-temps ; des événements manqués par un abonné en
 retard rendent `Unknown` toutes les sessions. Avant de lire, le backend
 applique les événements déjà publiés, en attendant au plus `FLUSH_GRACE`
 (2 s) ; au-delà, toutes comptent comme `Unknown`. Une session `Open`, ou

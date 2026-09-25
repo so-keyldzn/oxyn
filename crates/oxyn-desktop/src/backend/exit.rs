@@ -39,6 +39,21 @@ struct ConsoleEntry {
     /// forced exit names, which cannot wait for the store.
     name: String,
     state: TransactionState,
+    /// Console statements sent and not answered yet. Counted apart from
+    /// `state`: a late event of the previous statement must not make a
+    /// running one look settled.
+    running: usize,
+}
+
+impl ConsoleEntry {
+    /// `Unknown` while a statement runs: its end has not said yet.
+    fn shown_state(&self) -> TransactionState {
+        if self.running > 0 {
+            TransactionState::Unknown
+        } else {
+            self.state
+        }
+    }
 }
 
 /// The console sessions, in opening order, with their observed state.
@@ -52,6 +67,11 @@ pub(crate) struct ConsoleTransactions {
     /// A reader is waiting for `events`: the task lets it go.
     reader: Notify,
 }
+
+/// How often a reader asks the follower again for the event stream, within
+/// its grace: a follower that let go and took it back before the reader
+/// queued is asked once more.
+const READER_RETRY: Duration = Duration::from_millis(50);
 
 impl ConsoleTransactions {
     pub(crate) fn new(events: broadcast::Receiver<ExecEvent>) -> Self {
@@ -105,21 +125,37 @@ impl ConsoleTransactions {
     }
 
     /// The entries once every event already published is applied, waiting at
-    /// most `grace` for the follower to let go. Past it, every state is
-    /// `Unknown`: listed rather than assumed settled.
+    /// most `grace` for the follower to let go. Past it, this reading shows
+    /// every state `Unknown` — listed rather than assumed settled — without
+    /// keeping it: the events are still there for the next one.
     async fn settled(&self, grace: Duration) -> Vec<ConsoleEntry> {
-        self.reader.notify_one();
-        match tokio::time::timeout(grace, self.events.lock()).await {
-            Ok(mut events) => loop {
-                match events.try_recv() {
-                    Ok(event) => self.apply(Ok(event)),
-                    Err(TryRecvError::Lagged(_)) => self.apply(Err(Lag)),
-                    Err(TryRecvError::Empty | TryRecvError::Closed) => break,
-                }
-            },
-            Err(_) => self.apply(Err(Lag)),
+        let deadline = tokio::time::Instant::now() + grace;
+        let events = loop {
+            self.reader.notify_one();
+            let wait =
+                READER_RETRY.min(deadline.saturating_duration_since(tokio::time::Instant::now()));
+            match tokio::time::timeout(wait, self.events.lock()).await {
+                Ok(events) => break Some(events),
+                Err(_) if tokio::time::Instant::now() >= deadline => break None,
+                Err(_) => {}
+            }
+        };
+        let Some(mut events) = events else {
+            let mut entries = self.now();
+            for entry in &mut entries {
+                entry.state = TransactionState::Unknown;
+            }
+            return entries;
+        };
+        loop {
+            match events.try_recv() {
+                Ok(event) => self.apply(Ok(event)),
+                Err(TryRecvError::Lagged(_)) => self.apply(Err(Lag)),
+                Err(TryRecvError::Empty | TryRecvError::Closed) => break,
+            }
         }
-        self.entries.lock().clone()
+        drop(events);
+        self.now()
     }
 
     /// The entries as they stand, without waiting: the forced exit's reading.
@@ -139,6 +175,7 @@ impl ConsoleTransactions {
             connection,
             name,
             state,
+            running: 0,
         });
     }
 
@@ -146,30 +183,43 @@ impl ConsoleTransactions {
         self.entries.lock().retain(|entry| entry.session != session);
     }
 
-    /// A statement is about to run: until its end publishes a state, the
-    /// session's is not known, and an exit asked meanwhile lists it. Returns
-    /// the state before, for [`Self::not_run`].
-    pub(crate) fn running(&self, session: SessionId) -> Option<TransactionState> {
-        let mut entries = self.entries.lock();
-        let entry = entries.iter_mut().find(|entry| entry.session == session)?;
-        Some(std::mem::replace(
-            &mut entry.state,
-            TransactionState::Unknown,
-        ))
-    }
-
-    /// The statement announced by [`Self::running`] never reached the
-    /// session — refused, or held for approval. Puts `before` back unless a
-    /// state was published since.
-    pub(crate) fn not_run(&self, session: SessionId, before: Option<TransactionState>) {
-        let Some(before) = before else { return };
-        if let Some(entry) = self
+    /// A console statement is sent to `session`, by `run_console` or by an
+    /// approval: until the returned guard drops, an exit lists the session as
+    /// `Unknown`.
+    pub(crate) fn run_on(self: &Arc<Self>, session: SessionId) -> RunningStatement {
+        let counted = self
             .entries
             .lock()
             .iter_mut()
-            .find(|entry| entry.session == session && entry.state == TransactionState::Unknown)
+            .find(|entry| entry.session == session)
+            .map(|entry| entry.running += 1)
+            .is_some();
+        RunningStatement {
+            consoles: Arc::clone(self),
+            session: counted.then_some(session),
+        }
+    }
+}
+
+/// A console statement sent and not answered yet; see
+/// [`ConsoleTransactions::run_on`].
+pub(crate) struct RunningStatement {
+    consoles: Arc<ConsoleTransactions>,
+    /// `None` when the session is not a console's: nothing was counted.
+    session: Option<SessionId>,
+}
+
+impl Drop for RunningStatement {
+    fn drop(&mut self) {
+        let Some(session) = self.session else { return };
+        if let Some(entry) = self
+            .consoles
+            .entries
+            .lock()
+            .iter_mut()
+            .find(|entry| entry.session == session)
         {
-            entry.state = before;
+            entry.running = entry.running.saturating_sub(1);
         }
     }
 }
@@ -361,9 +411,12 @@ impl Backend {
             match sessions.get(entry.session) {
                 Some(slot) if slot.is_open() => {
                     if slot.capabilities().contains(Capabilities::TRANSACTIONS)
-                        && entry.state != TransactionState::Idle
+                        && entry.shown_state() != TransactionState::Idle
                     {
-                        holding.push(entry);
+                        holding.push(ConsoleEntry {
+                            state: entry.shown_state(),
+                            ..entry
+                        });
                     }
                 }
                 _ => self.inner.workbench.consoles.closed(entry.session),

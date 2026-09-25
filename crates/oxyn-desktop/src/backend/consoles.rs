@@ -180,7 +180,6 @@ impl Backend {
         connection: ConnectionId,
         session: SessionId,
     ) -> Result<(), IpcError> {
-        self.inner.workbench.consoles.closed(session);
         match self
             .inner
             .executor
@@ -195,7 +194,11 @@ impl Backend {
             .await?
         {
             Outcome::Denied { reason, .. } => Err(IpcError::invalid(reason)),
-            _ => Ok(()),
+            // Only once closed: a session still open keeps holding the exit.
+            _ => {
+                self.inner.workbench.consoles.closed(session);
+                Ok(())
+            }
         }
     }
 
@@ -311,27 +314,18 @@ impl Backend {
         let params = bind(&run.parameters).map_err(|error| IpcError::invalid(error.to_string()))?;
         let mut request = ExecRequest::new(QueryLanguage::Sql(dialect), text).with_params(params);
         request.limits.read_only = config.read_only;
-        let consoles = &self.inner.workbench.consoles;
-        let before = consoles.running(session);
-        let outcome = self
-            .run(
-                id,
-                Command::Execute {
-                    connection,
-                    session,
-                    request: Box::new(request),
-                },
-            )
-            .await;
-        // Nothing ran, so no state will be published: the session is where
-        // it was. An approved statement publishes its own at its end.
-        if matches!(
-            outcome,
-            Ok(CommandOutcome::Denied { .. } | CommandOutcome::NeedsApproval { .. })
-        ) {
-            consoles.not_run(session, before);
-        }
-        outcome
+        // Listed as `Unknown` at the exit until it answers (ADR-0043). Held
+        // for approval, it is counted again by `decide`.
+        let _running = self.inner.workbench.consoles.run_on(session);
+        self.run(
+            id,
+            Command::Execute {
+                connection,
+                session,
+                request: Box::new(request),
+            },
+        )
+        .await
     }
 }
 
