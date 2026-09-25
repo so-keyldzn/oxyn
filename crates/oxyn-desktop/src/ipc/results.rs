@@ -1,19 +1,20 @@
 //! What crosses the IPC boundary for a result the backend holds: a window of
-//! rows, where a search matched, one value page, the export formats.
+//! rows, where a search matched, one value page, the export formats, rows
+//! copied as text.
 //!
 //! None of these carries more than a bounded slice of the result
 //! ([I-06](../../../../CLAUDE.md#i-06)): a window is at most
 //! `MAX_PAGE_ROWS` rows (`backend/results.rs`), a value page 16 KiB,
-//! a list of matches one window.
+//! a list of matches one window, a copy `MAX_COPY_ROWS` rows.
 
 use std::fmt;
 
 use oxyn_core::ExportFormat;
 use oxyn_data::FindOutcome;
 use oxyn_data::value_page::ValuePage;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
-use crate::ipc::ResultPage;
+use crate::ipc::{CatalogAddress, ResultPage};
 
 /// A window of rows, or the reason there is none.
 ///
@@ -223,9 +224,107 @@ pub fn export_format(name: &str) -> Option<ExportFormat> {
         .map(|(format, _, _)| *format)
 }
 
+/// The text a « Copy rows as » entry puts on the clipboard.
+///
+/// The first four render values as the grid shows them; the last two compose
+/// SQL, with identifiers quoted and values escaped by the dialect
+/// ([I-10](../../../../CLAUDE.md#i-10)). None of them runs anything: the text
+/// goes to the clipboard, never to the bus.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum CopyRowsFormat {
+    Tsv,
+    Csv,
+    Json,
+    Markdown,
+    /// One `INSERT INTO … VALUES (…);` per row, into the relation `address`
+    /// names.
+    Insert,
+    /// `(v1, v2, …)` over a single column, for a `WHERE … IN`.
+    InList,
+}
+
+/// Which rows of a held result to copy, and how.
+///
+/// Carries ids and positions only: the values are read from the buffer in
+/// Rust, never sent by the webview.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CopyRowsRequest {
+    /// The result id, as `read_result_page` takes it.
+    pub result: String,
+    /// The first row copied.
+    pub offset: usize,
+    /// Rows copied; refused above `MAX_COPY_ROWS`, and when the range leaves
+    /// the rows the result holds.
+    pub count: usize,
+    /// Arrow column indexes, in the order the grid shows them.
+    pub columns: Vec<usize>,
+    pub format: CopyRowsFormat,
+    /// A header line, for TSV and CSV.
+    pub header: bool,
+    /// The connection the result belongs to: its dialect writes the literals
+    /// of `insert` and `inList`, which require it, and a batch that spilled to
+    /// disk is read back through it.
+    pub connection: Option<String>,
+    /// The relation an `insert` writes into; required for that format only.
+    pub address: Option<CatalogAddress>,
+}
+
+/// What a copy asks for, once its ids are parsed.
+#[derive(Debug, Clone)]
+pub struct CopySpec {
+    pub offset: usize,
+    pub count: usize,
+    pub columns: Vec<usize>,
+    pub format: CopyRowsFormat,
+    pub header: bool,
+}
+
+/// Rows copied as text.
+///
+/// **No `Debug` derive**: the text is the user's data. The manual
+/// implementation renders its length only.
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CopiedRows {
+    pub text: String,
+    /// Rows the text holds, for the front to say what it copied.
+    pub rows: usize,
+}
+
+impl fmt::Debug for CopiedRows {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("CopiedRows")
+            .field("bytes", &self.text.len())
+            .field("rows", &self.rows)
+            .finish()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn copied_rows_debug_never_shows_the_text() {
+        let copied = CopiedRows {
+            text: "confidential remark".into(),
+            rows: 1,
+        };
+        assert!(!format!("{copied:?}").contains("confidential"));
+    }
+
+    #[test]
+    fn a_copy_request_reads_the_names_the_front_sends() {
+        let request: CopyRowsRequest = serde_json::from_str(
+            r#"{"result":"r","offset":0,"count":2,"columns":[1,0],"format":"inList",
+                "header":false,"connection":null,"address":null}"#,
+        )
+        .expect("the TypeScript mirror's shape");
+        assert_eq!(request.format, CopyRowsFormat::InList);
+        assert_eq!(request.columns, [1, 0]);
+    }
 
     fn outcome(rows: Vec<usize>) -> FindOutcome {
         let mut outcome = FindOutcome::default();

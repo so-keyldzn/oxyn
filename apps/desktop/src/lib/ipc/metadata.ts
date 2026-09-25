@@ -153,6 +153,14 @@ export const RelationFacet = z.enum([
 export type RelationFacet = z.infer<typeof RelationFacet>
 
 /** The row a related-row query takes its values from. */
+/** What the catalog's « Copy as » entries compose (`ObjectSqlForm`). */
+export const ObjectSqlForm = z.enum([
+  "quotedName",
+  "selectAll",
+  "insertTemplate",
+])
+export type ObjectSqlForm = z.infer<typeof ObjectSqlForm>
+
 export const RelatedRowsSource = z.object({
   result: z.string(),
   row: z.number().int().nonnegative(),
@@ -287,6 +295,17 @@ export const metadata = {
       index,
       source: source ?? null,
     }),
+
+  /**
+   * A « Copy as » text for a relation, composed and quoted in Rust by the
+   * connection's dialect; never run. `insertTemplate` is refused while the
+   * relation's columns have not been read.
+   */
+  composeObjectSql: (
+    connection: string,
+    address: CatalogAddress,
+    form: ObjectSqlForm
+  ) => call("compose_object_sql", z.string(), { connection, address, form }),
 
   subscribeRefreshSignals: (onSignal: (signal: RefreshSignal) => void) => {
     // Constructing a channel outside the webview throws before `call` can

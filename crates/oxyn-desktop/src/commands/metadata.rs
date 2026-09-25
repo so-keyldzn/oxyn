@@ -14,8 +14,8 @@ use tauri::ipc::Channel;
 use super::parse;
 use crate::backend::Backend;
 use crate::ipc::metadata::{
-    CatalogSearchHit, Pagination, PreviewShapeDraft, RefreshSignal, RelatedRowsQuery,
-    RelatedRowsSource, RelationFacet, RelationFacets,
+    CatalogSearchHit, ObjectSqlForm, Pagination, PreviewShapeDraft, RefreshSignal,
+    RelatedRowsQuery, RelatedRowsSource, RelationFacet, RelationFacets,
 };
 use crate::ipc::{CatalogAddress, CatalogNode, CommandOutcome, IpcError, RelationDetail};
 
@@ -144,6 +144,20 @@ pub async fn related_rows_template(
         .on_blocking_pool(move |backend| {
             backend.related_rows_template(connection, &address, incoming, index, source)
         })
+        .await
+}
+
+/// A « Copy as » text for a relation; this command never runs it.
+#[tauri::command]
+pub async fn compose_object_sql(
+    backend: State<'_, Backend>,
+    connection: String,
+    address: CatalogAddress,
+    form: ObjectSqlForm,
+) -> Result<String, IpcError> {
+    let connection = parse("connection", &connection)?;
+    backend
+        .on_blocking_pool(move |backend| backend.compose_object_sql(connection, &address, form))
         .await
 }
 

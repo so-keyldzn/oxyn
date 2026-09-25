@@ -13,6 +13,7 @@
 //! |---|---|---|
 //! | [`model`] | la hiérarchie à cinq paliers, ses relations et ses champs | ARCHITECTURE §6 |
 //! | [`path`] | le chemin qualifié, et la citation d'identifiant | DRIVER-CONTRACT §6, I-10 |
+//! | [`literal`] | le littéral de chaîne SQL composé à partir d'une valeur | I-10 |
 //! | [`provider`] | ce qu'une session sait dire de sa structure | DRIVER-CONTRACT §5 |
 //! | [`cache`] | l'arbre en mémoire, sa fraîcheur, son invalidation | ARCHITECTURE §6 |
 //! | [`mod@search`] | la sélection lexicale des relations pertinentes | ARCHITECTURE §7.4 |
@@ -67,6 +68,7 @@
 
 pub mod cache;
 pub mod definition;
+pub mod literal;
 pub mod model;
 pub mod nesting;
 pub mod path;
@@ -75,6 +77,7 @@ pub mod search;
 
 pub use cache::{CacheError, CatalogCache, CatalogHandle, CatalogScope, Freshness, SharedCatalog};
 pub use definition::{DefinitionSource, RelationDefinition};
+pub use literal::{LiteralError, check_identifier, push_string_literal};
 pub use model::{
     CatalogRef, Constraint, ConstraintKind, Field, ForeignKey, ForeignKeyTarget,
     IncomingForeignKey, Index, LogicalType, NamespaceRef, ReferentialAction, Relation,
