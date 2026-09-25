@@ -267,4 +267,78 @@ mod tests {
             .expect("answered");
         assert!(matches!(expired, RetainedResult::Expired));
     }
+
+    fn all_history() -> HistoryQuery {
+        HistoryQuery {
+            connection: None,
+            search: String::new(),
+            days: None,
+            status: HistoryStatusChoice::All,
+            before: None,
+            limit: None,
+        }
+    }
+
+    #[test]
+    fn an_agent_statement_says_so_in_the_list_and_in_full() {
+        use oxyn_core::{AgentId, AgentSessionId, QueryLanguage};
+        use oxyn_store::history::HistoryRecord;
+
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .enable_all()
+            .build()
+            .expect("a test runtime starts");
+        let _guard = runtime.enter();
+        let store = std::sync::Arc::new(oxyn_store::Store::open_in_memory().expect("store"));
+        let human = store
+            .history()
+            .record(&HistoryRecord::new(
+                &Actor::Human,
+                QueryLanguage::SQL,
+                "SELECT 1",
+            ))
+            .expect("recorded");
+        let agent = store
+            .history()
+            .record(&HistoryRecord::new(
+                &Actor::agent(AgentId::new(), AgentSessionId::new()),
+                QueryLanguage::SQL,
+                "SELECT 2",
+            ))
+            .expect("recorded");
+        let backend = Backend::assemble(
+            store,
+            std::sync::Arc::new(oxyn_secrets::MemorySecretStore::new()),
+        )
+        .expect("backend");
+
+        let page = runtime
+            .block_on(backend.read_history(CommandId::new(), None, all_history()))
+            .expect("listed");
+        let from_agent = |id| {
+            page.entries
+                .iter()
+                .find(|row| row.id == id)
+                .map(|row| row.from_agent)
+        };
+        assert_eq!(from_agent(agent), Some(true));
+        assert_eq!(from_agent(human), Some(false));
+        let json = serde_json::to_value(&page).expect("serializable");
+        assert!(
+            json["entries"]
+                .as_array()
+                .is_some_and(|rows| rows.iter().any(|row| row["fromAgent"] == true)),
+            "{json}"
+        );
+
+        let detail = runtime
+            .block_on(backend.read_history_entry(agent))
+            .expect("read");
+        let json = serde_json::to_value(&detail).expect("serializable");
+        assert_eq!(json["fromAgent"], true, "{json}");
+        let detail = runtime
+            .block_on(backend.read_history_entry(human))
+            .expect("read");
+        assert!(!detail.from_agent);
+    }
 }

@@ -40,6 +40,11 @@ import {
 import { NativeSelect, NativeSelectOption } from "@/components/ui/native-select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipTrigger,
+} from "@/components/ui/tooltip"
 import type {
   DocumentEntry,
   HistoryRow,
@@ -103,6 +108,47 @@ function retainsResult(row: HistoryRow, connection: string) {
   return row.result !== null && row.connection === connection
 }
 
+/**
+ * Names the connection the copy opens on before the click (UX-SPEC « Ouvrir
+ * depuis la bibliothèque »): the entry lists where the text ran, which is not
+ * where it would run now.
+ */
+function OpenCopyButton({
+  destination,
+  className,
+  onClick,
+}: {
+  destination: string
+  className?: string
+  onClick: () => void
+}) {
+  return (
+    <Tooltip>
+      <TooltipTrigger
+        render={
+          <Button
+            size="xs"
+            variant="ghost"
+            className={className}
+            aria-label={`Open copy in ${destination}`}
+            onClick={onClick}
+          />
+        }
+      >
+        <HugeiconsIcon
+          icon={Copy01Icon}
+          strokeWidth={2}
+          data-icon="inline-start"
+        />
+        Open copy
+      </TooltipTrigger>
+      <TooltipContent>
+        Opens an unrun copy in <bdi>{destination}</bdi>
+      </TooltipContent>
+    </Tooltip>
+  )
+}
+
 export function LibraryPanel({
   view,
   onViewChange,
@@ -118,6 +164,7 @@ export function LibraryPanel({
   onNext,
   onRefresh,
   currentConnection,
+  currentConnectionName,
   onOpenHistory,
   onOpenResult,
   onReconcile,
@@ -140,6 +187,8 @@ export function LibraryPanel({
   onRefresh: () => void
   /** The connection of this workspace: only its queries can be resumed. */
   currentConnection: string
+  /** Where a copy opens, named on the button before the click. */
+  currentConnectionName: string
   onOpenHistory: (row: HistoryRow) => void
   /**
    * Opens the rows a run of this connection still retains. Reads them only:
@@ -291,6 +340,9 @@ export function LibraryPanel({
                   {row.preview}
                 </code>
                 <div className="flex items-center gap-1.5 text-muted-foreground">
+                  {row.fromAgent ? (
+                    <span className="shrink-0">AI ·</span>
+                  ) : null}
                   <span dir="auto" className="min-w-0 truncate">
                     {row.connectionName ?? "Connection unavailable"}
                   </span>
@@ -354,23 +406,15 @@ export function LibraryPanel({
                       Mark reconciled
                     </Button>
                   ) : (
-                    <Button
-                      size="xs"
-                      variant="ghost"
+                    <OpenCopyButton
+                      destination={currentConnectionName}
                       className={cn(
                         !(
                           onOpenResult && retainsResult(row, currentConnection)
                         ) && "ml-auto"
                       )}
                       onClick={() => onOpenHistory(row)}
-                    >
-                      <HugeiconsIcon
-                        icon={Copy01Icon}
-                        strokeWidth={2}
-                        data-icon="inline-start"
-                      />
-                      Open copy
-                    </Button>
+                    />
                   )}
                 </div>
               </li>
@@ -395,18 +439,10 @@ export function LibraryPanel({
                   <span>{entry.hasChanges ? "Draft changed" : "Saved"}</span>
                 </div>
                 <div className="flex flex-wrap items-center gap-1">
-                  <Button
-                    size="xs"
-                    variant="ghost"
+                  <OpenCopyButton
+                    destination={currentConnectionName}
                     onClick={() => onOpenSaved(entry)}
-                  >
-                    <HugeiconsIcon
-                      icon={Copy01Icon}
-                      strokeWidth={2}
-                      data-icon="inline-start"
-                    />
-                    Open copy
-                  </Button>
+                  />
                   {entry.connection === currentConnection ? (
                     <Button
                       size="xs"

@@ -28,6 +28,7 @@ const meta = {
     fetchPage: syntheticPages(1_200),
     onRetry: fn(),
     onOpenCopy: fn(),
+    destination: "billing replica",
   },
 } satisfies Meta<typeof RetainedResultView>
 
@@ -64,8 +65,11 @@ export const Expired: Story = {
   play: async ({ canvas, args }) => {
     await expect(canvas.getByText(/No query was rerun/)).toBeVisible()
     await expect(canvas.queryByRole("button", { name: /Run/ })).toBeNull()
+    // The destination is named before the click: the copy opens here.
     await userEvent.click(
-      canvas.getByRole("button", { name: "Open the statement in a console" })
+      canvas.getByRole("button", {
+        name: "Open a copy of the statement in billing replica",
+      })
     )
     await expect(args.onOpenCopy).toHaveBeenCalled()
   },

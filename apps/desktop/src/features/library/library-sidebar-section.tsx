@@ -179,6 +179,7 @@ export function LibrarySidebarSection({
         void queryClient.invalidateQueries({ queryKey: LIBRARY_QUERY_KEY })
       }}
       currentConnection={open.connection}
+      currentConnectionName={open.name}
       onOpenResult={onOpenResult}
       onOpenHistory={(row) =>
         void guard(async () =>

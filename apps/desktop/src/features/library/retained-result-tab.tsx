@@ -17,9 +17,12 @@ export function RetainedResultTab({
   result,
   succeeded,
   onOpenCopy,
+  connectionName,
 }: {
   /** The workspace's connection, which the result must belong to. */
   connection: string
+  /** Its name: where a copy of the statement opens. */
+  connectionName: string
   result: string
   /** The run ended without doubt; otherwise the rows are for inspection. */
   succeeded: boolean
@@ -71,6 +74,7 @@ export function RetainedResultTab({
       fetchPage={fetchPage}
       onRetry={() => void opened.refetch()}
       onOpenCopy={onOpenCopy}
+      destination={connectionName}
     />
   )
 }

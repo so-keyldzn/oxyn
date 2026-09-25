@@ -230,19 +230,30 @@ export function useConsoles({
       delta
     )
 
-  const openHistoryCopy = (entry: HistoryDetail) =>
-    openConsole({
+  const openHistoryCopy = async (entry: HistoryDetail) => {
+    // Refused here, whatever button asked: an editable copy of a write whose
+    // outcome is unknown is one ⌘↵ away from applying it twice (I-13).
+    if (entry.needsInspection) {
+      setNotice(
+        "This write needs inspection: it stays readable in the library and is never opened as an editable copy."
+      )
+      return null
+    }
+    return openConsole({
       title: "History copy.sql",
       text: entry.statement,
-      notice: `Copy from History · ${entry.connectionName ?? "Connection unavailable"}. Review for this connection before running; nothing was executed.`,
+      fromAgent: entry.fromAgent,
+      // Names both ends: where the text ran, and where it would run now.
+      notice: `Copy from ${entry.fromAgent ? "an agent's History entry" : "History"} · ${entry.connectionName ?? "Connection unavailable"}. Review for ${open.name} before running; nothing was executed.`,
     })
+  }
 
   const openDocumentCopy = (document: DocumentView, origin: string) =>
     openConsole({
       title: document.savedTitle ?? (document.title || "Query copy.sql"),
       text: document.savedText ?? document.text,
       fromAgent: document.fromAgent,
-      notice: `Copy from Saved query · ${origin}. Review for this connection before running; nothing was executed.`,
+      notice: `Copy from Saved query · ${origin}. Review for ${open.name} before running; nothing was executed.`,
     })
 
   const resume = (document: DocumentView) => {

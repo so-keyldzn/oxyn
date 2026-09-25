@@ -18,6 +18,8 @@ pub struct HistorySummary {
     pub connection: Option<ConnectionId>,
     /// Historical display name.
     pub connection_name: Option<String>,
+    /// Who submitted it: an agent's statement keeps saying so once copied.
+    pub actor_kind: ActorKind,
     /// At most 256 characters, never used for execution.
     pub statement_preview: String,
     /// Recorded outcome.
@@ -104,7 +106,7 @@ impl History<'_> {
                 let reconcile = entry.record.requires_reconciliation();
                 let record = entry.record;
                 Ok(HistorySummary { id: entry.id, ts: record.ts, connection: record.connection, connection_name: record.connection_name,
-                    statement_preview: record.statement, status: record.status, error_class: record.error_class, duration: record.duration,
+                    actor_kind: record.actor_kind, statement_preview: record.statement, status: record.status, error_class: record.error_class, duration: record.duration,
                     rows: record.rows, result: record.result, requires_reconciliation: reconcile,
                     reconciled_at: record.reconciled_at })
             })?.collect::<Result<Vec<_>>>()?;
