@@ -25,6 +25,7 @@ import {
 } from "@/components/ui/empty"
 import { Kbd, KbdGroup } from "@/components/ui/kbd"
 import { TabsContent } from "@/components/ui/tabs"
+import { toast } from "@/components/ui/toast"
 import { answeringReach } from "@/features/assistant/availability"
 import { usePinState } from "@/features/assistant/object-pin"
 import { useAssistantAvailable } from "@/features/assistant/use-assistant-available"
@@ -171,6 +172,10 @@ export function WorkspaceScreen({
   }, [focusAssistant])
   const [objects, setObjects] = React.useState<Array<ObjectTab>>([])
   const [retained, setRetained] = React.useState<Array<ResultTab>>([])
+  /** Result tabs with an export under way: they do not close meanwhile. */
+  const [exporting, setExporting] = React.useState<ReadonlySet<string>>(
+    () => new Set()
+  )
   const [active, setActive] = React.useState<string | null>(null)
   const lastConsole = React.useRef<string | null>(null)
   const objectsRef = React.useRef(objects)
@@ -299,6 +304,17 @@ export function WorkspaceScreen({
       work.requestClose(key)
       return
     }
+    // Closing would unmount the export and cancel its write (UX-SPEC
+    // § Résultats conservés): the user ends or cancels it first.
+    if (exporting.has(key)) {
+      activate(key)
+      toast.add({
+        title: "Export in progress",
+        description: "Finish or cancel the export before closing this result.",
+        type: "warning",
+      })
+      return
+    }
     if (key.startsWith("object:")) {
       const remaining = objectsRef.current.filter((tab) => tab.key !== key)
       sections.current.delete(key)
@@ -415,6 +431,7 @@ export function WorkspaceScreen({
       kind: "result" as const,
       key: tab.key,
       title: tab.title,
+      exporting: exporting.has(tab.key),
     })),
   ]
   const activeObject = objects.find((tab) => tab.key === active)
@@ -621,6 +638,14 @@ export function WorkspaceScreen({
                       if (tab.history) void openHistoryCopy(tab.history)
                     }
                   : undefined
+              }
+              onExportingChange={(running) =>
+                setExporting((current) => {
+                  const next = new Set(current)
+                  if (running) next.add(tab.key)
+                  else next.delete(tab.key)
+                  return next
+                })
               }
             />
           </TabsContent>

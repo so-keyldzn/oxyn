@@ -1,8 +1,10 @@
 import type { Meta, StoryObj } from "@storybook/react-vite"
 import { expect, fn, userEvent } from "storybook/test"
 
+import { ExportMenuView } from "./export-menu"
 import { invoiceColumns, syntheticPages } from "./fixtures"
-import { RetainedResultView } from "./retained-result-view"
+import { RetainedResultView, retainedExportable } from "./retained-result-view"
+import type { ExportFormatChoice } from "@/lib/ipc/results"
 
 const open = {
   status: "open" as const,
@@ -57,6 +59,51 @@ export const Incomplete: Story = {
 
 export const Truncated: Story = {
   args: { state: { ...open, truncated: true } },
+}
+
+const formats: Array<ExportFormatChoice> = [
+  { format: "csv", label: "CSV", extension: "csv", supported: true },
+  { format: "json", label: "JSON", extension: "json", supported: true },
+]
+
+/** The export menu under the grid, as the workspace tab wires it. */
+function exportFor(state: typeof open) {
+  return (
+    <ExportMenuView
+      formats={formats}
+      formatsFailed={false}
+      exportable={retainedExportable(state)}
+      reason="The run did not end cleanly: these rows may not be the whole result."
+      state={{ status: "idle" }}
+      onExport={fn()}
+      onCancel={fn()}
+    />
+  )
+}
+
+/** A whole, successful result exports the rows already retained. */
+export const ExportOffered: Story = {
+  args: { footerActions: exportFor(open) },
+  play: async ({ canvas }) => {
+    const trigger = canvas.getByRole("button", { name: "Export" })
+    await expect(trigger).not.toHaveAttribute("aria-disabled", "true")
+    await expect(trigger).not.toHaveAccessibleDescription(/Unavailable/)
+  },
+}
+
+/** Incomplete rows stay readable, but are never offered as a whole export. */
+export const ExportRefusedWhenIncomplete: Story = {
+  args: {
+    state: { ...open, complete: false },
+    footerActions: exportFor({ ...open, complete: false }),
+  },
+  play: async ({ canvas }) => {
+    const trigger = canvas.getByRole("button", { name: /Export/ })
+    await expect(trigger).toHaveAttribute("aria-disabled", "true")
+    await expect(trigger).toHaveAccessibleDescription(
+      /Unavailable: The run did not end cleanly/
+    )
+  },
 }
 
 /** Released rows are not brought back by running the query again. */

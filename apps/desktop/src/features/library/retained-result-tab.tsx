@@ -1,9 +1,13 @@
 import * as React from "react"
 import { useQuery } from "@tanstack/react-query"
 
-import { RetainedResultView } from "@/components/oxyn/retained-result-view"
+import {
+  RetainedResultView,
+  retainedExportable,
+} from "@/components/oxyn/retained-result-view"
 import type { RetainedResultState } from "@/components/oxyn/retained-result-view"
 import { useResultDensity } from "@/features/settings/use-result-density"
+import { ExportMenu } from "@/features/workspace/export-menu"
 import { BackendError } from "@/lib/ipc/client"
 import { library } from "@/lib/ipc/library"
 import { results } from "@/lib/ipc/results"
@@ -19,6 +23,7 @@ export function RetainedResultTab({
   succeeded,
   onOpenCopy,
   connectionName,
+  onExportingChange,
 }: {
   /** The workspace's connection, which the result must belong to. */
   connection: string
@@ -29,6 +34,8 @@ export function RetainedResultTab({
   succeeded: boolean
   /** Absent when the statement cannot be opened with its provenance. */
   onOpenCopy?: () => void
+  /** An export of these rows started or ended: the tab must not close. */
+  onExportingChange?: (exporting: boolean) => void
 }) {
   const density = useResultDensity()
   const opened = useQuery({
@@ -78,6 +85,21 @@ export function RetainedResultTab({
       onOpenCopy={onOpenCopy}
       destination={connectionName}
       density={density}
+      footerActions={
+        state.status === "open" ? (
+          <ExportMenu
+            connection={connection}
+            result={state.result}
+            exportable={retainedExportable(state)}
+            reason={
+              state.truncated
+                ? "Only the retained rows remain: the result was truncated."
+                : "The run did not end cleanly: these rows may not be the whole result."
+            }
+            onExportingChange={onExportingChange}
+          />
+        ) : null
+      }
     />
   )
 }

@@ -35,6 +35,16 @@ export type RetainedResultState =
   | { status: "expired" }
   | { status: "error"; message: string; retryable: boolean }
 
+/**
+ * Whether the rows are the whole result: a complete, successful run whose
+ * buffer was not truncated. Anything less stays readable but unexported.
+ */
+export function retainedExportable(
+  state: Extract<RetainedResultState, { status: "open" }>
+) {
+  return state.complete && !state.truncated
+}
+
 /** What these rows are, in the words of the library screen. */
 export function retainedNotice(
   state: Extract<RetainedResultState, { status: "open" }>
@@ -58,6 +68,7 @@ export function RetainedResultView({
   onOpenCopy,
   destination,
   density,
+  footerActions,
 }: {
   state: RetainedResultState
   fetchPage: FetchPage
@@ -69,6 +80,8 @@ export function RetainedResultView({
   destination: string
   /** The text size control of the result bar. */
   density?: React.ComponentProps<typeof ResultPanel>["density"]
+  /** The export of these rows, shown under the grid. */
+  footerActions?: React.ReactNode
 }) {
   switch (state.status) {
     case "loading":
@@ -158,6 +171,7 @@ export function RetainedResultView({
               }}
               fetchPage={fetchPage}
               density={density}
+              footerActions={footerActions}
             />
           </div>
         </div>

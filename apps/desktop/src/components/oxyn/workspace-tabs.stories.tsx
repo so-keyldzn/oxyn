@@ -90,6 +90,37 @@ export const Keyboard: Story = {
   },
 }
 
+/**
+ * A result being exported does not close: closing would cancel the write the
+ * user started. The tab says why, and offers no cross.
+ */
+export const ResultExporting: Story = {
+  args: {
+    tabs: [
+      ...tabs.slice(0, 2),
+      {
+        kind: "result",
+        key: "result:r1",
+        title: "Result #42",
+        exporting: true,
+      },
+    ],
+    active: "result:r1",
+  },
+  play: async ({ canvas, args }) => {
+    const result = canvas.getByRole("tab", { name: /Result #42/ })
+    await expect(result).toHaveTextContent("exporting")
+    await expect(result).toHaveAttribute(
+      "title",
+      expect.stringMatching(/finish or cancel the export/)
+    )
+    await expect(result.querySelector('[data-slot="tab-close"]')).toBeNull()
+    result.focus()
+    await userEvent.keyboard("{Delete}")
+    await expect(args.onClose).not.toHaveBeenCalled()
+  },
+}
+
 export const OneConsole: Story = {
   args: { tabs: tabs.slice(1, 2) },
   /**
