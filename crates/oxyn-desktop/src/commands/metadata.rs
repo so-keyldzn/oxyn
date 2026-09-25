@@ -169,18 +169,18 @@ pub async fn subscribe_refresh_signals(
                 () = superseded.wait() => break,
                 received = events.recv() => received,
             };
-            let signal = match received {
-                Ok(event) => match RefreshSignal::of(&event) {
-                    Some(signal) => signal,
-                    None => continue,
-                },
+            let signals = match received {
+                Ok(event) => RefreshSignal::of(&event),
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(missed)) => {
                     tracing::warn!(missed, "refresh signals dropped for a slow webview");
-                    RefreshSignal::Lagged
+                    vec![RefreshSignal::Lagged]
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             };
-            if channel.send(signal).is_err() {
+            if signals
+                .into_iter()
+                .any(|signal| channel.send(signal).is_err())
+            {
                 break;
             }
         }

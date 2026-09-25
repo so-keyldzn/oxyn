@@ -195,6 +195,7 @@ export type CatalogSearchHit = z.infer<typeof CatalogSearchHit>
 export const RefreshSignal = z.discriminatedUnion("type", [
   z.object({ type: z.literal("catalogInvalidated"), connection: z.string() }),
   z.object({ type: z.literal("rowsChanged"), connection: z.string() }),
+  z.object({ type: z.literal("historyRecorded"), connection: z.string() }),
   z.object({ type: z.literal("lagged") }),
 ])
 export type RefreshSignal = z.infer<typeof RefreshSignal>

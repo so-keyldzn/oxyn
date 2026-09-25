@@ -137,7 +137,7 @@ export function useRelationFacets(
   )
 
   useRefreshSignal(open.connection, (signal) => {
-    if (signal.type === "rowsChanged") return
+    if (signal.type !== "catalogInvalidated" && signal.type !== "lagged") return
     // The catalog was invalidated: every facet may be asked for again, and
     // the cache read tells which ones are now stale.
     attempted.current.clear()

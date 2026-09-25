@@ -1,8 +1,10 @@
 import * as React from "react"
 import { useDebouncer } from "@tanstack/react-pacer"
+import { useQueryClient } from "@tanstack/react-query"
 
 import type { SaveState } from "@/components/oxyn/console-toolbar"
 import { saveNotice, titleTooLong } from "@/features/consoles/console-model"
+import { refreshLibrary } from "@/features/library/library-refresh"
 import { backend, newCommandId } from "@/lib/ipc/client"
 import type { ParameterInput } from "@/lib/ipc/consoles"
 import { library } from "@/lib/ipc/library"
@@ -72,6 +74,7 @@ export function useConsoleDocument({
   seed: ConsoleSeed
   connection: string
 }) {
+  const queryClient = useQueryClient()
   const [document, setDocument] = React.useState(seed.document)
   const [title, setTitle] = React.useState(seed.title)
   const [text, setText] = React.useState(seed.text)
@@ -124,6 +127,7 @@ export function useConsoleDocument({
         connection,
         named: false,
       })
+      if (write.type === "saved") void refreshLibrary(queryClient)
       if (latest.current.document !== current.document) return
       if (write.type === "saved")
         setDraftNotice("Recovery draft saved locally.")
@@ -132,7 +136,7 @@ export function useConsoleDocument({
     } catch (error) {
       setDraftNotice(`Draft not saved: ${message(error)}`)
     }
-  }, [connection])
+  }, [connection, queryClient])
 
   const debouncer = useDebouncer(() => void writeDraft(), {
     wait: DRAFT_IDLE_MS,
@@ -207,6 +211,7 @@ export function useConsoleDocument({
         }
         return false
       }
+      void refreshLibrary(queryClient)
       setConflict(false)
       setSavedText(sent.text)
       setSavedTitle(sent.title)

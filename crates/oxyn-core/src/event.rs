@@ -92,6 +92,14 @@ pub enum Event {
 
     /// Le catalogue a changé : l'arborescence doit être relue.
     CatalogUpdated,
+
+    /// Une exécution réussie est inscrite à l'historique : une vue qui le
+    /// montre peut le relire.
+    ///
+    /// Distinct de [`Completed`](Event::Completed), qui arrive **avant**
+    /// l'écriture de l'issue : relire l'historique sur `Completed` montrerait
+    /// encore la ligne « en cours ». Rien après un échec ni une annulation.
+    HistoryRecorded,
 }
 
 impl Event {
@@ -107,8 +115,11 @@ impl Event {
 
     /// L'événement clôt-il l'exécution ?
     ///
-    /// Après un événement terminal, plus rien n'arrive pour cette exécution :
-    /// c'est le signal qui autorise l'interface à quitter l'état « en cours ».
+    /// Après un événement terminal, plus rien de l'exécution elle-même
+    /// n'arrive : c'est le signal qui autorise l'interface à quitter l'état
+    /// « en cours ». Seul [`HistoryRecorded`](Event::HistoryRecorded) peut
+    /// suivre `Completed` sous la même commande : il annonce l'écriture locale
+    /// de l'issue, pas une étape de l'exécution.
     #[must_use]
     pub const fn is_terminal(&self) -> bool {
         matches!(

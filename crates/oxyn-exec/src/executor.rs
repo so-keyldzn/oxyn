@@ -76,7 +76,7 @@ use oxyn_data::{
 };
 use oxyn_driver::{Cursor, DriverRegistry};
 use oxyn_store::history::Reconciliation;
-use oxyn_store::{Document, HistoryRecord, JournalRecord, Store};
+use oxyn_store::{Document, HistoryRecord, HistoryStatus, JournalRecord, Store};
 use parking_lot::{Mutex, RwLock};
 
 use crate::abandon::{AbandonGuard, AbandonedOutcomes, OutcomeGuard};
@@ -720,7 +720,7 @@ impl Executor {
         // above and this call: the window `OutcomeGuard` covers stays
         // exactly the one it covers today, between the start of execution
         // and the moment this operation is queued.
-        if self
+        let written = self
             .write_audit(move |store| {
                 if let Err(erreur) = store.journal().append(&outcome) {
                     tracing::error!(
@@ -729,16 +729,28 @@ impl Executor {
                         "failed to journal the outcome of a command that already ran"
                     );
                 }
-                if let Some((history_id, record)) = finishing
-                    && let Err(erreur) = store.history().finish(history_id, &record)
-                {
-                    tracing::error!(error = %erreur, "the outcome of a statement could not be written to the query history");
+                let (history_id, record) = finishing?;
+                match store.history().finish(history_id, &record) {
+                    Ok(true) => Some(record.status),
+                    Ok(false) => None,
+                    Err(erreur) => {
+                        tracing::error!(error = %erreur, "the outcome of a statement could not be written to the query history");
+                        None
+                    }
                 }
             })
-            .await
-            .is_err()
-        {
-            tracing::error!(command = %id, "the audit writer stopped after a command already ran");
+            .await;
+        match written {
+            // Announced once the row is written, so that a view reading the
+            // history again sees the outcome and not « running ».
+            Ok(Some(HistoryStatus::Succeeded)) => {
+                self.events
+                    .publish(id, command.target_connection(), Event::HistoryRecorded);
+            }
+            Ok(_) => {}
+            Err(_) => {
+                tracing::error!(command = %id, "the audit writer stopped after a command already ran");
+            }
         }
 
         issue
@@ -3046,6 +3058,86 @@ mod tests {
         // Le nom est recopié pour survivre à la suppression de la connexion.
         assert_eq!(entree.record.connection_name.as_deref(), Some("atelier"));
         assert!(entree.record.error.is_none());
+    }
+
+    /// Les `HistoryRecorded` reçus jusqu'ici, sans attendre.
+    fn inscriptions_annoncees(
+        evenements: &mut tokio::sync::broadcast::Receiver<crate::events::ExecEvent>,
+    ) -> Vec<Option<ConnectionId>> {
+        std::iter::from_fn(|| evenements.try_recv().ok())
+            .filter(|recu| recu.event == Event::HistoryRecorded)
+            .map(|recu| recu.connection)
+            .collect()
+    }
+
+    /// **Une lecture réussie annonce son inscription, qu'elle vienne de
+    /// l'humain ou de l'agent** (ADR-0022) : une bibliothèque ouverte n'a pas
+    /// d'autre moyen d'apprendre qu'une ligne s'est ajoutée. L'annonce suit
+    /// l'écriture de l'issue : relue à ce moment, la ligne n'est plus « en
+    /// cours ».
+    #[test]
+    fn une_lecture_reussie_annonce_son_inscription_a_l_historique() {
+        let connexion = ConnectionConfig::new("atelier", DriverId::sqlite())
+            .with_environment(Environment::Local);
+        let banc = Banc::new(&connexion);
+        let session = banc
+            .executeur
+            .sessions
+            .insert(SessionSlot::new(connexion.id, Box::new(SessionFactice)));
+        let mut evenements = banc.executeur.subscribe();
+
+        for acteur in [Actor::Human, agent()] {
+            let commande = Command::Execute {
+                connection: connexion.id,
+                session: session.id(),
+                request: Box::new(
+                    ExecRequest::new(
+                        QueryLanguage::Sql(SqlDialect::Sqlite),
+                        "SELECT id FROM clients",
+                    )
+                    .with_intent(StatementIntent::Read)
+                    .with_limits(ExecLimits::default().with_timeout(None::<Duration>)),
+                ),
+            };
+            block_on(
+                banc.executeur
+                    .dispatch(acteur, commande, &CancelToken::new()),
+            )
+            .expect("l'exécution aboutit");
+
+            assert_eq!(
+                inscriptions_annoncees(&mut evenements),
+                vec![Some(connexion.id)],
+                "une annonce par exécution réussie, rattachée à sa connexion"
+            );
+            let entree = banc
+                .store
+                .history()
+                .recent(1)
+                .expect("relecture")
+                .pop()
+                .expect("une exécution laisse une entrée");
+            assert_eq!(entree.record.status, HistoryStatus::Succeeded);
+        }
+    }
+
+    /// **Un échec n'annonce rien** : relire la bibliothèque sur une erreur
+    /// n'apprend rien que l'erreur affichée ne dise déjà.
+    #[test]
+    fn un_echec_n_annonce_aucune_inscription() {
+        let connexion = ConnectionConfig::new("atelier", DriverId::sqlite())
+            .with_environment(Environment::Local);
+        let banc = Banc::new(&connexion);
+        let mut evenements = banc.executeur.subscribe();
+
+        let commande = execution(connexion.id, "SELECT 1", StatementIntent::Read);
+        block_on(
+            banc.executeur
+                .dispatch(Actor::Human, commande, &CancelToken::new()),
+        )
+        .expect_err("aucune session sous cet identifiant");
+
+        assert!(inscriptions_annoncees(&mut evenements).is_empty());
     }
 
     /// **Une exécution qui échoue laisse l'erreur, pas un silence.**

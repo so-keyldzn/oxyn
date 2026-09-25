@@ -473,31 +473,45 @@ pub enum RefreshSignal {
     #[serde(rename_all = "camelCase")]
     CatalogInvalidated { connection: String },
     /// A write or a DDL succeeded: the **visible** preview is read again, with
-    /// the shape in force.
+    /// the shape in force. A DDL counts: `ALTER`, `TRUNCATE` or `DROP COLUMN`
+    /// change the rows a preview shows as surely as an `UPDATE`.
     #[serde(rename_all = "camelCase")]
     RowsChanged { connection: String },
+    /// A successful execution, whoever ran it, is written to the query
+    /// history: an open library reads it again.
+    #[serde(rename_all = "camelCase")]
+    HistoryRecorded { connection: String },
     /// The front missed events: nobody knows what changed, so everything
     /// visible is read again.
     Lagged,
 }
 
 impl RefreshSignal {
-    /// The signal an execution event carries, if any.
+    /// The signals an execution event carries, possibly none.
     ///
     /// Nothing after a failure or a cancellation: a read that follows an
-    /// error hides the error. A statement classified as a read stales nothing.
+    /// error hides the error. A statement classified as a read stales no
+    /// preview, but its history entry is still news to the library.
     #[must_use]
-    pub fn of(event: &oxyn_exec::ExecEvent) -> Option<Self> {
-        let connection = event.connection?.to_string();
+    pub fn of(event: &oxyn_exec::ExecEvent) -> Vec<Self> {
+        let Some(connection) = event.connection.map(|id| id.to_string()) else {
+            return Vec::new();
+        };
         match &event.event {
             oxyn_core::Event::Completed { intent, .. } => match intent {
-                oxyn_core::StatementIntent::Read => None,
-                oxyn_core::StatementIntent::Ddl => Some(Self::CatalogInvalidated { connection }),
+                oxyn_core::StatementIntent::Read => Vec::new(),
+                oxyn_core::StatementIntent::Ddl => vec![
+                    Self::CatalogInvalidated {
+                        connection: connection.clone(),
+                    },
+                    Self::RowsChanged { connection },
+                ],
                 // Write, Grant, Unknown and whatever comes later: the price of
                 // being wrong the other way is one bounded 200-row read.
-                _ => Some(Self::RowsChanged { connection }),
+                _ => vec![Self::RowsChanged { connection }],
             },
-            _ => None,
+            oxyn_core::Event::HistoryRecorded => vec![Self::HistoryRecorded { connection }],
+            _ => Vec::new(),
         }
     }
 }
@@ -744,5 +758,70 @@ mod tests {
             FacetFreshness::from(Freshness::now()),
             FacetFreshness::Fetched { fetched_at } if fetched_at.ends_with("+00:00")
         ));
+    }
+
+    fn completed(
+        connection: oxyn_core::ConnectionId,
+        intent: oxyn_core::StatementIntent,
+    ) -> oxyn_exec::ExecEvent {
+        oxyn_exec::ExecEvent::new(
+            oxyn_core::CommandId::new(),
+            Some(connection),
+            oxyn_core::Event::Completed {
+                result: oxyn_core::ResultId::new(),
+                stats: oxyn_core::ExecStats::default(),
+                intent,
+            },
+        )
+    }
+
+    #[test]
+    fn a_ddl_stales_both_the_catalog_and_the_visible_preview() {
+        let connection = oxyn_core::ConnectionId::new();
+        let name = connection.to_string();
+        assert_eq!(
+            RefreshSignal::of(&completed(connection, oxyn_core::StatementIntent::Ddl)),
+            vec![
+                RefreshSignal::CatalogInvalidated {
+                    connection: name.clone()
+                },
+                RefreshSignal::RowsChanged { connection: name },
+            ]
+        );
+    }
+
+    #[test]
+    fn a_read_stales_nothing_but_its_history_entry_is_announced() {
+        let connection = oxyn_core::ConnectionId::new();
+        assert!(
+            RefreshSignal::of(&completed(connection, oxyn_core::StatementIntent::Read)).is_empty()
+        );
+        let recorded = oxyn_exec::ExecEvent::new(
+            oxyn_core::CommandId::new(),
+            Some(connection),
+            oxyn_core::Event::HistoryRecorded,
+        );
+        assert_eq!(
+            RefreshSignal::of(&recorded),
+            vec![RefreshSignal::HistoryRecorded {
+                connection: connection.to_string()
+            }]
+        );
+    }
+
+    #[test]
+    fn nothing_is_signalled_after_a_failure_or_a_cancellation() {
+        let connection = oxyn_core::ConnectionId::new();
+        for event in [
+            oxyn_core::Event::Cancelled,
+            oxyn_core::Event::Failed {
+                error: "boom".to_owned(),
+                retryable: false,
+            },
+        ] {
+            let event =
+                oxyn_exec::ExecEvent::new(oxyn_core::CommandId::new(), Some(connection), event);
+            assert!(RefreshSignal::of(&event).is_empty());
+        }
     }
 }

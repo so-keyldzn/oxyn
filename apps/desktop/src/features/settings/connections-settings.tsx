@@ -14,6 +14,7 @@ import type { BackendFailure } from "@/components/oxyn/backend-error-alert"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useTypedSecrets } from "@/features/connections/typed-secrets"
+import { LIBRARY_QUERY_KEY } from "@/features/library/library-refresh"
 import type { WithoutSecrets } from "@/features/connections/typed-secrets"
 import { BackendError, backend, newCommandId } from "@/lib/ipc/client"
 import { settingsBackend } from "@/lib/ipc/settings"
@@ -116,6 +117,11 @@ export function ConnectionsSettings({
     }
     setReview(null)
     await queryClient.invalidateQueries({ queryKey: ["connections"] })
+    // The library's connection filter names connections too: a renamed or
+    // removed one must not keep its old label there.
+    void queryClient.invalidateQueries({
+      queryKey: [...LIBRARY_QUERY_KEY, "history-connections"],
+    })
     if (change.type === "deleted") {
       setDeleting(null)
       return

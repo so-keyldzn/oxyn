@@ -106,7 +106,9 @@ export function usePreview({
   }, [entry?.state.status, entry?.stale, entry?.running, visible])
 
   useRefreshSignal(open.connection, (signal) => {
-    if (!enabled || signal.type === "catalogInvalidated") return
+    // A DDL sends `rowsChanged` too: the catalog signal alone adds nothing.
+    if (!enabled || (signal.type !== "rowsChanged" && signal.type !== "lagged"))
+      return
     previews.invalidate(open.connection)
   })
 
