@@ -90,6 +90,17 @@ pub enum DataError {
     #[error("the result is still streaming; exporting it now would truncate it silently")]
     IncompleteResult,
 
+    /// An export was asked of a truncated result: closed by a row limit,
+    /// saturation, a cancellation or a timeout.
+    ///
+    /// No option allows it: a truncated buffer has finished loading, nothing
+    /// tells it from a whole result, and the file would pass for the table.
+    #[error(
+        "the result is truncated (row limit, memory budget, cancellation or timeout); \
+         exporting it would pass a partial result off as complete"
+    )]
+    TruncatedResult,
+
     /// L'opération a été interrompue par un
     /// [`CancelToken`](oxyn_core::CancelToken).
     #[error("cancelled")]
@@ -130,6 +141,9 @@ impl From<DataError> for OxynError {
             autre @ (DataError::Arrow(_) | DataError::SchemaMismatch { .. }) => {
                 Self::Serialization(autre.to_string())
             }
+            // A refusal of use, not a bug: `Internal` would present it as a
+            // defect of Oxyn.
+            autre @ DataError::TruncatedResult => Self::Config(autre.to_string()),
             autre => Self::Internal(autre.to_string()),
         }
     }

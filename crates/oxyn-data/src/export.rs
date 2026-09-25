@@ -13,6 +13,11 @@
 //! **Un export partiel est refusé par défaut.** Un fichier tronqué qui ressemble
 //! à un fichier complet est une perte de données silencieuse ; l'appelant qui
 //! l'accepte le déclare avec [`ExportOptions::allow_incomplete`].
+//!
+//! **A truncated result is always refused.** A buffer closed by a row limit,
+//! saturation, a cancellation or a timeout has finished loading: nothing on
+//! screen tells it from a whole result, which is why no option allows it
+//! ([UX-SPEC](../../../docs/UX-SPEC.md#ce-qui-est-exporté-est-ce-qui-est-affiché)).
 
 use std::borrow::Cow;
 use std::io::Write;
@@ -138,6 +143,7 @@ pub const fn is_supported(format: ExportFormat) -> bool {
 ///
 /// * [`DataError::IncompleteResult`] si le résultat coule encore et que
 ///   [`ExportOptions::allow_incomplete`] est faux ;
+/// * [`DataError::TruncatedResult`] when rows of the result are missing;
 /// * [`DataError::UnsupportedFormat`] pour Parquet, SQL et Markdown ;
 /// * [`DataError::Cancelled`] si le jeton est déclenché — le fichier
 ///   partiellement écrit reste à la charge de l'appelant, qui seul sait s'il
@@ -150,9 +156,7 @@ pub fn export<W: Write>(
     opts: &ExportOptions,
     ct: &CancelToken,
 ) -> Result<ExportSummary> {
-    if !buffer.is_complete() && !opts.allow_incomplete {
-        return Err(DataError::IncompleteResult);
-    }
+    ensure_exportable(buffer, opts)?;
 
     // Instantané : le nombre de lots est relu une seule fois, pour que l'export
     // d'un résultat encore en cours ait une fin définie.
@@ -206,6 +210,26 @@ pub fn export<W: Write>(
     compteur.flush()?;
     resume.bytes = compteur.bytes;
     Ok(resume)
+}
+
+/// Refuses what [`export`] would refuse, without writing anything.
+///
+/// For the caller that prepares a destination before writing: the refusal
+/// then comes before any file is created.
+///
+/// # Errors
+///
+/// [`DataError::TruncatedResult`] or [`DataError::IncompleteResult`].
+pub fn ensure_exportable(buffer: &ResultBuffer, opts: &ExportOptions) -> Result<()> {
+    // `truncated` first: it is never cleared, and a truncated buffer still
+    // open will not become whole by waiting.
+    if buffer.stats().truncated {
+        return Err(DataError::TruncatedResult);
+    }
+    if !buffer.is_complete() && !opts.allow_incomplete {
+        return Err(DataError::IncompleteResult);
+    }
+    Ok(())
 }
 
 /// L'instantané des lots à écrire.
@@ -508,6 +532,32 @@ mod tests {
         )
         .expect("export explicite d'un résultat partiel");
         assert_eq!(resume.rows, 3);
+    }
+
+    /// Closed but truncated: the case nothing on screen tells from a whole
+    /// result. No option allows it, not even `allowing_incomplete`.
+    #[test]
+    fn a_truncated_result_never_exports() {
+        let tampon = tampon_deborde();
+        tampon.mark_truncated();
+
+        for opts in [
+            ExportOptions::default(),
+            ExportOptions::default().allowing_incomplete(),
+        ] {
+            let mut sortie: Vec<u8> = Vec::new();
+            match export(
+                &tampon,
+                ExportFormat::Csv,
+                &mut sortie,
+                &opts,
+                &CancelToken::new(),
+            ) {
+                Err(DataError::TruncatedResult) => {}
+                autre => panic!("expected TruncatedResult, got {autre:?}"),
+            }
+            assert!(sortie.is_empty(), "nothing may be written");
+        }
     }
 
     #[test]

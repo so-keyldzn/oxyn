@@ -1008,6 +1008,9 @@ impl Executor {
                         capability: format!("export:{}", format.extension()),
                     });
                 }
+                // Un tampon tronqué est refusé ici pour la même raison : avant que
+                // la destination ne soit touchée, et pour tout acteur.
+                oxyn_data::ensure_exportable(&buffer, &ExportOptions::default())?;
                 let format = *format;
                 let destination = destination.clone();
                 let cancel_owned = cancel.clone();
@@ -3384,3 +3387,7 @@ mod transaction_state_tests;
 #[cfg(test)]
 #[path = "connection_tests.rs"]
 mod connection_tests;
+
+#[cfg(test)]
+#[path = "export_tests.rs"]
+mod export_tests;
