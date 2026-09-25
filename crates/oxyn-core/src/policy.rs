@@ -15,6 +15,7 @@
 //! |---|---|
 //! | agent + `GRANT`/`REVOKE` | `Deny` |
 //! | agent + `SetSessionContext` | `Deny` — l'effet porte sur les instructions suivantes |
+//! | agent + contrôle de transaction (`BEGIN`, `COMMIT`, `ROLLBACK`, `SAVEPOINT`…) | `Deny` — l'effet porte sur la transaction de la session, peut-être celle de l'utilisateur |
 //! | commande mutante sur une connexion marquée lecture seule | `Deny`, humain compris |
 //! | commande mutante sur une connexion **inconnue** du gate | `Deny` |
 //! | agent + commande mutante + production | `Deny` — lecture seule stricte |
@@ -367,6 +368,21 @@ impl PolicyGate for DefaultPolicy {
             return Decision::deny(
                 "an agent may not change the session context: \
                  it changes the meaning of the statements that follow",
+            );
+        }
+
+        // Nor does it steer a transaction. `COMMIT` and `ROLLBACK` read and
+        // write nothing of their own, but they settle whatever the session
+        // holds — on a session shared with the user, the user's own writes,
+        // committed or thrown away without a word. The gate does not know
+        // whether a transaction is open (ADR-0039 keeps that state out of
+        // security decisions), and needs not: an agent has no use for one
+        // that it could not begin in a session it may share, and a `BEGIN` of
+        // its own would capture the statements the user sends next.
+        if actor.is_agent() && cmd.controls_transaction() {
+            return Decision::deny(
+                "an agent may not begin, commit or roll back a transaction: \
+                 the session may hold one the user opened",
             );
         }
 
@@ -1011,6 +1027,34 @@ mod tests {
                 assert!(
                     !agentive.is_allowed(),
                     "un agent ne le fait jamais : env={env} lecture_seule={read_only}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn un_agent_ne_pilote_pas_la_transaction_de_la_session() {
+        // `COMMIT` is classified `Read`: it passes for a human everywhere,
+        // read-only connection included, where closing a read transaction is
+        // the very use. For an agent it is a refusal, not an approval, in every
+        // environment: it would settle a transaction the user may have opened.
+        let banc = Banc::new();
+        for read_only in [false, true] {
+            let mut cmd = banc.execute(read_only, StatementIntent::Read);
+            if let Command::Execute { request, .. } = &mut cmd {
+                request.transaction_control = true;
+            }
+            assert!(!cmd.is_mutating());
+            for env in ENVS {
+                let humaine = banc.politique.authorize(&humain(), &cmd, env);
+                assert!(
+                    humaine.is_allowed(),
+                    "env={env} lecture_seule={read_only} → {humaine:?}"
+                );
+                let agentive = banc.politique.authorize(&agent(), &cmd, env);
+                assert!(
+                    agentive.is_denied(),
+                    "env={env} lecture_seule={read_only} → {agentive:?}"
                 );
             }
         }

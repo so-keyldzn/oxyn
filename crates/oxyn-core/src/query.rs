@@ -362,6 +362,15 @@ pub struct ExecRequest {
     pub risk: MutationRisk,
     /// Bornes d'exécution.
     pub limits: ExecLimits,
+    /// Whether the text begins, commits, rolls back or marks a transaction
+    /// (`BEGIN`, `COMMIT`, `ROLLBACK`, `SAVEPOINT`, `RELEASE`…).
+    ///
+    /// Such a statement reads nothing and writes nothing of its own, so its
+    /// intent is `Read`; yet its effect lands on whatever the session already
+    /// holds — a transaction the user opened. Like the intent, it is replaced
+    /// by the executor's reclassification, never taken from the caller.
+    #[serde(default)]
+    pub transaction_control: bool,
 }
 
 impl ExecRequest {
@@ -380,6 +389,7 @@ impl ExecRequest {
             intent: StatementIntent::Unknown,
             risk: MutationRisk::None,
             limits: ExecLimits::default(),
+            transaction_control: false,
         }
     }
 
@@ -440,6 +450,7 @@ impl std::fmt::Debug for ExecRequest {
             .field("intent", &self.intent)
             .field("risk", &self.risk)
             .field("limits", &self.limits)
+            .field("transaction_control", &self.transaction_control)
             .finish()
     }
 }

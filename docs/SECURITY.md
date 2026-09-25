@@ -133,6 +133,23 @@ stricte** — ce n'est pas une confirmation renforcée, c'est un refus
 ([ADR-0004](adr/0004-command-bus.md#politique-par-défaut)). La différence
 compte : une confirmation finit par être cliquée.
 
+Un `Actor::Agent` ne pilote pas non plus une transaction, quel que soit
+l'environnement : `BEGIN`, `COMMIT`, `ROLLBACK`, `SAVEPOINT`, `RELEASE` et
+leurs synonymes (`END`, `ABORT`, `PREPARE TRANSACTION`…) lui sont refusés. Ces
+instructions ne lisent ni n'écrivent d'elles-mêmes, mais elles valident ou
+annulent ce que la session tient — sur une session partagée, les écritures de
+l'utilisateur. Le refus ne dépend pas de l'état de transaction : le `PolicyGate`
+ne le consulte pas ([ADR-0039](adr/0039-etat-de-transaction-d-une-session.md)).
+
+Ce refus a deux limites connues. Il ne lit que le SQL : un langage que
+`oxyn-query` n'analyse pas est `Unknown`, soumis à approbation hors production,
+et le premier driver non SQL devra apprendre ses propres verbes de transaction.
+Et il ne couvre que les fins **explicites** : sous SQLite, une écriture
+interrompue (Stop, délai dépassé) ou tombée sur `SQLITE_FULL`, `SQLITE_IOERR`
+ou `SQLITE_BUSY` peut annuler toute la transaction ouverte — une écriture
+d'agent approuvée sur une session partagée le peut donc aussi. Le panneau
+d'assistant ouvre aujourd'hui sa propre session, distincte des consoles.
+
 ## Surface d'entrée
 
 Ce qui entre dans Oxyn et n'est pas fiable, par ordre de sous-estimation :

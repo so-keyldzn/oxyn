@@ -104,6 +104,9 @@ pub struct StatementInfo {
     pub basis: Basis,
     /// Message de l'analyseur, quand il a refusé de lire.
     pub error: Option<String>,
+    /// Whether it begins, ends or marks a transaction: see
+    /// [`ExecRequest::transaction_control`].
+    pub transaction_control: bool,
 }
 
 /// Le résultat de l'analyse d'un lot.
@@ -113,6 +116,8 @@ pub struct Classification {
     pub intent: StatementIntent,
     /// Le risque du lot : le plus grave de ses instructions.
     pub risk: MutationRisk,
+    /// Whether any of its statements controls a transaction.
+    pub transaction_control: bool,
     /// Le détail, instruction par instruction, dans l'ordre du texte.
     pub statements: Vec<StatementInfo>,
 }
@@ -163,16 +168,22 @@ impl Classification {
     /// agent ne peut pas s'auto-déclarer en lecture seule (ARCHITECTURE §8).
     #[must_use]
     pub fn qualify(&self, request: ExecRequest) -> ExecRequest {
-        request.with_intent(self.intent).with_risk(self.risk)
+        let mut request = request.with_intent(self.intent).with_risk(self.risk);
+        request.transaction_control = self.transaction_control;
+        request
     }
 
     /// Le lot dont on ne sait rien : une instruction opaque, `Unknown`.
+    ///
+    /// Its language is not SQL, so no transaction verb of SQL can be looked
+    /// for: `Unknown` already sends it to a human's approval, preview shown.
     fn opaque(text: &str, error: String) -> Self {
         let trimmed = text.trim();
         let start = text.len() - text.trim_start().len();
         Self {
             intent: StatementIntent::Unknown,
             risk: MutationRisk::None,
+            transaction_control: false,
             statements: vec![StatementInfo {
                 text: trimmed.to_owned(),
                 span: start..start + trimmed.len(),
@@ -180,6 +191,7 @@ impl Classification {
                 risk: MutationRisk::None,
                 basis: Basis::Unparsed,
                 error: Some(error),
+                transaction_control: false,
             }],
         }
     }
@@ -229,6 +241,7 @@ pub fn classify(sql: &str, dialect: SqlDialect) -> Classification {
     Classification {
         intent: facts.intent,
         risk: facts.risk,
+        transaction_control: statements.iter().any(|s| s.transaction_control),
         statements,
     }
 }
@@ -396,6 +409,9 @@ fn classify_fragment(
             risk: MutationRisk::None,
             basis: Basis::Unparsed,
             error: Some(UNREADABLE_COMMENT.to_owned()),
+            // Whether a `COMMIT` hides behind the comment depends on the
+            // server: what cannot be read counts as the worst it could be.
+            transaction_control: true,
         };
     }
     let (facts, basis, error) = match Parser::parse_sql(grammar, fragment.text) {
@@ -451,6 +467,7 @@ fn classify_fragment(
         risk: facts.risk,
         basis,
         error,
+        transaction_control: controls_a_transaction(fragment.text, dialect),
     }
 }
 
@@ -500,7 +517,9 @@ fn statement_facts(statement: &Statement) -> Facts {
         // Contrôle de transaction et changement de contexte : ces instructions
         // ne lisent ni n'écrivent d'elles-mêmes. Les compter comme mutantes
         // ferait demander une approbation pour `BEGIN; SELECT 1; COMMIT;` ; le
-        // lot prend de toute façon l'intention de ce qu'il contient.
+        // lot prend de toute façon l'intention de ce qu'il contient. What the
+        // transaction verbs do to the session's open transaction is carried
+        // apart, by `controls_a_transaction`.
         Statement::StartTransaction { .. }
         | Statement::Commit { .. }
         | Statement::Rollback { .. }
@@ -855,6 +874,45 @@ fn hides_a_mutation(text: &str, dialect: SqlDialect) -> bool {
     false
 }
 
+/// Does the statement begin, end or mark a transaction?
+///
+/// Read from its leading words rather than from the AST: every such statement
+/// opens with its verb, and the verbs the parser does not know — PostgreSQL's
+/// `END` and `ABORT`, `PREPARE TRANSACTION`, `XA` — count as much as those it
+/// does. Over-reading only costs an agent a refusal; a `BEGIN` opening a
+/// procedural block is read as a transaction.
+fn controls_a_transaction(text: &str, dialect: SqlDialect) -> bool {
+    let words = split::words(text, dialect);
+    let mut leading = words.iter().map(|word| word.text);
+    let Some(verb) = leading.next() else {
+        return false;
+    };
+    let is = |keyword: &str| verb.eq_ignore_ascii_case(keyword);
+    if TRANSACTION_VERBS.iter().any(|keyword| is(keyword)) {
+        return true;
+    }
+    // `START TRANSACTION`, `PREPARE TRANSACTION 'x'`, `SAVE TRAN` — but not
+    // `PREPARE plan AS …`, a prepared statement.
+    (is("start") || is("prepare") || is("save"))
+        && leading.next().is_some_and(|second| {
+            ["transaction", "tran"]
+                .iter()
+                .any(|keyword| second.eq_ignore_ascii_case(keyword))
+        })
+}
+
+/// Verbs that, leading a statement, always control a transaction.
+const TRANSACTION_VERBS: [&str; 8] = [
+    "begin",
+    "commit",
+    "end",
+    "rollback",
+    "abort",
+    "savepoint",
+    "release",
+    "xa",
+];
+
 /// PostgreSQL écrit `FOR UPDATE` mais aussi `FOR NO KEY UPDATE`, d'où une
 /// fenêtre de trois mots en arrière.
 fn locked_for_update(words: &[Word<'_>], index: usize) -> bool {
@@ -1156,6 +1214,54 @@ mod tests {
         let lu = pg("BEGIN; DELETE FROM t; COMMIT");
         assert_eq!(lu.intent, StatementIntent::Write);
         assert_eq!(lu.risk, MutationRisk::UnboundedDelete);
+    }
+
+    /// Read, yet settling what the session holds: the gate refuses these to
+    /// an agent (issue #19). Parsed or not — `END` and `ABORT` are
+    /// PostgreSQL's own spellings of `COMMIT` and `ROLLBACK`.
+    #[rstest]
+    #[case::begin("BEGIN")]
+    #[case::start("START TRANSACTION READ WRITE")]
+    #[case::commit("COMMIT")]
+    #[case::commit_commente("/* fin */ commit")]
+    #[case::end("END")]
+    #[case::rollback("ROLLBACK")]
+    #[case::abort("ABORT")]
+    #[case::savepoint("SAVEPOINT s1")]
+    #[case::rollback_to("ROLLBACK TO SAVEPOINT s1")]
+    #[case::release("RELEASE SAVEPOINT s1")]
+    #[case::prepare_transaction("PREPARE TRANSACTION 'x'")]
+    #[case::commit_prepared("COMMIT PREPARED 'x'")]
+    #[case::in_a_batch("SELECT 1; ROLLBACK")]
+    fn le_controle_de_transaction_est_signale(#[case] sql: &str) {
+        let lu = pg(sql);
+        assert!(lu.transaction_control, "{lu:?}");
+        let request = lu.qualify(ExecRequest::new(
+            QueryLanguage::Sql(SqlDialect::Postgres),
+            sql,
+        ));
+        assert!(request.transaction_control, "qualify carries it");
+    }
+
+    #[rstest]
+    #[case::lecture("SELECT 1")]
+    #[case::ecriture("DELETE FROM t WHERE id = 1")]
+    #[case::instruction_preparee("PREPARE plan AS SELECT 1")]
+    #[case::nom_de_colonne("SELECT commit, rollback FROM journal")]
+    #[case::chaine("SELECT 'COMMIT'")]
+    fn le_reste_ne_l_est_pas(#[case] sql: &str) {
+        assert!(!pg(sql).transaction_control, "{sql}");
+    }
+
+    #[test]
+    fn qualify_remplace_ce_que_l_appelant_declare() {
+        let mut declare = ExecRequest::new(QueryLanguage::Sql(SqlDialect::Postgres), "COMMIT");
+        declare.transaction_control = false;
+        assert!(pg("COMMIT").qualify(declare).transaction_control);
+
+        let mut declare = ExecRequest::new(QueryLanguage::Sql(SqlDialect::Postgres), "SELECT 1");
+        declare.transaction_control = true;
+        assert!(!pg("SELECT 1").qualify(declare).transaction_control);
     }
 
     /// Un lot vide ne se lit pas comme une lecture : un découpage qui perdrait
