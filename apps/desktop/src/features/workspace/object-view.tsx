@@ -75,6 +75,7 @@ export type ObjectViewHandle = {
 export function ObjectView({
   open,
   node,
+  active,
   initialTab,
   restored,
   onPlaceChange,
@@ -87,6 +88,12 @@ export function ObjectView({
 }: {
   open: OpenConnection
   node: CatalogNode
+  /**
+   * On screen: the active tab of a visible workspace. Kept mounted behind
+   * another tab, this view reads nothing; a change marks its preview stale,
+   * read once when it shows again (ADR-0022).
+   */
+  active: boolean
   initialTab?: OpenTarget
   /**
    * The sub-view saved in the last session. The tab opens on it and reads
@@ -159,7 +166,7 @@ export function ObjectView({
     open,
     address: node.address,
     enabled: previewable,
-    visible: tab === "data" && !held,
+    visible: active && tab === "data" && !held,
   })
 
   const placeChange = React.useRef(onPlaceChange)
