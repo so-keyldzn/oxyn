@@ -112,6 +112,7 @@ impl Backend {
             Arc::new(Store::open_default().context("opening the local workspace state")?),
             Arc::new(KeyringSecretStore::new()),
             confirm::Confirmations::new(confirm, confirm::Timing::HOST),
+            oxyn_data::DEFAULT_MEMORY_BUDGET,
         )
     }
 
@@ -151,6 +152,22 @@ impl Backend {
             Arc::new(Store::open_in_memory().context("opening temporary workspace state")?),
             Arc::new(oxyn_secrets::MemorySecretStore::new()),
             confirmations,
+            oxyn_data::DEFAULT_MEMORY_BUDGET,
+        )
+    }
+
+    /// A temporary workspace whose results spill to disk past `memory_budget`
+    /// bytes: the tests of pages read back from disk or from the page cache.
+    ///
+    /// # Errors
+    /// If the in-memory state cannot be created.
+    #[cfg(test)]
+    pub(crate) fn open_temporary_spilling(memory_budget: usize) -> Result<Self> {
+        Self::assemble_with(
+            Arc::new(Store::open_in_memory().context("opening temporary workspace state")?),
+            Arc::new(oxyn_secrets::MemorySecretStore::new()),
+            confirm::Confirmations::confirming(),
+            memory_budget,
         )
     }
 
@@ -170,13 +187,19 @@ impl Backend {
     /// decision at once: the tests that are not about the dialog.
     #[cfg(test)]
     fn assemble(store: Arc<Store>, secrets: Arc<dyn SecretStore>) -> Result<Self> {
-        Self::assemble_with(store, secrets, confirm::Confirmations::confirming())
+        Self::assemble_with(
+            store,
+            secrets,
+            confirm::Confirmations::confirming(),
+            oxyn_data::DEFAULT_MEMORY_BUDGET,
+        )
     }
 
     fn assemble_with(
         store: Arc<Store>,
         secrets: Arc<dyn SecretStore>,
         confirmations: confirm::Confirmations,
+        memory_budget: usize,
     ) -> Result<Self> {
         let mut drivers = DriverRegistry::new();
         drivers
@@ -204,6 +227,7 @@ impl Backend {
             .with_drivers(Arc::clone(&drivers))
             .with_credentials(Arc::clone(&credentials) as Arc<_>)
             .with_workspace(workspace)
+            .with_memory_budget(memory_budget)
             .build();
 
         let known = executor
