@@ -1623,3 +1623,14 @@ d'ADR-0037 : ni l'un ni l'autre n'est repris ici.
 | Redshift | `TRUNCATE` « commits the transaction in which it is run » ; `DROP TABLE` vaut `RESTRICT` | [r_TRUNCATE](https://docs.aws.amazon.com/redshift/latest/dg/r_TRUNCATE.html), [r_DROP_TABLE](https://docs.aws.amazon.com/redshift/latest/dg/r_DROP_TABLE.html) |
 | MySQL 8.4 | `DROP TABLE`, `TRUNCATE TABLE`, `RENAME TABLE`, `ALTER TABLE` valident implicitement | [implicit-commit](https://dev.mysql.com/doc/refman/8.4/en/implicit-commit.html) |
 | SQLite | Pas de `TRUNCATE` ; `DROP TABLE` passe malgré une vue dépendante, et malgré des lignes filles quand `foreign_keys` vaut `0` ; `DROP` se défait par `ROLLBACK` | constaté avec le client `sqlite3` 3.51.0 ; le driver embarque 3.50.2, d'où l'exigence d'ADR-0042 : un test d'intégration du driver avant de déclarer chaque drapeau |
+
+## Licences — vérification du 2026-09-25
+
+Faits sur lesquels repose [ADR-0044](adr/0044-licence-gpl-et-contrat-apache.md).
+
+### Le dépôt
+
+| Fait | Valeur | Source |
+|---|---|---|
+| Dépôt | `so-keyldzn/oxyn`, privé, licence détectée par GitHub : Apache-2.0 avant ce changement | `gh repo view so-keyldzn/oxyn` |
+| Ancienne valeur de `repository` | `https://github.com/keyldzn/oxyn`, qui ne se résout pas | `gh repo view keyldzn/oxyn` : « Could not resolve to a Repository » |
