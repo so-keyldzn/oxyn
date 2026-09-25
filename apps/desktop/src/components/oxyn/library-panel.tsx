@@ -96,8 +96,9 @@ function when(iso: string) {
 /**
  * The local library: execution history and saved queries (ADR-0014).
  *
- * Opening an entry always copies its text into a new console; nothing runs.
- * An ambiguous write is marked for inspection and offers no copy: it is never
+ * Selecting an entry shows its full text read only; opening one always copies
+ * its text into a new console; nothing runs. An ambiguous write stays readable
+ * but is marked for inspection and offers no copy: it is never
  * replayed (I-13). Once the user has inspected the server, they may mark it
  * reconciled, after a confirmation that names the connection and quotes the
  * statement. Deleting a saved query removes a local file, never a database
@@ -165,6 +166,8 @@ export function LibraryPanel({
   onRefresh,
   currentConnection,
   currentConnectionName,
+  onInspectHistory,
+  onInspectSaved,
   onOpenHistory,
   onOpenResult,
   onReconcile,
@@ -189,6 +192,9 @@ export function LibraryPanel({
   currentConnection: string
   /** Where a copy opens, named on the button before the click. */
   currentConnectionName: string
+  /** Shows the full text read only; it neither opens nor runs anything. */
+  onInspectHistory: (row: HistoryRow) => void
+  onInspectSaved: (entry: DocumentEntry) => void
   onOpenHistory: (row: HistoryRow) => void
   /**
    * Opens the rows a run of this connection still retains. Reads them only:
@@ -336,9 +342,18 @@ export function LibraryPanel({
                 key={row.id}
                 className="flex flex-col gap-1 rounded-md border p-2 text-xs"
               >
-                <code className="line-clamp-2 font-mono break-all">
-                  {row.preview}
-                </code>
+                {/* Selecting the entry reads its full text, read only; the
+                    preview is cut at 256 characters. */}
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  className="h-auto justify-start p-1 text-left font-normal whitespace-normal"
+                  onClick={() => onInspectHistory(row)}
+                >
+                  <code className="line-clamp-2 font-mono break-all">
+                    {row.preview}
+                  </code>
+                </Button>
                 <div className="flex items-center gap-1.5 text-muted-foreground">
                   {row.fromAgent ? (
                     <span className="shrink-0">AI ·</span>
@@ -427,10 +442,17 @@ export function LibraryPanel({
                 key={entry.id}
                 className="flex flex-col gap-1 rounded-md border p-2 text-xs"
               >
-                <span dir="auto" className="truncate font-medium">
-                  {entry.fromAgent ? "AI · " : ""}
-                  {entry.title === "" ? "Untitled query" : entry.title}
-                </span>
+                <Button
+                  variant="ghost"
+                  size="xs"
+                  className="h-auto min-w-0 justify-start p-1 text-left"
+                  onClick={() => onInspectSaved(entry)}
+                >
+                  <span dir="auto" className="truncate font-medium">
+                    {entry.fromAgent ? "AI · " : ""}
+                    {entry.title === "" ? "Untitled query" : entry.title}
+                  </span>
+                </Button>
                 <div className="flex items-center gap-1.5 text-muted-foreground">
                   <span dir="auto" className="min-w-0 truncate">
                     {entry.connectionName ?? "No connection"}

@@ -92,6 +92,8 @@ const meta = {
     onRefresh: fn(),
     currentConnection: CURRENT,
     currentConnectionName: "billing replica",
+    onInspectHistory: fn(),
+    onInspectSaved: fn(),
     onOpenHistory: fn(),
     onOpenResult: fn(),
     onReconcile: fn(),
@@ -115,6 +117,32 @@ export const History: Story = {
     // The agent's statement says so in the list, before any copy.
     await expect(canvas.getAllByText("AI ·")).toHaveLength(1)
     await expect(canvas.queryByText(new RegExp(CURRENT))).toBeNull()
+  },
+}
+
+/**
+ * Selecting an entry asks for its full text, read only — the write that needs
+ * inspection included, although it offers no copy. Nothing opens or runs.
+ */
+export const SelectReadsTheFullText: Story = {
+  play: async ({ canvas, args }) => {
+    await userEvent.click(
+      canvas.getByRole("button", { name: /UPDATE invoices SET paid_at/ })
+    )
+    await expect(args.onInspectHistory).toHaveBeenCalledWith(history[1])
+    await expect(args.onOpenHistory).not.toHaveBeenCalled()
+  },
+}
+
+/** A saved query is read the same way, by its title. */
+export const SelectReadsASavedQuery: Story = {
+  args: { view: "saved", state: { status: "saved", entries: saved } },
+  play: async ({ canvas, args }) => {
+    await userEvent.click(
+      canvas.getByRole("button", { name: "unpaid invoices.sql" })
+    )
+    await expect(args.onInspectSaved).toHaveBeenCalledWith(saved[0])
+    await expect(args.onOpenSaved).not.toHaveBeenCalled()
   },
 }
 

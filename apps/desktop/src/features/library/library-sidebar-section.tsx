@@ -6,6 +6,9 @@ import {
 } from "@tanstack/react-query"
 import { useDebouncedValue } from "@tanstack/react-pacer"
 
+import type { BackendFailure } from "@/components/oxyn/backend-error-alert"
+import { LibraryEntryView } from "@/components/oxyn/library-entry-view"
+import type { LibraryEntryState } from "@/components/oxyn/library-entry-view"
 import { LibraryPanel } from "@/components/oxyn/library-panel"
 import type {
   ConnectionOption,
@@ -29,6 +32,13 @@ export const LIBRARY_QUERY_KEY = ["library"] as const
 
 function failure(error: unknown) {
   return error instanceof BackendError ? error.message : String(error)
+}
+
+/** `retryable` comes from the backend; anything else is not worth retrying. */
+function backendFailure(error: unknown): BackendFailure {
+  return error instanceof BackendError
+    ? { message: error.message, retryable: error.retryable }
+    : { message: String(error), retryable: false }
 }
 
 /**
@@ -127,6 +137,39 @@ export function LibrarySidebarSection({
     return options
   }, [savedConnections.data, recorded.data])
 
+  // The entry whose full text is shown read only, beside the console.
+  const [inspecting, setInspecting] = React.useState<
+    | { kind: "history"; row: HistoryRow }
+    | { kind: "saved"; entry: DocumentEntry }
+    | null
+  >(null)
+  const inspected = useQuery({
+    queryKey: [
+      ...LIBRARY_QUERY_KEY,
+      "entry",
+      inspecting?.kind,
+      inspecting?.kind === "history" ? inspecting.row.id : inspecting?.entry.id,
+    ],
+    queryFn: async (): Promise<LibraryEntryState> => {
+      if (inspecting?.kind === "history")
+        return {
+          status: "history",
+          entry: await library.readHistoryEntry(inspecting.row.id),
+        }
+      if (inspecting?.kind === "saved")
+        return {
+          status: "saved",
+          document: await library.openDocument(inspecting.entry.id),
+          entry: inspecting.entry,
+        }
+      return { status: "loading" }
+    },
+    enabled: inspecting !== null,
+  })
+  const entryState: LibraryEntryState = inspected.isError
+    ? { status: "error", error: backendFailure(inspected.error) }
+    : (inspected.data ?? { status: "loading" })
+
   const current = view === "history" ? history : saved
   const state: LibraryState = actionError
     ? { status: "error", message: actionError }
@@ -149,67 +192,86 @@ export function LibrarySidebarSection({
   }
 
   return (
-    <LibraryPanel
-      view={view}
-      onViewChange={(nextView) => {
-        setView(nextView)
-        resetPages()
-      }}
-      search={search}
-      onSearchChange={(value) => {
-        setSearch(value)
-        resetPages()
-      }}
-      filters={filters}
-      onFiltersChange={(value) => {
-        setFilters(value)
-        resetPages()
-      }}
-      connections={connections}
-      state={state}
-      hasPrevious={cursors.length > 1}
-      hasNext={next !== null && next !== undefined}
-      onPrevious={() => setCursors((all) => all.slice(0, -1))}
-      onNext={() => {
-        if (next !== null && next !== undefined)
-          setCursors((all) => [...all, next])
-      }}
-      onRefresh={() => {
-        setActionError(null)
-        void queryClient.invalidateQueries({ queryKey: LIBRARY_QUERY_KEY })
-      }}
-      currentConnection={open.connection}
-      currentConnectionName={open.name}
-      onOpenResult={onOpenResult}
-      onOpenHistory={(row) =>
-        void guard(async () =>
-          onOpenHistory(await library.readHistoryEntry(row.id))
-        )
-      }
-      onReconcile={(row) =>
-        void guard(async () => {
-          await library.reconcileHistoryEntry(row.id)
-          await queryClient.invalidateQueries({ queryKey: LIBRARY_QUERY_KEY })
-        })
-      }
-      onOpenSaved={(entry) =>
-        void guard(async () =>
-          onOpenCopy(await library.openDocument(entry.id), entry)
-        )
-      }
-      onResumeSaved={(entry) =>
-        void guard(async () => onResume(await library.openDocument(entry.id)))
-      }
-      onDeleteSaved={(entry) =>
-        void guard(async () => {
-          const document = await library.openDocument(entry.id)
-          await library.deleteDocument(
-            entry.id,
-            Math.max(document.revision, document.savedRevision) + 1
+    <>
+      <LibraryEntryView
+        open={inspecting !== null}
+        state={entryState}
+        driver={open.driver}
+        destination={open.name}
+        onRetry={() => void inspected.refetch()}
+        onClose={() => setInspecting(null)}
+        onOpenCopy={() => {
+          const data = inspected.data
+          setInspecting(null)
+          if (data?.status === "history") onOpenHistory(data.entry)
+          else if (data?.status === "saved")
+            onOpenCopy(data.document, data.entry)
+        }}
+      />
+      <LibraryPanel
+        view={view}
+        onViewChange={(nextView) => {
+          setView(nextView)
+          resetPages()
+        }}
+        search={search}
+        onSearchChange={(value) => {
+          setSearch(value)
+          resetPages()
+        }}
+        filters={filters}
+        onFiltersChange={(value) => {
+          setFilters(value)
+          resetPages()
+        }}
+        connections={connections}
+        state={state}
+        hasPrevious={cursors.length > 1}
+        hasNext={next !== null && next !== undefined}
+        onPrevious={() => setCursors((all) => all.slice(0, -1))}
+        onNext={() => {
+          if (next !== null && next !== undefined)
+            setCursors((all) => [...all, next])
+        }}
+        onRefresh={() => {
+          setActionError(null)
+          void queryClient.invalidateQueries({ queryKey: LIBRARY_QUERY_KEY })
+        }}
+        currentConnection={open.connection}
+        currentConnectionName={open.name}
+        onInspectHistory={(row) => setInspecting({ kind: "history", row })}
+        onInspectSaved={(entry) => setInspecting({ kind: "saved", entry })}
+        onOpenResult={onOpenResult}
+        onOpenHistory={(row) =>
+          void guard(async () =>
+            onOpenHistory(await library.readHistoryEntry(row.id))
           )
-          await queryClient.invalidateQueries({ queryKey: LIBRARY_QUERY_KEY })
-        })
-      }
-    />
+        }
+        onReconcile={(row) =>
+          void guard(async () => {
+            await library.reconcileHistoryEntry(row.id)
+            await queryClient.invalidateQueries({ queryKey: LIBRARY_QUERY_KEY })
+          })
+        }
+        onOpenSaved={(entry) =>
+          void guard(async () =>
+            onOpenCopy(await library.openDocument(entry.id), entry)
+          )
+        }
+        onResumeSaved={(entry) =>
+          void guard(async () => onResume(await library.openDocument(entry.id)))
+        }
+        onDeleteSaved={(entry) =>
+          void guard(async () => {
+            const document = await library.openDocument(entry.id)
+            await library.deleteDocument(
+              entry.id,
+              Math.max(document.revision, document.savedRevision) + 1
+            )
+            await queryClient.invalidateQueries({ queryKey: LIBRARY_QUERY_KEY })
+          })
+        }
+      />
+    </>
   )
 }
