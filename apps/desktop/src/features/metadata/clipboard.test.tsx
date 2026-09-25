@@ -83,7 +83,12 @@ const open: OpenConnection = {
   readOnly: false,
   privacyTier: "metadata",
   capabilities: [],
-  console: { session: SENTINEL, capabilities: [], readOnly: false },
+  console: {
+    session: SENTINEL,
+    capabilities: [],
+    readOnly: false,
+    transactionState: "unknown",
+  },
 }
 
 const address: CatalogAddress = {

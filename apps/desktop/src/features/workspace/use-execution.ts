@@ -88,6 +88,8 @@ export function useExecution({ serverCancel }: { serverCancel: boolean }) {
   /** When the current run started, for a live elapsed time. */
   const [startedAt, setStartedAt] = React.useState<number | null>(null)
   const pendingApproval = React.useRef<string | null>(null)
+  /** The session the current run targets, when its transaction state matters. */
+  const session = React.useRef<string | null>(null)
 
   const progress = useStore(executionProgress, (all) =>
     running ? all[running] : undefined
@@ -157,12 +159,20 @@ export function useExecution({ serverCancel }: { serverCancel: boolean }) {
     forget(id)
   }
 
-  const start = (run: (id: string) => Promise<CommandOutcome>) => {
+  /**
+   * `options.session`: the session the run targets, for a session that
+   * reports a transaction state — see `watch`.
+   */
+  const start = (
+    run: (id: string) => Promise<CommandOutcome>,
+    options: { session?: string | null } = {}
+  ) => {
     if (current.current) void backend.cancel(current.current)
     release()
     const id = newCommandId()
     current.current = id
-    watch(id)
+    session.current = options.session ?? null
+    watch(id, session.current)
     setRunning(id)
     setCancelling(false)
     setStartedAt(Date.now())
@@ -191,7 +201,8 @@ export function useExecution({ serverCancel }: { serverCancel: boolean }) {
     current.current = command
     setDeciding(true)
     if (approved) {
-      watch(command)
+      // The approved command runs on the session its request named.
+      watch(command, session.current)
       setRunning(command)
       setStartedAt(Date.now())
       setState({ status: "running", rows: 0, serverCancel })

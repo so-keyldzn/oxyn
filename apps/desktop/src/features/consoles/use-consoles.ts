@@ -24,6 +24,7 @@ import {
 import { BackendError, backend, newCommandId } from "@/lib/ipc/client"
 import { consoles } from "@/lib/ipc/consoles"
 import type { ConsoleSession } from "@/lib/ipc/consoles"
+import { forgetSession, recordTransactionState } from "@/lib/ipc/events"
 import { library } from "@/lib/ipc/library"
 import type { DocumentView, HistoryDetail } from "@/lib/ipc/library"
 import type { OpenConnection } from "@/lib/ipc/types"
@@ -116,6 +117,9 @@ export function useConsoles({
   ) => {
     counter.current += 1
     const key = `console:${counter.current}`
+    // What the session reported at opening; events carry it on (ADR-0039).
+    if (session)
+      recordTransactionState(session.session, session.transactionState)
     const document = input.document ?? (await library.newDocument())
     const entry: ConsoleEntry = {
       key,
@@ -212,6 +216,7 @@ export function useConsoles({
         })
       }
       return await withSession((session) => {
+        recordTransactionState(session.session, session.transactionState)
         setEntries((all) =>
           all.map((item) => (item.key === key ? { ...item, session } : item))
         )
@@ -240,10 +245,12 @@ export function useConsoles({
     const closed = await handle.close(discard)
     if (!closed) return false
     // The session goes with the console; siblings and the catalog keep theirs.
-    if (entry.session)
+    if (entry.session) {
       void consoles
         .close(open.connection, entry.session.session)
         .catch(() => undefined)
+      forgetSession(entry.session.session)
+    }
     const rest = entriesRef.current.filter((item) => item.key !== key)
     setEntries(rest)
     setMeta(({ [key]: _gone, ...others }) => others)

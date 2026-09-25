@@ -10,10 +10,12 @@ const meta = {
   args: {
     reasons: {
       title: "unpaid invoices.sql",
+      connection: "billing",
       conflict: false,
       hasSavedCopy: true,
       unsaved: true,
       running: false,
+      transaction: null,
     },
     onCancel: fn(),
     onSave: fn(),
@@ -41,10 +43,12 @@ export const RunningStatement: Story = {
   args: {
     reasons: {
       title: "console_2.sql",
+      connection: "billing",
       conflict: false,
       hasSavedCopy: false,
       unsaved: false,
       running: true,
+      transaction: null,
     },
   },
 }
@@ -53,10 +57,12 @@ export const Conflict: Story = {
   args: {
     reasons: {
       title: "monthly.sql",
+      connection: "billing",
       conflict: true,
       hasSavedCopy: true,
       unsaved: true,
       running: false,
+      transaction: null,
     },
     notice:
       "The stored query changed elsewhere. Save a new query to preserve both versions.",
@@ -83,16 +89,72 @@ export const Saving: Story = {
   },
 }
 
+/**
+ * A transaction the session reported open: closing rolls it back, so the
+ * dialog asks even though the text is saved, names the connection, says the
+ * transaction is rolled back — and the reflex answer keeps the console
+ * (ADR-0039 §5).
+ */
+export const OpenTransaction: Story = {
+  args: {
+    reasons: {
+      title: "console_3.sql",
+      connection: "billing",
+      conflict: false,
+      hasSavedCopy: true,
+      unsaved: false,
+      running: false,
+      transaction: "open",
+    },
+  },
+  play: async ({ args }) => {
+    const dialog = await screen.findByRole("alertdialog")
+    await expect(dialog).toHaveTextContent("A transaction is open on billing.")
+    await expect(dialog).toHaveTextContent("rolls it back")
+    const cancel = await screen.findByRole("button", { name: "Cancel" })
+    await waitFor(() => expect(cancel).toHaveFocus())
+    await userEvent.keyboard("{Enter}")
+    await expect(args.onDiscard).not.toHaveBeenCalled()
+    await expect(args.onCancel).toHaveBeenCalled()
+  },
+}
+
+/** The session could not say: the dialog does not say « no transaction ». */
+export const UnknownTransactionState: Story = {
+  args: {
+    reasons: {
+      title: "console_4.sql",
+      connection: "billing",
+      conflict: false,
+      hasSavedCopy: true,
+      unsaved: false,
+      running: false,
+      transaction: "unknown",
+    },
+  },
+  play: async () => {
+    const dialog = await screen.findByRole("alertdialog")
+    await expect(dialog).toHaveTextContent(
+      "The transaction state on billing is unknown."
+    )
+    await waitFor(() =>
+      expect(screen.getByRole("button", { name: "Cancel" })).toHaveFocus()
+    )
+  },
+}
+
 /** A long file name with nothing to break on stays inside the frame. */
 export const LongContentStaysInTheFrame: Story = {
   args: {
     reasons: {
       title:
         "reporting_warehouse_2026_customer_orders_with_shipping_details.sql",
+      connection: "analytics-warehouse-production-eu-west-1-read-replica",
       conflict: true,
       hasSavedCopy: true,
       unsaved: true,
       running: true,
+      transaction: "open",
     },
     notice:
       "Not saved: /Users/analyst/Documents/workspaces/analytics-warehouse-production/consoles/reporting_warehouse_2026.sql is read-only.",

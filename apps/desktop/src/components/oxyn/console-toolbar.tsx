@@ -10,6 +10,7 @@ import {
 } from "@hugeicons/core-free-icons"
 
 import { ReadOnlyBadge } from "@/components/oxyn/read-only-badge"
+import { TransactionBadge } from "@/components/oxyn/transaction-badge"
 import { Button } from "@/components/ui/button"
 import { ButtonGroup } from "@/components/ui/button-group"
 import {
@@ -102,6 +103,7 @@ export function ConsoleToolbar({
   closing = false,
   onCancelWrite,
   context,
+  transaction = null,
 }: {
   running: boolean
   /** Stop was pressed; the server has not answered yet. */
@@ -134,6 +136,11 @@ export function ConsoleToolbar({
   onCancelWrite?: () => void
   /** The session context picker, when the session declares it. */
   context?: React.ReactNode
+  /**
+   * What the session last reported about its transaction, when there is
+   * something to say (ADR-0039 §5): drawn beside the context.
+   */
+  transaction?: "open" | "unknown" | null
 }) {
   const titleId = React.useId()
   const noticeId = React.useId()
@@ -247,7 +254,10 @@ export function ConsoleToolbar({
           <span className="tabular-nums">· {parameterCount}</span>
         </Button>
         {readOnly ? <ReadOnlyBadge /> : null}
-        <div className="ml-auto min-w-0">{context}</div>
+        <div className="ml-auto flex min-w-0 items-center gap-2">
+          {transaction ? <TransactionBadge state={transaction} /> : null}
+          {context}
+        </div>
       </div>
       <div className="flex min-w-0 flex-wrap items-center gap-2">
         <label htmlFor={titleId} className="text-xs text-muted-foreground">

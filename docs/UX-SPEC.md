@@ -778,6 +778,24 @@ qualifié. La console peut donc travailler dans `analytics` pendant que la
 sidebar montre `public` ; c'est un écart visible, préféré à un catalogue qui se
 déplace sans qu'on le lui ait demandé.
 
+### Transaction ouverte
+
+À côté du sélecteur, la barre dit si la session garde une transaction ouverte,
+en texte : `Transaction open`. Sur une session qui déclare les transactions et
+n'a pas pu le dire — une exécution abandonnée, une session qui se ferme —, elle
+dit `Transaction state unknown` : rien n'affirme « aucune transaction » sans que
+la session l'ait constaté. Sans transaction ouverte, ou sur une session qui ne
+sait pas en tenir, la barre ne dit rien : aucun repère éteint ne laisse croire
+la transaction possible là où elle ne l'est pas.
+
+L'état est celui que la session rapporte à la fin de chaque exécution — succès,
+échec ou arrêt —, jamais celui qu'on déduit du texte soumis : un Stop ou une
+erreur peut refermer la transaction d'office. Rien d'optimiste : l'affichage
+change à ce rapport, pas à la soumission d'un `BEGIN` ou d'un `COMMIT`, et
+garde la dernière valeur constatée pendant une exécution. Oxyn n'offre aucun
+bouton `Commit` ni `Rollback` : l'utilisateur tape `COMMIT` ou `ROLLBACK`
+([ADR-0039](adr/0039-etat-de-transaction-d-une-session.md)).
+
 ## Valeurs liées d'une console
 
 Une console porte ses propres valeurs liées, affichées par le contrôle
@@ -809,7 +827,11 @@ Une confirmation d'un onglet masqué reste rattachée à cet onglet.
 et `⌘W` vise uniquement la console active lorsque le panneau SQL est affiché.
 Fermer une console vide et inactive est immédiat. Si elle contient du SQL non
 sauvegardé ou une opération, un dialogue nomme la console, explique ce qui sera
-abandonné et place le focus sur Annuler. Fermer ne rejoue aucune requête et
+abandonné et place le focus sur Annuler. Une console dont la transaction est
+ouverte, ou dont l'état est inconnu sur une session qui déclare les
+transactions, ne se ferme pas non plus sans ce dialogue : il nomme alors aussi
+la connexion et dit que la transaction sera **annulée**, ses écritures non
+validées perdues — même si le texte est sauvegardé. Fermer ne rejoue aucune requête et
 n'annule pas les opérations d'une autre console. Fermer la dernière laisse un
 état vide avec l'action d'ouverture, tandis que le catalogue reste disponible.
 

@@ -265,3 +265,33 @@ export const Narrow: Story = {
     ).toBeVisible()
   },
 }
+
+/**
+ * A transaction the session reported open is said in words beside the
+ * context, and stays said while a statement runs: the bar keeps the last
+ * state observed until the next one arrives (ADR-0039 §5).
+ */
+export const TransactionOpen: Story = {
+  args: { transaction: "open", running: true, elapsedMs: 800 },
+  play: async ({ canvas }) => {
+    await expect(canvas.getByText("Transaction open")).toBeVisible()
+  },
+}
+
+/** A session that declares transactions but could not say: not « none ». */
+export const TransactionStateUnknown: Story = {
+  args: { transaction: "unknown" },
+  play: async ({ canvas }) => {
+    await expect(canvas.getByText("Transaction state unknown")).toBeVisible()
+  },
+}
+
+/** Idle, or a session without transactions: nothing, not a dimmed marker. */
+export const NoTransactionToShow: Story = {
+  args: { transaction: null },
+  play: async ({ canvasElement }) => {
+    await expect(
+      canvasElement.querySelector('[data-slot="transaction-badge"]')
+    ).toBeNull()
+  },
+}

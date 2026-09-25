@@ -90,6 +90,13 @@ export const ConnectionDraft = z.object({
 export type ConnectionDraft = z.infer<typeof ConnectionDraft>
 
 /**
+ * Whether a session has a transaction open, as the session reported it
+ * (ADR-0039). `unknown` is never shown as `idle`.
+ */
+export const TransactionState = z.enum(["idle", "open", "unknown"])
+export type TransactionState = z.infer<typeof TransactionState>
+
+/**
  * A console's own session.
  *
  * Declared here rather than next to the console commands because
@@ -101,6 +108,8 @@ export const ConsoleSession = z.object({
   session: z.string(),
   capabilities: z.array(z.string()),
   readOnly: z.boolean(),
+  /** What the session reported at opening (ADR-0039 §4). */
+  transactionState: TransactionState,
 })
 export type ConsoleSession = z.infer<typeof ConsoleSession>
 
@@ -315,7 +324,7 @@ export type RelationDetail = z.infer<typeof RelationDetail>
  * `ExecutionEvent` carries its `ExecutionEventKind` under `#[serde(flatten)]`,
  * so `command`, the `type` tag and the variant's own fields all arrive at the
  * same level: the JSON draws no line between the two, and neither does this.
- * Splitting them back apart would mean either a second declaration of the eight
+ * Splitting them back apart would mean either a second declaration of the nine
  * variants, or an intersection — which stops `type` from being a real
  * discriminant, on a union parsed once per batch of a running query.
  */
@@ -356,6 +365,12 @@ export const ExecutionEvent = z.discriminatedUnion("type", [
   }),
   z.object({ command: z.string(), type: z.literal("cancelled") }),
   z.object({ command: z.string(), type: z.literal("catalogUpdated") }),
+  z.object({
+    command: z.string(),
+    type: z.literal("transactionState"),
+    session: z.string(),
+    state: TransactionState,
+  }),
 ])
 export type ExecutionEvent = z.infer<typeof ExecutionEvent>
 
