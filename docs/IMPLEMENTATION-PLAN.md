@@ -268,7 +268,7 @@ clic droit sur chaque surface, raccourcis, palette, glisser-déposer, plusieurs
 fenêtres. Le comportement est dans [UX-SPEC](UX-SPEC.md#menus-raccourcis-et-gestes),
 les décisions dans [ADR-0041](adr/0041-registre-d-actions-menus-et-raccourcis.md),
 [ADR-0042](adr/0042-revue-sur-place-des-operations-destructrices.md) et
-[ADR-0043](adr/0043-multi-fenetre.md). Les lots 1 à 5 sont faits (le 4 sous
+[ADR-0043](adr/0043-multi-fenetre.md). Les lots 1 à 6 sont faits (le 4 sous
 la liste), le 8 pour une fenêtre ; les autres ne sont pas implémentés. Les interfaces sont écrites en shadcn/ui (`menubar`, `context-menu`, `command`,
 `alert-dialog`, `kbd`), sauf la barre native de macOS, construite en Rust.
 
@@ -486,6 +486,53 @@ Lots, dans l'ordre :
      l'impression de WebView2.
 6. **Glisser-déposer** — interne sur événements de pointeur, dépôt de fichiers
    depuis le système (ADR-0041).
+   **Fait le 2026-09-25.** Implémentation locale, sans bibliothèque :
+   `components/oxyn/pointer-drag.ts` (seuil de 4 px, écouteurs de fenêtre,
+   `Échap` qui annule, clic avalé après un dépôt). Onglets
+   (`workspace-tabs.tsx`, ordre tenu par `workspace-screen.tsx`), colonnes de
+   la grille (`column-order.ts`, `result-grid.tsx`), relation du catalogue
+   vers l'éditeur (`catalog-name-drag.ts`, `features/workspace/name-transfer.ts`,
+   `insertAt` de la poignée de zone de `sql-editor.tsx`, à la position
+   `posAtCoords`). Le nom inséré est le `qualifiedName` de `relation_facets`,
+   cité par le backend. Dépôt de fichiers : `crates/oxyn-desktop/src/file_drop.rs`,
+   `subscribe_file_drops`, `lib/ipc/file-drops.ts`, `features/file-drops/` ;
+   aucune permission ajoutée. Tenu par `pointer-drag.test.ts`,
+   `grid-selection.test.ts`, `result-grid.test.ts`, `name-transfer.test.ts`
+   (nom hostile), `use-file-drops.test.ts`, les tests de `file_drop.rs`
+   (extension, existence, taille, lien symbolique, UTF-8, nombre de
+   fichiers) et les stories `Oxyn/WorkspaceTabs`, `Oxyn/ResultGrid`,
+   `Oxyn/CatalogTree`, `Oxyn/SqlEditor`, `Oxyn/ConnectionForm`. Écarts et
+   restes :
+   - **équivalents clavier choisis par ce lot**, qu'UX-SPEC ne fixait pas :
+     `⌥⇧←` et `⌥⇧→` déplacent l'onglet focalisé ou la colonne de la cellule
+     active (`item.moveLeft`, `item.moveRight`, un seul couple au niveau
+     `global` avec un libellé par zone : deux zones précises ne peuvent pas
+     partager une combinaison) ; `⌥↵` sur une relation du catalogue pose son
+     nom dans la console active (`catalog.insertName`, zone `tree`, que
+     l'arbre déclare désormais). Tous en `binding: component` ;
+   - **pas de colonne du catalogue** : l'arbre ne montre pas les colonnes
+     (voir le lot 4). Seules les relations se glissent ;
+   - l'ordre des onglets vit tant que le workspace est ouvert, **sans
+     persistance** ; celui des colonnes est oublié au résultat suivant, comme
+     leur visibilité. Une copie suit l'ordre affiché, puisqu'elle copie ce qui est
+     montré ; l'export garde l'ordre du résultat (UX-SPEC,
+     « Colonnes et inspection des valeurs ») ;
+   - un `.sql` déposé **sans connexion ouverte** est refusé avec un message :
+     une console appartient à une connexion, et une file d'attente
+     l'aurait fait surgir dans le workspace ouvert ensuite ;
+   - les extensions reconnues (`.sqlite`, `.sqlite3` pour `sqlite` ;
+     `.duckdb` pour `duckdb`) sont une table de `file_drop.rs` : les drivers
+     ne déclarent pas les fichiers qu'ils lisent. Aucun driver DuckDB n'est
+     enregistré, un `.duckdb` est donc refusé avec sa raison. Bornes : 4 Mio
+     par `.sql`, 16 fichiers par dépôt ; un lien symbolique est refusé ;
+   - seule la fenêtre `main` reçoit les dépôts (le lot 7 les étendra) ;
+   - pas de défilement automatique quand un onglet ou une colonne est glissé
+     au bord de la vue, ni de marque de dépôt dans l'éditeur : le fantôme
+     suit le pointeur ;
+   - **à vérifier à la main** dans `make desktop-dev`, sous Windows surtout :
+     qu'un fichier déposé arrive avec `dragDropEnabled` resté vrai, et que le
+     glisser interne n'en souffre pas. Les stories simulent les événements de
+     pointeur, pas le moteur.
 7. **Multi-fenêtre** — abonnements par fenêtre, `WindowRegistry`, capability
    par motif `workspace-*`, migration de disposition, `Open in new window`,
    restauration par fenêtre, consoles comprises après une fermeture ordinaire

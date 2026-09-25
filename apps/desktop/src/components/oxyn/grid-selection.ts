@@ -7,7 +7,11 @@ export interface GridPosition {
   column: number
 }
 
-/** An inclusive rectangle of cells. */
+/**
+ * An inclusive rectangle of cells. `left` and `right` are positions among the
+ * columns drawn, not Arrow indexes: once columns are moved, a rectangle on
+ * screen is not a range of indexes.
+ */
 export interface GridRange {
   top: number
   bottom: number
@@ -64,15 +68,16 @@ function field(text: string) {
  * cannot be rendered: pasting « Long note Long no… » into a ticket is a wrong
  * value that looks right. The full value is one `Inspect full value` away, and
  * the export writes every value whole. `NULL` copies as an empty field, the
- * spreadsheet convention. A column hidden from the grid is left out of the
- * copy, since it is not shown.
+ * spreadsheet convention. `shown` are the Arrow indexes the grid draws, in
+ * the order it draws them: a hidden column is left out, and a moved one is
+ * copied where it stands, since the copy is of what is shown.
  */
 export function copyText(
   rows: ReadonlyArray<ReadonlyArray<Cell>>,
   columns: ReadonlyArray<ResultColumn>,
   range: GridRange,
   withHeaders: boolean,
-  hidden: ReadonlySet<number> = new Set()
+  shown: ReadonlyArray<number>
 ): CopyText {
   if (rangeRows(range) > MAX_COPY_ROWS) {
     return {
@@ -86,10 +91,7 @@ export function copyText(
       reason: "Not copied: some selected rows are not loaded.",
     }
   }
-  const copied: Array<number> = []
-  for (let column = range.left; column <= range.right; column++) {
-    if (!hidden.has(column)) copied.push(column)
-  }
+  const copied = shown.slice(range.left, range.right + 1)
   let truncated = 0
   let unrenderable = 0
   const lines: Array<string> = []

@@ -5,7 +5,7 @@ import { expect, fn, userEvent, waitFor, within } from "storybook/test"
 import { SqlEditor } from "./sql-editor"
 import type { EditorTarget } from "./sql-editor"
 import { nameAt } from "@/features/consoles/object-under-cursor"
-import { useActionSource } from "@/lib/actions/context"
+import { useActionSource, zoneHandleAt } from "@/lib/actions/context"
 import { modKey } from "@/lib/actions/platform"
 
 // ⌘ on macOS, Ctrl elsewhere: the registry's dispatcher, installed by the
@@ -264,5 +264,47 @@ export const SQLite: Story = {
   args: {
     driver: "sqlite",
     value: "SELECT name FROM sqlite_master WHERE type = 'table';",
+  },
+}
+
+/** Quoted by the backend for PostgreSQL, as `qualified_name` renders it. */
+const QUOTED_HOSTILE = '"public"."users""; DROP TABLE audit; --"'
+
+/**
+ * A relation dropped from the catalog: the editor under the pointer takes the
+ * name the backend quoted, at the drop point, byte for byte — and runs
+ * nothing (UX-SPEC « Souris et glisser »).
+ */
+export const NameDroppedFromTheCatalog: Story = {
+  args: { value: "SELECT *\nFROM " },
+  play: async ({ canvas, args }) => {
+    const editor = canvas.getByRole("textbox")
+    const lines = editor.querySelectorAll(".cm-line")
+    const last = lines[lines.length - 1]
+    if (!last) throw new Error("the editor draws its lines")
+    const box = last.getBoundingClientRect()
+    const point = { x: box.right - 1, y: box.top + box.height / 2 }
+    const insertAt = zoneHandleAt("editor", point)?.insertAt
+    await expect(insertAt).toBeDefined()
+    insertAt?.(QUOTED_HOSTILE, point)
+    await waitFor(() =>
+      expect(args.onChange).toHaveBeenLastCalledWith(
+        `SELECT *\nFROM ${QUOTED_HOSTILE}`
+      )
+    )
+    await expect(args.onCancel).not.toHaveBeenCalled()
+  },
+}
+
+/** A read-only view takes no dropped name. */
+export const ReadOnlyTakesNoName: Story = {
+  args: { value: "SELECT 1;", readOnly: true },
+  play: async ({ canvas }) => {
+    const editor = canvas.getByRole("textbox")
+    const point = {
+      x: editor.getBoundingClientRect().left + 40,
+      y: editor.getBoundingClientRect().top + 12,
+    }
+    await expect(zoneHandleAt("editor", point)?.insertAt).toBeUndefined()
   },
 }

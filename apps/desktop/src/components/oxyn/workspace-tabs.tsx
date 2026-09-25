@@ -26,7 +26,9 @@ import { tabState, tabTitle } from "@/features/consoles/console-model"
 import type { ConsoleTabInfo } from "@/features/consoles/console-model"
 import { cn } from "@/lib/utils"
 import type { ActionSources } from "@/lib/actions/context"
+import { setItemHandle } from "@/lib/actions/context"
 import { actionKeys, ariaKeys } from "@/lib/actions/manifest"
+import { dropMark, moveStep, usePointerReorder } from "./pointer-drag"
 
 /** The `tab` target of a tab's context menu: its state and what it runs. */
 export type TabMenuTarget = NonNullable<ActionSources["tab"]>
@@ -80,12 +82,18 @@ export function tabPanelValue(key: string) {
  * A right click on a tab — or ⇧F10 and the menu key on the focused one —
  * opens the registry's `tab` menu for **that** tab, given by `menuFor`
  * (UX-SPEC, « Menus contextuels »). The strip around the tabs has no menu.
+ *
+ * Tabs reorder by dragging, or with ⌥⇧← and ⌥⇧→ on the focused tab — the
+ * keyboard's side of the drag (UX-SPEC « Souris et glisser »). The order is
+ * the screen's to keep: nothing else changes with it. Only the primary
+ * button drags, so a right click opens the menu and moves nothing.
  */
 export function WorkspaceTabs({
   tabs,
   active = null,
   opening = false,
   onClose,
+  onMove,
   onNewConsole,
   onCancelOpening,
   menuFor,
@@ -96,6 +104,8 @@ export function WorkspaceTabs({
   /** A console session is being opened; a second opening waits for it. */
   opening?: boolean
   onClose: (key: string) => void
+  /** The tab `key` now stands at `to`, among `tabs`. Absent: tabs stay put. */
+  onMove?: (key: string, to: number) => void
   onNewConsole: () => void
   onCancelOpening: () => void
   /** The menu target of the tab `key`; without it, tabs have no menu. */
@@ -120,6 +130,30 @@ export function WorkspaceTabs({
   }, [active, tabs.length])
 
   const [menuOpen, setMenuOpen] = React.useState(false)
+  const reorder = usePointerReorder({
+    centers: () =>
+      Array.from(
+        strip.current?.querySelectorAll('[data-slot="tabs-trigger"]') ?? [],
+        (tab) => {
+          const box = tab.getBoundingClientRect()
+          return box.left + box.width / 2
+        }
+      ),
+    onMove: (from, to) => {
+      const tab = tabs[from]
+      if (tab && onMove) onMove(tab.key, to)
+    },
+  })
+  // Said aloud: a moved tab keeps the focus, and nothing else shows it moved.
+  const [moved, setMoved] = React.useState("")
+  const moveBy = (index: number, step: -1 | 1) => {
+    const tab = tabs[index]
+    const to = index + step
+    if (!tab || !onMove || to < 0 || to >= tabs.length) return
+    onMove(tab.key, to)
+    const title = tab.kind === "console" ? tabTitle(tab) : tab.title
+    setMoved(`${title} moved to position ${to + 1} of ${tabs.length}`)
+  }
 
   return (
     <div className="flex min-w-0 items-center gap-1">
@@ -148,18 +182,40 @@ export function WorkspaceTabs({
             />
           }
         >
-          {tabs.map((tab) => {
+          {tabs.map((tab, index) => {
             const title = tab.kind === "console" ? tabTitle(tab) : tab.title
             const state = stateOf(tab)
             const closable = state !== "exporting"
             const close = () => {
               if (closable) onClose(tab.key)
             }
+            const mark = dropMark(reorder.drag, index)
             return (
               <TabsTrigger
                 key={tab.key}
                 value={tabPanelValue(tab.key)}
-                aria-keyshortcuts={closable ? "Delete" : undefined}
+                ref={(element: HTMLElement | null) => {
+                  if (!element || !onMove) return
+                  setItemHandle(element, {
+                    move: (step) => moveBy(index, step),
+                  })
+                  return () => setItemHandle(element, null)
+                }}
+                data-item-handle
+                data-dragging={reorder.drag?.from === index || undefined}
+                data-drop={mark ?? undefined}
+                onPointerDown={
+                  onMove ? (event) => reorder.start(event, index) : undefined
+                }
+                aria-keyshortcuts={
+                  [
+                    closable ? "Delete" : null,
+                    onMove ? ariaKeys("item.moveLeft") : null,
+                    onMove ? ariaKeys("item.moveRight") : null,
+                  ]
+                    .filter(Boolean)
+                    .join(" ") || undefined
+                }
                 title={
                   closable
                     ? title
@@ -169,6 +225,12 @@ export function WorkspaceTabs({
                   if (event.key === "Delete" || event.key === "Backspace") {
                     event.preventDefault()
                     close()
+                    return
+                  }
+                  const step = moveStep(event)
+                  if (step !== 0) {
+                    event.preventDefault()
+                    moveBy(index, step)
                   }
                 }}
                 onAuxClick={(event) => {
@@ -181,7 +243,12 @@ export function WorkspaceTabs({
                   pointed.current = tab.key
                   setMenu({ key: tab.key, anchor: event.currentTarget })
                 }}
-                className="group/tab h-8 max-w-56 flex-none gap-1.5 pr-1 text-[length:var(--reading-text)]"
+                className={cn(
+                  "group/tab h-8 max-w-56 flex-none gap-1.5 pr-1 text-[length:var(--reading-text)]",
+                  // The mark of where the dragged tab lands: an inset bar, so
+                  // the strip does not shift under the pointer.
+                  "data-dragging:opacity-60 data-[drop=after]:shadow-[inset_-2px_0_0_var(--primary)] data-[drop=before]:shadow-[inset_2px_0_0_var(--primary)]"
+                )}
               >
                 <HugeiconsIcon icon={iconOf(tab)} strokeWidth={2} />
                 <span dir="auto" className="min-w-0 truncate">
@@ -225,6 +292,9 @@ export function WorkspaceTabs({
           />
         ) : null}
       </ContextMenu>
+      <span role="status" className="sr-only">
+        {moved}
+      </span>
       {opening ? (
         <Button size="sm" variant="ghost" onClick={onCancelOpening}>
           <Spinner data-icon="inline-start" />

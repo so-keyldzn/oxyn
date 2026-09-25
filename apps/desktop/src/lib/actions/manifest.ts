@@ -7,7 +7,7 @@ import { z } from "zod"
 
 import manifestJson from "./actions.json"
 import { platform } from "./platform"
-import { keyCaps, parseChord } from "./shortcut"
+import { keyCaps, matches, parseChord } from "./shortcut"
 import type { Chord, Platform } from "./shortcut"
 
 /**
@@ -141,6 +141,21 @@ export function actionKeys(id: string, on: Platform = platform): Array<string> {
   const spec = actionSpec(id)
   const chord = spec ? chordsOf(spec, on)[0] : undefined
   return chord ? keyCaps(chord, on) : []
+}
+
+/**
+ * Whether `event` presses a combination of `id`: how a component binds an
+ * action declared `binding: component`, without writing the keys twice.
+ */
+export function presses(
+  id: string,
+  event: Parameters<typeof matches>[1],
+  on: Platform = platform
+) {
+  const spec = actionSpec(id)
+  return spec
+    ? chordsOf(spec, on).some((chord) => matches(chord, event))
+    : false
 }
 
 /** The same key caps as one piece of text: `⌘↵` on macOS, `Ctrl+Enter` elsewhere. */

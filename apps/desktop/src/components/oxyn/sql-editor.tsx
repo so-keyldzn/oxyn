@@ -209,6 +209,20 @@ export function SqlEditor({
       toggleComment: readOnly
         ? undefined
         : () => runModBinding(view, "/", "Slash"),
+      // A name dropped from the catalog lands where the pointer is, and only
+      // lands: nothing runs (UX-SPEC « Souris et glisser »). A read-only
+      // view takes no text.
+      insertAt: readOnly
+        ? undefined
+        : (text, point) => {
+            const at = view.posAtCoords(point) ?? view.state.selection.main.head
+            view.dispatch({
+              changes: { from: at, insert: text },
+              selection: { anchor: at + text.length },
+              scrollIntoView: true,
+            })
+            view.focus()
+          },
     })
     return () => setZoneHandle(element, null)
   }, [view, readOnly])

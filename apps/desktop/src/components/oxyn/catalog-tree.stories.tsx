@@ -5,6 +5,7 @@ import { expect, fn, userEvent, waitFor, within } from "storybook/test"
 import { CatalogTree, addressKey } from "./catalog-tree"
 import { Button } from "@/components/ui/button"
 import { catalog } from "./fixtures"
+import { centerOf, pressAndMove, release } from "./pointer-drag-fixtures"
 import {
   HOSTILE,
   hostileAddress,
@@ -595,5 +596,81 @@ export const SearchInProgress: Story = {
     await expect(
       await canvas.findByText("Searching loaded objects…")
     ).toBeVisible()
+  },
+}
+
+/**
+ * A relation dragged out of the tree carries its name under the pointer, and
+ * the parent is told where it was released; a schema does not move.
+ */
+export const DragARelationName: Story = {
+  args: { nameTransfer: { onDrop: fn(), onInsert: fn() } },
+  play: async ({ canvas, args }) => {
+    await userEvent.click(canvas.getByText("public"))
+    const invoices = canvas.getByText("invoices")
+    const from = centerOf(invoices)
+    const to = { x: from.x + 160, y: from.y + 40 }
+    pressAndMove(invoices, to)
+    const ghost = await waitFor(() => {
+      const found = document.querySelector('[data-slot="catalog-drag-ghost"]')
+      expect(found).toHaveTextContent("invoices")
+      return found
+    })
+    await expect(ghost).toHaveAttribute("aria-hidden", "true")
+    release(invoices, to)
+    await expect(args.nameTransfer?.onDrop).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "invoices" }),
+      to
+    )
+    await waitFor(() =>
+      expect(
+        document.querySelector('[data-slot="catalog-drag-ghost"]')
+      ).toBeNull()
+    )
+
+    const schema = canvas.getByText("public")
+    const at = centerOf(schema)
+    pressAndMove(schema, { x: at.x + 160, y: at.y })
+    release(schema, { x: at.x + 160, y: at.y })
+    await expect(args.nameTransfer?.onDrop).toHaveBeenCalledTimes(1)
+  },
+}
+
+/** Esc drops nothing: the drag ends where it started. */
+export const DragCancelledByEscape: Story = {
+  args: { nameTransfer: { onDrop: fn(), onInsert: fn() } },
+  play: async ({ canvas, args }) => {
+    await userEvent.click(canvas.getByText("public"))
+    const invoices = canvas.getByText("invoices")
+    const to = { x: centerOf(invoices).x + 120, y: centerOf(invoices).y }
+    pressAndMove(invoices, to)
+    await userEvent.keyboard("{Escape}")
+    release(invoices, to)
+    await expect(args.nameTransfer?.onDrop).not.toHaveBeenCalled()
+  },
+}
+
+/**
+ * ⌥↵, the keyboard's side of the drag: the focused relation's name goes to
+ * the console. The row is not opened, and a hostile name is handed over as
+ * the node it is — its quoting is the backend's, never the tree's (I-10).
+ */
+export const InsertANameFromTheKeyboard: Story = {
+  args: {
+    nodes: unusualCatalog,
+    nameTransfer: { onDrop: fn(), onInsert: fn() },
+  },
+  play: async ({ canvas, args }) => {
+    const tree = canvas.getByRole("tree")
+    await expect(tree).toHaveAttribute("aria-keyshortcuts", "Alt+Enter")
+    await userEvent.click(canvas.getByText("public"))
+    await userEvent.click(canvas.getByText(HOSTILE))
+    args.onSelect.mockClear()
+    tree.focus()
+    await userEvent.keyboard("{Alt>}{Enter}{/Alt}")
+    await expect(args.nameTransfer?.onInsert).toHaveBeenCalledWith(
+      expect.objectContaining({ name: HOSTILE })
+    )
+    await expect(args.onSelect).not.toHaveBeenCalled()
   },
 }

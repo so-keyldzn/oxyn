@@ -13,6 +13,7 @@ import type { AsideItem } from "@/components/oxyn/workspace-aside"
 import { WorkspaceLayout } from "@/components/oxyn/workspace-layout"
 import type { LeftView } from "@/components/oxyn/workspace-layout"
 import { RenameConsoleDialog } from "@/components/oxyn/rename-console-dialog"
+import { inOrder, moveItem } from "@/components/oxyn/pointer-drag"
 import { WorkspaceTabs, tabPanelValue } from "@/components/oxyn/workspace-tabs"
 import type {
   TabMenuTarget,
@@ -188,6 +189,7 @@ export function WorkspaceScreen({
   // The tab shown, as a series of closes reads it between two awaits.
   const activeRef = React.useRef(active)
   activeRef.current = active
+  const [tabOrder, setTabOrder] = React.useState<ReadonlyArray<string>>([])
   const lastConsole = React.useRef<string | null>(null)
   const objectsRef = React.useRef(objects)
   objectsRef.current = objects
@@ -469,7 +471,7 @@ export function WorkspaceScreen({
     }
   )
 
-  const tabs: Array<WorkspaceTabItem> = [
+  const naturalTabs: Array<WorkspaceTabItem> = [
     ...objects.map((tab) => ({
       kind: "object" as const,
       key: tab.key,
@@ -491,6 +493,13 @@ export function WorkspaceScreen({
       exporting: exporting.has(tab.key),
     })),
   ]
+  // The order the tabs were dragged into: display only, kept while the
+  // workspace is open (UX-SPEC « Souris et glisser »).
+  const tabs = inOrder(naturalTabs, (tab) => tab.key, tabOrder)
+  const moveTab = (key: string, to: number) => {
+    const keys = tabs.map((tab) => tab.key)
+    setTabOrder(moveItem(keys, keys.indexOf(key), to))
+  }
   // The target of a tab's context menu: the same functions as the tab's
   // cross, ⌘W, the console's « Query name » field and the library switch
   // (I-01).
@@ -590,6 +599,7 @@ export function WorkspaceScreen({
             active={active}
             opening={work.opening}
             onClose={(key) => void closeTab(key)}
+            onMove={moveTab}
             onNewConsole={() => void work.openConsole()}
             onCancelOpening={work.cancelOpening}
             menuFor={tabMenu}

@@ -22,6 +22,8 @@ import type {
   GridMenu,
   GridMenuTarget,
 } from "@/components/oxyn/result-grid-menu"
+import { setItemHandle } from "@/lib/actions/context"
+import { ariaKeys } from "@/lib/actions/manifest"
 import { platform } from "@/lib/actions/platform"
 import { hasMod, keyOf } from "@/lib/actions/shortcut"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -41,6 +43,8 @@ import type {
   ResultWindow,
 } from "@/lib/ipc/types"
 import { cn } from "@/lib/utils"
+import { useColumnOrder } from "./column-order"
+import { dropMark, moveStep, usePointerReorder } from "./pointer-drag"
 
 /**
  * Compact density (docs/UX-SPEC.md, « Lisibilité et hauteur de grille »): the
@@ -118,32 +122,41 @@ export function pagesFor(first: number, last: number, pageSize = PAGE_SIZE) {
 
 /**
  * The Arrow indexes the grid draws, in order: every column the user has not
- * hidden. Hiding never renumbers a column — the inspector, the copy and the
- * export all speak of the same index. Pure, so it is tested.
+ * hidden, in the order they moved them to. Neither hiding nor moving
+ * renumbers a column — the inspector, the copy and the export all speak of
+ * the same index. Pure, so it is tested.
  */
-export function shownColumns(count: number, hidden?: ReadonlySet<number>) {
-  const shown: Array<number> = []
-  for (let column = 0; column < count; column++) {
-    if (!hidden?.has(column)) shown.push(column)
-  }
-  return shown
+export function shownColumns(
+  count: number,
+  hidden?: ReadonlySet<number>,
+  order?: ReadonlyArray<number> | null
+) {
+  const sequence =
+    order?.length === count
+      ? order
+      : Array.from({ length: count }, (_, column) => column)
+  return sequence.filter((column) => !hidden?.has(column))
 }
 
 /**
  * The shown column `step` places away from `column`, clamped to the ends. A
- * hidden `column` counts from the first shown column after it. Pure, so it is
- * tested.
+ * hidden `column` counts from the shown column of the lowest index after it.
+ * Pure, so it is tested.
  */
 export function stepColumn(
   shown: ReadonlyArray<number>,
   column: number,
   step: number
 ) {
-  let position = shown.findIndex((index) => index >= column)
+  let position = shown.indexOf(column)
   let moves = step
-  if (position === -1) position = shown.length
-  // Standing on a hidden column, the next shown one is already a step right.
-  else if (shown[position] !== column && moves > 0) moves--
+  if (position === -1) {
+    const after = shown.filter((index) => index > column)
+    position =
+      after.length === 0 ? shown.length : shown.indexOf(Math.min(...after))
+    // Standing on a hidden column, the next shown one is already a step right.
+    if (after.length > 0 && moves > 0) moves--
+  }
   const next = Math.max(0, Math.min(shown.length - 1, position + moves))
   return shown[next] ?? column
 }
@@ -315,14 +328,27 @@ export const ResultGrid = React.memo(function ResultGrid({
   const [menuTarget, setMenuTarget] = React.useState<GridMenuTarget | null>(
     null
   )
-  const range = rangeOf(anchor, active)
   // Pages are sized on the result's width, not on what is shown: hiding a
   // column must not ask the backend again for pages already held.
   const pageSize = pageSizeFor(columns.length)
+  const columnOrder = useColumnOrder(resultKey, columns.length)
   const shown = React.useMemo(
-    () => shownColumns(columns.length, hiddenColumns),
-    [columns.length, hiddenColumns]
+    () => shownColumns(columns.length, hiddenColumns, columnOrder.order),
+    [columns.length, hiddenColumns, columnOrder.order]
   )
+  // The selection is a rectangle of what is drawn: its columns are shown
+  // positions, not Arrow indexes, once columns have been moved.
+  const positionOf = React.useMemo(
+    () => new Map(shown.map((column, position) => [column, position])),
+    [shown]
+  )
+  const drawn = (position: GridPosition | null) => {
+    const column = position ? positionOf.get(position.column) : undefined
+    return position && column !== undefined
+      ? { row: position.row, column }
+      : null
+  }
+  const range = rangeOf(drawn(anchor) ?? drawn(active), drawn(active))
   const firstShown = shown[0] ?? 0
   const lastShown = shown[shown.length - 1] ?? 0
   // The active cell never stays on a column the user just hid.
@@ -469,7 +495,7 @@ export const ResultGrid = React.memo(function ResultGrid({
     if (!range) return
     const count = rangeRows(range)
     if (count > MAX_COPY_ROWS) {
-      const refused = copyText([], columns, range, withHeaders, hiddenColumns)
+      const refused = copyText([], columns, range, withHeaders, shown)
       if (!refused.ok) setStatus({ text: refused.reason, failed: true })
       return
     }
@@ -484,13 +510,7 @@ export const ResultGrid = React.memo(function ResultGrid({
         })
         return
       }
-      const copied = copyText(
-        page.rows,
-        columns,
-        range,
-        withHeaders,
-        hiddenColumns
-      )
+      const copied = copyText(page.rows, columns, range, withHeaders, shown)
       if (!copied.ok) {
         setStatus({ text: copied.reason, failed: true })
         return
@@ -517,8 +537,53 @@ export const ResultGrid = React.memo(function ResultGrid({
     if (position !== -1) cols.scrollToIndex(position, { align: "auto" })
   }
 
+  // ⌥⇧← and ⌥⇧→ move the active cell's column, the keyboard's side of
+  // dragging its header; the cell stays on it.
+  const moveColumn = (from: number, to: number) => {
+    const column = shown[from]
+    if (column === undefined || to < 0 || to >= shown.length) return
+    columnOrder.move(shown, from, to)
+    const name = columns[column]?.name ?? ""
+    setStatus({
+      text: `${name} moved to position ${to + 1} of ${shown.length}.`,
+      failed: false,
+    })
+    // Where the column now stands, not where it stood.
+    requestAnimationFrame(() => cols.scrollToIndex(to, { align: "auto" }))
+  }
+  const moveActive = (step: -1 | 1) => {
+    const from = shown.indexOf(active?.column ?? firstShown)
+    if (from !== -1) moveColumn(from, from + step)
+  }
+  const latestMove = React.useRef(moveActive)
+  latestMove.current = moveActive
+  React.useEffect(() => {
+    const element = scrollRef.current
+    if (!element) return
+    setItemHandle(element, { move: (step) => latestMove.current(step) })
+    return () => setItemHandle(element, null)
+  }, [])
+  const reorder = usePointerReorder({
+    centers: () => {
+      const element = scrollRef.current
+      if (!element) return []
+      const origin = element.getBoundingClientRect().left - element.scrollLeft
+      return shown.map((_, position) => {
+        const measured = cols.measurementsCache[position]
+        return measured ? origin + measured.start + measured.size / 2 : 0
+      })
+    },
+    onMove: moveColumn,
+  })
+
   const onKeyDown = (event: React.KeyboardEvent<HTMLDivElement>) => {
     if (rowCount === 0 || shown.length === 0) return
+    const step = moveStep(event)
+    if (step !== 0) {
+      event.preventDefault()
+      moveActive(step)
+      return
+    }
     // ⌘ on macOS, Ctrl elsewhere — never either: ⌃C is not a copy on a Mac
     // (docs/adr/0041-registre-d-actions-menus-et-raccourcis.md, point 3). The
     // letter comes from `event.code` when the layout is not Latin.
@@ -582,10 +647,9 @@ export const ResultGrid = React.memo(function ResultGrid({
   const onContextMenu = (event: React.MouseEvent<HTMLDivElement>) => {
     if (!(event.target instanceof Element)) return
     const target = menuTargetOf(event.target, active)
-    if (
-      target?.kind === "cell" &&
-      !inRange(range, target.position.row, target.position.column)
-    ) {
+    // `range` spans drawn positions; the target is an Arrow index.
+    const at = target?.kind === "cell" ? drawn(target.position) : null
+    if (target?.kind === "cell" && !(at && inRange(range, at.row, at.column))) {
       setAnchor(target.position)
       setActive(target.position)
     }
@@ -662,6 +726,8 @@ export const ResultGrid = React.memo(function ResultGrid({
         tabIndex={0}
         onKeyDown={onKeyDown}
         onContextMenu={onContextMenu}
+        data-item-handle
+        aria-keyshortcuts={`${ariaKeys("item.moveLeft") ?? ""} ${ariaKeys("item.moveRight") ?? ""}`.trim()}
         className="relative min-h-0 flex-1 overflow-auto bg-background font-mono text-[length:var(--reading-text)] outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
       >
         <div
@@ -700,9 +766,15 @@ export const ResultGrid = React.memo(function ResultGrid({
                   aria-colindex={virtual.index + 2}
                   data-column={index}
                   title={`${column.name} · ${column.dataType}`}
+                  data-dragging={
+                    reorder.drag?.from === virtual.index || undefined
+                  }
+                  data-drop={dropMark(reorder.drag, virtual.index) ?? undefined}
+                  onPointerDown={(event) => reorder.start(event, virtual.index)}
                   className={cn(
                     "absolute top-0 flex h-full min-w-0 flex-col justify-center border-r border-grid-line px-2 leading-3",
-                    numeric && "items-end text-right"
+                    numeric && "items-end text-right",
+                    "data-dragging:opacity-60 data-[drop=after]:shadow-[inset_-2px_0_0_var(--primary)] data-[drop=before]:shadow-[inset_2px_0_0_var(--primary)]"
                   )}
                   style={{ left: virtual.start, width: virtual.size }}
                 >
@@ -782,7 +854,7 @@ export const ResultGrid = React.memo(function ResultGrid({
                   const column = shown[virtual.index] ?? virtual.index
                   const described = columns[column]
                   const isActive = isActiveRow && active.column === column
-                  const selected = inRange(range, item.index, column)
+                  const selected = inRange(range, item.index, virtual.index)
                   const cell = row?.[column]
                   const numeric = described
                     ? isNumericType(described.dataType)

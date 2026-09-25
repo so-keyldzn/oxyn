@@ -1,4 +1,5 @@
 import * as React from "react"
+import { createPortal } from "react-dom"
 import { useDebouncedValue } from "@tanstack/react-pacer"
 import { useVirtualizer } from "@tanstack/react-virtual"
 import { HugeiconsIcon } from "@hugeicons/react"
@@ -29,8 +30,12 @@ import type { CopyAsForm } from "@/lib/actions/targets"
 import type { CatalogSearchHit } from "@/lib/ipc/metadata"
 import type { OperationKind } from "@/lib/ipc/object-operations"
 import type { CatalogAddress, CatalogNode, PrivacyTier } from "@/lib/ipc/types"
+import { setItemHandle } from "@/lib/actions/context"
+import { ariaKeys, presses } from "@/lib/actions/manifest"
 import { cn } from "@/lib/utils"
 import { ActionMenuContent } from "./action-menu-items"
+import { hasInsertableName, useNameDrag } from "./catalog-name-drag"
+import type { NameTransfer } from "./catalog-name-drag"
 import { operationOffer } from "./object-operations"
 import { InputGroupTextInput } from "./text-field"
 
@@ -346,6 +351,7 @@ export function CatalogTree({
   operations,
   copyAs,
   onNewConsole,
+  nameTransfer,
 }: {
   nodes: Array<CatalogNode>
   loading: ReadonlySet<string>
@@ -376,6 +382,8 @@ export function CatalogTree({
    * console »); offered on schema nodes.
    */
   onNewConsole?: (node: CatalogNode) => void
+  /** A relation dragged to the editor, or ⌥↵: its quoted name goes there. */
+  nameTransfer?: NameTransfer
 }) {
   const [ownExpanded, setOwnExpanded] = React.useState<Set<string>>(
     () => new Set()
@@ -469,9 +477,36 @@ export function CatalogTree({
     }
   }
 
+  const nameDrag = useNameDrag(nameTransfer)
+  const insertable = (row: Row | undefined): row is Row =>
+    row !== undefined &&
+    row.placeholder === undefined &&
+    hasInsertableName(row.node)
+  // The menu and the palette reach ⌥↵ through the tree's handle.
+  const insertFocused = React.useRef<(() => void) | undefined>(undefined)
+  insertFocused.current =
+    nameTransfer && insertable(focusRow)
+      ? () => nameTransfer.onInsert(focusRow.node)
+      : undefined
+  const treeRef = React.useCallback((element: HTMLDivElement | null) => {
+    listRef.current = element
+    if (!element) return
+    setItemHandle(element, {
+      get insertName() {
+        return insertFocused.current
+      },
+    })
+    return () => setItemHandle(element, null)
+  }, [])
+
   const onKeyDown = (event: React.KeyboardEvent) => {
     const row = focusRow
     const index = Math.max(focus, 0)
+    if (presses("catalog.insertName", event)) {
+      event.preventDefault()
+      insertFocused.current?.()
+      return
+    }
     switch (event.key) {
       case "ArrowDown":
         focusAt(Math.min(rows.length - 1, index + 1))
@@ -580,6 +615,24 @@ export function CatalogTree({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2">
+      {nameDrag.dragged
+        ? createPortal(
+            // Follows the pointer, above everything; decoration only — the
+            // keyboard has ⌥↵, and the drop is announced by the console.
+            <div
+              aria-hidden
+              data-slot="catalog-drag-ghost"
+              className="pointer-events-none fixed z-50 max-w-64 truncate rounded-md border bg-popover px-2 py-1 font-mono text-[length:var(--reading-caption)] text-popover-foreground shadow-md"
+              style={{
+                left: nameDrag.dragged.point.x + 12,
+                top: nameDrag.dragged.point.y + 8,
+              }}
+            >
+              {nameDrag.dragged.node.name}
+            </div>,
+            document.body
+          )
+        : null}
       <InputGroup className="h-8">
         <InputGroupAddon>
           {searching && search.searching ? (
@@ -649,9 +702,14 @@ export function CatalogTree({
           <ContextMenuTrigger
             render={
               <div
-                ref={listRef}
+                ref={treeRef}
                 role="tree"
                 aria-label="Catalog"
+                data-action-zone="tree"
+                data-item-handle
+                aria-keyshortcuts={
+                  nameTransfer ? ariaKeys("catalog.insertName") : undefined
+                }
                 aria-activedescendant={
                   // Only a row the virtualizer has drawn exists in the DOM: an
                   // id pointing at nothing is announced as nothing, and the
@@ -703,6 +761,12 @@ export function CatalogTree({
                     aria-expanded={row.expandable ? row.expanded : undefined}
                     aria-selected={isSelected}
                     aria-busy={isLoading || undefined}
+                    data-dragging={
+                      nameDrag.dragged?.node === row.node || undefined
+                    }
+                    onPointerDown={(event) => {
+                      if (insertable(row)) nameDrag.start(event, row.node)
+                    }}
                     onClick={() => {
                       setFocusKey(row.key)
                       activate(row)
@@ -727,7 +791,8 @@ export function CatalogTree({
                       // The ring sits on the row, and only while the tree has
                       // keyboard focus: one ring, never two.
                       isFocused &&
-                        "group-focus-visible/tree:ring-2 group-focus-visible/tree:ring-ring group-focus-visible/tree:ring-inset"
+                        "group-focus-visible/tree:ring-2 group-focus-visible/tree:ring-ring group-focus-visible/tree:ring-inset",
+                      "data-dragging:opacity-60"
                     )}
                     style={{
                       height: ROW_HEIGHT,
