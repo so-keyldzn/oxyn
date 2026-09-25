@@ -168,6 +168,7 @@ pub mod consoles;
 pub mod library;
 pub mod location;
 pub mod metadata;
+pub mod object_operations;
 pub mod recovery;
 pub mod results;
 pub mod settings;

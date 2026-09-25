@@ -268,8 +268,8 @@ clic droit sur chaque surface, raccourcis, palette, glisser-déposer, plusieurs
 fenêtres. Le comportement est dans [UX-SPEC](UX-SPEC.md#menus-raccourcis-et-gestes),
 les décisions dans [ADR-0041](adr/0041-registre-d-actions-menus-et-raccourcis.md),
 [ADR-0042](adr/0042-revue-sur-place-des-operations-destructrices.md) et
-[ADR-0043](adr/0043-multi-fenetre.md). Rien n'est encore implémenté ; les
-interfaces sont écrites en shadcn/ui (`menubar`, `context-menu`, `command`,
+[ADR-0043](adr/0043-multi-fenetre.md). Le lot 4 est fait (voir sous la liste) ;
+les autres ne sont pas implémentés. Les interfaces sont écrites en shadcn/ui (`menubar`, `context-menu`, `command`,
 `alert-dialog`, `kbd`), sauf la barre native de macOS, construite en Rust.
 
 Arbitrages de l'utilisateur, le 2026-09-25 : barre de menus aussi sous Windows
@@ -363,6 +363,42 @@ Lots, dans l'ordre :
    `ShutdownSignal::ResolveTransactions`, `shutdown_acknowledged`,
    `cancel_exit`, journal de la sortie forcée (ADR-0043). **Ce qui le
    débloque** : l'acceptation et la mise en œuvre d'ADR-0039.
+
+**Lot 4 fait le 2026-09-25.** `backend/object_operations.rs` compose, revoit et
+soumet ; `review_object_operation` et `run_object_operation` sont les deux
+commandes Tauri ; `ObjectOperationReviewDialog` est la boîte, avec ses stories ;
+`Drop…`, `Truncate…` et `Rename…` sont dans le menu contextuel du catalogue.
+Les drapeaux `TRUNCATE`, `TRANSACTIONAL_DDL` et `RESTRICT_DEPENDENTS` (bits 44
+à 46) sont prouvés par `ddl_tests` dans chaque driver qui les déclare. Le test
+`object_operations_are_not_tools` garde `oxyn-ai`. Écarts et restes :
+
+- **SQLite vérifie les clés étrangères par défaut.** ADR-0042 (tableau des
+  sources) et l'en-tête de `drivers/oxyn-driver-sqlite/src/session.rs` disaient
+  l'inverse. Le moteur embarqué par `libsqlite3-sys` (fonctionnalité `bundled`)
+  est compilé avec `SQLITE_DEFAULT_FOREIGN_KEYS=1`. Un `DROP TABLE` échoue
+  donc sur une ligne fille, mais pas sur une vue ni sur une clé sans lignes.
+  La décision tient : pas de `RESTRICT_DEPENDENTS`. L'en-tête de `session.rs`
+  est corrigé, et le test `foreign_keys_are_enforced_by_the_bundled_engine`
+  fixe le comportement. La ligne d'ADR-0042 reste à corriger par un ADR
+  précisant ;
+- `review_object_operation` prend aussi la **session du catalogue** : ses
+  capacités décident de ce qui est offert, et le registre des sessions ne
+  désigne pas celle du catalogue d'une connexion ;
+- **renommer une colonne** : le backend et la boîte le savent. Aucune entrée ne
+  l'offre encore, parce que l'arbre du catalogue ne montre pas les colonnes.
+  L'entrée revient au menu de l'onglet Structure (lot 3) ;
+- une erreur rendue par `decide` après l'approbation ne porte pas sa classe
+  (`IpcError` n'a que `retryable`). La boîte affiche le message et
+  `Refresh catalog`, sans jamais proposer de relancer. Elle ne peut pas écrire
+  la phrase de l'erreur ambiguë à coup sûr ;
+- Redshift déclare `TRUNCATE` par le driver PostgreSQL, prouvé contre
+  PostgreSQL. Aucun serveur Redshift n'est disponible en test : le retrait de
+  `TRANSACTIONAL_DDL` et `RESTRICT_DEPENDENTS` est vérifié sur la variante
+  (`variant.rs`), pas contre le moteur ;
+- plusieurs fenêtres (ADR-0042, « Plusieurs fenêtres ») : la fermeture d'une
+  fenêtre ne rejette pas encore l'approbation en attente. Cela relève du lot 7.
+  D'ici là, la session de revue se ferme à l'échéance de l'approbation, par le
+  balayage d'une seconde du backend.
 
 Écarts relevés en rédigeant, non tranchés, re-vérifiés sur `origin/main` le
 2026-09-25 :

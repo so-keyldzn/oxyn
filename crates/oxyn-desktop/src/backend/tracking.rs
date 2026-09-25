@@ -184,6 +184,11 @@ impl Backend {
     pub fn cancel(&self, id: CommandId) -> bool {
         self.inner.running.lock().cancel(id, Instant::now())
     }
+
+    /// Whether a command runs under `id` right now — being approved counts.
+    pub(crate) fn is_tracked(&self, id: CommandId) -> bool {
+        self.inner.running.lock().running.contains_key(&id)
+    }
 }
 
 #[cfg(test)]
