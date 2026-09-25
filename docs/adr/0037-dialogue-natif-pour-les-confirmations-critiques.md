@@ -156,20 +156,28 @@ Un refus **consomme** ce qu'il refuse, comme un refus dans l'écran :
   édition ne l'est — une édition est confirmée entière ou pas du tout.
 
 **Une confirmation trop rapide est un refus.** Sous macOS, le bouton de
-confirmation est le premier ajouté à l'`NSAlert`, donc celui qu'Entrée
+confirmation est le bouton par défaut de l'alerte — `CFUserNotificationDisplayAlert`
+pour un dialogue sans fenêtre parente, le cas d'Oxyn —, donc celui qu'Entrée
 déclenche, et le plugin ne permet pas d'en désigner un autre (source de `rfd`
-0.16.0, `src/backend/macos/message_dialog.rs`, vérifiée le 2026-09-25). Un
+0.16.0, `src/backend/macos/utils/user_alert.rs`, vérifiée le 2026-09-25). Un
 script qui ouvre le dialogue pendant que l'utilisateur tape — Cmd+Entrée pour
 exécuter — obtiendrait la frappe suivante. Une confirmation reçue moins d'**une
-seconde** après l'ouverture vaut donc refus, et consomme la décision comme
-tout refus.
+seconde** après l'**affichage** du dialogue vaut donc refus, et consomme la
+décision comme tout refus. La seconde part du moment où l'hôte présente le
+dialogue, pas de la demande : un dialogue qui attend son tour derrière un autre
+encore à l'écran (échéance ci-dessous) s'affiche tard, et n'a pas été lu pour
+autant. Chaque dialogue d'une telle file a sa propre seconde.
 
 **Une échéance pour tout dialogue : cinq minutes**, la borne qu'[ADR-0034](0034-echantillon-pour-toute-destination.md)
 fixe déjà à la demande d'échantillon. Le plugin ne peut pas fermer un dialogue
 par programme ; passé ce délai, la décision est consommée comme refusée, le
-dialogue suivant peut s'ouvrir, et la réponse tardive du dialogue resté à
+dialogue suivant peut être demandé, et la réponse tardive du dialogue resté à
 l'écran est ignorée — une écriture approuvée le lendemain serait une écriture
-que personne n'a vue partir.
+que personne n'a vue partir. L'hôte n'affiche qu'un dialogue critique à la fois : le
+suivant attend que celui resté à l'écran soit fermé, et ne s'affiche jamais si
+sa propre échéance passe avant. L'échéance court depuis la demande, pas depuis
+l'affichage : elle borne la vie de la décision, que l'attente de son tour ne
+prolonge pas.
 
 **Un seul dialogue critique à la fois.** Une décision critique qui arrive
 pendant qu'un dialogue est ouvert est refusée sur-le-champ, avec un message
@@ -190,8 +198,15 @@ texte de son choix.
 
 `oxyn-desktop` porte un trait `HostConfirm` — une seule méthode asynchrone qui
 prend une `Confirmation` (titre, corps, libellé de confirmation, sévérité) et
-rend un booléen. Deux implémentations, c'est une frontière avec l'hôte et non
-une indirection ([CLAUDE.md](../../CLAUDE.md#organisation-du-code)) :
+l'échéance, et rend l'issue : refusé, ou confirmé avec l'instant où le
+dialogue a été affiché, d'où la seconde du § 3 se compte. C'est l'hôte qui
+sait quand il présente un dialogue ; `NativeDialog` le date sur le thread
+principal, là où le plugin dessine, une fois l'écran libéré du précédent — et
+non avant la file de ce thread, qu'un script de la webview peut remplir. Reste
+la latence entre cet instant et l'alerte à l'écran, hors de portée d'un
+script, que la vérification à la main mesure. Arrivé à l'échéance avant son
+tour, le dialogue ne se dessine pas. Deux implémentations, c'est une frontière
+avec l'hôte et non une indirection ([CLAUDE.md](../../CLAUDE.md#organisation-du-code)) :
 
 * **`NativeDialog`**, sur le plugin `tauri-plugin-dialog`, comme
   `ai_save_external_agent` aujourd'hui — qui rejoint ce port ;
@@ -202,7 +217,7 @@ Le `Backend` reçoit le port à sa construction, sans valeur par défaut : un
 `Backend` qui n'en a pas ne se construit pas, donc aucune décision critique ne
 passe faute de dialogue. Le `Backend` s'ouvre avant `tauri::Builder`, pour
 qu'un échec de démarrage arrive sur stderr (`main.rs`) ; `NativeDialog` se
-construit donc sans `AppHandle`, le reçoit au `setup`, et **répond `false`**
+construit donc sans `AppHandle`, le reçoit au `setup`, et **refuse**
 tant qu'il ne l'a pas — fermer, c'est refuser, et n'avoir pas pu ouvrir aussi. C'est le `Backend`, et non la commande Tauri, qui
 décide qu'une décision est critique et qui appelle le port : la règle vit à
 côté de la configuration qu'elle lit.
@@ -220,11 +235,14 @@ Ce qui se teste, sans fenêtre ni `MockRuntime` :
   qu'elle apparaisse, une instruction longue y est coupée **et le dit**, sa
   fin y figure, chaque champ modifié d'une édition y figure, aucun champ
   secret n'y figure ;
-* **la conduite** — sur un `Backend` monté avec la réponse scriptée et une
-  horloge contrôlée : un `DELETE` sans `WHERE` sur `production` ouvre le
+* **la conduite** — sur un `Backend` monté avec la réponse scriptée et des
+  délais scriptés : un `DELETE` sans `WHERE` sur `production` ouvre le
   dialogue ; `decide(…, true)` sur `production` refusé, sans réponse
   après l'échéance, ou confirmé en moins d'une seconde n'exécute rien et ne
-  laisse aucune commande en attente ; confirmé, exécute ; une commande retenue
+  laisse aucune commande en attente ; confirmé, exécute ; de deux dialogues
+  en file, le second refuse une confirmation arrivée moins d'une seconde
+  après son propre affichage, même plus d'une seconde après sa demande ; une
+  commande retenue
   sur `development` dont la connexion est passée en `production` ouvre le
   dialogue ; `production → development` refusé laisse la configuration
   inchangée et n'envoie aucune commande ; un échantillon refusé ne lit aucune
