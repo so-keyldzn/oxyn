@@ -70,6 +70,7 @@ Pour localiser les planches et leurs états avant implémentation, consulter
 | [0041](adr/0041-registre-d-actions-menus-et-raccourcis.md) | Un registre d'actions unique alimente la barre de menus, les menus contextuels, la palette et les raccourcis | proposé |
 | [0042](adr/0042-revue-sur-place-des-operations-destructrices.md) | `Drop…`, `Truncate…` et `Rename…` s'exécutent depuis une revue sur place, comme du SQL utilisateur | proposé |
 | [0043](adr/0043-multi-fenetre.md) | Plusieurs fenêtres dans un seul processus, chacune propriétaire de ses consoles et de ses sessions | proposé |
+| [0044](adr/0044-licence-gpl-et-contrat-apache.md) | L'application est sous GPL-3.0-or-later, le contrat des drivers sous Apache-2.0, et ce qui se paie est un service de compte | accepté |
 
 Les ADR restent `proposé` jusqu'au premier commit de code qui les met en œuvre.
 
