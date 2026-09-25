@@ -49,6 +49,7 @@ import {
   takeResultOpenRequests,
 } from "@/features/workspace/result-requests"
 import { useCompact } from "@/features/workspace/use-compact"
+import { usePanelPreferences } from "@/features/workspace/use-panel-preferences"
 import { library } from "@/lib/ipc/library"
 import type { HistoryRow } from "@/lib/ipc/library"
 import type {
@@ -136,10 +137,9 @@ export function WorkspaceScreen({
   exitRef?: React.Ref<WorkspaceExit>
 }) {
   const compact = useCompact()
-  // The wide-screen preference; compact folds to the rail without touching it.
-  const [sidebarOpen, setSidebarOpen] = React.useState(true)
+  const { sidebarOpen, setSidebarOpen, asideOpen, setAsideOpen } =
+    usePanelPreferences(compact)
   const [leftView, setLeftView] = React.useState<LeftView>("catalog")
-  const [asideOpen, setAsideOpen] = React.useState(aside.length > 0)
   const [asideActive, setAsideActive] = React.useState(aside[0]?.id ?? "")
   const inspectorWidth = useStore(
     preferencesStore,
@@ -324,7 +324,7 @@ export function WorkspaceScreen({
       {
         hotkey: "Mod+Alt+B",
         callback: () => {
-          if (aside.length > 0) setAsideOpen((value) => !value)
+          if (aside.length > 0) setAsideOpen(!asideOpen)
         },
       },
     ],
