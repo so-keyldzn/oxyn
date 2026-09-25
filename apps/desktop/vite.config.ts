@@ -71,6 +71,12 @@ export default defineConfig({
         ],
         test: {
           name: "storybook",
+          // Pays each file's cold start before its first story is timed.
+          setupFiles: ["./.storybook/vitest.setup.ts"],
+          // Written out rather than inherited: the stories' own waits are
+          // bounded under it, and a default that moved with an upgrade would
+          // turn their messages into bare timeouts.
+          testTimeout: 15_000,
           browser: {
             enabled: true,
             headless: true,

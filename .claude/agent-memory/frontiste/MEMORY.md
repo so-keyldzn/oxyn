@@ -1,4 +1,5 @@
 - [cn supprime les tailles de thème](cn-supprime-les-tailles-de-theme.md) — `text-caption` est lu comme une couleur et avalé : écrire `text-[length:var(--reading-caption)]`
+- [Première story, démarrage à froid](premiere-story-paie-le-demarrage-a-froid.md) — axe et les `import()` tombent dans son budget : `preloadBeforeStories`, pas un timeout
 - [Stories instables sous charge](stories-instables-sous-charge.md) — un échec de story sur une animation Base UI se relance avant d'être pris pour une régression
 - [TabsList line : soulignement coupé](tabslist-line-souligne-coupe.md) — `variant="line"` avec `overflow-x-auto` perd le soulignement de l'onglet actif, et un `h-*` en `className` ne gagne pas contre le défaut
 - [userEvent Escape n'atteint pas un trigger Base UI](userevent-escape-nattend-pas-un-trigger-base-ui.md) — dans un `play`, `{Escape}` sur un `TooltipTrigger` ne déclenche aucun `onKeyDown`, là où une vraie touche marche
