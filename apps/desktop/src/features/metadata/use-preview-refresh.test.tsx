@@ -190,3 +190,73 @@ describe("after a write, only the preview on screen reads again", () => {
     expect(readsSince(mark).map((read) => read.relation)).toEqual(["a"])
   })
 })
+
+describe("after a DDL", () => {
+  it("reads the visible preview again, with the shape in force", async () => {
+    const open = opened()
+    const view = renderPreviews(open, ["invoices"])
+    await answerAll((id) => executed(`r-${id}`))
+    act(() => view.result.current[0]?.applyPredicate("total > 10"))
+    await answerAll((id) => executed(`r-${id}`))
+
+    // What the backend sends once `ALTER TABLE … ADD COLUMN` succeeded.
+    const mark = ipc.reads.length
+    signal({ type: "catalogInvalidated", connection: open.connection })
+    expect(readsSince(mark)).toEqual([])
+    signal({ type: "rowsChanged", connection: open.connection })
+
+    expect(readsSince(mark)).toMatchObject([
+      {
+        relation: "invoices",
+        session: open.session,
+        shape: { predicate: "total > 10" },
+      },
+    ])
+    await answerAll((id) => executed(`after-${id}`))
+    expect(view.result.current[0]?.state).toMatchObject({
+      status: "populated",
+      result: `after-${readsSince(mark)[0]?.id}`,
+    })
+  })
+
+  it("leaves a hidden preview stale until it is shown", async () => {
+    const open = opened()
+    const view = renderPreviews(open, ["invoices"])
+    await answerAll((id) => executed(`r-${id}`))
+    view.show([])
+
+    const mark = ipc.reads.length
+    signal({ type: "catalogInvalidated", connection: open.connection })
+    signal({ type: "rowsChanged", connection: open.connection })
+    expect(readsSince(mark)).toEqual([])
+
+    view.show(["invoices"])
+    expect(readsSince(mark)).toHaveLength(1)
+  })
+
+  it("never hides an error behind a new read", async () => {
+    const open = opened()
+    const view = renderPreviews(open, ["invoices"])
+    await answerAll(() => ({ type: "denied", reason: "permission denied" }))
+    const failed = view.result.current[0]?.state
+
+    const mark = ipc.reads.length
+    signal({ type: "rowsChanged", connection: open.connection })
+    view.show([])
+    view.show(["invoices"])
+
+    expect(readsSince(mark)).toEqual([])
+    expect(failed).toMatchObject({ status: "error" })
+    expect(view.result.current[0]?.state).toEqual(failed)
+  })
+
+  it("reads nothing for a DDL on another connection", async () => {
+    const open = opened()
+    renderPreviews(open, ["invoices"])
+    await answerAll((id) => executed(`r-${id}`))
+
+    const mark = ipc.reads.length
+    signal({ type: "rowsChanged", connection: "elsewhere" })
+    expect(readsSince(mark)).toEqual([])
+  })
+})
