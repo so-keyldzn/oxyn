@@ -1,10 +1,12 @@
 import * as React from "react"
 import type { Meta, StoryObj } from "@storybook/react-vite"
-import { expect, fn, userEvent, waitFor } from "storybook/test"
+import { expect, fn, userEvent, waitFor, within } from "storybook/test"
 
 import { WorkspaceTabs } from "./workspace-tabs"
-import type { WorkspaceTabItem } from "./workspace-tabs"
+import type { TabMenuTarget, WorkspaceTabItem } from "./workspace-tabs"
 import { Tabs, TabsContent } from "@/components/ui/tabs"
+import { useActionSource } from "@/lib/actions/context"
+import type { WorkspaceActions } from "@/lib/actions/context"
 
 const tabs: Array<WorkspaceTabItem> = [
   {
@@ -218,6 +220,139 @@ export const HostileName: Story = {
       canvas.getByRole("tab", { name: /DROP TABLE audit/ })
     ).toBeVisible()
     await expect(canvas.queryByRole("img", { name: "x" })).toBeNull()
+  },
+}
+
+const nothing = () => undefined
+const storyWorkspace: WorkspaceActions = {
+  openConsole: nothing,
+  closeActiveTab: nothing,
+  nextTab: nothing,
+  previousTab: nothing,
+  showCatalog: nothing,
+  showLibrary: nothing,
+  focusPreview: nothing,
+  focusConsole: nothing,
+  toggleSidebar: nothing,
+  toggleAside: nothing,
+  openAssistant: nothing,
+  switchConnection: nothing,
+}
+
+/** The workspace as the registry sees it: `Close` needs one open. */
+function InWorkspace({ children }: { children: React.ReactNode }) {
+  useActionSource(
+    "workspace",
+    {
+      activeTab: "console:1",
+      tabCount: tabs.length,
+      consoleCount: 3,
+      objectActive: false,
+      hasAside: false,
+      hasAssistant: false,
+    },
+    storyWorkspace
+  )
+  return children
+}
+
+const close = fn()
+const closeOthers = fn()
+const closeRight = fn()
+
+/** The target each tab gives its menu, as the workspace screen builds it. */
+function menuFor(key: string): TabMenuTarget {
+  const index = tabs.findIndex((tab) => tab.key === key)
+  return {
+    state: {
+      console: key.startsWith("console:"),
+      count: tabs.length,
+      toTheRight: tabs.length - index - 1,
+      saved: key === "console:2",
+    },
+    actions: {
+      close: () => close(key),
+      closeOthers: () => closeOthers(key),
+      closeRight: () => closeRight(key),
+      closeAll: fn(),
+      duplicate: fn(),
+      rename: fn(),
+      revealInLibrary: key.startsWith("console:") ? fn() : undefined,
+    },
+  }
+}
+
+async function openMenuOn(tab: HTMLElement) {
+  await userEvent.pointer({ keys: "[MouseRight]", target: tab })
+  const page = within(document.body)
+  await page.findByRole("menu")
+  return page
+}
+
+async function closeMenu(page: ReturnType<typeof within>) {
+  await userEvent.keyboard("{Escape}")
+  await waitFor(() => expect(page.queryByRole("menu")).toBeNull())
+}
+
+/**
+ * The menu of the tab under the pointer: on the last one, `Close to the
+ * right` says why it cannot; `Close others` closes the others of **this**
+ * tab; an object is neither duplicated nor renamed, and says so.
+ */
+export const TabMenu: Story = {
+  args: { menuFor },
+  decorators: [
+    (Story) => (
+      <InWorkspace>
+        <Story />
+      </InWorkspace>
+    ),
+  ],
+  play: async ({ canvas }) => {
+    const last = canvas.getByRole("tab", { name: /AI · Untitled query/ })
+    let page = await openMenuOn(last)
+    const right = page.getByRole("menuitem", { name: /Close to the right/ })
+    await expect(right).toHaveAttribute("aria-disabled", "true")
+    await expect(right).toHaveTextContent("No tab is to the right")
+    // Not yet possible, and said so rather than hidden.
+    await expect(
+      page.getByRole("menuitem", { name: /Open in new window/ })
+    ).toHaveTextContent("Oxyn opens a single window")
+    await userEvent.click(page.getByRole("menuitem", { name: "Close others" }))
+    await expect(closeOthers).toHaveBeenCalledWith("console:3")
+    await waitFor(() => expect(page.queryByRole("menu")).toBeNull())
+
+    page = await openMenuOn(canvas.getByRole("tab", { name: /^invoices/ }))
+    await expect(
+      page.getByRole("menuitem", { name: /Duplicate/ })
+    ).toHaveTextContent("Only a console is duplicated")
+    await expect(
+      page.queryByRole("menuitem", { name: /Reveal in library/ })
+    ).toBeNull()
+    await userEvent.click(
+      page.getByRole("menuitem", {
+        name: /^Close(?! (others|to the right|all))/,
+      })
+    )
+    await expect(close).toHaveBeenCalledWith("object:invoices")
+    await waitFor(() => expect(page.queryByRole("menu")).toBeNull())
+
+    page = await openMenuOn(canvas.getByRole("tab", { name: /console_1/ }))
+    await expect(
+      page.getByRole("menuitem", { name: /Reveal in library/ })
+    ).toHaveTextContent("This console is not saved in the library")
+    await closeMenu(page)
+  },
+}
+
+/** The middle button closes the tab under the pointer, not the active one. */
+export const MiddleClickCloses: Story = {
+  play: async ({ canvas, args }) => {
+    const tab = canvas.getByRole("tab", { name: /^invoices/ })
+    tab.dispatchEvent(
+      new MouseEvent("auxclick", { button: 1, bubbles: true, cancelable: true })
+    )
+    await expect(args.onClose).toHaveBeenCalledWith("object:invoices")
   },
 }
 

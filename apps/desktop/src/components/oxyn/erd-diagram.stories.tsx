@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite"
-import { expect, fn, userEvent, within } from "storybook/test"
+import { expect, fn, userEvent, waitFor, within } from "storybook/test"
 
 import { ERD_MAX_TABLES, ErdDiagram } from "./erd-diagram"
 import { hubAndSpokes, shopLinks, shopTables } from "./erd-fixtures"
@@ -96,4 +96,49 @@ export const WithoutOpening: Story = {
  */
 export const Light: Story = {
   globals: { theme: "light" },
+}
+
+const copyName = fn()
+
+/**
+ * A right click on a table: `Open table` and `Copy name` act on it, what the
+ * diagram cannot do yet is greyed with what is missing.
+ */
+export const ContextMenuOfATable: Story = {
+  args: { onCopyName: copyName },
+  play: async ({ canvasElement, args }) => {
+    const canvas = within(canvasElement)
+    const page = within(document.body)
+    await userEvent.pointer({
+      keys: "[MouseRight]",
+      target: await canvas.findByRole("button", { name: "Open public.orders" }),
+    })
+    const relayout = await page.findByRole("menuitem", { name: /Re-layout/ })
+    await expect(relayout).toHaveAttribute("aria-disabled", "true")
+    await expect(relayout).toHaveTextContent(
+      "Not available yet: the diagram is laid out once"
+    )
+    await expect(
+      page.getByRole("menuitem", { name: /Export image/ })
+    ).toHaveAttribute("aria-disabled", "true")
+    await userEvent.click(page.getByRole("menuitem", { name: "Copy name" }))
+    await expect(copyName).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "orders", namespace: "public" })
+    )
+    await waitFor(() => expect(page.queryByRole("menu")).toBeNull())
+
+    await userEvent.pointer({
+      keys: "[MouseRight]",
+      target: canvas.getByRole("button", { name: "Open public.orders" }),
+    })
+    await userEvent.click(
+      await page.findByRole("menuitem", { name: "Open table" })
+    )
+    await expect(args.onOpenObject).toHaveBeenCalledWith({
+      catalog: null,
+      namespace: "public",
+      relation: "orders",
+    })
+    await waitFor(() => expect(page.queryByRole("menu")).toBeNull())
+  },
 }

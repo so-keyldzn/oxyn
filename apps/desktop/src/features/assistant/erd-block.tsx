@@ -4,8 +4,10 @@ import type { QueryClient } from "@tanstack/react-query"
 import { AssistantErd } from "@/components/oxyn/assistant-erd"
 import type { ErdState } from "@/components/oxyn/assistant-erd"
 import type { ErdRequest } from "@/components/oxyn/assistant-markdown-model"
+import type { ErdTable } from "@/components/oxyn/erd-model"
 import { assembleErd } from "@/features/assistant/erd"
 import type { ErdSources } from "@/features/assistant/erd"
+import { copyToClipboard } from "@/features/metadata/clipboard"
 import { useRefreshSignal } from "@/features/metadata/refresh-signals"
 import { facetsKey } from "@/features/metadata/use-relation-facets"
 import { BackendError, backend, newCommandId } from "@/lib/ipc/client"
@@ -151,11 +153,30 @@ export function ErdBlock({
         }
       : erd.data
 
+  // The name the backend quoted for the session's dialect, from the facets
+  // the diagram was drawn from; the name as drawn when they cannot be read.
+  // Never a name composed here (I-10).
+  const copyName = async (table: ErdTable) => {
+    let name =
+      table.namespace === null ? table.name : `${table.namespace}.${table.name}`
+    try {
+      const facets = await queryClient.fetchQuery({
+        queryKey: facetsKey(open.connection, table.address),
+        queryFn: () => metadata.relationFacets(open.connection, table.address),
+      })
+      name = facets.qualifiedName
+    } catch {
+      // The drawn name stays: the copy says what the diagram shows.
+    }
+    await copyToClipboard(name, "Name")
+  }
+
   return (
     <AssistantErd
       source={request.source}
       state={state}
       onOpenObject={onOpenObject}
+      onCopyName={(table) => void copyName(table)}
       // A read, asked again by the user: nothing is written, nothing replays.
       onRetry={() => void erd.refetch()}
     />

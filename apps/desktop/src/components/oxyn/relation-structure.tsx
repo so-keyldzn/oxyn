@@ -18,6 +18,7 @@ import {
 
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
+import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu"
 import {
   Empty,
   EmptyContent,
@@ -37,6 +38,26 @@ import {
 } from "@/components/ui/table"
 import type { RelationDetail, RelationField } from "@/lib/ipc/types"
 import { cn } from "@/lib/utils"
+import { ActionMenuContent } from "./action-menu-items"
+import { HOSTILE_NAME, hidesText } from "./object-operations"
+import type { OperationOffer } from "./object-operations"
+
+/**
+ * `Rename…` of a column: what the catalog tree cannot offer, since it does not
+ * show columns (ADR-0042). The offer is the relation's, by the capabilities of
+ * its session; the entry opens the review, and nothing runs from the menu.
+ */
+export interface RenameColumn {
+  offer: OperationOffer
+  onRename: (column: string) => void
+}
+
+/** The offer for one column: a name that hides text is written in a console. */
+function columnOffer(offer: OperationOffer, column: string): OperationOffer {
+  if (offer.state === "offered" && hidesText(column))
+    return { state: "greyed", reason: HOSTILE_NAME }
+  return offer
+}
 
 /** A structure row: one line of text, so the virtual list can size it. */
 const ROW_HEIGHT = 32
@@ -133,6 +154,7 @@ const columns: Array<ColumnDef<RelationField>> = [
  * (docs/UX-SPEC.md, « États d'une vue »). A structure already read stays on
  * screen under a failed refresh, marked as possibly outdated. The list is
  * virtualized: a relation of a thousand columns renders the visible ones.
+ * With `renameColumn`, a right click on a column offers `Rename…`.
  */
 export function RelationStructure({
   detail,
@@ -140,6 +162,7 @@ export function RelationStructure({
   denied = null,
   refreshing = false,
   onRefresh,
+  renameColumn,
 }: {
   /** `undefined` while the first read runs, `null` when never read. */
   detail: RelationDetail | null | undefined
@@ -149,8 +172,10 @@ export function RelationStructure({
   denied?: string | null
   refreshing?: boolean
   onRefresh?: () => void
+  renameColumn?: RenameColumn
 }) {
   const [sorting, setSorting] = React.useState<SortingState>([])
+  const [menuAnchor, setMenuAnchor] = React.useState<Element | null>(null)
   const scrollRef = React.useRef<HTMLDivElement>(null)
   const table = useReactTable({
     data: detail?.fields ?? EMPTY,
@@ -346,21 +371,59 @@ export function RelationStructure({
             {items.map((item) => {
               const row = rows[item.index]
               if (!row) return null
+              const cells = row.getVisibleCells().map((cell) => (
+                <TableCell key={cell.id} className="py-0">
+                  {flexRender(cell.column.columnDef.cell, cell.getContext())}
+                </TableCell>
+              ))
+              if (!renameColumn)
+                return (
+                  <TableRow
+                    key={row.id}
+                    aria-rowindex={item.index + 2}
+                    style={{ height: ROW_HEIGHT }}
+                  >
+                    {cells}
+                  </TableRow>
+                )
+              const column = row.original.name
               return (
-                <TableRow
-                  key={row.id}
-                  aria-rowindex={item.index + 2}
-                  style={{ height: ROW_HEIGHT }}
-                >
-                  {row.getVisibleCells().map((cell) => (
-                    <TableCell key={cell.id} className="py-0">
-                      {flexRender(
-                        cell.column.columnDef.cell,
-                        cell.getContext()
-                      )}
-                    </TableCell>
-                  ))}
-                </TableRow>
+                <ContextMenu key={row.id}>
+                  <ContextMenuTrigger
+                    render={
+                      <TableRow
+                        aria-rowindex={item.index + 2}
+                        style={{ height: ROW_HEIGHT }}
+                        onContextMenu={(event) =>
+                          setMenuAnchor(event.target as Element)
+                        }
+                      />
+                    }
+                  >
+                    {cells}
+                  </ContextMenuTrigger>
+                  <ActionMenuContent
+                    surface="structureColumn"
+                    anchor={menuAnchor}
+                    title={column}
+                    sources={{
+                      objectOperation: {
+                        state: {
+                          offers: {
+                            rename: columnOffer(renameColumn.offer, column),
+                            truncate: { state: "absent" },
+                            drop: { state: "absent" },
+                          },
+                        },
+                        actions: {
+                          review: (kind) => {
+                            if (kind === "rename") renameColumn.onRename(column)
+                          },
+                        },
+                      },
+                    }}
+                  />
+                </ContextMenu>
               )
             })}
             {after > 0 ? (

@@ -317,6 +317,72 @@ export const SavedQueries: Story = {
   },
 }
 
+async function openMenuOn(target: HTMLElement) {
+  await userEvent.pointer({ keys: "[MouseRight]", target })
+  await screen.findByRole("menu")
+}
+
+async function closeMenu() {
+  await userEvent.keyboard("{Escape}")
+  await waitFor(() => expect(screen.queryByRole("menu")).toBeNull())
+}
+
+/**
+ * The menu of a saved query: `Open` names where its copy opens, `Reveal`
+ * says why it waits, and `Delete…` asks first, as the button does. Rename,
+ * Duplicate and Copy path are not offered: nothing yet does them safely.
+ */
+export const SavedQueryContextMenu: Story = {
+  args: { view: "saved", state: { status: "saved", entries: saved } },
+  play: async ({ canvas, args }) => {
+    await openMenuOn(canvas.getByText("unpaid invoices.sql"))
+    const names = screen
+      .getAllByRole("menuitem")
+      .map((item) => item.firstChild?.textContent?.trim())
+    await expect(names).toEqual([
+      "Open",
+      expect.stringMatching(/^Reveal in (Finder|Explorer)$/),
+      "Delete…",
+    ])
+    await expect(
+      screen.getByRole("menuitem", { name: /^Open/ })
+    ).toHaveTextContent("Opens an unrun copy in billing replica")
+    const reveal = screen.getByRole("menuitem", { name: /^Reveal in/ })
+    await expect(reveal).toHaveAttribute("aria-disabled", "true")
+    await expect(reveal).toHaveTextContent(
+      "Not available yet: Oxyn cannot open the file manager"
+    )
+    await userEvent.click(screen.getByRole("menuitem", { name: "Delete…" }))
+    const cancel = await screen.findByRole("button", { name: "Cancel" })
+    await userEvent.click(cancel)
+    await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull())
+    await expect(args.onDeleteSaved).not.toHaveBeenCalled()
+
+    await openMenuOn(canvas.getByText(/churn by month/))
+    await userEvent.click(screen.getByRole("menuitem", { name: /^Open/ }))
+    await expect(args.onOpenSaved).toHaveBeenCalledWith(saved[1])
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull())
+  },
+}
+
+/**
+ * The menu of a history row: `Open` alone — and not for the write awaiting
+ * inspection, which offers no editable copy (I-13).
+ */
+export const HistoryRowContextMenu: Story = {
+  play: async ({ canvas, args }) => {
+    await openMenuOn(canvas.getByText(/UPDATE invoices SET paid_at/))
+    await expect(screen.queryByRole("menuitem", { name: /^Open/ })).toBeNull()
+    await closeMenu()
+
+    await openMenuOn(canvas.getByText(/SELECT c.name, i.amount/))
+    await expect(screen.queryByRole("menuitem", { name: /^Delete/ })).toBeNull()
+    await userEvent.click(screen.getByRole("menuitem", { name: /^Open/ }))
+    await expect(args.onOpenHistory).toHaveBeenCalledWith(history[0])
+    await waitFor(() => expect(screen.queryByRole("menu")).toBeNull())
+  },
+}
+
 /**
  * A long connection name and statement with nothing to break on: the
  * reconciliation dialog keeps them inside its frame.

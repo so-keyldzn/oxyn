@@ -84,10 +84,12 @@ function Unresolved({
 function Body({
   state,
   onOpenObject,
+  onCopyName,
   onRetry,
 }: {
   state: ErdState
   onOpenObject?: (address: CatalogAddress) => void
+  onCopyName?: (table: ErdTable) => void
   onRetry?: () => void
 }) {
   switch (state.status) {
@@ -142,6 +144,7 @@ function Body({
                 links={state.links}
                 omitted={state.omitted}
                 onOpenObject={onOpenObject}
+                onCopyName={onCopyName}
               />
             </React.Suspense>
           ) : (
@@ -166,12 +169,15 @@ export function AssistantErd({
   source,
   state,
   onOpenObject,
+  onCopyName,
   onRetry,
 }: {
   /** The block's text, as the model wrote it. */
   source: string
   state: ErdState
   onOpenObject?: (address: CatalogAddress) => void
+  /** `Copy name` of a table's context menu. */
+  onCopyName?: (table: ErdTable) => void
   onRetry?: () => void
 }) {
   const [showSource, setShowSource] = React.useState(false)
@@ -209,7 +215,12 @@ export function AssistantErd({
           <code>{source}</code>
         </pre>
       ) : null}
-      <Body state={state} onOpenObject={onOpenObject} onRetry={onRetry} />
+      <Body
+        state={state}
+        onOpenObject={onOpenObject}
+        onCopyName={onCopyName}
+        onRetry={onRetry}
+      />
     </figure>
   )
 }

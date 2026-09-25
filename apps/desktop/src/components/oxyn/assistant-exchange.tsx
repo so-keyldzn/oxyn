@@ -5,7 +5,10 @@ import {
   AssistantPermissionRefused,
   AssistantWaiting,
 } from "@/components/oxyn/assistant-agent-activity"
-import { AssistantAnswerActions } from "@/components/oxyn/assistant-answer-actions"
+import {
+  AssistantAnswerActions,
+  AssistantAnswerMenu,
+} from "@/components/oxyn/assistant-answer-actions"
 import { AssistantEnding } from "@/components/oxyn/assistant-ending"
 import { AssistantFailure } from "@/components/oxyn/assistant-failure"
 import { AssistantMarkdown } from "@/components/oxyn/assistant-markdown"
@@ -246,18 +249,35 @@ export function ExchangeView({
           not authority — what actually went through the bus is drawn by the
           tool calls below, with their connection and their approval (I-07). */}
       <AssistantPlan entries={exchange.plan ?? []} running={exchange.running} />
-      {exchange.entries.map((item) => (
-        <EntryView
-          key={item.key}
-          entry={item}
-          openSql={(sql) => view.onOpenInConsole(sql, provenance)}
-          openSqlDisabledReason={openSqlDisabledReason}
-          onReview={(tool) => onReview(node.id, tool)}
-          onCopy={view.onCopy}
-          renderToolRows={view.renderToolRows}
-          renderErd={view.renderErd}
-        />
-      ))}
+      {exchange.entries.map((item) => {
+        const entry = (
+          <EntryView
+            key={item.key}
+            entry={item}
+            openSql={(sql) => view.onOpenInConsole(sql, provenance)}
+            openSqlDisabledReason={openSqlDisabledReason}
+            onReview={(tool) => onReview(node.id, tool)}
+            onCopy={view.onCopy}
+            renderToolRows={view.renderToolRows}
+            renderErd={view.renderErd}
+          />
+        )
+        // A right click on any part of the answer acts on the whole answer,
+        // as the buttons under it do.
+        return item.kind === "answer" && answer !== "" ? (
+          <AssistantAnswerMenu
+            key={item.key}
+            text={answer}
+            answering={busy}
+            onCopy={view.onCopy}
+            onRegenerate={() => view.onRegenerate(node)}
+          >
+            {entry}
+          </AssistantAnswerMenu>
+        ) : (
+          entry
+        )
+      })}
       {waiting ? (
         <AssistantWaiting
           label={

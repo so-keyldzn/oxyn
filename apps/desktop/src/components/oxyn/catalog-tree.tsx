@@ -14,15 +14,7 @@ import {
 } from "@hugeicons/core-free-icons"
 
 import { Badge } from "@/components/ui/badge"
-import {
-  ContextMenu,
-  ContextMenuContent,
-  ContextMenuGroup,
-  ContextMenuItem,
-  ContextMenuLabel,
-  ContextMenuSeparator,
-  ContextMenuTrigger,
-} from "@/components/ui/context-menu"
+import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu"
 import {
   Empty,
   EmptyDescription,
@@ -32,10 +24,13 @@ import {
 import { InputGroup, InputGroupAddon } from "@/components/ui/input-group"
 import { Spinner } from "@/components/ui/spinner"
 import { Toggle } from "@/components/ui/toggle"
+import type { ActionSources } from "@/lib/actions/context"
+import type { CopyAsForm } from "@/lib/actions/targets"
 import type { CatalogSearchHit } from "@/lib/ipc/metadata"
 import type { OperationKind } from "@/lib/ipc/object-operations"
 import type { CatalogAddress, CatalogNode, PrivacyTier } from "@/lib/ipc/types"
 import { cn } from "@/lib/utils"
+import { ActionMenuContent } from "./action-menu-items"
 import { operationOffer } from "./object-operations"
 import { InputGroupTextInput } from "./text-field"
 
@@ -66,11 +61,16 @@ export interface ObjectOperations {
   onOperation: (node: CatalogNode, operation: OperationKind) => void
 }
 
-const OPERATIONS: ReadonlyArray<{ kind: OperationKind; label: string }> = [
-  { kind: "rename", label: "Rename…" },
-  { kind: "truncate", label: "Truncate…" },
-  { kind: "drop", label: "Drop…" },
-]
+/**
+ * `Copy as ▸`: every form but `DDL` is composed by the backend, identifiers
+ * quoted by the driver (I-10); `DDL` is the definition the session reads.
+ * Nothing runs — it goes to the clipboard.
+ */
+export interface CopyAs {
+  /** The session reads object definitions (`OBJECT_DEFINITION`). */
+  definition: boolean
+  onCopy: (node: CatalogNode, form: CopyAsForm) => void
+}
 
 export function canPin(pin: PinToQuestion | undefined, node: CatalogNode) {
   return (
@@ -344,6 +344,8 @@ export function CatalogTree({
   onRefresh,
   pin,
   operations,
+  copyAs,
+  onNewConsole,
 }: {
   nodes: Array<CatalogNode>
   loading: ReadonlySet<string>
@@ -367,6 +369,13 @@ export function CatalogTree({
   onRefresh?: (node: CatalogNode) => void
   pin?: PinToQuestion
   operations?: ObjectOperations
+  copyAs?: CopyAs
+  /**
+   * Opens a console whose session context is this schema. Given only where a
+   * console's context can be a schema (UX-SPEC, « Contexte de session d'une
+   * console »); offered on schema nodes.
+   */
+  onNewConsole?: (node: CatalogNode) => void
 }) {
   const [ownExpanded, setOwnExpanded] = React.useState<Set<string>>(
     () => new Set()
@@ -406,6 +415,7 @@ export function CatalogTree({
   }
 
   const [menuNode, setMenuNode] = React.useState<CatalogNode | null>(null)
+  const [menuAnchor, setMenuAnchor] = React.useState<Element | null>(null)
   const listRef = React.useRef<HTMLDivElement>(null)
   const onQuery = search?.onQuery
   const baseId = React.useId()
@@ -523,7 +533,50 @@ export function CatalogTree({
   }
 
   const hasSystem = nodes.some((node) => node.system)
-  const menuRelation = menuNode !== null && menuNode.address.relation !== null
+  // The target of the context menu, as the registry reads it (ADR-0041,
+  // point 6): each entry is present only where this tree offers its handler,
+  // and the three operations stay last and apart (ADR-0042).
+  const menuSources = (node: CatalogNode): ActionSources => {
+    const relation = node.address.relation !== null
+    const openAt = onOpen
+    const sources: ActionSources = {
+      catalogNode: {
+        state: {
+          relation,
+          holdsRecords: node.holdsRecords,
+          schemaContext:
+            onNewConsole !== undefined && node.kind === "namespace",
+          definition: copyAs?.definition ?? false,
+          expanded: expanded.size > 0,
+        },
+        actions: {
+          openData: openAt ? () => openAt(node, "data") : undefined,
+          viewStructure: openAt ? () => openAt(node, "structure") : undefined,
+          viewDdl: openAt ? () => openAt(node, "definition") : undefined,
+          newConsoleOnSchema: onNewConsole
+            ? () => onNewConsole(node)
+            : undefined,
+          copyQualifiedName: onCopyName ? () => onCopyName(node) : undefined,
+          copyAs: copyAs ? (form) => copyAs.onCopy(node, form) : undefined,
+          refresh: onRefresh ? () => onRefresh(node) : undefined,
+          collapseAll: () => setExpanded(() => new Set()),
+          pin: pin && canPin(pin, node) ? () => pin.onPin(node) : undefined,
+        },
+      },
+    }
+    if (operations)
+      sources.objectOperation = {
+        state: {
+          offers: {
+            rename: operationOffer("rename", node, operations.capabilities),
+            truncate: operationOffer("truncate", node, operations.capabilities),
+            drop: operationOffer("drop", node, operations.capabilities),
+          },
+        },
+        actions: { review: (kind) => operations.onOperation(node, kind) },
+      }
+    return sources
+  }
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2">
@@ -615,8 +668,10 @@ export function CatalogTree({
                 onContextMenu={(event) => {
                   // The menu key opens the menu on the tree itself: it acts
                   // on the focused row, as a right click acts on its row.
-                  if (event.target === event.currentTarget && focusRow)
+                  if (event.target === event.currentTarget && focusRow) {
                     setMenuNode(focusRow.node)
+                    setMenuAnchor(event.currentTarget)
+                  }
                 }}
                 className="group/tree relative min-h-0 flex-1 overflow-auto rounded-md outline-none"
               />
@@ -652,9 +707,10 @@ export function CatalogTree({
                       setFocusKey(row.key)
                       activate(row)
                     }}
-                    onContextMenu={() => {
+                    onContextMenu={(event) => {
                       setFocusKey(row.key)
                       setMenuNode(row.node)
+                      setMenuAnchor(event.currentTarget)
                     }}
                     title={
                       row.placeholder
@@ -730,103 +786,17 @@ export function CatalogTree({
               })}
             </div>
           </ContextMenuTrigger>
-          <ContextMenuContent>
-            {menuNode ? (
-              <>
-                <ContextMenuGroup>
-                  <ContextMenuLabel dir="auto" className="max-w-64 truncate">
-                    {menuNode.name}
-                  </ContextMenuLabel>
-                  {menuRelation && onOpen ? (
-                    <>
-                      <ContextMenuItem
-                        disabled={!menuNode.holdsRecords}
-                        onClick={() => onOpen(menuNode, "data")}
-                      >
-                        Open data
-                      </ContextMenuItem>
-                      <ContextMenuItem
-                        onClick={() => onOpen(menuNode, "structure")}
-                      >
-                        View structure
-                      </ContextMenuItem>
-                      <ContextMenuItem
-                        onClick={() => onOpen(menuNode, "definition")}
-                      >
-                        View DDL
-                      </ContextMenuItem>
-                    </>
-                  ) : null}
-                </ContextMenuGroup>
-                {(menuRelation && onCopyName) ||
-                (!menuRelation && onRefresh) ||
-                canPin(pin, menuNode) ? (
-                  <ContextMenuSeparator />
-                ) : null}
-                <ContextMenuGroup>
-                  {menuRelation && onCopyName ? (
-                    <ContextMenuItem onClick={() => onCopyName(menuNode)}>
-                      Copy qualified name
-                    </ContextMenuItem>
-                  ) : null}
-                  {!menuRelation && onRefresh ? (
-                    <ContextMenuItem onClick={() => onRefresh(menuNode)}>
-                      Refresh this level
-                    </ContextMenuItem>
-                  ) : null}
-                  {pin && canPin(pin, menuNode) ? (
-                    <ContextMenuItem onClick={() => pin.onPin(menuNode)}>
-                      Pin to question
-                    </ContextMenuItem>
-                  ) : null}
-                </ContextMenuGroup>
-                {operations ? (
-                  <OperationItems node={menuNode} operations={operations} />
-                ) : null}
-              </>
-            ) : null}
-          </ContextMenuContent>
+          {menuNode ? (
+            <ActionMenuContent
+              surface="catalog"
+              anchor={menuAnchor}
+              title={menuNode.name}
+              sources={menuSources(menuNode)}
+            />
+          ) : null}
         </ContextMenu>
       )}
     </div>
-  )
-}
-
-/** The destructive entries, last and apart: a slip lands on anything else. */
-function OperationItems({
-  node,
-  operations,
-}: {
-  node: CatalogNode
-  operations: ObjectOperations
-}) {
-  const offers = OPERATIONS.map((operation) => ({
-    ...operation,
-    offer: operationOffer(operation.kind, node, operations.capabilities),
-  })).filter(({ offer }) => offer.state !== "absent")
-  if (offers.length === 0) return null
-  return (
-    <>
-      <ContextMenuSeparator />
-      <ContextMenuGroup>
-        {offers.map(({ kind, label, offer }) => (
-          <ContextMenuItem
-            key={kind}
-            disabled={offer.state !== "offered"}
-            variant={kind === "rename" ? "default" : "destructive"}
-            onClick={() => operations.onOperation(node, kind)}
-            className="flex-col items-start gap-0.5"
-          >
-            {label}
-            {offer.state === "greyed" ? (
-              <span className="max-w-60 text-[length:var(--reading-caption)] text-muted-foreground">
-                {offer.reason}
-              </span>
-            ) : null}
-          </ContextMenuItem>
-        ))}
-      </ContextMenuGroup>
-    </>
   )
 }
 

@@ -384,6 +384,89 @@ export const PinForAnExternalAgent: Story = {
   },
 }
 
+/**
+ * `Copy as ▸` hands the node and the form over: the SQL is composed by the
+ * backend, never here (I-10). `DDL` is greyed where the session reads no
+ * definition, and says so.
+ */
+export const CopyAs: Story = {
+  args: {
+    onCopyName: fn(),
+    copyAs: { definition: false, onCopy: fn() },
+  },
+  play: async ({ canvas, args }) => {
+    const menu = await openInvoicesMenu(canvas)
+    await userEvent.click(menu.getByRole("menuitem", { name: /Copy as/ }))
+    const ddl = await menu.findByRole("menuitem", { name: /^DDL/ })
+    await expect(ddl).toHaveAttribute("aria-disabled", "true")
+    await expect(ddl).toHaveTextContent(
+      "This session does not provide object definitions"
+    )
+    await userEvent.click(menu.getByRole("menuitem", { name: "SELECT *" }))
+    await expect(args.copyAs?.onCopy).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "invoices" }),
+      "selectAll"
+    )
+    await waitFor(() => expect(menu.queryByRole("menu")).toBeNull())
+  },
+}
+
+/**
+ * On a schema, where a console's session context can be one: `New console on
+ * this schema` hands the schema over, and nothing runs. It is absent from a
+ * table's menu.
+ */
+export const NewConsoleOnThisSchema: Story = {
+  args: { onCopyName: fn(), onRefresh: fn(), onNewConsole: fn() },
+  play: async ({ canvas, args }) => {
+    const menu = await openInvoicesMenu(canvas)
+    await expect(
+      menu.queryByRole("menuitem", { name: "New console on this schema" })
+    ).toBeNull()
+    await userEvent.keyboard("{Escape}")
+    await waitFor(() => expect(menu.queryByRole("menu")).toBeNull())
+
+    await userEvent.pointer({
+      keys: "[MouseRight]",
+      target: canvas.getByText("public"),
+    })
+    await userEvent.click(
+      await menu.findByRole("menuitem", { name: "New console on this schema" })
+    )
+    await expect(args.onNewConsole).toHaveBeenCalledWith(
+      expect.objectContaining({ name: "public", kind: "namespace" })
+    )
+    await waitFor(() => expect(menu.queryByRole("menu")).toBeNull())
+  },
+}
+
+/** `Collapse all` folds every level; with nothing open it says so. */
+export const CollapseAll: Story = {
+  args: { onRefresh: fn() },
+  play: async ({ canvas }) => {
+    await userEvent.click(canvas.getByText("public"))
+    await expect(canvas.getByText("invoices")).toBeVisible()
+    const menu = within(document.body)
+    await userEvent.pointer({
+      keys: "[MouseRight]",
+      target: canvas.getByText("public"),
+    })
+    await userEvent.click(
+      await menu.findByRole("menuitem", { name: "Collapse all" })
+    )
+    await waitFor(() => expect(canvas.queryByText("invoices")).toBeNull())
+    await userEvent.pointer({
+      keys: "[MouseRight]",
+      target: canvas.getByText("public"),
+    })
+    const collapse = await menu.findByRole("menuitem", { name: /Collapse all/ })
+    await expect(collapse).toHaveAttribute("aria-disabled", "true")
+    await expect(collapse).toHaveTextContent("Nothing is expanded")
+    await userEvent.keyboard("{Escape}")
+    await waitFor(() => expect(menu.queryByRole("menu")).toBeNull())
+  },
+}
+
 /** The tree's active row, as a screen reader is told it. */
 function activeRow(tree: HTMLElement) {
   const id = tree.getAttribute("aria-activedescendant")

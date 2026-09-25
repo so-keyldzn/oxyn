@@ -370,6 +370,7 @@ export function PreviewControls({
   onPage,
   onCancel,
   onLoadColumns,
+  filterRef,
 }: {
   canFilter: boolean
   canSort: boolean
@@ -385,6 +386,8 @@ export function PreviewControls({
   onPage: (forward: boolean) => void
   onCancel: () => void
   onLoadColumns: () => void
+  /** The WHERE field, which a header's `Filter…` focuses. */
+  filterRef?: React.Ref<HTMLInputElement>
 }) {
   const [draft, setDraft] = React.useState(applied.predicate ?? "")
 
@@ -416,6 +419,7 @@ export function PreviewControls({
               </InputGroupText>
             </InputGroupAddon>
             <InputGroupTextInput
+              ref={filterRef}
               value={draft}
               onChange={(event) => setDraft(event.target.value)}
               onKeyDown={(event) => {

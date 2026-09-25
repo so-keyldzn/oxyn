@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite"
-import { expect, fn, userEvent } from "storybook/test"
+import { expect, fn, userEvent, waitFor, within } from "storybook/test"
 
 import { invoicesDetail } from "./fixtures"
 import { HOSTILE, unusualDetail, wideDetail } from "./metadata-fixtures"
@@ -159,4 +159,53 @@ export const Narrow: Story = {
       </div>
     ),
   ],
+}
+
+/**
+ * A right click on a column offers `Rename…`, which opens the review: nothing
+ * runs from the menu (ADR-0042).
+ */
+export const RenameColumnFromTheMenu: Story = {
+  args: { renameColumn: { offer: { state: "offered" }, onRename: fn() } },
+  play: async ({ canvas, args }) => {
+    const page = within(document.body)
+    await userEvent.pointer({
+      keys: "[MouseRight]",
+      target: canvas.getByText("customer_id"),
+    })
+    await userEvent.click(
+      await page.findByRole("menuitem", { name: "Rename…" })
+    )
+    await expect(args.renameColumn?.onRename).toHaveBeenCalledWith(
+      "customer_id"
+    )
+    await waitFor(() => expect(page.queryByRole("menu")).toBeNull())
+  },
+}
+
+/** A session without `DDL`: the entry is greyed, with the reason. */
+export const RenameColumnOnReadOnly: Story = {
+  args: {
+    renameColumn: {
+      offer: {
+        state: "greyed",
+        reason: "This connection does not accept schema changes.",
+      },
+      onRename: fn(),
+    },
+  },
+  play: async ({ canvas }) => {
+    const page = within(document.body)
+    await userEvent.pointer({
+      keys: "[MouseRight]",
+      target: canvas.getByText("amount"),
+    })
+    const rename = await page.findByRole("menuitem", { name: /Rename…/ })
+    await expect(rename).toHaveAttribute("aria-disabled", "true")
+    await expect(rename).toHaveTextContent(
+      "This connection does not accept schema changes."
+    )
+    await userEvent.keyboard("{Escape}")
+    await waitFor(() => expect(page.queryByRole("menu")).toBeNull())
+  },
 }

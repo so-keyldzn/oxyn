@@ -5,12 +5,22 @@ import { useStore } from "@tanstack/react-store"
 import { open as openDialog } from "@tauri-apps/plugin-dialog"
 
 import type { BackendFailure } from "@/components/oxyn/backend-error-alert"
+import { toast } from "@/components/ui/toast"
 import { ConnectionScreenView } from "@/features/connections/connection-screen-view"
 import type { PendingConnectionApproval } from "@/features/connections/connection-screen-view"
+import type { ConnectionPrefill } from "@/components/oxyn/connection-form"
+import { copyConnection } from "@/features/connections/copy-connection"
+import { duplicatePrefill } from "@/features/connections/duplicate-connection"
 import { useTypedSecrets } from "@/features/connections/typed-secrets"
 import type { WithoutSecrets } from "@/features/connections/typed-secrets"
-import { openConnection, session } from "@/features/session"
+import { closeConnection, openConnection, session } from "@/features/session"
+import { requestConnectionChange } from "@/features/settings/connections-settings"
+import type { ConnectionRequest } from "@/features/settings/connections-settings"
+import { openSettings } from "@/features/settings/settings-dialog"
+import { actionSources } from "@/lib/actions/context"
+import type { ConnectionMenuActions } from "@/lib/actions/targets"
 import { BackendError, backend, newCommandId } from "@/lib/ipc/client"
+import { metadata } from "@/lib/ipc/metadata"
 import { settingsBackend } from "@/lib/ipc/settings"
 import type { ConnectionSummary } from "@/lib/ipc/settings"
 import type {
@@ -31,6 +41,30 @@ function failureOf(error: unknown): BackendFailure | null {
   if (error instanceof BackendError)
     return { message: error.message, retryable: error.retryable }
   return { message: String(error), retryable: false }
+}
+
+/** Past this, the workspace did not show: the console is not opened late. */
+const WORKSPACE_SHOWN_WITHIN_MS = 2_000
+
+/**
+ * Shows the workspace left open, then opens a console in it — the registry's
+ * `New console`, through the actions it publishes. Hidden, it publishes
+ * none: the console waits until it is on screen, and never opens later than
+ * the user could connect it to this click.
+ */
+function openConsoleInWorkspace(show: () => void) {
+  const subscription = actionSources.subscribe(() => {
+    const workspace = actionSources.state.sources.workspace
+    if (!workspace) return
+    stop()
+    workspace.actions.openConsole()
+  })
+  const timer = setTimeout(() => stop(), WORKSPACE_SHOWN_WITHIN_MS)
+  function stop() {
+    clearTimeout(timer)
+    subscription.unsubscribe()
+  }
+  show()
 }
 
 /**
@@ -58,6 +92,10 @@ export function ConnectionScreen() {
     queryFn: settingsBackend.listConnections,
   })
   const [driver, setDriver] = React.useState<DriverChoice | null>(null)
+  const [duplicate, setDuplicate] = React.useState<{
+    of: string
+    prefill: ConnectionPrefill
+  } | null>(null)
   const [approval, setApproval] =
     React.useState<PendingConnectionApproval | null>(null)
   const [cancelling, setCancelling] = React.useState(false)
@@ -177,6 +215,105 @@ export function ConnectionScreen() {
     void backend.cancel(commandId).catch(() => undefined)
   }
 
+  const idle = () =>
+    !(reconnect.isPending || connect.isPending || test.isPending)
+
+  const connectionMenu = (
+    connection: ConnectionSummary
+  ): ConnectionMenuActions => {
+    const open = leftOpen?.connection === connection.id ? leftOpen : null
+    const settings = (intent: ConnectionRequest["intent"]) => () => {
+      requestConnectionChange({ connection: connection.id, intent })
+      openSettings("connections")
+    }
+    return {
+      // The workspace's own `Disconnect`: its drafts are written, then its
+      // sessions close (`WorkspaceHost`).
+      disconnect: open ? closeConnection : undefined,
+      // Closed, opening is the new console: a workspace starts on one.
+      newConsole: open
+        ? () =>
+            openConsoleInWorkspace(() => void navigate({ to: "/workspace" }))
+        : () => {
+            if (idle()) reconnect.mutate(connection)
+          },
+      refreshCatalog: open ? () => void refreshCatalogOf(open) : undefined,
+      edit: settings("edit"),
+      duplicate: () => void startDuplicate(connection),
+      changeEnvironment: settings("environment"),
+      copy: () => void copyConnection(connection),
+      // As in the settings: the connection in use is left before deletion.
+      delete: open ? undefined : settings("delete"),
+    }
+  }
+
+  // The new connection form, filled with the source's non-secret parameters:
+  // nothing is saved before the user connects, and the secrets are typed.
+  const startDuplicate = async (connection: ConnectionSummary) => {
+    if (!idle()) return
+    const choice = drivers.data?.find((item) => item.id === connection.driver)
+    if (!choice) {
+      toast.add({
+        title: "Cannot duplicate this connection",
+        description: `This build does not offer the ${connection.driverName} driver.`,
+        type: "error",
+      })
+      return
+    }
+    try {
+      const source = await settingsBackend.connectionDetails(connection.id)
+      connect.reset()
+      test.reset()
+      setDuplicate({
+        of: connection.name,
+        prefill: duplicatePrefill(choice, source),
+      })
+      setDriver(choice)
+    } catch (error) {
+      toast.add({
+        title: "Cannot duplicate this connection",
+        description: failureOf(error)?.message,
+        type: "error",
+      })
+    }
+  }
+
+  const refreshCatalogOf = async (open: OpenConnection) => {
+    try {
+      const outcome = await metadata.refreshCatalog(
+        newCommandId(),
+        open.connection,
+        open.session,
+        null
+      )
+      if (outcome.type === "denied")
+        toast.add({
+          title: "Catalog not refreshed",
+          description: outcome.reason,
+          type: "error",
+        })
+      else if (outcome.type === "catalogRefreshed")
+        toast.add({
+          title: `Catalog of ${open.name} refreshed`,
+          type: "success",
+        })
+    } catch (error) {
+      toast.add({
+        title: "Catalog not refreshed",
+        description: failureOf(error)?.message,
+        type: "error",
+      })
+    } finally {
+      // The hidden workspace's tree reads it again, as after its own refresh.
+      await queryClient.invalidateQueries({
+        queryKey: ["catalog", open.connection],
+      })
+      await queryClient.invalidateQueries({
+        queryKey: ["catalog-search", open.connection],
+      })
+    }
+  }
+
   const browse = async () => {
     const chosen = await openDialog({ multiple: false, directory: false })
     return typeof chosen === "string" ? chosen : null
@@ -191,25 +328,29 @@ export function ConnectionScreen() {
       driversError={failureOf(drivers.error)}
       onRetryDrivers={() => void drivers.refetch()}
       driver={driver}
+      duplicate={duplicate}
       onChooseDriver={(choice) => {
         connect.reset()
         test.reset()
+        setDuplicate(null)
         setDriver(choice)
       }}
       onLeaveDriver={() => {
         connect.reset()
         test.reset()
+        setDuplicate(null)
         setDriver(null)
       }}
       opening={reconnect.isPending ? reconnect.variables.id : null}
       openError={failureOf(reconnect.error)}
       onOpen={(connection) => {
-        if (reconnect.isPending || connect.isPending || test.isPending) return
-        reconnect.mutate(connection)
+        if (idle()) reconnect.mutate(connection)
       }}
       onRetryOpen={() => {
         if (reconnect.variables) reconnect.mutate(reconnect.variables)
       }}
+      openConnectionId={leftOpen?.connection ?? null}
+      connectionMenu={connectionMenu}
       submitting={connect.isPending || decide.isPending}
       formError={failureOf(connect.error ?? decide.error)}
       onSubmit={(draft) => {

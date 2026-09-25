@@ -233,6 +233,35 @@ export const NewConnection: Story = {
   },
 }
 
+/**
+ * `Duplicate`: the new connection form, filled with the source's parameters.
+ * It says the secrets are to be typed, and that nothing is saved yet.
+ */
+export const DuplicatingAConnection: Story = {
+  args: {
+    driver: postgresDriver,
+    duplicate: {
+      of: "billing",
+      prefill: {
+        name: "billing copy",
+        readOnly: false,
+        values: { host: "db.internal", database: "billing", user: "app" },
+      },
+    },
+  },
+  play: async ({ canvas, args }) => {
+    await expect(
+      canvas.getByText(/Its secrets are not copied: type them again/)
+    ).toBeVisible()
+    await expect(canvas.getByLabelText(/^Name/)).toHaveValue("billing copy")
+    await expect(canvas.getByLabelText(/^Password/)).toHaveValue("")
+    await expect(
+      canvas.getByRole("radio", { name: /PRODUCTION/ })
+    ).toBeChecked()
+    await expect(args.onSubmit).not.toHaveBeenCalled()
+  },
+}
+
 export const LeavingTypedValuesAsksFirst: Story = {
   args: { driver: sqliteDriver },
   play: async ({ canvas, args }) => {

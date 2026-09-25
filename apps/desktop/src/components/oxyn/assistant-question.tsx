@@ -2,12 +2,14 @@ import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { PencilEdit02Icon } from "@hugeicons/core-free-icons"
 
+import { ActionMenuContent } from "@/components/oxyn/action-menu-items"
 import { AssistantCopyButton } from "@/components/oxyn/assistant-copy-button"
 import { MentionChip } from "@/components/oxyn/assistant-mention-chip"
 import { questionSegments } from "@/components/oxyn/assistant-question-segments"
 import { AssistantVersions } from "@/components/oxyn/assistant-versions"
 import { Bubble, BubbleContent } from "@/components/ui/bubble"
 import { Button } from "@/components/ui/button"
+import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu"
 import { Kbd } from "@/components/ui/kbd"
 import { Message, MessageContent } from "@/components/ui/message"
 import {
@@ -55,6 +57,7 @@ export function AssistantQuestion({
   const [submitting, setSubmitting] = React.useState(false)
   const field = React.useRef<HTMLTextAreaElement>(null)
   const editButton = React.useRef<HTMLButtonElement>(null)
+  const [anchor, setAnchor] = React.useState<Element | null>(null)
 
   React.useEffect(() => {
     if (editing) field.current?.focus()
@@ -134,57 +137,80 @@ export function AssistantQuestion({
     )
   }
 
+  const startEditing = () => {
+    setDraft(text)
+    setEditing(true)
+  }
+
   return (
-    <Message align="end" className="group/question">
-      <MessageContent className="items-end">
-        <Bubble variant="secondary" align="end">
-          <BubbleContent
-            className="whitespace-pre-wrap"
-            dir="auto"
-            data-selectable
-          >
-            <QuestionText
-              text={text}
-              mentions={mentions}
-              onOpenObject={onOpenObject}
-            />
-          </BubbleContent>
-        </Bubble>
-        <div className="flex items-center gap-0.5">
-          <AssistantVersions
-            versions={versions}
-            disabled={busy}
-            onSelect={onSelectVersion}
+    <ContextMenu>
+      <ContextMenuTrigger
+        render={
+          <Message
+            align="end"
+            className="group/question"
+            onContextMenu={(event) => setAnchor(event.target as Element)}
           />
-          <AssistantCopyButton
-            text={text}
-            label="Copy question"
-            onCopy={onCopy}
-          />
-          <Tooltip>
-            <TooltipTrigger
-              render={
-                <Button
-                  ref={editButton}
-                  type="button"
-                  size="icon-xs"
-                  variant="ghost"
-                  aria-label="Edit question"
-                  disabled={busy}
-                  onClick={() => {
-                    setDraft(text)
-                    setEditing(true)
-                  }}
-                />
-              }
+        }
+      >
+        <MessageContent className="items-end">
+          <Bubble variant="secondary" align="end">
+            <BubbleContent
+              className="whitespace-pre-wrap"
+              dir="auto"
+              data-selectable
             >
-              <HugeiconsIcon icon={PencilEdit02Icon} strokeWidth={2} />
-            </TooltipTrigger>
-            <TooltipContent>Edit and send again</TooltipContent>
-          </Tooltip>
-        </div>
-      </MessageContent>
-    </Message>
+              <QuestionText
+                text={text}
+                mentions={mentions}
+                onOpenObject={onOpenObject}
+              />
+            </BubbleContent>
+          </Bubble>
+          <div className="flex items-center gap-0.5">
+            <AssistantVersions
+              versions={versions}
+              disabled={busy}
+              onSelect={onSelectVersion}
+            />
+            <AssistantCopyButton
+              text={text}
+              label="Copy question"
+              onCopy={onCopy}
+            />
+            <Tooltip>
+              <TooltipTrigger
+                render={
+                  <Button
+                    ref={editButton}
+                    type="button"
+                    size="icon-xs"
+                    variant="ghost"
+                    aria-label="Edit question"
+                    disabled={busy}
+                    onClick={startEditing}
+                  />
+                }
+              >
+                <HugeiconsIcon icon={PencilEdit02Icon} strokeWidth={2} />
+              </TooltipTrigger>
+              <TooltipContent>Edit and send again</TooltipContent>
+            </Tooltip>
+          </div>
+        </MessageContent>
+      </ContextMenuTrigger>
+      <ActionMenuContent
+        surface="assistantQuestion"
+        anchor={anchor}
+        sources={{
+          assistant: {
+            // The button's condition: nothing is edited while an answer runs.
+            state: { answering: busy },
+            actions: { editQuestion: startEditing },
+          },
+        }}
+      />
+    </ContextMenu>
   )
 }
 

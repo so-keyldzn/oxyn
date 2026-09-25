@@ -17,6 +17,7 @@ import { DensityMenu } from "@/components/oxyn/density-menu"
 import { ResultFooter } from "@/components/oxyn/result-footer"
 import { ResultGrid } from "@/components/oxyn/result-grid"
 import type { FetchPage } from "@/components/oxyn/result-grid"
+import type { GridMenuSource } from "@/components/oxyn/result-grid-menu"
 import type { GridPosition } from "@/components/oxyn/grid-selection"
 import { rowCount } from "@/components/oxyn/status-bar"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
@@ -125,6 +126,8 @@ interface ResultPanelProps {
   reveal?: { row: number; key: number } | null
   onActiveChange?: (active: GridPosition | null, cell: Cell | undefined) => void
   onInspect?: (position: GridPosition) => void
+  /** The context menus of the grid; absent, the grid opens none. */
+  gridMenu?: GridMenuSource
   /**
    * The rows are the plan `Explain` asked for, not the statement's data: the
    * mention stays above them for as long as they are shown.
@@ -176,6 +179,7 @@ export const ResultPanel = React.memo(function ResultPanel({
   reveal,
   onActiveChange,
   onInspect,
+  gridMenu,
   plan = false,
 }: ResultPanelProps) {
   const planNote = plan ? <PlanNote /> : null
@@ -191,6 +195,23 @@ export const ResultPanel = React.memo(function ResultPanel({
   }>({ result: resultKey, columns: new Set() })
   const hiddenColumns =
     hidden.result === resultKey ? hidden.columns : NO_HIDDEN_COLUMNS
+  // `Hide column` is the same choice as `Columns` (docs/UX-SPEC.md, « Menus
+  // contextuels »).
+  const menu = React.useMemo(
+    () =>
+      gridMenu && {
+        ...gridMenu,
+        hideColumn: (column: number) =>
+          setHidden((current) => ({
+            result: resultKey,
+            columns: new Set([
+              ...(current.result === resultKey ? current.columns : []),
+              column,
+            ]),
+          })),
+      },
+    [gridMenu, resultKey]
+  )
   const columnsChoice = (columns: Array<ResultColumn>) => ({
     columns,
     hidden: hiddenColumns,
@@ -266,6 +287,7 @@ export const ResultPanel = React.memo(function ResultPanel({
               reveal={reveal}
               onActiveChange={onActiveChange}
               onInspect={onInspect}
+              menu={menu}
             />
             <ResultFooter
               state={{
@@ -380,6 +402,7 @@ export const ResultPanel = React.memo(function ResultPanel({
             reveal={reveal}
             onActiveChange={onActiveChange}
             onInspect={onInspect}
+            menu={menu}
           />
           {footer(barActions(state.columns))}
         </div>

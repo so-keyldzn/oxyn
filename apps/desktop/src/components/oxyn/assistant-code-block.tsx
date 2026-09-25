@@ -4,7 +4,9 @@ import { CodeIcon } from "@hugeicons/core-free-icons"
 
 import { isSqlBlock } from "@/components/oxyn/assistant-markdown-model"
 import type { CodeBlock as CodeBlockNode } from "@/components/oxyn/assistant-markdown-model"
+import { ActionMenuContent } from "@/components/oxyn/action-menu-items"
 import { AssistantCopyButton } from "@/components/oxyn/assistant-copy-button"
+import { copyFromMenu } from "@/components/oxyn/assistant-menu-copy"
 import {
   HIGHLIGHT_MAX_CHARS,
   cachedTokens,
@@ -13,6 +15,7 @@ import {
 } from "@/components/oxyn/code-highlight"
 import type { CodeLines } from "@/components/oxyn/code-highlight"
 import { Button } from "@/components/ui/button"
+import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu"
 
 /**
  * The tokens of a closed block, once computed. A block still streaming stays
@@ -87,50 +90,76 @@ export function CodeBlock({
 }) {
   const sql = onOpenSql !== undefined && isSqlBlock(block)
   const lines = useTokens(block)
+  const [anchor, setAnchor] = React.useState<Element | null>(null)
+  const code = block.text.trim()
+  // The entries of the buttons below, and only those: never `Run` (I-07). An
+  // entry whose button is absent or disabled is absent too.
+  const openInConsole =
+    sql && !openSqlDisabledReason ? () => onOpenSql(code) : undefined
+  const copyCode = onCopy
+    ? () => void copyFromMenu(onCopy, code, "Code")
+    : undefined
   return (
-    <figure
-      data-slot="assistant-code"
-      className="flex min-w-0 flex-col overflow-hidden rounded-lg border bg-card"
-    >
-      {block.language !== "" || sql || onCopy ? (
-        <figcaption className="flex h-8 items-center justify-between gap-2 border-b px-2.5 text-xs text-muted-foreground">
-          <span className="font-mono">
-            {block.language || (sql ? "sql" : "code")}
-          </span>
-          {sql ? (
-            <Button
-              size="xs"
-              variant="ghost"
-              disabled={Boolean(openSqlDisabledReason)}
-              title={openSqlDisabledReason ?? undefined}
-              onClick={() => onOpenSql(block.text.trim())}
-            >
-              <HugeiconsIcon
-                icon={CodeIcon}
-                strokeWidth={2}
-                data-icon="inline-start"
-              />
-              Open in console
-            </Button>
-          ) : null}
-          {onCopy ? (
-            <AssistantCopyButton
-              text={block.text.trim()}
-              label="Copy code"
-              onCopy={onCopy}
-            />
-          ) : null}
-        </figcaption>
-      ) : null}
-      <pre
-        data-selectable
-        data-highlighted={lines !== null || undefined}
-        tabIndex={0}
-        aria-label={sql ? "Proposed SQL" : "Code"}
-        className="overflow-x-auto p-3 font-mono text-xs leading-5 whitespace-pre outline-none focus-visible:ring-2 focus-visible:ring-ring"
+    <ContextMenu>
+      <ContextMenuTrigger
+        render={
+          <figure
+            data-slot="assistant-code"
+            className="flex min-w-0 flex-col overflow-hidden rounded-lg border bg-card"
+            onContextMenu={(event) => setAnchor(event.target as Element)}
+          />
+        }
       >
-        <code>{lines ? <Tokens lines={lines} /> : block.text}</code>
-      </pre>
-    </figure>
+        {block.language !== "" || sql || onCopy ? (
+          <figcaption className="flex h-8 items-center justify-between gap-2 border-b px-2.5 text-xs text-muted-foreground">
+            <span className="font-mono">
+              {block.language || (sql ? "sql" : "code")}
+            </span>
+            {sql ? (
+              <Button
+                size="xs"
+                variant="ghost"
+                disabled={Boolean(openSqlDisabledReason)}
+                title={openSqlDisabledReason ?? undefined}
+                onClick={() => onOpenSql(code)}
+              >
+                <HugeiconsIcon
+                  icon={CodeIcon}
+                  strokeWidth={2}
+                  data-icon="inline-start"
+                />
+                Open in console
+              </Button>
+            ) : null}
+            {onCopy ? (
+              <AssistantCopyButton
+                text={code}
+                label="Copy code"
+                onCopy={onCopy}
+              />
+            ) : null}
+          </figcaption>
+        ) : null}
+        <pre
+          data-selectable
+          data-highlighted={lines !== null || undefined}
+          tabIndex={0}
+          aria-label={sql ? "Proposed SQL" : "Code"}
+          className="overflow-x-auto p-3 font-mono text-xs leading-5 whitespace-pre outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <code>{lines ? <Tokens lines={lines} /> : block.text}</code>
+        </pre>
+      </ContextMenuTrigger>
+      <ActionMenuContent
+        surface="assistantCode"
+        anchor={anchor}
+        sources={{
+          assistant: {
+            state: { answering: false },
+            actions: { copyCode, openInConsole },
+          },
+        }}
+      />
+    </ContextMenu>
   )
 }

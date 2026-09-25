@@ -47,7 +47,39 @@ export interface ConsoleEntry {
 }
 
 /** What a new console starts with; a new document unless one is resumed. */
-type SeedInput = Partial<ConsoleSeed> & { notice?: string | null }
+export type SeedInput = Partial<ConsoleSeed> & { notice?: string | null }
+
+/** The seed of a new console: what `input` says, a new empty console else. */
+export function consoleSeed(
+  input: SeedInput,
+  document: string,
+  title: string
+): ConsoleSeed {
+  return {
+    document,
+    revision: input.revision ?? 0,
+    title: input.title ?? title,
+    text: input.text ?? "",
+    savedTitle: input.savedTitle ?? null,
+    savedText: input.savedText ?? null,
+    hasSavedCopy: input.hasSavedCopy ?? false,
+    fromAgent: input.fromAgent ?? false,
+    parameters: input.parameters ?? [],
+    needsValues: input.needsValues ?? false,
+    context: input.context ?? null,
+  }
+}
+
+/** A closed console as ⌘⇧T brings it back: its text, never its run. */
+interface ClosedConsole {
+  title: string
+  text: string
+  /** Kept: a reopened agent's text stays marked as one (ADR-0023). */
+  fromAgent: boolean
+}
+
+/** Closed consoles kept for ⌘⇧T, the oldest forgotten first. */
+const MAX_REOPENABLE = 20
 
 function failure(error: unknown) {
   return error instanceof BackendError ? error.message : String(error)
@@ -98,6 +130,11 @@ export function useConsoles({
   const openingRef = React.useRef<string | null>(null)
   const entriesRef = React.useRef(entries)
   entriesRef.current = entries
+  const metaRef = React.useRef(meta)
+  metaRef.current = meta
+  const [closedConsoles, setClosedConsoles] = React.useState<
+    Array<ClosedConsole>
+  >([])
 
   const register = React.useCallback(
     (key: string, handle: ConsoleHandle | null) => {
@@ -126,18 +163,7 @@ export function useConsoles({
       session,
       origin,
       notice: input.notice ?? null,
-      seed: {
-        document,
-        revision: input.revision ?? 0,
-        title: input.title ?? consoleTitle(counter.current),
-        text: input.text ?? "",
-        savedTitle: input.savedTitle ?? null,
-        savedText: input.savedText ?? null,
-        hasSavedCopy: input.hasSavedCopy ?? false,
-        fromAgent: input.fromAgent ?? false,
-        parameters: input.parameters ?? [],
-        needsValues: input.needsValues ?? false,
-      },
+      seed: consoleSeed(input, document, consoleTitle(counter.current)),
     }
     setEntries((all) => [...all, entry])
     onActivate(key)
@@ -242,8 +268,17 @@ export function useConsoles({
     const handle = handles.current.get(key)
     const entry = entriesRef.current.find((item) => item.key === key)
     if (!handle || !entry) return false
+    // Read before closing: the text is what ⌘⇧T brings back, discarded
+    // text included — the reopening is how a hasty Discard is undone.
+    const shown = metaRef.current[key]
+    const reopenable: ClosedConsole = {
+      title: shown?.title ?? entry.seed.title,
+      text: handle.text(),
+      fromAgent: shown?.fromAgent ?? entry.seed.fromAgent,
+    }
     const closed = await handle.close(discard)
     if (!closed) return false
+    setClosedConsoles((all) => [...all, reopenable].slice(-MAX_REOPENABLE))
     // The session goes with the console; siblings and the catalog keep theirs.
     if (entry.session) {
       void consoles
@@ -252,6 +287,8 @@ export function useConsoles({
       forgetSession(entry.session.session)
     }
     const rest = entriesRef.current.filter((item) => item.key !== key)
+    // Now rather than at the next render: a series of closes reads it.
+    entriesRef.current = rest
     setEntries(rest)
     setMeta(({ [key]: _gone, ...others }) => others)
     const last = rest[rest.length - 1]
@@ -259,17 +296,37 @@ export function useConsoles({
     return true
   }
 
-  const requestClose = (key: string) => {
+  // Resolves the close the dialog is deciding: `true` once the console is
+  // gone, `false` on Cancel — which ends a series of closes there.
+  const settle = React.useRef<((closed: boolean) => void) | null>(null)
+  const settleClose = (closed: boolean) => {
+    const resolve = settle.current
+    settle.current = null
+    resolve?.(closed)
+  }
+
+  /**
+   * Closes the console `key`, asking first when work would be lost
+   * (ADR-0015). Resolves whether it closed: a series of closes stops at the
+   * first that did not (UX-SPEC, « Menus contextuels », Onglet).
+   */
+  const requestClose = (key: string): Promise<boolean> => {
     const handle = handles.current.get(key)
-    if (!handle) return
+    if (!handle) return Promise.resolve(false)
     const reasons = handle.closeReasons()
-    const activity = meta[key]?.activity
+    const activity = metaRef.current[key]?.activity
     if (activity === "saving" || activity === "closing") {
       setNotice("Wait for the current save or close operation, or cancel it.")
-      return
+      return Promise.resolve(false)
     }
-    if (needsCloseDecision(reasons)) setClosing({ key, reasons, busy: false })
-    else void finishClose(key, false)
+    if (!needsCloseDecision(reasons)) return finishClose(key, false)
+    settleClose(false)
+    // The console the dialog names is the one shown behind it.
+    onActivate(key)
+    setClosing({ key, reasons, busy: false })
+    return new Promise((resolve) => {
+      settle.current = resolve
+    })
   }
 
   // Bumped by every decision: an answer to a decision since cancelled neither
@@ -283,6 +340,7 @@ export function useConsoles({
     if (choice === "cancel") {
       setClosing(null)
       if (current.busy) handles.current.get(current.key)?.cancelWrite()
+      settleClose(false)
       return
     }
     const token = decision.current
@@ -296,6 +354,44 @@ export function useConsoles({
       saved && (await finishClose(current.key, choice === "discard"))
     if (decision.current !== token) return
     setClosing(closed ? null : { ...current, busy: false })
+    if (closed) settleClose(true)
+  }
+
+  /**
+   * ⌘⇧T: the last closed console again, in a console of its own — its own
+   * session, its text, nothing run. Taken off the list only once opened: a
+   * refused or cancelled opening leaves it there.
+   */
+  const reopen = async () => {
+    const last = closedConsoles[closedConsoles.length - 1]
+    if (!last) return null
+    const key = await openConsole({
+      title: last.title,
+      text: last.text,
+      fromAgent: last.fromAgent,
+      notice: "Closed console reopened. Nothing was executed.",
+    })
+    if (key)
+      setClosedConsoles((all) =>
+        all[all.length - 1] === last ? all.slice(0, -1) : all
+      )
+    return key
+  }
+
+  /**
+   * `Duplicate`: an independent console — its own session and document —
+   * with the same text, nothing run (UX-SPEC, « Menus contextuels »).
+   */
+  const duplicate = (key: string) => {
+    const entry = entriesRef.current.find((item) => item.key === key)
+    const handle = handles.current.get(key)
+    if (!entry || !handle) return Promise.resolve(null)
+    const shown = metaRef.current[key]
+    return openConsole({
+      text: handle.text(),
+      fromAgent: shown?.fromAgent ?? entry.seed.fromAgent,
+      notice: `Duplicated from ${shown?.title ?? entry.seed.title}. Nothing was executed.`,
+    })
   }
 
   const cycle = (active: string | null, delta: 1 | -1) =>
@@ -435,6 +531,10 @@ export function useConsoles({
     cancelOpening,
     requestClose,
     decideClose,
+    /** A closed console can be brought back by ⌘⇧T. */
+    reopenable: closedConsoles.length > 0,
+    reopen,
+    duplicate,
     cycle,
     openHistoryCopy,
     openDocumentCopy,

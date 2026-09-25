@@ -15,8 +15,10 @@ import {
   TableIcon,
 } from "@hugeicons/core-free-icons"
 
+import { ActionMenuContent } from "@/components/oxyn/action-menu-items"
 import { BackendErrorAlert } from "@/components/oxyn/backend-error-alert"
 import type { BackendFailure } from "@/components/oxyn/backend-error-alert"
+import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu"
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -91,6 +93,15 @@ const PERIODS = [
   { value: "all", label: "All dates" },
 ]
 
+/** The entry a context menu was opened on, and where. */
+type MenuTarget =
+  | { kind: "saved"; entry: DocumentEntry; anchor: Element }
+  | { kind: "history"; row: HistoryRow; anchor: Element }
+
+function titleOf(entry: DocumentEntry) {
+  return entry.title === "" ? "Untitled query" : entry.title
+}
+
 function when(iso: string) {
   // Shown in UTC, as recorded: the history is a log, not a calendar.
   return `${iso.slice(0, 16).replace("T", " ")} UTC`
@@ -106,6 +117,12 @@ function when(iso: string) {
  * reconciled, after a confirmation that names the connection and quotes the
  * statement. Deleting a saved query removes a local file, never a database
  * object, and asks first.
+ *
+ * A right click — or ⇧F10 on a focused entry — opens the entry's context menu
+ * (UX-SPEC « Menus contextuels »). `Open` is `Open copy`, its destination
+ * named under it; `Delete…` is the same confirmation as the button, for a
+ * saved query only. A history row offers `Open` alone, and not even that
+ * when the write awaits inspection (I-13).
  */
 /** A result is addressed through the session that produced it: this connection only. */
 function retainsResult(row: HistoryRow, connection: string) {
@@ -222,6 +239,57 @@ export function LibraryPanel({
   const [reconciling, setReconciling] = React.useState<HistoryRow | null>(null)
   const cancelRef = React.useRef<HTMLButtonElement>(null)
   const keepRef = React.useRef<HTMLButtonElement>(null)
+  const [menu, setMenu] = React.useState<MenuTarget | null>(null)
+
+  // The entry under the pointer, or the focused one for ⇧F10, by its
+  // position in the list shown; between two entries there is no target.
+  const pickTarget = (event: React.MouseEvent) => {
+    const anchor = event.target instanceof Element ? event.target : null
+    const item = anchor?.closest("[data-library-entry]")
+    const index = item ? Number(item.getAttribute("data-library-entry")) : -1
+    if (!anchor || index < 0) return setMenu(null)
+    if (state.status === "saved") {
+      const entry = state.entries[index]
+      return setMenu(entry ? { kind: "saved", entry, anchor } : null)
+    }
+    if (state.status === "history") {
+      const row = state.entries[index]
+      return setMenu(row ? { kind: "history", row, anchor } : null)
+    }
+    setMenu(null)
+  }
+
+  const menuContent =
+    menu === null ? null : (
+      <ActionMenuContent
+        surface="library"
+        anchor={menu.anchor}
+        title={menu.kind === "saved" ? titleOf(menu.entry) : undefined}
+        details={{
+          "library.openEntry": `Opens an unrun copy in ${currentConnectionName}`,
+        }}
+        sources={{
+          libraryEntry:
+            menu.kind === "saved"
+              ? {
+                  state: { file: true },
+                  actions: {
+                    open: () => onOpenSaved(menu.entry),
+                    delete: () => setDeleting(menu.entry),
+                  },
+                }
+              : {
+                  state: { file: false },
+                  actions: {
+                    // A write awaiting inspection offers no editable copy.
+                    open: menu.row.needsInspection
+                      ? undefined
+                      : () => onOpenHistory(menu.row),
+                  },
+                },
+        }}
+      />
+    )
 
   return (
     <div className="flex min-h-0 flex-1 flex-col gap-2 p-2">
@@ -336,206 +404,222 @@ export function LibraryPanel({
         </p>
       )}
 
-      <div className="min-h-0 flex-1 overflow-y-auto">
-        {state.status === "loading" ? (
-          <div className="flex flex-col gap-2" aria-busy="true">
-            <Skeleton className="h-12" />
-            <Skeleton className="h-12" />
-            <Skeleton className="h-12" />
-          </div>
-        ) : state.status === "error" ? (
-          <BackendErrorAlert
-            title="The library could not be read."
-            error={state.error}
-            onRetry={onRefresh}
-            nextStep="Change the search or the filters, then refresh."
-          />
-        ) : state.status === "cancelled" ? (
-          <Empty className="p-4">
-            <EmptyHeader>
-              <EmptyTitle>Search cancelled</EmptyTitle>
-              <EmptyDescription>
-                Nothing is listed until you refresh or change the search.
-              </EmptyDescription>
-            </EmptyHeader>
-          </Empty>
-        ) : state.entries.length === 0 ? (
-          <Empty className="p-4">
-            <EmptyHeader>
-              <EmptyTitle>No queries match these filters.</EmptyTitle>
-              <EmptyDescription>
-                {view === "results"
-                  ? "Runs whose rows are kept for reopening appear here."
-                  : state.status === "history"
-                    ? "Queries you run appear here."
-                    : "Save a console with ⌘S to find it here."}
-              </EmptyDescription>
-            </EmptyHeader>
-          </Empty>
-        ) : state.status === "history" ? (
-          <ul className="flex flex-col gap-1">
-            {state.entries.map((row) => (
-              <li
-                key={row.id}
-                className="flex flex-col gap-1 rounded-md border p-2 text-xs"
-              >
-                {/* Selecting the entry reads its full text, read only; the
-                    preview is cut at 256 characters. */}
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  className="h-auto justify-start p-1 text-left font-normal whitespace-normal"
-                  onClick={() => onInspectHistory(row)}
+      <ContextMenu>
+        <ContextMenuTrigger
+          render={
+            <div
+              className="min-h-0 flex-1 overflow-y-auto"
+              onContextMenu={pickTarget}
+            />
+          }
+        >
+          {state.status === "loading" ? (
+            <div className="flex flex-col gap-2" aria-busy="true">
+              <Skeleton className="h-12" />
+              <Skeleton className="h-12" />
+              <Skeleton className="h-12" />
+            </div>
+          ) : state.status === "error" ? (
+            <BackendErrorAlert
+              title="The library could not be read."
+              error={state.error}
+              onRetry={onRefresh}
+              nextStep="Change the search or the filters, then refresh."
+            />
+          ) : state.status === "cancelled" ? (
+            <Empty className="p-4">
+              <EmptyHeader>
+                <EmptyTitle>Search cancelled</EmptyTitle>
+                <EmptyDescription>
+                  Nothing is listed until you refresh or change the search.
+                </EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          ) : state.entries.length === 0 ? (
+            <Empty className="p-4">
+              <EmptyHeader>
+                <EmptyTitle>No queries match these filters.</EmptyTitle>
+                <EmptyDescription>
+                  {view === "results"
+                    ? "Runs whose rows are kept for reopening appear here."
+                    : state.status === "history"
+                      ? "Queries you run appear here."
+                      : "Save a console with ⌘S to find it here."}
+                </EmptyDescription>
+              </EmptyHeader>
+            </Empty>
+          ) : state.status === "history" ? (
+            <ul className="flex flex-col gap-1">
+              {state.entries.map((row, index) => (
+                <li
+                  key={row.id}
+                  data-library-entry={index}
+                  className="flex flex-col gap-1 rounded-md border p-2 text-xs"
                 >
-                  <code className="line-clamp-2 font-mono break-all">
-                    {row.preview}
-                  </code>
-                </Button>
-                <div className="flex items-center gap-1.5 text-muted-foreground">
-                  {row.fromAgent ? (
-                    <span className="shrink-0">AI ·</span>
-                  ) : null}
-                  <span dir="auto" className="min-w-0 truncate">
-                    {row.connectionName ?? "Connection unavailable"}
-                  </span>
-                  <span>·</span>
-                  <span className="shrink-0 tabular-nums">{when(row.at)}</span>
-                </div>
-                {/* Wraps: the panel is 280 px wide in the sidebar, and two
+                  {/* Selecting the entry reads its full text, read only; the
+                    preview is cut at 256 characters. */}
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    className="h-auto justify-start p-1 text-left font-normal whitespace-normal"
+                    onClick={() => onInspectHistory(row)}
+                  >
+                    <code className="line-clamp-2 font-mono break-all">
+                      {row.preview}
+                    </code>
+                  </Button>
+                  <div className="flex items-center gap-1.5 text-muted-foreground">
+                    {row.fromAgent ? (
+                      <span className="shrink-0">AI ·</span>
+                    ) : null}
+                    <span dir="auto" className="min-w-0 truncate">
+                      {row.connectionName ?? "Connection unavailable"}
+                    </span>
+                    <span>·</span>
+                    <span className="shrink-0 tabular-nums">
+                      {when(row.at)}
+                    </span>
+                  </div>
+                  {/* Wraps: the panel is 280 px wide in the sidebar, and two
                     actions beside a badge do not fit on one line there. */}
-                <div className="flex flex-wrap items-center gap-1.5">
-                  {row.needsInspection ? (
-                    <Badge variant="destructive">
-                      <HugeiconsIcon
-                        icon={Alert02Icon}
-                        strokeWidth={2}
-                        data-icon="inline-start"
+                  <div className="flex flex-wrap items-center gap-1.5">
+                    {row.needsInspection ? (
+                      <Badge variant="destructive">
+                        <HugeiconsIcon
+                          icon={Alert02Icon}
+                          strokeWidth={2}
+                          data-icon="inline-start"
+                        />
+                        Needs inspection
+                      </Badge>
+                    ) : (
+                      <Badge variant="outline">{row.status}</Badge>
+                    )}
+                    {row.reconciled ? (
+                      <Badge variant="secondary">Reconciled</Badge>
+                    ) : null}
+                    {row.durationMs !== null ? (
+                      <span className="text-muted-foreground">
+                        {row.durationMs.toLocaleString("en-US")} ms
+                      </span>
+                    ) : null}
+                    {onOpenResult && retainsResult(row, currentConnection) ? (
+                      <Button
+                        size="xs"
+                        variant="ghost"
+                        className="ml-auto"
+                        onClick={() => onOpenResult(row)}
+                      >
+                        <HugeiconsIcon
+                          icon={TableIcon}
+                          strokeWidth={2}
+                          data-icon="inline-start"
+                        />
+                        Open result
+                      </Button>
+                    ) : view === "results" ? (
+                      // A result is read through the session that produced it.
+                      <span className="text-muted-foreground">
+                        Rows open from their own connection
+                      </span>
+                    ) : null}
+                    {row.needsInspection ? (
+                      <Button
+                        size="xs"
+                        variant="ghost"
+                        className={cn(
+                          !(
+                            onOpenResult &&
+                            retainsResult(row, currentConnection)
+                          ) && "ml-auto"
+                        )}
+                        onClick={() => setReconciling(row)}
+                      >
+                        <HugeiconsIcon
+                          icon={CheckmarkCircle02Icon}
+                          strokeWidth={2}
+                          data-icon="inline-start"
+                        />
+                        Mark reconciled
+                      </Button>
+                    ) : (
+                      <OpenCopyButton
+                        destination={currentConnectionName}
+                        className={cn(
+                          !(
+                            onOpenResult &&
+                            retainsResult(row, currentConnection)
+                          ) && "ml-auto"
+                        )}
+                        onClick={() => onOpenHistory(row)}
                       />
-                      Needs inspection
-                    </Badge>
-                  ) : (
-                    <Badge variant="outline">{row.status}</Badge>
-                  )}
-                  {row.reconciled ? (
-                    <Badge variant="secondary">Reconciled</Badge>
-                  ) : null}
-                  {row.durationMs !== null ? (
-                    <span className="text-muted-foreground">
-                      {row.durationMs.toLocaleString("en-US")} ms
+                    )}
+                  </div>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <ul className="flex flex-col gap-1">
+              {state.entries.map((entry, index) => (
+                <li
+                  key={entry.id}
+                  data-library-entry={index}
+                  className="flex flex-col gap-1 rounded-md border p-2 text-xs"
+                >
+                  <Button
+                    variant="ghost"
+                    size="xs"
+                    className="h-auto min-w-0 justify-start p-1 text-left"
+                    onClick={() => onInspectSaved(entry)}
+                  >
+                    <span dir="auto" className="truncate font-medium">
+                      {entry.fromAgent ? "AI · " : ""}
+                      {entry.title === "" ? "Untitled query" : entry.title}
                     </span>
-                  ) : null}
-                  {onOpenResult && retainsResult(row, currentConnection) ? (
-                    <Button
-                      size="xs"
-                      variant="ghost"
-                      className="ml-auto"
-                      onClick={() => onOpenResult(row)}
-                    >
-                      <HugeiconsIcon
-                        icon={TableIcon}
-                        strokeWidth={2}
-                        data-icon="inline-start"
-                      />
-                      Open result
-                    </Button>
-                  ) : view === "results" ? (
-                    // A result is read through the session that produced it.
-                    <span className="text-muted-foreground">
-                      Rows open from their own connection
+                  </Button>
+                  <div className="flex items-center gap-1.5 text-muted-foreground">
+                    <span dir="auto" className="min-w-0 truncate">
+                      {entry.connectionName ?? "No connection"}
                     </span>
-                  ) : null}
-                  {row.needsInspection ? (
-                    <Button
-                      size="xs"
-                      variant="ghost"
-                      className={cn(
-                        !(
-                          onOpenResult && retainsResult(row, currentConnection)
-                        ) && "ml-auto"
-                      )}
-                      onClick={() => setReconciling(row)}
-                    >
-                      <HugeiconsIcon
-                        icon={CheckmarkCircle02Icon}
-                        strokeWidth={2}
-                        data-icon="inline-start"
-                      />
-                      Mark reconciled
-                    </Button>
-                  ) : (
+                    <span>·</span>
+                    <span>{entry.hasChanges ? "Draft changed" : "Saved"}</span>
+                  </div>
+                  <div className="flex flex-wrap items-center gap-1">
                     <OpenCopyButton
                       destination={currentConnectionName}
-                      className={cn(
-                        !(
-                          onOpenResult && retainsResult(row, currentConnection)
-                        ) && "ml-auto"
-                      )}
-                      onClick={() => onOpenHistory(row)}
+                      onClick={() => onOpenSaved(entry)}
                     />
-                  )}
-                </div>
-              </li>
-            ))}
-          </ul>
-        ) : (
-          <ul className="flex flex-col gap-1">
-            {state.entries.map((entry) => (
-              <li
-                key={entry.id}
-                className="flex flex-col gap-1 rounded-md border p-2 text-xs"
-              >
-                <Button
-                  variant="ghost"
-                  size="xs"
-                  className="h-auto min-w-0 justify-start p-1 text-left"
-                  onClick={() => onInspectSaved(entry)}
-                >
-                  <span dir="auto" className="truncate font-medium">
-                    {entry.fromAgent ? "AI · " : ""}
-                    {entry.title === "" ? "Untitled query" : entry.title}
-                  </span>
-                </Button>
-                <div className="flex items-center gap-1.5 text-muted-foreground">
-                  <span dir="auto" className="min-w-0 truncate">
-                    {entry.connectionName ?? "No connection"}
-                  </span>
-                  <span>·</span>
-                  <span>{entry.hasChanges ? "Draft changed" : "Saved"}</span>
-                </div>
-                <div className="flex flex-wrap items-center gap-1">
-                  <OpenCopyButton
-                    destination={currentConnectionName}
-                    onClick={() => onOpenSaved(entry)}
-                  />
-                  {entry.connection === currentConnection ? (
+                    {entry.connection === currentConnection ? (
+                      <Button
+                        size="xs"
+                        variant="ghost"
+                        onClick={() => onResumeSaved(entry)}
+                      >
+                        <HugeiconsIcon
+                          icon={FileEditIcon}
+                          strokeWidth={2}
+                          data-icon="inline-start"
+                        />
+                        Resume
+                      </Button>
+                    ) : null}
                     <Button
-                      size="xs"
+                      size="icon-xs"
                       variant="ghost"
-                      onClick={() => onResumeSaved(entry)}
+                      className="ml-auto"
+                      aria-label={`Delete ${entry.title === "" ? "Untitled query" : entry.title}`}
+                      onClick={() => setDeleting(entry)}
                     >
-                      <HugeiconsIcon
-                        icon={FileEditIcon}
-                        strokeWidth={2}
-                        data-icon="inline-start"
-                      />
-                      Resume
+                      <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} />
                     </Button>
-                  ) : null}
-                  <Button
-                    size="icon-xs"
-                    variant="ghost"
-                    className="ml-auto"
-                    aria-label={`Delete ${entry.title === "" ? "Untitled query" : entry.title}`}
-                    onClick={() => setDeleting(entry)}
-                  >
-                    <HugeiconsIcon icon={Delete02Icon} strokeWidth={2} />
-                  </Button>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          )}
+        </ContextMenuTrigger>
+        {menuContent}
+      </ContextMenu>
 
       <div className="flex items-center gap-1">
         <Button

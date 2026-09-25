@@ -23,9 +23,11 @@ import {
 } from "@hugeicons/core-free-icons"
 import "@xyflow/react/dist/base.css"
 
+import { ActionMenuContent } from "@/components/oxyn/action-menu-items"
 import { ERD_MAX_COLUMNS, ERD_MAX_TABLES } from "@/components/oxyn/erd-model"
 import type { ErdColumn, ErdLink, ErdTable } from "@/components/oxyn/erd-model"
 import { Button } from "@/components/ui/button"
+import { ContextMenu, ContextMenuTrigger } from "@/components/ui/context-menu"
 import { cn } from "@/lib/utils"
 import type { CatalogAddress } from "@/lib/ipc/types"
 
@@ -93,14 +95,16 @@ export function layoutErd(
 type TableNodeData = {
   table: ErdTable
   onOpen?: (address: CatalogAddress) => void
+  onCopyName?: (table: ErdTable) => void
 }
 type TableNode = Node<TableNodeData, "table">
 
 /** A table, drawn as React text: its name and columns come from a server. */
 function TableNodeView({ data }: NodeProps<TableNode>) {
-  const { table, onOpen } = data
+  const { table, onOpen, onCopyName } = data
   const { shown, hidden } = visibleColumns(table.columns)
   const label = tableLabel(table)
+  const [anchor, setAnchor] = React.useState<Element | null>(null)
   const title = (
     <>
       <HugeiconsIcon
@@ -118,97 +122,119 @@ function TableNodeView({ data }: NodeProps<TableNode>) {
     </>
   )
   return (
-    <div
-      data-slot="erd-table"
-      data-requested={table.requested || undefined}
-      className={cn(
-        // The canvas turns pointer events off on a node that is neither
-        // selectable nor draggable; its button must still take a click.
-        "pointer-events-auto flex flex-col overflow-hidden rounded-lg border bg-card text-xs text-card-foreground shadow-xs",
-        table.requested && "border-primary/60"
-      )}
-      style={{ width: NODE_WIDTH }}
-    >
-      <Handle
-        type="target"
-        position={Position.Left}
-        isConnectable={false}
-        className="size-1! min-h-0! min-w-0! border-0! bg-transparent!"
-      />
-      {onOpen ? (
-        <Button
-          variant="ghost"
-          size="sm"
-          title={label}
-          aria-label={`Open ${label}`}
-          className="nodrag nopan h-8 w-full justify-start gap-1.5 rounded-none border-b px-2 text-xs"
-          onClick={() => onOpen(table.address)}
-        >
-          {title}
-        </Button>
-      ) : (
-        <div
-          title={label}
-          className="flex h-8 items-center gap-1.5 border-b px-2"
-        >
-          {title}
-        </div>
-      )}
-      <ul className="flex flex-col py-1">
-        {shown.length === 0 ? (
-          <li className="flex h-5.5 items-center px-2 text-muted-foreground">
-            No columns reported
-          </li>
-        ) : null}
-        {shown.map((column) => (
-          <li
-            key={column.name}
-            className="flex h-5.5 min-w-0 items-center gap-1.5 px-2"
+    <ContextMenu>
+      <ContextMenuTrigger
+        render={
+          <div
+            data-slot="erd-table"
+            data-requested={table.requested || undefined}
+            className={cn(
+              // The canvas turns pointer events off on a node that is neither
+              // selectable nor draggable; its button and its menu must still
+              // take a click.
+              "pointer-events-auto flex flex-col overflow-hidden rounded-lg border bg-card text-xs text-card-foreground shadow-xs",
+              table.requested && "border-primary/60"
+            )}
+            style={{ width: NODE_WIDTH }}
+            onContextMenu={(event) => setAnchor(event.target as Element)}
+          />
+        }
+      >
+        <Handle
+          type="target"
+          position={Position.Left}
+          isConnectable={false}
+          className="size-1! min-h-0! min-w-0! border-0! bg-transparent!"
+        />
+        {onOpen ? (
+          <Button
+            variant="ghost"
+            size="sm"
+            title={label}
+            aria-label={`Open ${label}`}
+            className="nodrag nopan h-8 w-full justify-start gap-1.5 rounded-none border-b px-2 text-xs"
+            onClick={() => onOpen(table.address)}
           >
-            <span className="flex w-3.5 shrink-0 justify-center">
+            {title}
+          </Button>
+        ) : (
+          <div
+            title={label}
+            className="flex h-8 items-center gap-1.5 border-b px-2"
+          >
+            {title}
+          </div>
+        )}
+        <ul className="flex flex-col py-1">
+          {shown.length === 0 ? (
+            <li className="flex h-5.5 items-center px-2 text-muted-foreground">
+              No columns reported
+            </li>
+          ) : null}
+          {shown.map((column) => (
+            <li
+              key={column.name}
+              className="flex h-5.5 min-w-0 items-center gap-1.5 px-2"
+            >
+              <span className="flex w-3.5 shrink-0 justify-center">
+                {column.primaryKey ? (
+                  <HugeiconsIcon
+                    icon={Key01Icon}
+                    strokeWidth={2}
+                    className="size-3 text-warning"
+                    aria-hidden
+                  />
+                ) : column.foreignKey ? (
+                  <HugeiconsIcon
+                    icon={Link01Icon}
+                    strokeWidth={2}
+                    className="size-3 text-primary-text"
+                    aria-hidden
+                  />
+                ) : null}
+              </span>
+              <span className="min-w-0 truncate font-mono" title={column.name}>
+                {column.name}
+              </span>
               {column.primaryKey ? (
-                <HugeiconsIcon
-                  icon={Key01Icon}
-                  strokeWidth={2}
-                  className="size-3 text-warning"
-                  aria-hidden
-                />
-              ) : column.foreignKey ? (
-                <HugeiconsIcon
-                  icon={Link01Icon}
-                  strokeWidth={2}
-                  className="size-3 text-primary-text"
-                  aria-hidden
-                />
+                <span className="sr-only">, primary key</span>
               ) : null}
-            </span>
-            <span className="min-w-0 truncate font-mono" title={column.name}>
-              {column.name}
-            </span>
-            {column.primaryKey ? (
-              <span className="sr-only">, primary key</span>
-            ) : null}
-            {column.foreignKey ? (
-              <span className="sr-only">, foreign key</span>
-            ) : null}
-            <span className="ml-auto max-w-[45%] shrink-0 truncate pl-2 font-mono text-muted-foreground">
-              {column.type}
-            </span>
-          </li>
-        ))}
-        {hidden > 0 ? (
-          <li className="flex h-5.5 items-center px-2 text-muted-foreground">
-            {hidden} more {hidden === 1 ? "column" : "columns"}
-          </li>
-        ) : null}
-      </ul>
-      <Handle
-        type="source"
-        position={Position.Right}
-        isConnectable={false}
-        className="size-1! min-h-0! min-w-0! border-0! bg-transparent!"
+              {column.foreignKey ? (
+                <span className="sr-only">, foreign key</span>
+              ) : null}
+              <span className="ml-auto max-w-[45%] shrink-0 truncate pl-2 font-mono text-muted-foreground">
+                {column.type}
+              </span>
+            </li>
+          ))}
+          {hidden > 0 ? (
+            <li className="flex h-5.5 items-center px-2 text-muted-foreground">
+              {hidden} more {hidden === 1 ? "column" : "columns"}
+            </li>
+          ) : null}
+        </ul>
+        <Handle
+          type="source"
+          position={Position.Right}
+          isConnectable={false}
+          className="size-1! min-h-0! min-w-0! border-0! bg-transparent!"
+        />
+      </ContextMenuTrigger>
+      <ActionMenuContent
+        surface="erd"
+        anchor={anchor}
+        title={label}
+        sources={{
+          erd: {
+            state: {},
+            actions: {
+              openTable: onOpen ? () => onOpen(table.address) : undefined,
+              copyName: onCopyName ? () => onCopyName(table) : undefined,
+            },
+          },
+        }}
       />
-    </div>
+    </ContextMenu>
   )
 }
 
@@ -254,10 +280,12 @@ function Canvas({
   tables,
   links,
   onOpenObject,
+  onCopyName,
 }: {
   tables: Array<ErdTable>
   links: Array<ErdLink>
   onOpenObject?: (address: CatalogAddress) => void
+  onCopyName?: (table: ErdTable) => void
 }) {
   const flow = useReactFlow()
   const keysHint = React.useId()
@@ -269,7 +297,7 @@ function Canvas({
         id: table.key,
         type: "table",
         position: positions.get(table.key) ?? { x: 0, y: 0 },
-        data: { table, onOpen: onOpenObject },
+        data: { table, onOpen: onOpenObject, onCopyName },
       })),
       edges: links.flatMap((link): Array<Edge> => {
         const from = byKey.get(link.from)
@@ -292,7 +320,7 @@ function Canvas({
         ]
       }),
     }
-  }, [tables, links, onOpenObject])
+  }, [tables, links, onOpenObject, onCopyName])
 
   // The canvas takes arrows and +/- only when it has the focus itself: a
   // button inside keeps its own keys.
@@ -393,13 +421,16 @@ function Canvas({
  *
  * Everything shown comes from the catalog, read by the backend: nothing here
  * is drawn from what a model wrote. Names are React text. A click on a table
- * opens it, as the catalog would; nothing runs.
+ * opens it, as the catalog would; nothing runs. A right click on a table
+ * offers `Open table` and `Copy name`; `Re-layout` and `Export image…` are
+ * greyed with what is missing.
  */
 export function ErdDiagram({
   tables,
   links,
   omitted = 0,
   onOpenObject,
+  onCopyName,
   className,
 }: {
   tables: Array<ErdTable>
@@ -407,6 +438,8 @@ export function ErdDiagram({
   /** Tables related to those drawn, left out by `ERD_MAX_TABLES`. */
   omitted?: number
   onOpenObject?: (address: CatalogAddress) => void
+  /** Copies the table's name — the one the backend quotes, where it can. */
+  onCopyName?: (table: ErdTable) => void
   className?: string
 }) {
   const byKey = new Map(tables.map((table) => [table.key, table]))
@@ -419,7 +452,12 @@ export function ErdDiagram({
       className={cn("flex min-w-0 flex-col", className)}
     >
       <ReactFlowProvider>
-        <Canvas tables={tables} links={links} onOpenObject={onOpenObject} />
+        <Canvas
+          tables={tables}
+          links={links}
+          onOpenObject={onOpenObject}
+          onCopyName={onCopyName}
+        />
       </ReactFlowProvider>
       {/* The edges are drawn, not written: this list is what a screen
           reader gets of them. */}

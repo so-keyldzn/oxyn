@@ -69,6 +69,7 @@ export function RetainedResultView({
   destination,
   density,
   footerActions,
+  gridMenu,
 }: {
   state: RetainedResultState
   fetchPage: FetchPage
@@ -82,6 +83,8 @@ export function RetainedResultView({
   density?: React.ComponentProps<typeof ResultPanel>["density"]
   /** The export of these rows, shown under the grid. */
   footerActions?: React.ReactNode
+  /** The context menus of the grid: a retained result is a query's rows. */
+  gridMenu?: React.ComponentProps<typeof ResultPanel>["gridMenu"]
 }) {
   switch (state.status) {
     case "loading":
@@ -172,6 +175,7 @@ export function RetainedResultView({
               fetchPage={fetchPage}
               density={density}
               footerActions={footerActions}
+              gridMenu={gridMenu}
             />
           </div>
         </div>

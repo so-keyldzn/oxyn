@@ -195,6 +195,56 @@ export const EditingASavedConnection: Story = {
 }
 
 /**
+ * `Duplicate`: a new connection starting from another's parameters. The
+ * password is typed, not copied (I-03); the copy starts in production with
+ * the default tier, whatever the source's (I-02, ADR-0006); nothing is saved
+ * before Connect.
+ */
+export const DuplicatingAConnection: Story = {
+  args: {
+    prefill: {
+      name: "billing copy",
+      readOnly: true,
+      values: {
+        host: "db.internal",
+        port: "5432",
+        database: "billing",
+        user: "app",
+      },
+    },
+  },
+  play: async ({ canvas, args }) => {
+    await expect(canvas.getByLabelText(/^Name/)).toHaveValue("billing copy")
+    await expect(canvas.getByLabelText(/^Host/)).toHaveValue("db.internal")
+    const password = canvas.getByLabelText(/^Password/)
+    await expect(password).toHaveValue("")
+    await expect(
+      canvas.getByRole("radio", { name: /PRODUCTION/ })
+    ).toBeChecked()
+    await expect(canvas.getByRole("radio", { name: /^Metadata/ })).toBeChecked()
+    await expect(
+      canvas.getByRole("switch", { name: "Read only" })
+    ).toBeChecked()
+    await expect(args.onSubmit).not.toHaveBeenCalled()
+
+    await userEvent.type(password, "hunter2")
+    await userEvent.click(canvas.getByRole("button", { name: "Connect" }))
+    await waitFor(() =>
+      expect(args.onSubmit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          name: "billing copy",
+          environment: "production",
+          privacyTier: "metadata",
+          readOnly: true,
+          values: expect.objectContaining({ host: "db.internal" }),
+          secrets: { password: "hunter2" },
+        })
+      )
+    )
+  },
+}
+
+/**
  * A stored password is not presented to a host it was not typed for: once a
  * parameter changes, the field stops saying « stored » and asks for it again.
  */

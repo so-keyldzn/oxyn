@@ -268,8 +268,8 @@ clic droit sur chaque surface, raccourcis, palette, glisser-déposer, plusieurs
 fenêtres. Le comportement est dans [UX-SPEC](UX-SPEC.md#menus-raccourcis-et-gestes),
 les décisions dans [ADR-0041](adr/0041-registre-d-actions-menus-et-raccourcis.md),
 [ADR-0042](adr/0042-revue-sur-place-des-operations-destructrices.md) et
-[ADR-0043](adr/0043-multi-fenetre.md). Le lot 4 est fait (voir sous la liste) ;
-les autres ne sont pas implémentés. Les interfaces sont écrites en shadcn/ui (`menubar`, `context-menu`, `command`,
+[ADR-0043](adr/0043-multi-fenetre.md). Les lots 1 à 4 sont faits (le 4 sous
+la liste) ; les autres ne sont pas implémentés. Les interfaces sont écrites en shadcn/ui (`menubar`, `context-menu`, `command`,
 `alert-dialog`, `kbd`), sauf la barre native de macOS, construite en Rust.
 
 Arbitrages de l'utilisateur, le 2026-09-25 : barre de menus aussi sous Windows
@@ -375,6 +375,64 @@ Lots, dans l'ordre :
 3. **Menus contextuels** — grille et en-têtes de colonne, onglets, éditeur SQL,
    connexions enregistrées, bibliothèque, assistant, ERD ; compléments du
    catalogue.
+   **Fait le 2026-09-25.** Chaque surface liste des actions du registre
+   (`lib/actions/context-menus.ts`) ; la cible d'un clic droit rejoint le
+   contexte par des sources propres au menu (`menuContext`,
+   `lib/actions/targets.ts`), les conditions sont dans
+   `lib/actions/menu-behaviours.ts`, et `ActionMenuContent` rend les entrées,
+   grisées avec leur raison dans le texte de l'entrée. Le SQL copié est composé
+   en Rust : `copy_result_rows` (six formats, 2 000 lignes au plus, 32 Mio au
+   plus, littéraux par `oxyn_catalog::push_string_literal`, qui refuse NUL et
+   les caractères de contrôle autres que tabulation et fins de ligne) et
+   `compose_object_sql` (`Quoted name`, `SELECT *` sans `LIMIT`, `INSERT
+   template`). `edit.cut`, `edit.copy` et `edit.paste` existent désormais sous
+   macOS aussi, sans place dans la barre native, pour le menu de l'éditeur ;
+   `tab.close` prend le libellé `Close` sur un onglet ; `⌘⇧T` est
+   `tab.reopen`. Tenu par `context-menus.test.ts` (dont : jamais de `Run` sur un
+   bloc de code de l'assistant), les stories de chaque surface, et les tests de
+   `literal.rs` et `backend/results/copy`. Écarts et restes :
+   - **grisées, avec ce qui manque pour raison** : `Filter by this value`,
+     `Exclude this value`, `Is NULL` (l'aperçu ne porte qu'un prédicat texte ;
+     **suite à faire** une fois fusionné le lot apercus-execution, issues #14
+     et #16 : une valeur liée dans la forme de l'aperçu), `Freeze`, `Open
+     referenced row`, `Send to assistant` sous `Sampled` (l'écran
+     d'approbation ne s'ouvre qu'à la demande d'un modèle), `Format` (aucun
+     formateur SQL : dépendance à passer par `/versions`), `Ask assistant about
+     selection` (le composeur ne reçoit pas de texte de l'extérieur), `Re-layout`
+     et `Export image…` de l'ERD, `Reveal in Finder`/`Explorer` (attend une
+     commande système, comme `open_external`), `Open in new window` (lot 7) ;
+   - **absentes** de la bibliothèque : `Rename…`, `Duplicate` et `Copy path` —
+     il faudrait `rename_query_document` et `duplicate_query_document` en Rust,
+     la composition ouvrir-puis-sauvegarder n'étant pas atomique, et
+     `DocumentEntry` ne porte pas de chemin. UX-SPEC ne prévoit pas cette
+     absence ;
+   - `Duplicate` d'une connexion ouvre le formulaire de création pré-rempli des
+     seuls paramètres non secrets ; la copie commence en `production`, au
+     niveau IA par défaut, et rien n'est enregistré avant `Connect`. Il n'est
+     pas offert dans les réglages, qui n'ont pas de formulaire de création ;
+   - `Copy answer` copie désormais le texte lisible, bouton compris ; `Copy as
+     Markdown` copie la source ;
+   - `Rename…` du catalogue s'affiche en rouge, comme toute action
+     `destructive` ;
+   - `Open object under cursor` résout le nom en TypeScript contre l'arbre déjà
+     lu (casse ignorée hors guillemets) : une résolution par le backend
+     suivrait le dialecte ;
+   - `⌘⇧T` rouvre dans une console et une session neuves, sans les paramètres
+     liés ; `Reveal in library` ouvre la bibliothèque sans y sélectionner
+     l'entrée ;
+   - `Filter…` d'un en-tête de l'aperçu donne le focus au champ `WHERE` ;
+   - les lignes de l'onglet Structure ne prennent pas le focus : `⇧F10` n'y
+     vise pas une colonne ;
+   - pour brancher l'aperçu et l'onglet Structure, `features/workspace/object-view.tsx`
+     reçoit quelques lignes (menu de la grille, revue de renommage de colonne) ;
+   - les copies TSV, CSV, JSON et Markdown recopient les valeurs telles
+     quelles, caractères de contrôle compris, comme la copie `⌘C` de la grille ;
+     seul le SQL copié les refuse. À trancher dans SECURITY si le collage dans
+     un terminal doit valoir pour les données aussi ;
+   - relevé en relecture, antérieur à ce lot : `quote_identifier` ne double que
+     le caractère fermant, alors que BigQuery (et probablement ClickHouse) lit
+     les échappements par antislash dans un identifiant cité. Aucun driver ne
+     produit ces dialectes aujourd'hui ; à régler avant le premier.
 4. **Revue destructive** — `review_object_operation`, `run_object_operation`,
    qui approuve une commande retenue par `confirm_held`, donc par le dialogue
    natif d'[ADR-0037](adr/0037-dialogue-natif-pour-les-confirmations-critiques.md)
@@ -415,7 +473,7 @@ Les drapeaux `TRUNCATE`, `TRANSACTIONAL_DDL` et `RESTRICT_DEPENDENTS` (bits 44
   désigne pas celle du catalogue d'une connexion ;
 - **renommer une colonne** : le backend et la boîte le savent. Aucune entrée ne
   l'offre encore, parce que l'arbre du catalogue ne montre pas les colonnes.
-  L'entrée revient au menu de l'onglet Structure (lot 3) ;
+  L'entrée revient au menu de l'onglet Structure (lot 3) — fait ;
 - une erreur rendue par `decide` après l'approbation ne porte pas sa classe
   (`IpcError` n'a que `retryable`). La boîte affiche le message et
   `Refresh catalog`, sans jamais proposer de relancer. Elle ne peut pas écrire

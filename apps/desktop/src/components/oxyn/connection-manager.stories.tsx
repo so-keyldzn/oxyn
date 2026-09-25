@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/react-vite"
-import { expect, fn, userEvent } from "storybook/test"
+import { expect, fn, userEvent, waitFor, within } from "storybook/test"
 
 import { homonyms, hostileNames, summaries } from "./connection-fixtures"
 import { ConnectionManager } from "./connection-manager"
@@ -54,6 +54,47 @@ export const ConnectionInUse: Story = {
     await expect(
       canvas.getByRole("button", { name: "Edit billing" })
     ).toBeEnabled()
+  },
+}
+
+const changeEnvironment = fn()
+
+/**
+ * The context menu of a row: `Edit…` is the button, `Change environment…`
+ * what the host gives. Nothing opens a connection from the settings, and the
+ * connection in use offers no `Delete…`, as its button is disabled.
+ */
+export const ContextMenu: Story = {
+  args: {
+    openConnectionId: summaries[0]!.id,
+    menuActions: () => ({ changeEnvironment, copy: fn() }),
+  },
+  play: async ({ canvas, args }) => {
+    const page = within(document.body)
+    await userEvent.pointer({
+      keys: "[MouseRight]",
+      target: canvas.getByText("billing"),
+    })
+    await page.findByRole("menu")
+    await expect(page.queryByRole("menuitem", { name: /^Connect/ })).toBeNull()
+    await expect(
+      page.queryByRole("menuitem", { name: /^Refresh catalog/ })
+    ).toBeNull()
+    await expect(page.queryByRole("menuitem", { name: /^Delete/ })).toBeNull()
+    await userEvent.click(
+      page.getByRole("menuitem", { name: "Change environment…" })
+    )
+    await expect(changeEnvironment).toHaveBeenCalled()
+    await waitFor(() => expect(page.queryByRole("menu")).toBeNull())
+
+    await userEvent.pointer({
+      keys: "[MouseRight]",
+      target: canvas.getByText("scratch"),
+    })
+    await page.findByRole("menu")
+    await userEvent.click(page.getByRole("menuitem", { name: "Delete…" }))
+    await expect(args.onDelete).toHaveBeenCalledWith(summaries[2])
+    await waitFor(() => expect(page.queryByRole("menu")).toBeNull())
   },
 }
 
