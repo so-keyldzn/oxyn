@@ -33,9 +33,14 @@ function harness() {
     }
   >()
   let next = 0
+  const sessions: Array<string> = []
   const effects: PreviewEffects = {
-    read: (id) =>
-      new Promise((resolve, reject) => pending.set(id, { resolve, reject })),
+    read: (id, entry) => {
+      sessions.push(entry.session)
+      return new Promise((resolve, reject) =>
+        pending.set(id, { resolve, reject })
+      )
+    },
     cancel: vi.fn(),
     refuse: vi.fn(),
     forgetResult: vi.fn(),
@@ -50,7 +55,7 @@ function harness() {
     await Promise.resolve()
     await Promise.resolve()
   }
-  return { previews, effects, answer, pending }
+  return { previews, effects, answer, pending, sessions }
 }
 
 describe("preview store", () => {
@@ -232,6 +237,82 @@ describe("preview store", () => {
       status: "error",
       message: "connection reset",
       retryable: true,
+    })
+  })
+
+  describe("after a reconnection", () => {
+    const reopened = { ...target, session: "s2" }
+
+    it("reads on the new session only, keeping the shape in force", async () => {
+      const { previews, effects, answer, sessions } = harness()
+      const sorted = {
+        ...PLAIN_SHAPE,
+        sort: [{ column: "id", descending: true }],
+      }
+      previews.attach("k", target)
+      previews.read("k", sorted)
+      await answer("cmd1", executed("r1"))
+      previews.detach("k")
+
+      previews.attach("k", reopened)
+      const entry = previews.store.state.k
+      // The rows came from the closed session: released, not shown as current.
+      expect(effects.forgetResult).toHaveBeenCalledWith("r1")
+      expect(entry?.state.status).toBe("initial")
+      expect(entry?.session).toBe("s2")
+      expect(entry?.applied).toEqual(sorted)
+      expect(entry?.views).toBe(1)
+
+      previews.read("k", entry?.applied ?? PLAIN_SHAPE)
+      previews.read("k", entry?.applied ?? PLAIN_SHAPE)
+      expect(sessions).toEqual(["s1", "s2", "s2"])
+    })
+
+    it("never lets a late answer from the old session replace the new one", async () => {
+      const { previews, effects, answer } = harness()
+      previews.attach("k", target)
+      previews.read("k", PLAIN_SHAPE)
+      previews.attach("k", reopened)
+      expect(effects.cancel).toHaveBeenCalledWith("cmd1")
+      previews.read("k", PLAIN_SHAPE)
+
+      await answer("cmd1", executed("old"))
+      expect(effects.forgetResult).toHaveBeenCalledWith("old")
+      expect(previews.store.state.k?.state.status).toBe("running")
+
+      await answer("cmd2", executed("new"))
+      expect(previews.store.state.k?.state).toMatchObject({ result: "new" })
+    })
+
+    it("keeps an entry attached again on the same session", async () => {
+      const { previews, effects, answer } = harness()
+      previews.attach("k", target)
+      previews.read("k", PLAIN_SHAPE)
+      await answer("cmd1", executed("r1"))
+      previews.detach("k")
+      previews.attach("k", { ...target })
+      expect(effects.forgetResult).not.toHaveBeenCalled()
+      expect(previews.store.state.k?.state).toMatchObject({ result: "r1" })
+    })
+
+    it("drops the previews of closed sessions, and cancels their reads", async () => {
+      const { previews, effects, answer } = harness()
+      previews.attach("kept", target)
+      previews.read("kept", PLAIN_SHAPE)
+      await answer("cmd1", executed("r1"))
+      previews.detach("kept")
+      previews.attach("shown", target)
+      previews.read("shown", PLAIN_SHAPE)
+      previews.attach("other", { ...target, connection: "c2", session: "t1" })
+
+      previews.closeSessions(["s1"])
+      expect(effects.forgetResult).toHaveBeenCalledWith("r1")
+      expect(effects.cancel).toHaveBeenCalledWith("cmd2")
+      expect(Object.keys(previews.store.state)).toEqual(["other"])
+
+      await answer("cmd2", executed("late"))
+      expect(effects.forgetResult).toHaveBeenCalledWith("late")
+      expect(previews.store.state.shown).toBeUndefined()
     })
   })
 })

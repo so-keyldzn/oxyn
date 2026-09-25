@@ -1,4 +1,5 @@
 import { closeConversation } from "@/features/assistant/conversation-store"
+import { previews } from "@/features/metadata/use-preview"
 import type { WorkspaceExit } from "@/features/workspace/workspace-screen"
 import { backend } from "@/lib/ipc/client"
 import { consoles } from "@/lib/ipc/consoles"
@@ -11,6 +12,9 @@ export async function release(
   exit: WorkspaceExit | null
 ) {
   const left = exit ? await exit() : { sessions: [previous.session] }
+  // Read on sessions about to close: never shown again as current, and a
+  // Refresh must not reach a closed session.
+  previews.closeSessions([previous.session, ...left.sessions])
   if (next?.connection === previous.connection) {
     // Reopened on the same connection: `disconnect` would close the new
     // sessions too, so only the old ones go.
