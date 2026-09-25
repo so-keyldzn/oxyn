@@ -106,6 +106,32 @@ describe("the shape Oxyn picks", () => {
     expect(choose([status, orders], rows).auto).toBe("donut")
   })
 
+  it("draws no donut for values that do not add up to a whole", () => {
+    const fractional: Array<Array<Cell>> = [
+      ["Montant moyen d'une commande", "187.4213"],
+      ["Prix moyen d'un produit", "42.9"],
+      ["Note moyenne des avis", "3.86"],
+    ]
+    const averages = choose(
+      [column("indicateur", "Utf8"), column("moyenne", "Float64")],
+      fractional
+    )
+    expect(averages.auto).toBe("bar-horizontal")
+    // Still the user's to pick.
+    expect(possible(averages.verdicts, "donut")).toBe(true)
+    // Whole numbers, but named as averages or rates.
+    const whole: Array<Array<Cell>> = [
+      ["a", "12"],
+      ["b", "4"],
+    ]
+    for (const name of ["avg_points", "Moyenne", "taux retour", "mean"])
+      expect(choose([status, column(name, "Int64")], whole).auto).toBe(
+        "bar-vertical"
+      )
+    // A word that merely contains one is not one.
+    expect(choose([status, column("rated", "Int64")], whole).auto).toBe("donut")
+  })
+
   it("stands bars up for a few categories, grouped when there are several series", () => {
     const six = ["a", "b", "c", "d", "e", "f"].map((label, index) => [
       label,

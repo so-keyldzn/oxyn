@@ -4,6 +4,7 @@ import { expect, userEvent, waitFor, within } from "storybook/test"
 import { ResultChartView } from "./assistant-result-chart"
 import { chartData, chartPlan } from "./result-chart-model"
 import type { ChartData } from "./result-chart-model"
+import { ASIDE_WIDTH } from "./workspace-layout"
 import type { Cell, ResultColumn } from "@/lib/ipc/types"
 
 type Canvas = ReturnType<typeof within>
@@ -108,6 +109,21 @@ const priceAgainstSales = read(
   ])
 )
 
+/**
+ * The query reported on 2026-09-25: SQLite's `AVG` is a REAL, a `Float64`
+ * column, and Rust writes each value as plain decimal text. Four averages in
+ * four units — not parts of one whole.
+ */
+const averages = read(
+  [column("indicateur", "Utf8"), column("moyenne", "Float64")],
+  [
+    ["Montant moyen d'une commande", "187.4213"],
+    ["Points de fidélité moyens par client", `1${GROUP}245.5`],
+    ["Prix moyen d'un produit", "42.9"],
+    ["Note moyenne des avis", "3.86"],
+  ]
+)
+
 const totals = read(
   [column("orders", "Int64"), column("revenue", "Decimal128(12, 2)")],
   [[`4${GROUP}823`, `1${GROUP}204${GROUP}318.40`]]
@@ -117,8 +133,11 @@ const meta = {
   title: "Oxyn/Assistant/ResultChart",
   component: ResultChartView,
   decorators: [
-    (Story) => (
-      <div className="w-[420px] overflow-hidden rounded-lg border bg-card">
+    (Story, { parameters }) => (
+      <div
+        className="overflow-hidden rounded-lg border bg-card"
+        style={{ width: (parameters.width as number | undefined) ?? 420 }}
+      >
         <Story />
       </div>
     ),
@@ -325,6 +344,85 @@ export const Radial: Story = {
   },
 }
 
+/** The assistant's panel as it opens: `ASIDE_WIDTH.initial`. */
+const narrow = { parameters: { width: ASIDE_WIDTH.initial } }
+
+/**
+ * The drawing and each legend entry, as laid out: no entry may cross the
+ * drawing's box, and the drawing must have room for its marks.
+ */
+async function legendApart(root: HTMLElement) {
+  const figure = root.querySelector<HTMLElement>("[data-slot=chart]")
+  const entries = root.querySelectorAll<HTMLElement>("li")
+  await waitFor(() => {
+    const box = figure?.getBoundingClientRect()
+    expect(box?.height ?? 0).toBeGreaterThan(120)
+    expect(entries.length).toBeGreaterThan(0)
+    for (const entry of entries) {
+      const at = entry.getBoundingClientRect()
+      const apart =
+        box !== undefined &&
+        (at.top >= box.bottom ||
+          at.bottom <= box.top ||
+          at.left >= box.right ||
+          at.right <= box.left)
+      expect(apart).toBe(true)
+    }
+  })
+}
+
+/**
+ * Four averages in four units: not shares of a whole, so not a donut —
+ * bars, which lie down for labels this long.
+ */
+export const Averages: Story = {
+  args: { data: averages },
+  ...narrow,
+  play: async ({ canvas, canvasElement }) => {
+    await marks(canvasElement, ".recharts-bar-rectangle")
+    await expect(
+      canvas.getByText("Drawn as Horizontal bars, chosen by Oxyn.")
+    ).toBeInTheDocument()
+  },
+}
+
+/** The user asks for a donut anyway: a ring, and a legend under it. */
+export const DonutLongLabelsNarrow: Story = {
+  args: { data: averages, initialChoice: "donut" },
+  ...narrow,
+  play: async ({ canvas, canvasElement }) => {
+    await marks(canvasElement, ".recharts-pie-sector")
+    await legendApart(canvasElement)
+    await expect(
+      canvas.getByText("Points de fidélité moyens par client")
+    ).toBeVisible()
+  },
+}
+
+export const RadialLongLabelsNarrow: Story = {
+  args: { data: averages, initialChoice: "radial" },
+  ...narrow,
+  play: async ({ canvasElement }) => {
+    await marks(canvasElement, ".recharts-radial-bar-sector")
+    await legendApart(canvasElement)
+  },
+}
+
+/** Room enough: the legend stands beside the drawing. */
+export const RadialLongLabelsWide: Story = {
+  args: { data: averages, initialChoice: "radial" },
+  parameters: { width: 640 },
+  play: async ({ canvasElement }) => {
+    await marks(canvasElement, ".recharts-radial-bar-sector")
+    await legendApart(canvasElement)
+    const box = canvasElement
+      .querySelector("[data-slot=chart]")
+      ?.getBoundingClientRect()
+    const entry = canvasElement.querySelector("li")?.getBoundingClientRect()
+    await expect((entry?.left ?? 0) >= (box?.right ?? 0)).toBe(true)
+  },
+}
+
 /** Two numbers and no axis: one against the other. */
 export const Scatter: Story = {
   args: { data: priceAgainstSales },
@@ -374,4 +472,12 @@ export const PieLight: Story = { ...Pie, ...light }
 export const DonutWithTotalLight: Story = { ...DonutWithTotal, ...light }
 export const RadarLight: Story = { ...Radar, ...light }
 export const RadialLight: Story = { ...Radial, ...light }
+export const DonutLongLabelsNarrowLight: Story = {
+  ...DonutLongLabelsNarrow,
+  ...light,
+}
+export const RadialLongLabelsNarrowLight: Story = {
+  ...RadialLongLabelsNarrow,
+  ...light,
+}
 export const ScatterLight: Story = { ...Scatter, ...light }
