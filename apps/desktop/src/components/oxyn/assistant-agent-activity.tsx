@@ -77,25 +77,22 @@ export function AssistantPermissionRefused({
   reason: string
 }) {
   return (
-    <div
+    <Marker
       data-slot="assistant-permission-refused"
       role="note"
-      className="flex items-start gap-2 rounded-lg border border-dashed px-3 py-2 text-xs"
+      className="items-start text-xs"
     >
-      <HugeiconsIcon
-        icon={SquareLock02Icon}
-        strokeWidth={2}
-        className="mt-0.5 size-4 shrink-0 text-muted-foreground"
-        aria-hidden
-      />
-      <div className="flex min-w-0 flex-col gap-0.5">
-        <p className="font-medium">
+      <MarkerIcon className="mt-0.5">
+        <HugeiconsIcon icon={SquareLock02Icon} strokeWidth={2} />
+      </MarkerIcon>
+      <MarkerContent className="flex flex-col gap-0.5">
+        <span className="font-medium text-foreground">
           The agent asked to <span className="font-mono">{action}</span> on this
           machine. Oxyn refused.
-        </p>
-        <p className="text-muted-foreground">{reason}</p>
-      </div>
-    </div>
+        </span>
+        <span>{reason}</span>
+      </MarkerContent>
+    </Marker>
   )
 }
 

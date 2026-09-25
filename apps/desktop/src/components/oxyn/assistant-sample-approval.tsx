@@ -8,6 +8,7 @@ import {
 
 import { EnvironmentBadge } from "@/components/oxyn/environment-badge"
 import { PRIVACY_TIERS } from "@/components/oxyn/privacy-tier"
+import { Alert, AlertDescription } from "@/components/ui/alert"
 import {
   AlertDialog,
   AlertDialogCancel,
@@ -20,6 +21,7 @@ import {
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
 import { Checkbox } from "@/components/ui/checkbox"
+import { Field, FieldLabel, FieldLegend, FieldSet } from "@/components/ui/field"
 import { Spinner } from "@/components/ui/spinner"
 import type { ProviderReach, SampleRequest as SampleOffer } from "@/lib/ipc/ai"
 import type { Environment, PrivacyTier, RelationField } from "@/lib/ipc/types"
@@ -67,9 +69,9 @@ function ColumnRow({
   const id = React.useId()
   return (
     <li className="min-w-0">
-      <label
-        htmlFor={id}
-        className="flex min-w-0 cursor-pointer items-start gap-2 rounded-md px-1 py-1 hover:bg-muted/50"
+      <Field
+        orientation="horizontal"
+        className="min-w-0 items-start rounded-md px-1 py-1 hover:bg-muted/50"
       >
         <Checkbox
           id={id}
@@ -81,7 +83,10 @@ function ColumnRow({
           // the stories below measure it on this dialog in both themes.
           className="mt-0.5"
         />
-        <span className="flex min-w-0 flex-1 flex-col gap-0.5">
+        <FieldLabel
+          htmlFor={id}
+          className="min-w-0 flex-1 cursor-pointer flex-col items-stretch gap-0.5 font-normal"
+        >
           <span className="flex min-w-0 flex-wrap items-center gap-1.5">
             <bdi className="min-w-0 font-mono text-xs wrap-break-word">
               {field.name}
@@ -103,8 +108,8 @@ function ColumnRow({
               {field.comment}
             </span>
           ) : null}
-        </span>
-      </label>
+        </FieldLabel>
+      </Field>
     </li>
   )
 }
@@ -245,6 +250,7 @@ function ApprovalBody({
   React.useEffect(() => {
     cancelRef.current?.focus()
   }, [cancelRef])
+  const legendId = React.useId()
   const allowed = tier === "sampled"
   const fields = request.fields
   const where = whereItGoes(request.reach)
@@ -308,43 +314,48 @@ function ApprovalBody({
         </p>
       ) : (
         <>
-          <div className="flex items-start gap-2 rounded-md border border-dashed px-2 py-1.5 text-xs text-muted-foreground">
-            <HugeiconsIcon
-              icon={Alert02Icon}
-              strokeWidth={2}
-              className="mt-0.5 size-3.5 shrink-0"
-              aria-hidden
-            />
-            <span>
+          {/* A standing note, not news: `role="note"` keeps it from being
+              announced before the dialog's title, as `Alert`'s own
+              `role="alert"` would. */}
+          <Alert role="note">
+            <HugeiconsIcon icon={Alert02Icon} strokeWidth={2} />
+            <AlertDescription className="text-xs">
               A column you leave unticked is <strong>not sent</strong>. It is
               not truncated and not masked — it does not leave. Oxyn cannot tell
               you which column holds personal data: the name, the type and the
               comment are all it knows.
-            </span>
-          </div>
-          {/* Vertical only, and its own region: sixty columns scroll here
+            </AlertDescription>
+          </Alert>
+          {/* `min-w-0`: a fieldset is as wide as its content by default, and
+              a long column name would widen the dialog with it. */}
+          <FieldSet className="min-w-0">
+            <FieldLegend id={legendId} className="sr-only">
+              Columns that may be sent
+            </FieldLegend>
+            {/* Vertical only, and its own region: sixty columns scroll here
                 without the dialog ever scrolling sideways. */}
-          <ul
-            aria-label="Columns that may be sent"
-            tabIndex={0}
-            className="flex max-h-64 min-w-0 flex-col gap-0.5 overflow-x-hidden overflow-y-auto rounded-md border p-1 outline-none focus-visible:ring-2 focus-visible:ring-ring"
-          >
-            {fields.map((field) => (
-              <ColumnRow
-                key={field.name}
-                field={field}
-                checked={ticked.includes(field.name)}
-                disabled={deciding}
-                onToggle={(checked) =>
-                  setTicked((current) =>
-                    checked
-                      ? [...current, field.name]
-                      : current.filter((name) => name !== field.name)
-                  )
-                }
-              />
-            ))}
-          </ul>
+            <ul
+              aria-labelledby={legendId}
+              tabIndex={0}
+              className="flex max-h-64 min-w-0 flex-col gap-0.5 overflow-x-hidden overflow-y-auto rounded-md border p-1 outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              {fields.map((field) => (
+                <ColumnRow
+                  key={field.name}
+                  field={field}
+                  checked={ticked.includes(field.name)}
+                  disabled={deciding}
+                  onToggle={(checked) =>
+                    setTicked((current) =>
+                      checked
+                        ? [...current, field.name]
+                        : current.filter((name) => name !== field.name)
+                    )
+                  }
+                />
+              ))}
+            </ul>
+          </FieldSet>
           <p className="text-xs text-muted-foreground" aria-live="polite">
             {chosen.length === 0
               ? "No column ticked. Nothing would be sent."
