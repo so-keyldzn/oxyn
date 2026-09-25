@@ -107,6 +107,7 @@
     {
       "id": "tab.close",
       "label": "Close tab",
+      "variants": [{ "zone": "tabs", "label": "Close" }],
       "zone": "global",
       "shortcut": { "mac": "Mod+W", "other": "Mod+W" },
       "menu": {
@@ -152,9 +153,8 @@
       "id": "edit.cut",
       "label": "Cut",
       "zone": "global",
-      "platform": "other",
       "binding": "system",
-      "shortcut": { "other": "Mod+X" },
+      "shortcut": { "mac": "Mod+X", "other": "Mod+X" },
       "menu": {
         "other": { "menu": "edit", "group": 1, "order": 0, "mnemonic": "t" }
       }
@@ -163,9 +163,8 @@
       "id": "edit.copy",
       "label": "Copy",
       "zone": "global",
-      "platform": "other",
       "binding": "system",
-      "shortcut": { "other": "Mod+C" },
+      "shortcut": { "mac": "Mod+C", "other": "Mod+C" },
       "menu": {
         "other": { "menu": "edit", "group": 1, "order": 1, "mnemonic": "c" }
       }
@@ -174,9 +173,8 @@
       "id": "edit.paste",
       "label": "Paste",
       "zone": "global",
-      "platform": "other",
       "binding": "system",
-      "shortcut": { "other": "Mod+V" },
+      "shortcut": { "mac": "Mod+V", "other": "Mod+V" },
       "menu": {
         "other": { "menu": "edit", "group": 1, "order": 2, "mnemonic": "p" }
       }
@@ -326,6 +324,206 @@
         "mac": ["Shift+F10", "ContextMenu"],
         "other": ["Shift+F10", "ContextMenu"]
       }
+    },
+    { "id": "tab.closeOthers", "label": "Close others", "zone": "tabs" },
+    { "id": "tab.closeRight", "label": "Close to the right", "zone": "tabs" },
+    { "id": "tab.closeAll", "label": "Close all", "zone": "tabs" },
+    { "id": "tab.duplicate", "label": "Duplicate", "zone": "tabs" },
+    { "id": "tab.rename", "label": "Rename…", "zone": "tabs" },
+    {
+      "id": "tab.openInNewWindow",
+      "label": "Open in new window",
+      "zone": "tabs"
+    },
+    {
+      "id": "tab.revealInLibrary",
+      "label": "Reveal in library",
+      "zone": "tabs"
+    },
+    {
+      "id": "tab.reopen",
+      "label": "Reopen closed tab",
+      "zone": "global",
+      "shortcut": { "mac": "Mod+Shift+T", "other": "Mod+Shift+T" }
+    },
+    { "id": "grid.copyValue", "label": "Copy value", "zone": "grid" },
+    { "id": "grid.copyRows.tsv", "label": "TSV", "zone": "grid" },
+    { "id": "grid.copyRows.csv", "label": "CSV", "zone": "grid" },
+    { "id": "grid.copyRows.json", "label": "JSON", "zone": "grid" },
+    { "id": "grid.copyRows.markdown", "label": "Markdown", "zone": "grid" },
+    { "id": "grid.copyRows.insert", "label": "INSERT", "zone": "grid" },
+    { "id": "grid.copyRows.inList", "label": "IN list", "zone": "grid" },
+    {
+      "id": "grid.inspectValue",
+      "label": "Inspect full value",
+      "zone": "grid",
+      "binding": "component",
+      "shortcut": { "mac": "Enter", "other": "Enter" }
+    },
+    {
+      "id": "grid.filterByValue",
+      "label": "Filter by this value",
+      "zone": "grid"
+    },
+    {
+      "id": "grid.excludeValue",
+      "label": "Exclude this value",
+      "zone": "grid"
+    },
+    { "id": "grid.filterNull", "label": "Is NULL", "zone": "grid" },
+    { "id": "grid.sortAscending", "label": "Ascending", "zone": "grid" },
+    { "id": "grid.sortDescending", "label": "Descending", "zone": "grid" },
+    { "id": "grid.hideColumn", "label": "Hide column", "zone": "grid" },
+    {
+      "id": "grid.openReferencedRow",
+      "label": "Open referenced row",
+      "zone": "grid"
+    },
+    {
+      "id": "grid.sendToAssistant",
+      "label": "Send to assistant",
+      "zone": "grid"
+    },
+    { "id": "column.filter", "label": "Filter…", "zone": "grid" },
+    { "id": "column.hide", "label": "Hide", "zone": "grid" },
+    { "id": "column.freeze", "label": "Freeze", "zone": "grid" },
+    { "id": "column.autosize", "label": "Autosize", "zone": "grid" },
+    { "id": "column.copyName", "label": "Copy name", "zone": "grid" },
+    { "id": "column.copyValues", "label": "Copy values", "zone": "grid" },
+    { "id": "editor.runSelection", "label": "Run selection", "zone": "editor" },
+    { "id": "editor.runStatement", "label": "Run statement", "zone": "editor" },
+    { "id": "editor.format", "label": "Format", "zone": "editor" },
+    {
+      "id": "editor.openObject",
+      "label": "Open object under cursor",
+      "zone": "editor"
+    },
+    {
+      "id": "editor.askAssistant",
+      "label": "Ask assistant about selection",
+      "zone": "editor"
+    },
+    { "id": "connection.connect", "label": "Connect", "zone": "global" },
+    { "id": "connection.disconnect", "label": "Disconnect", "zone": "global" },
+    { "id": "connection.newConsole", "label": "New console", "zone": "global" },
+    {
+      "id": "connection.refreshCatalog",
+      "label": "Refresh catalog",
+      "zone": "global"
+    },
+    { "id": "connection.edit", "label": "Edit…", "zone": "global" },
+    { "id": "connection.duplicate", "label": "Duplicate", "zone": "global" },
+    {
+      "id": "connection.changeEnvironment",
+      "label": "Change environment…",
+      "zone": "global"
+    },
+    { "id": "connection.copy", "label": "Copy connection", "zone": "global" },
+    {
+      "id": "connection.delete",
+      "label": "Delete…",
+      "zone": "global",
+      "destructive": true
+    },
+    { "id": "library.openEntry", "label": "Open", "zone": "global" },
+    { "id": "library.rename", "label": "Rename…", "zone": "global" },
+    { "id": "library.duplicate", "label": "Duplicate", "zone": "global" },
+    {
+      "id": "library.reveal",
+      "label": { "mac": "Reveal in Finder", "other": "Reveal in Explorer" },
+      "zone": "global"
+    },
+    { "id": "library.copyPath", "label": "Copy path", "zone": "global" },
+    {
+      "id": "library.delete",
+      "label": "Delete…",
+      "zone": "global",
+      "destructive": true
+    },
+    {
+      "id": "assistant.copyAnswer",
+      "label": "Copy answer",
+      "zone": "assistant"
+    },
+    {
+      "id": "assistant.copyMarkdown",
+      "label": "Copy as Markdown",
+      "zone": "assistant"
+    },
+    {
+      "id": "assistant.regenerate",
+      "label": "Regenerate answer",
+      "zone": "assistant"
+    },
+    {
+      "id": "assistant.editQuestion",
+      "label": "Edit question",
+      "zone": "assistant"
+    },
+    { "id": "assistant.copyCode", "label": "Copy code", "zone": "assistant" },
+    {
+      "id": "assistant.openInConsole",
+      "label": "Open in console",
+      "zone": "assistant"
+    },
+    {
+      "id": "assistant.openObject",
+      "label": "Open object",
+      "zone": "assistant"
+    },
+    { "id": "erd.openTable", "label": "Open table", "zone": "global" },
+    { "id": "erd.copyName", "label": "Copy name", "zone": "global" },
+    { "id": "erd.relayout", "label": "Re-layout", "zone": "global" },
+    { "id": "erd.exportImage", "label": "Export image…", "zone": "global" },
+    { "id": "catalog.openData", "label": "Open data", "zone": "tree" },
+    {
+      "id": "catalog.viewStructure",
+      "label": "View structure",
+      "zone": "tree"
+    },
+    { "id": "catalog.viewDdl", "label": "View DDL", "zone": "tree" },
+    {
+      "id": "catalog.newConsoleOnSchema",
+      "label": "New console on this schema",
+      "zone": "tree"
+    },
+    {
+      "id": "catalog.copyQualifiedName",
+      "label": "Copy qualified name",
+      "zone": "tree"
+    },
+    {
+      "id": "catalog.copyAs.quotedName",
+      "label": "Quoted name",
+      "zone": "tree"
+    },
+    { "id": "catalog.copyAs.selectAll", "label": "SELECT *", "zone": "tree" },
+    {
+      "id": "catalog.copyAs.insertTemplate",
+      "label": "INSERT template",
+      "zone": "tree"
+    },
+    { "id": "catalog.copyAs.ddl", "label": "DDL", "zone": "tree" },
+    { "id": "catalog.refresh", "label": "Refresh this level", "zone": "tree" },
+    { "id": "catalog.collapseAll", "label": "Collapse all", "zone": "tree" },
+    { "id": "catalog.pin", "label": "Pin to question", "zone": "tree" },
+    {
+      "id": "object.rename",
+      "label": "Rename…",
+      "zone": "global",
+      "destructive": true
+    },
+    {
+      "id": "object.truncate",
+      "label": "Truncate…",
+      "zone": "global",
+      "destructive": true
+    },
+    {
+      "id": "object.drop",
+      "label": "Drop…",
+      "zone": "global",
+      "destructive": true
     }
   ]
 }

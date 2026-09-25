@@ -12,6 +12,26 @@ import { createStore } from "@tanstack/react-store"
 import type { Zone } from "./manifest"
 import { platform } from "./platform"
 import type { Platform } from "./shortcut"
+import type {
+  AssistantMenuActions,
+  AssistantMenuState,
+  CatalogMenuActions,
+  CatalogMenuState,
+  ConnectionMenuActions,
+  ConnectionMenuState,
+  EditorMenuActions,
+  EditorMenuState,
+  ErdMenuActions,
+  ErdMenuState,
+  GridMenuActions,
+  GridMenuState,
+  LibraryMenuActions,
+  LibraryMenuState,
+  ObjectOperationActions,
+  ObjectOperationState,
+  TabMenuActions,
+  TabMenuState,
+} from "./targets"
 
 export interface WorkspaceState {
   activeTab: string | null
@@ -23,6 +43,8 @@ export interface WorkspaceState {
   hasAside: boolean
   /** A destination for the assistant is declared (UX-SPEC). */
   hasAssistant: boolean
+  /** A closed console can be reopened by ⌘⇧T. */
+  reopenable?: boolean
 }
 
 export interface WorkspaceActions {
@@ -38,6 +60,7 @@ export interface WorkspaceActions {
   toggleAside: () => void
   openAssistant: () => void
   switchConnection: () => void
+  reopenTab?: () => void
 }
 
 export interface ConsoleState {
@@ -70,6 +93,17 @@ export interface ActionSources {
   navigation?: Source<Record<string, never>, { back: () => void }>
   /** The web menu bar of Windows and Linux. */
   menubar?: Source<Record<string, never>, { focus: () => void }>
+  // The targets of a context menu, present only in the context its menu
+  // builds while open (`menuContext`), never published for good.
+  grid?: Source<GridMenuState, GridMenuActions>
+  tab?: Source<TabMenuState, TabMenuActions>
+  editorMenu?: Source<EditorMenuState, EditorMenuActions>
+  connection?: Source<ConnectionMenuState, ConnectionMenuActions>
+  libraryEntry?: Source<LibraryMenuState, LibraryMenuActions>
+  assistant?: Source<AssistantMenuState, AssistantMenuActions>
+  erd?: Source<ErdMenuState, ErdMenuActions>
+  catalogNode?: Source<CatalogMenuState, CatalogMenuActions>
+  objectOperation?: Source<ObjectOperationState, ObjectOperationActions>
 }
 
 type SourceKey = keyof ActionSources
@@ -239,6 +273,24 @@ export function currentContext(): ActionContext {
     ...(focus.focused?.isConnected ? focus : NO_FOCUS),
     platform,
     sources: actionSources.state.sources,
+  }
+}
+
+/**
+ * The context a context menu evaluates and invokes its entries in: the
+ * right-clicked element stands for the focus — its zone decides as the
+ * keyboard's would —, and the menu's target joins the published sources.
+ */
+export function menuContext(
+  target: Element | null,
+  sources: ActionSources
+): ActionContext {
+  const base = currentContext()
+  const focus = target?.isConnected ? focusOf(target) : null
+  return {
+    ...base,
+    ...(focus ?? {}),
+    sources: { ...base.sources, ...sources },
   }
 }
 
