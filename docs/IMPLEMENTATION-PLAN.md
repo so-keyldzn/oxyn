@@ -238,11 +238,11 @@ ici :
   statut d'ADR-0029 lui-même relève de la
   [question ouverte n° 3](#3-le-statut-des-adr--revue-du-2026-09-24) ;
 - **ce que l'interface GPUI faisait et qu'`apps/desktop` ne fait pas**, relevé en
-  réalignant [ARCHITECTURE](ARCHITECTURE.md) : le titre de fenêtre qui signalait
-  un `--temporary-workspace`, et le sélecteur de fichiers par `⌘O`, ou `⌘N` pour
-  une base SQLite à créer — le front n'offre qu'un `Browse…` vers un fichier
-  existant. Aucun document d'autorité hors ARCHITECTURE ne les exigeait : les
-  porter ou y renoncer est à décider ;
+  réalignant [ARCHITECTURE](ARCHITECTURE.md) : ~~le titre de fenêtre qui
+  signalait un `--temporary-workspace`~~ — porté le 2026-09-25 (`window_title`,
+  `oxyn-desktop/src/main.rs`) ; le sélecteur de fichiers par `⌘O`, ou `⌘N` pour
+  une base SQLite à créer, n'est pas demandé (décision du 2026-09-24) — le front
+  n'offre qu'un `Browse…` vers un fichier existant ;
 - **`assets/fonts/` et `assets/ui/`**, que seul `oxyn-ui` lisait, n'ont plus de
   lecteur ;
 - ~~**des commentaires de code nomment encore `oxyn-app`, `oxyn-ui` ou GPUI**~~ —

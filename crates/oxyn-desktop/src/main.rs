@@ -19,12 +19,26 @@ mod sentinel_tests;
 use std::time::Duration;
 
 use anyhow::{Context as _, Result};
+use tauri::Manager as _;
 
 use crate::backend::Backend;
 use crate::logging::FileJournal;
 
 /// How long a failed start waits for its journal to reach the disk.
 const FLUSH_BEFORE_EXIT: Duration = Duration::from_secs(2);
+
+/// The window `tauri.conf.json` declares.
+const MAIN_WINDOW: &str = "main";
+
+/// The window's title. A temporary workspace keeps nothing past its exit: a
+/// window that reads like the real workspace invites work that will be lost.
+fn window_title(temporary: bool) -> &'static str {
+    if temporary {
+        "Oxyn · Temporary workspace"
+    } else {
+        "Oxyn"
+    }
+}
 
 fn main() -> Result<()> {
     let context = tauri::generate_context!();
@@ -66,6 +80,12 @@ fn main() -> Result<()> {
     builder
         .plugin(tauri_plugin_dialog::init())
         .manage(backend)
+        .setup(move |app| {
+            if let Some(window) = app.get_webview_window(MAIN_WINDOW) {
+                window.set_title(window_title(temporary))?;
+            }
+            Ok(())
+        })
         // Grouped by feature. A feature module adds its block here and nowhere
         // else: a command missing from this list fails silently in the front.
         .invoke_handler(tauri::generate_handler![
@@ -197,4 +217,15 @@ fn report_startup_failure(error: &anyhow::Error, journal: Option<&FileJournal>) 
         .set_description(description)
         .set_buttons(rfd::MessageButtons::Ok)
         .show();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::window_title;
+
+    #[test]
+    fn a_temporary_workspace_says_so_in_the_window_title() {
+        assert_eq!(window_title(true), "Oxyn · Temporary workspace");
+        assert_eq!(window_title(false), "Oxyn");
+    }
 }
