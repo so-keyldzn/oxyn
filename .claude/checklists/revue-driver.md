@@ -53,6 +53,12 @@ correspond à une panne qui ne se verra pas en test.
 - [ ] Évaluées **par session**, pas par driver
 - [ ] Rien n'est simulé : ne pas savoir faire est déclaré
 - [ ] `QueryLanguage` explicite
+- [ ] Si la session déclare `TRANSACTIONS` : `transaction_state` est redéfinie,
+      **ordonnée après** tout ce qui a été soumis, et testée — `Idle` à
+      l'ouverture, `Open` après un `BEGIN` exécuté et après `begin`, `Idle`
+      après `COMMIT`, `ROLLBACK`, `commit` et `rollback`, et `Idle` après une
+      interruption pendant une écriture qui a déclenché l'annulation d'office
+      ([ADR-0039](../../docs/adr/0039-etat-de-transaction-d-une-session.md))
 
 ## Types
 

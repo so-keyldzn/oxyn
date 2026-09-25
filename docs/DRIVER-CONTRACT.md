@@ -106,6 +106,28 @@ enchaînement de requêtes laisse l'utilisateur croire qu'un `ROLLBACK` a annul�
 son écriture. Ne pas savoir faire est une réponse acceptable ; laisser croire ne
 l'est pas.
 
+**Une session qui déclare `TRANSACTIONS` dit si une transaction est ouverte**
+([ADR-0039](adr/0039-etat-de-transaction-d-une-session.md)). Elle redéfinit
+`Session::transaction_state`, qui rend `Idle`, `Open` ou `Unknown` :
+
+* **après** la fin de toute opération déjà soumise à la session — exécution,
+  `begin`, `commit`, `rollback`, `set_context` —, qu'elle ait réussi, échoué ou
+  été interrompue. Une valeur simplement rangée par le driver et lue sans
+  attendre serait celle d'avant l'annulation d'office que SQLite fait sur un
+  Stop ;
+* **sans aller-retour** vers le serveur : elle attend, elle n'interroge pas ;
+* **jamais déduite du texte soumis** : seul le moteur sait qu'une erreur ou une
+  interruption a refermé la transaction ;
+* `Unknown` si le jeton se déclenche ou si la session ne peut plus répondre —
+  jamais une erreur, jamais `Idle` par défaut.
+
+L'appelant draine ou lâche le curseur avant de l'appeler. Le défaut du trait
+rend `Unknown` : c'est la réponse honnête d'une session qui ne sait pas.
+
+**Panne concrète :** un affichage qui dit « aucune transaction » après un Stop
+alors que la transaction est encore ouverte — ou l'inverse — et la console se
+ferme sans prévenir en jetant des écritures non validées.
+
 Corollaire pour un driver non-SQL : une requête porte un `QueryLanguage`
 explicite. Le SQL est un cas parmi d'autres, pas le défaut auquel les autres se
 ramènent.

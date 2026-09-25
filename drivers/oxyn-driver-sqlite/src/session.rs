@@ -39,7 +39,9 @@ use std::time::{Duration, Instant};
 
 use async_trait::async_trait;
 use oxyn_catalog::provider::CatalogProvider;
-use oxyn_core::{CancelToken, Capabilities, ExecRequest, OxynError, Result, StatementHandle};
+use oxyn_core::{
+    CancelToken, Capabilities, ExecRequest, OxynError, Result, StatementHandle, TransactionState,
+};
 use oxyn_driver::{Cursor, Session};
 use rusqlite::Connection;
 use tokio::sync::{mpsc, oneshot};
@@ -272,6 +274,27 @@ impl Session for SqliteSession {
     async fn rollback(&self, cancel: &CancelToken) -> Result<()> {
         self.transaction(cancel, "ROLLBACK", Effect::Mutating).await
     }
+
+    /// Reads `sqlite3_get_autocommit` on the carrier thread.
+    ///
+    /// Submitted as a task, not read from a stored value: the thread runs its
+    /// tasks in submission order, so this one runs only once the previous one
+    /// has returned from `sqlite3_step` — including the automatic rollback an
+    /// interruption triggers, which "the only way to find out" about is this
+    /// call (ADR-0039).
+    async fn transaction_state(&self, cancel: &CancelToken) -> TransactionState {
+        let autocommit = self
+            .worker
+            .call(cancel, |connection: &Connection| {
+                Ok(connection.is_autocommit())
+            })
+            .await;
+        match autocommit {
+            Ok(true) => TransactionState::Idle,
+            Ok(false) => TransactionState::Open,
+            Err(_) => TransactionState::Unknown,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -327,5 +350,138 @@ mod tests {
         );
 
         Box::new(session).close().await.expect("fermeture");
+    }
+
+    /// A session opened through the driver, as the executor gets it.
+    async fn ouvrir(chemin: &str) -> Box<dyn Session> {
+        use oxyn_core::{ConnectionConfig, DriverId, Environment};
+        use oxyn_driver::{Credentials, Driver};
+
+        let connexion = ConnectionConfig::new("transactions", DriverId::sqlite())
+            .with_environment(Environment::Local)
+            .with_param(crate::SqliteDriver::PATH, chemin);
+        crate::SqliteDriver::new()
+            .connect(&connexion, &Credentials::new(), &CancelToken::new())
+            .await
+            .unwrap_or_else(|err| panic!("ouverture : {err}"))
+    }
+
+    /// Runs a statement to its end, cursor released.
+    async fn executer(session: &dyn Session, sql: &str) {
+        let demande = ExecRequest::new(QueryLanguage::Sql(SqlDialect::Sqlite), sql)
+            .with_limits(oxyn_core::ExecLimits::unbounded());
+        let mut curseur = match session.execute(demande, &CancelToken::new()).await {
+            Ok(curseur) => curseur,
+            Err(err) => panic!("exécution de `{sql}` : {err}"),
+        };
+        while curseur.next_batch().await.expect("lot suivant").is_some() {}
+    }
+
+    async fn etat(session: &dyn Session) -> TransactionState {
+        session.transaction_state(&CancelToken::new()).await
+    }
+
+    #[tokio::test]
+    async fn l_etat_suit_les_transactions_ecrites_et_celles_du_trait() {
+        // ADR-0039 §2, the contract of a session that declares TRANSACTIONS.
+        let session = ouvrir(crate::SqliteDriver::MEMORY).await;
+        assert!(session.capabilities().contains(Capabilities::TRANSACTIONS));
+        assert_eq!(
+            etat(session.as_ref()).await,
+            TransactionState::Idle,
+            "a fresh connection is in autocommit, and says so"
+        );
+        executer(session.as_ref(), "CREATE TABLE t(v INTEGER)").await;
+
+        for fin in ["COMMIT", "ROLLBACK", "END"] {
+            executer(session.as_ref(), "BEGIN").await;
+            assert_eq!(etat(session.as_ref()).await, TransactionState::Open);
+            executer(session.as_ref(), "INSERT INTO t(v) VALUES (1)").await;
+            assert_eq!(etat(session.as_ref()).await, TransactionState::Open);
+            executer(session.as_ref(), fin).await;
+            assert_eq!(
+                etat(session.as_ref()).await,
+                TransactionState::Idle,
+                "{fin}"
+            );
+        }
+
+        let jeton = CancelToken::new();
+        session.begin(&jeton).await.expect("begin");
+        assert_eq!(etat(session.as_ref()).await, TransactionState::Open);
+        session.commit(&jeton).await.expect("commit");
+        assert_eq!(etat(session.as_ref()).await, TransactionState::Idle);
+
+        session.begin(&jeton).await.expect("begin");
+        assert_eq!(etat(session.as_ref()).await, TransactionState::Open);
+        session.rollback(&jeton).await.expect("rollback");
+        assert_eq!(etat(session.as_ref()).await, TransactionState::Idle);
+
+        session.close().await.expect("fermeture");
+    }
+
+    #[tokio::test]
+    async fn un_jeton_deja_declenche_rend_inconnu_jamais_idle() {
+        let session = ouvrir(crate::SqliteDriver::MEMORY).await;
+        let jeton = CancelToken::new();
+        jeton.cancel();
+        assert_eq!(
+            session.transaction_state(&jeton).await,
+            TransactionState::Unknown
+        );
+        session.close().await.expect("fermeture");
+    }
+
+    #[tokio::test]
+    async fn l_annulation_d_office_apres_un_stop_est_constatee() {
+        // The scenario: `BEGIN`, a write, then Stop on an endless `INSERT`.
+        // SQLite rolls the whole transaction back on `SQLITE_INTERRUPT`, while
+        // `execute` returns `Cancelled` as soon as the token fires — before
+        // the carrier thread is even out of `sqlite3_step`. A state read then
+        // must come after that step, not before.
+        let dossier = tempfile::tempdir().expect("dossier temporaire");
+        let base = dossier.path().join("transactions.sqlite");
+        let journal = dossier.path().join("transactions.sqlite-journal");
+        let session = ouvrir(base.to_str().expect("chemin UTF-8")).await;
+
+        executer(session.as_ref(), "CREATE TABLE t(v INTEGER)").await;
+        executer(session.as_ref(), "BEGIN").await;
+        assert!(
+            !journal.exists(),
+            "a deferred BEGIN writes nothing: the journal marks the first write"
+        );
+
+        let jeton = CancelToken::new();
+        let demande = ExecRequest::new(
+            QueryLanguage::Sql(SqlDialect::Sqlite),
+            "INSERT INTO t(v) SELECT x FROM \
+             (WITH RECURSIVE c(x) AS (SELECT 1 UNION ALL SELECT x + 1 FROM c) SELECT x FROM c)",
+        )
+        .with_limits(oxyn_core::ExecLimits::unbounded());
+        let mut ecriture = Box::pin(session.execute(demande, &jeton));
+        assert!(futures::poll!(ecriture.as_mut()).is_pending());
+        // The rollback journal appears on the first page written: the INSERT
+        // is then inside `sqlite3_step`, past the point where an interrupt
+        // could be lost. A condition, not a delay.
+        tokio::time::timeout(Duration::from_secs(10), async {
+            while !journal.exists() {
+                tokio::time::sleep(Duration::from_millis(1)).await;
+            }
+        })
+        .await
+        .expect("the endless INSERT starts writing");
+
+        jeton.cancel();
+        match ecriture.await {
+            Ok(_) => panic!("an endless INSERT only ends interrupted"),
+            Err(err) => assert!(err.is_cancelled(), "{err:?}"),
+        }
+
+        assert_eq!(
+            etat(session.as_ref()).await,
+            TransactionState::Idle,
+            "the interrupted write rolled the transaction back"
+        );
+        session.close().await.expect("fermeture");
     }
 }
