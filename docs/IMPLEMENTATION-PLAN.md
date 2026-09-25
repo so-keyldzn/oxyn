@@ -123,8 +123,12 @@ Chaque onglet conserve éditeur, résultat, confirmation, pages et export, y com
 hors écran. La première console est aussi séparée de la session réservée au
 catalogue et à l'aperçu. `CloseSession` ferme uniquement la session désignée et
 annule sa préparation ou son drainage avant libération (ADR-0015).
-Les workspaces de connexion sont conservés dans la fenêtre ; revenir à une
-connexion restaure toutes ses consoles. Une copie du brouillon vers une nouvelle
+Les workspaces de connexion sont conservés dans la fenêtre, connectés, huit au
+plus ([ADR-0046](adr/0046-workspaces-retenus-restent-connectes.md)) ; revenir à
+une connexion restaure toutes ses consoles, sans reconnexion ni SQL
+(`features/workspace/workspace-host.tsx`, tenu par `workspace-host.test.tsx`).
+L'écran d'accueil nomme une connexion masquée dont une console tient une
+transaction (story `SavedConnections/OpenWithPendingTransaction`). Une copie du brouillon vers une nouvelle
 connexion est signalée, sans exécution, et conserve l'original. Les préférences
 communes sont réappliquées lorsqu'un workspace retenu redevient visible.
 La sauvegarde explicite depuis l'éditeur est raccordée : nom modifiable,
@@ -625,10 +629,6 @@ jamais rejouée, la webview muette et le Quit du Dock. Écarts et restes :
   ce prédéfini ; d'ici là, le vérifier à la main dans `make desktop-dev` ;
 - `⌘1` (catalogue) et `⌘⇧H` (bibliothèque) étaient liés par le code sans être
   écrits dans UX-SPEC ; ils le sont désormais, section « Clavier » ;
-- UX-SPEC dit qu'une fenêtre conserve plusieurs workspaces de connexion, et ce
-  plan le répète (« Les workspaces de connexion sont conservés dans la
-  fenêtre ») ; `workspace-host.tsx` et `release-workspace.ts` libèrent le
-  précédent à chaque changement de connexion ;
 - ADR-0025 cite `workspace/definition.rs`, `open_definition_console` et
   `library::OpenQuery::Copy`, disparus avec GPUI ; le composeur actuel est
   `crates/oxyn-desktop/src/backend/proposal.rs` ;

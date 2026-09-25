@@ -617,9 +617,42 @@ ne déclenchent pas de requête simulée.
 
 Le formulaire propose uniquement les drivers enregistrés. Toute nouvelle
 connexion commence en `production` jusqu'à changement explicite. Pendant un
-changement de connexion, l'ancien workspace reste accessible ; une connexion
-réussie transfère le texte SQL dans le nouvel éditeur sans l'exécuter. Les
+changement de connexion, l'ancien workspace reste accessible ; une **nouvelle**
+connexion copie le texte SQL de la console active dans son premier éditeur,
+l'annonce et ne l'exécute pas, et la console d'origine le garde. Les
 connexions ouvertes pendant la session rejoignent immédiatement la liste.
+
+**Les workspaces ouverts restent connectés**
+([ADR-0046](adr/0046-workspaces-retenus-restent-connectes.md)). Passer de A à B
+ne ferme rien : A garde ses consoles, leurs textes et leur historique
+d'édition, ses résultats, ses sessions, leurs transactions et leur contexte.
+Choisir A de nouveau sur l'écran d'accueil rend son workspace tel qu'il était,
+sans reconnexion et sans exécuter de SQL. Seuls `Disconnect`, la fermeture
+d'une console et la sortie d'Oxyn ferment des sessions ; `Disconnect` écrit
+d'abord les brouillons, puis ferme toutes les sessions de la connexion et
+arrête ses conversations. Un workspace masqué ne reçoit ni raccourci, ni
+dialogue, ni le texte destiné à « la console active ».
+
+Dans la liste de l'écran d'accueil, une connexion dont le workspace est
+retenu porte le libellé `Open`. Si l'une de ses consoles a signalé une
+transaction ouverte, ou un état inconnu sur une session qui déclare les
+transactions (dernière valeur reçue, [ADR-0039](adr/0039-etat-de-transaction-d-une-session.md)),
+la ligne le dit **en toutes lettres** et nomme la connexion :
+« Transaction open in a console of *billing* », « Transaction state unknown in
+a console of *billing* ». Ses verrous sont tenus pendant que l'utilisateur
+travaille ailleurs ; une couleur seule ne le dirait pas.
+
+Une fenêtre garde **au plus huit** workspaces. Une neuvième connexion est
+refusée avant toute tentative de connexion — « 8 connections are open in this
+window. Disconnect one before opening another. » — et aucun workspace n'est
+fermé d'office pour lui faire place : la fermeture pourrait annuler une
+transaction sans le dialogue qui l'annonce. Une connexion ouverte ne se
+supprime pas depuis les réglages ; la déconnecter d'abord. Modifier une
+connexion ouverte vaut aussitôt pour son workspace, visible ou masqué.
+
+Les résultats d'un workspace masqué ne sont pas épinglés au-delà des budgets
+de [PERFORMANCE](PERFORMANCE.md#budgets-de-mémoire) : un résultat évincé
+pendant l'absence se lit « expired » au retour ; il n'est jamais réexécuté.
 
 La barre d'état du formulaire nomme la connexion en préparation et distingue
 `Not tested`, le résultat du test et l'enregistrement. Elle n'annonce pas
@@ -838,10 +871,11 @@ validées perdues — même si le texte est sauvegardé. Fermer ne rejoue aucune
 n'annule pas les opérations d'une autre console. Fermer la dernière laisse un
 état vide avec l'action d'ouverture, tandis que le catalogue reste disponible.
 
-La fenêtre conserve aussi les workspaces de connexion déjà ouverts. Sélectionner
-une connexion déjà présente rend son workspace et ses consoles visibles, sans
-remplacer leurs textes. Une copie vers une nouvelle connexion est annoncée et
-n'exécute rien ; la console d'origine reste disponible.
+La fenêtre conserve aussi les workspaces de connexion déjà ouverts, connectés
+(« Navigation du premier workspace »). Sélectionner une connexion déjà présente
+rend son workspace et ses consoles visibles, sans remplacer leurs textes. Une
+copie vers une nouvelle connexion est annoncée et n'exécute rien ; la console
+d'origine reste disponible.
 
 
 ## Sauvegarde d'une console

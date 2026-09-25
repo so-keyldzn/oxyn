@@ -72,6 +72,7 @@ Pour localiser les planches et leurs états avant implémentation, consulter
 | [0043](adr/0043-multi-fenetre.md) | Plusieurs fenêtres dans un seul processus, chacune propriétaire de ses consoles et de ses sessions | proposé |
 | [0044](adr/0044-licence-gpl-et-contrat-apache.md) | L'application est sous GPL-3.0-or-later, le contrat des drivers sous Apache-2.0, et ce qui se paie est un service de compte | accepté |
 | [0045](adr/0045-ci-selective-sur-les-pull-requests.md) | Sur une pull request, la CI saute les jobs dont la zone n'est pas touchée ; sur `main`, tout tourne | accepté |
+| [0046](adr/0046-workspaces-retenus-restent-connectes.md) | Un workspace de connexion retenu garde ses sessions ouvertes, dans la limite de huit par fenêtre | accepté |
 
 Les ADR restent `proposé` jusqu'au premier commit de code qui les met en œuvre.
 
