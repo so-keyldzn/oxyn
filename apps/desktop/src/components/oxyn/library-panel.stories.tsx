@@ -322,11 +322,6 @@ async function openMenuOn(target: HTMLElement) {
   await screen.findByRole("menu")
 }
 
-async function closeMenu() {
-  await userEvent.keyboard("{Escape}")
-  await waitFor(() => expect(screen.queryByRole("menu")).toBeNull())
-}
-
 /**
  * The menu of a saved query: `Open` names where its copy opens, `Reveal`
  * says why it waits, and `Delete…` asks first, as the button does. Rename,
@@ -371,9 +366,13 @@ export const SavedQueryContextMenu: Story = {
  */
 export const HistoryRowContextMenu: Story = {
   play: async ({ canvas, args }) => {
-    await openMenuOn(canvas.getByText(/UPDATE invoices SET paid_at/))
-    await expect(screen.queryByRole("menuitem", { name: /^Open/ })).toBeNull()
-    await closeMenu()
+    // A write awaiting inspection is not opened (I-13), and a history row has
+    // no file: nothing is offered, so no menu opens.
+    await userEvent.pointer({
+      keys: "[MouseRight]",
+      target: canvas.getByText(/UPDATE invoices SET paid_at/),
+    })
+    await expect(screen.queryByRole("menu")).toBeNull()
 
     await openMenuOn(canvas.getByText(/SELECT c.name, i.amount/))
     await expect(screen.queryByRole("menuitem", { name: /^Delete/ })).toBeNull()
