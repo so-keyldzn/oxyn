@@ -98,6 +98,16 @@ export function DeleteConnectionDialog<
             workspace. Its open sessions are closed. The database itself is not
             touched.
           </AlertDialogDescription>
+          {/* Said before, not discovered after: what was asked about this
+              connection stays in the workspace file (docs/UX-SPEC.md). */}
+          <p
+            data-slot="delete-connection-conversations"
+            className="text-sm text-muted-foreground"
+          >
+            Its assistant conversations are kept in this workspace, under the
+            name <bdi>{name}</bdi>, and stay listed, read-only, in the assistant
+            panel.
+          </p>
         </AlertDialogHeader>
 
         <Field>

@@ -1,4 +1,5 @@
 import * as React from "react"
+import { useQuery } from "@tanstack/react-query"
 
 import {
   answerSampleAsk,
@@ -41,6 +42,7 @@ import { declaredEfforts, effortToSend } from "./reasoning-effort"
 import type { ExchangeNode } from "./thread"
 import { useAssistantAvailable } from "./use-assistant-available"
 import { useMentionSearch } from "./mention-search"
+import { orphanThreadsQuery } from "./queries"
 import { ToolRows } from "./tool-rows"
 import { ErdBlock } from "./erd-block"
 import { AssistantEntryButton } from "@/components/oxyn/assistant-entry-button"
@@ -90,6 +92,7 @@ export function AssistantPanel({
 }) {
   const entry = useAssistantAvailable(open)
   const state = useAssistant(open.connection)
+  const orphanThreads = useQuery(orphanThreadsQuery)
   // From the local catalog and library: no model completes a name.
   const mentionSource = useMentionSearch(open.connection)
   const { chosenKey, pin: pinned } = usePinState(open.connection)
@@ -359,7 +362,19 @@ export function AssistantPanel({
         onOpenThread={(id) => void openThread(open.connection, id)}
         onRenameThread={(id, title) => renameThread(open.connection, id, title)}
         onDeleteThread={(id) => deleteThread(open.connection, id)}
-        onReloadHistory={() => void refreshHistory(open.connection)}
+        onReloadHistory={() => {
+          void refreshHistory(open.connection)
+          void orphanThreads.refetch()
+        }}
+        // A connection deleted in settings says nothing to this panel.
+        onHistoryShown={() => void orphanThreads.refetch()}
+        orphans={
+          orphanThreads.isError
+            ? { status: "error", message: orphanThreads.error.message }
+            : orphanThreads.data
+              ? { status: "ready", items: orphanThreads.data }
+              : undefined
+        }
         onSendQueued={(key) => void sendQueued(open.connection, key)}
         onRemoveQueued={(key) => removeQueued(open.connection, key)}
       />

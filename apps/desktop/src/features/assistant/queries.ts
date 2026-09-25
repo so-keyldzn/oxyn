@@ -10,7 +10,20 @@ export const aiKeys = {
   models: (provider: string) => ["ai", "models", provider] as const,
   presets: ["ai", "presets"] as const,
   detected: (preset: string) => ["ai", "detected", preset] as const,
+  orphans: ["ai", "orphans"] as const,
 }
+
+/**
+ * The conversations of connections deleted since, for the history panel.
+ *
+ * Read again each time the list is shown: deleting a connection happens in
+ * settings, and nothing tells the panel.
+ */
+export const orphanThreadsQuery = queryOptions({
+  queryKey: aiKeys.orphans,
+  queryFn: () => ai.orphanThreads(),
+  staleTime: 0,
+})
 
 /**
  * The declared providers, classified by the backend.

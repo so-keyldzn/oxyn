@@ -35,6 +35,8 @@ import { Input } from "@/components/ui/input"
 import { Item } from "@/components/ui/item"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Spinner } from "@/components/ui/spinner"
+import { AssistantOrphans } from "@/components/oxyn/assistant-orphans"
+import type { OrphanThreadsState } from "@/components/oxyn/assistant-orphans"
 import type { HistoryState } from "@/features/assistant/conversation-store"
 import type { ThreadSummary } from "@/lib/ipc/ai"
 import { cn } from "@/lib/utils"
@@ -197,8 +199,11 @@ export function AssistantHistory({
   onRename,
   onDelete,
   onReload,
+  orphans,
 }: {
   history: HistoryState
+  /** The conversations of deleted connections, listed read-only. */
+  orphans?: OrphanThreadsState
   currentId: string | null
   onNew: () => void
   onOpen: (id: string) => void
@@ -292,15 +297,19 @@ export function AssistantHistory({
         </ul>
       ) : null}
 
-      <p
-        data-slot="assistant-history-retention"
-        className="mt-auto text-xs text-muted-foreground"
-      >
-        Conversations are saved with this workspace, on this machine. Oxyn keeps
-        the 200 most recent, and removes those idle for 90 days when it starts.
-        Query results are never saved, and an answer that used a data sample is
-        not kept: only its question, the sample's size and how it ended are.
-      </p>
+      <div className="mt-auto flex flex-col gap-2">
+        {orphans ? <AssistantOrphans state={orphans} /> : null}
+        <p
+          data-slot="assistant-history-retention"
+          className="text-xs text-muted-foreground"
+        >
+          Conversations are saved with this workspace, on this machine. Oxyn
+          keeps the 200 most recent, and removes those idle for 90 days when it
+          starts. Query results are never saved, and an answer that used a data
+          sample is not kept: only its question, the sample's size and how it
+          ended are.
+        </p>
+      </div>
 
       <AlertDialog open={removalOpen} onOpenChange={setRemovalOpen}>
         {/* A grid track sized by its content would let a long title widen

@@ -201,6 +201,21 @@ pub struct ThreadSummary {
     pub running: bool,
 }
 
+/// A conversation whose connection was deleted: listed, never reopened or
+/// changed from here.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OrphanThreadSummary {
+    pub id: String,
+    pub title: String,
+    /// The connection's name when the thread was written; `None` if it was
+    /// written without one.
+    pub connection_name: Option<String>,
+    pub updated_at_ms: u64,
+    /// Exchanges, all versions counted.
+    pub exchanges: usize,
+}
+
 /// Which version of an exchange is shown under a parent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

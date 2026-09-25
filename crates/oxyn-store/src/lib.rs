@@ -119,9 +119,9 @@ pub mod sessions;
 pub use agents::ExternalAgents;
 pub use connections::Connections;
 pub use conversations::{
-    Conversation, ConversationSummary, Conversations, Destination, DestinationKind, PruneReport,
-    RetentionPolicy, ToolCallRecord, ToolCallStatus, Turn, TurnPage, TurnRecord, TurnRole,
-    TurnUsage,
+    Conversation, ConversationSummary, Conversations, Destination, DestinationKind,
+    OrphanConversation, PruneReport, RetentionPolicy, ToolCallRecord, ToolCallStatus, Turn,
+    TurnPage, TurnRecord, TurnRole, TurnUsage,
 };
 pub use documents::{Document, Documents};
 pub use egress::{Egress, EgressEntry, EgressPage, EgressReach, EgressRecord};

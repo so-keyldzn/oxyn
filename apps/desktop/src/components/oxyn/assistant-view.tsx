@@ -21,6 +21,7 @@ import {
 import { AssistantHeader } from "@/components/oxyn/assistant-header"
 import type { ModelListState } from "@/components/oxyn/assistant-header"
 import { AssistantHistory } from "@/components/oxyn/assistant-history"
+import type { OrphanThreadsState } from "@/components/oxyn/assistant-orphans"
 import type { ErdRequest } from "@/components/oxyn/assistant-markdown-model"
 import { AssistantQueue } from "@/components/oxyn/assistant-queue"
 import { Button } from "@/components/ui/button"
@@ -171,6 +172,10 @@ export interface AssistantViewProps {
   onRenameThread: (id: string, title: string) => Promise<void>
   onDeleteThread: (id: string) => Promise<void>
   onReloadHistory: () => void
+  /** The conversations of deleted connections, shown read-only in the history. */
+  orphans?: OrphanThreadsState
+  /** The history list was just shown: what it holds from elsewhere is read again. */
+  onHistoryShown?: () => void
   onSendQueued: (key: string) => void
   onRemoveQueued: (key: string) => void
 }
@@ -298,7 +303,10 @@ export function AssistantView(props: AssistantViewProps) {
         onSelectEffort={onSelectEffort}
         agentStartup={agentStartup}
         modelList={modelList}
-        onToggleHistory={setHistoryOpen}
+        onToggleHistory={(open: boolean) => {
+          setHistoryOpen(open)
+          if (open) props.onHistoryShown?.()
+        }}
         onNewConversation={() => {
           setHistoryOpen(false)
           props.onNewConversation()
@@ -320,6 +328,7 @@ export function AssistantView(props: AssistantViewProps) {
           onRename={props.onRenameThread}
           onDelete={props.onDeleteThread}
           onReload={props.onReloadHistory}
+          orphans={props.orphans}
         />
       ) : (
         <MessageScrollerProvider autoScroll>

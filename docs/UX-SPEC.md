@@ -1122,7 +1122,19 @@ même transaction ; ce qui est sorti vers un destinataire reste inscrit dans
 ([SECURITY](SECURITY.md#ce-qui-sort-vers-un-destinataire-ia-laisse-une-trace)).
 Supprimer une connexion n'efface pas ses conversations, qui gardent le nom de la
 connexion : ce que l'utilisateur a demandé ne disparaît pas avec l'outil qui a
-servi à le demander. Si l'écriture échoue, la question part quand même, et le
+servi à le demander. La boîte de suppression de la connexion **le dit avant**
+la suppression : ses conversations restent dans le workspace, sous son nom, et
+restent listées, en lecture seule, dans le panneau de l'assistant.
+
+Elles s'y relisent dans la liste « Conversations », sous un volet replié
+**From deleted connections**, qui n'existe que s'il en reste au moins une.
+Chaque ligne donne le titre, le nom qu'avait la connexion, la date de dernière
+activité et le nombre d'échanges. La liste est en **lecture seule** : aucune
+ligne ne s'ouvre, ne se renomme ni ne se supprime, et rien n'en part vers un
+modèle — la connexion qui donnait son niveau de confidentialité à ces échanges
+n'existe plus. Elle couvre tout le workspace, 64 conversations au plus, et se
+relit à chaque affichage de l'historique. Ces conversations restent soumises à
+l'élagage du lancement, comme les autres. Si l'écriture échoue, la question part quand même, et le
 panneau dit que ce fil n'est gardé que dans la fenêtre.
 
 ### Une proposition n'est jamais exécutée par le fait de l'être
