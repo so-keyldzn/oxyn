@@ -472,13 +472,7 @@ impl Backend {
     ) -> Result<OpenConnection, IpcError> {
         let inner = &self.inner;
         let cancel = self.track(id)?;
-        let config = inner
-            .executor
-            .store()
-            .connections()
-            .get(connection)
-            .map_err(|error| IpcError::invalid(format!("reading the saved connection: {error}")))?
-            .ok_or_else(|| IpcError::invalid("This connection is no longer in the workspace"))?;
+        let config = self.read_config(connection).await?;
         inner.policy.register(&config);
         self.open_session(config, &cancel).await
     }
@@ -644,6 +638,8 @@ impl Backend {
     /// Reads the store: only from the blocking pool, or through
     /// [`Self::read_config`] from an async body (I-05).
     pub(crate) fn config(&self, connection: ConnectionId) -> Result<ConnectionConfig, IpcError> {
+        #[cfg(test)]
+        config_reads::record(connection);
         self.inner
             .executor
             .store()
@@ -745,6 +741,33 @@ pub(crate) fn describe(outcome: Outcome) -> CommandOutcome {
         Outcome::Exported { rows, bytes, .. } => CommandOutcome::Exported { rows, bytes },
         Outcome::Cancelled { .. } => CommandOutcome::Cancelled,
         _ => CommandOutcome::Done,
+    }
+}
+
+/// The threads [`Backend::config`] ran on, per connection: a store read made
+/// on the thread that polls an async body is invisible on the dev machine, and
+/// only a record of where it ran shows it (I-05).
+#[cfg(test)]
+pub(crate) mod config_reads {
+    use std::thread::ThreadId;
+
+    use oxyn_core::ConnectionId;
+    use parking_lot::Mutex;
+
+    static READS: Mutex<Vec<(ConnectionId, ThreadId)>> = Mutex::new(Vec::new());
+
+    pub(crate) fn record(connection: ConnectionId) {
+        READS.lock().push((connection, std::thread::current().id()));
+    }
+
+    /// The threads that read `connection`, oldest first.
+    pub(crate) fn of(connection: ConnectionId) -> Vec<ThreadId> {
+        READS
+            .lock()
+            .iter()
+            .filter(|(read, _)| *read == connection)
+            .map(|(_, thread)| *thread)
+            .collect()
     }
 }
 
@@ -1083,6 +1106,33 @@ mod tests {
         assert!(
             !serialized.contains(CANARY),
             "secret on the wire: {serialized}"
+        );
+    }
+
+    /// A current-thread runtime polls every async body on the test thread:
+    /// a read of the saved connection made there would stall every command
+    /// sharing its worker.
+    #[test]
+    fn reconnecting_reads_the_saved_connection_off_the_async_thread() {
+        let runtime = tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .expect("a test runtime starts");
+        let _guard = runtime.enter();
+        let backend = Backend::open_temporary().expect("temporary backend");
+        let (connection, _) = ids(&open(&runtime, &backend, Environment::Local));
+        let before = config_reads::of(connection).len();
+
+        runtime
+            .block_on(backend.reconnect(CommandId::new(), connection))
+            .expect("reconnects");
+
+        let reads = config_reads::of(connection);
+        let async_thread = std::thread::current().id();
+        assert!(reads.len() > before, "reconnect reads through `config`");
+        assert!(
+            !reads.contains(&async_thread),
+            "the saved connection was read on the thread that polls async bodies"
         );
     }
 
