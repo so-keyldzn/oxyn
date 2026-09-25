@@ -2,6 +2,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite"
 import { expect, fn, userEvent, waitFor, within } from "storybook/test"
 
 import { ConnectionChangeReview } from "./connection-change-review"
+import { expectContainedInFrame, openFrame } from "./frame-overflow"
 
 const meta = {
   title: "Oxyn/ConnectionChangeReview",
@@ -58,3 +59,26 @@ export const ProductionDeletion: Story = {
 }
 
 export const Deciding: Story = { args: { deciding: true } }
+
+/** A long name with nothing to break on stays inside the frame. */
+export const LongContentStaysInTheFrame: Story = {
+  args: {
+    change: {
+      command: "018f0000-0000-7000-8000-00000000c0e2",
+      kind: "delete",
+      reason:
+        'DDL operation on "analytics_warehouse_production_eu_west_3_read_replica", marked production',
+      connectionName: "analytics_warehouse_production_eu_west_3_read_replica",
+      environment: "production",
+    },
+  },
+  play: async () => {
+    await expectContainedInFrame(await openFrame("alert-dialog-content"))
+  },
+}
+
+/** The same, in a compact window. */
+export const LongContentStaysInTheFrameWhenCompact: Story = {
+  ...LongContentStaysInTheFrame,
+  globals: { viewport: { value: "mobile1" } },
+}

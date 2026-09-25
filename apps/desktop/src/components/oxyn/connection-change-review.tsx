@@ -51,6 +51,9 @@ export function ConnectionChangeReview({
       }}
     >
       <AlertDialogContent
+        // A grid track sized by its content would let a long name widen the
+        // footer past the frame.
+        className="grid-cols-1"
         initialFocus={cancelRef}
         onKeyDown={(event) => {
           if (
@@ -62,7 +65,7 @@ export function ConnectionChangeReview({
         }}
       >
         <AlertDialogHeader>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <AlertDialogTitle>
               {deleting ? "Confirm the deletion" : "Confirm the changes"}
             </AlertDialogTitle>
@@ -70,7 +73,7 @@ export function ConnectionChangeReview({
               <EnvironmentBadge environment={change.environment} />
             ) : null}
           </div>
-          <AlertDialogDescription>
+          <AlertDialogDescription className="wrap-anywhere">
             <span data-selectable>{change?.reason}</span>{" "}
             {deleting
               ? "The saved connection and its keyring secrets are removed:"
@@ -91,7 +94,7 @@ export function ConnectionChangeReview({
             onClick={() => onDecide(true)}
             // The name is whatever the user typed: bounded here, in full above.
             title={deleting ? `Delete ${name}` : `Save ${name}`}
-            className="max-w-full"
+            className="min-w-0 shrink"
           >
             {deciding ? <Spinner data-icon="inline-start" /> : null}
             <span className="min-w-0 truncate">

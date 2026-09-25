@@ -92,7 +92,7 @@ export function ValuePageDialog({
               <AlertDescription>
                 <pre
                   data-selectable
-                  className="font-mono text-xs whitespace-pre-wrap"
+                  className="font-mono text-xs wrap-anywhere whitespace-pre-wrap"
                 >
                   {state.message}
                 </pre>

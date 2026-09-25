@@ -2,6 +2,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite"
 import { expect, fn, screen, userEvent, waitFor } from "storybook/test"
 
 import { CloseConsoleDialog } from "./close-console-dialog"
+import { expectContainedInFrame, openFrame } from "./frame-overflow"
 
 const meta = {
   title: "Oxyn/CloseConsoleDialog",
@@ -80,4 +81,29 @@ export const Saving: Story = {
     await userEvent.click(cancel)
     await expect(args.onCancel).toHaveBeenCalled()
   },
+}
+
+/** A long file name with nothing to break on stays inside the frame. */
+export const LongContentStaysInTheFrame: Story = {
+  args: {
+    reasons: {
+      title:
+        "reporting_warehouse_2026_customer_orders_with_shipping_details.sql",
+      conflict: true,
+      hasSavedCopy: true,
+      unsaved: true,
+      running: true,
+    },
+    notice:
+      "Not saved: /Users/analyst/Documents/workspaces/analytics-warehouse-production/consoles/reporting_warehouse_2026.sql is read-only.",
+  },
+  play: async () => {
+    await expectContainedInFrame(await openFrame("alert-dialog-content"))
+  },
+}
+
+/** The same, in a compact window: the three actions stack. */
+export const LongContentStaysInTheFrameWhenCompact: Story = {
+  ...LongContentStaysInTheFrame,
+  globals: { viewport: { value: "mobile1" } },
 }

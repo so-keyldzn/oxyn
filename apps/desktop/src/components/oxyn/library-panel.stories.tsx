@@ -1,6 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/react-vite"
 import { expect, fn, screen, userEvent, waitFor } from "storybook/test"
 
+import { expectContainedInFrame, openFrame } from "./frame-overflow"
 import { LibraryPanel } from "./library-panel"
 import type { DocumentEntry, HistoryRow } from "@/lib/ipc/library"
 
@@ -206,6 +207,53 @@ export const SavedQueries: Story = {
     await waitFor(() => expect(cancel).toHaveFocus())
     await userEvent.keyboard("{Enter}")
     await expect(args.onDeleteSaved).not.toHaveBeenCalled()
+  },
+}
+
+/**
+ * A long connection name and statement with nothing to break on: the
+ * reconciliation dialog keeps them inside its frame.
+ */
+export const ReconcileLongContentStaysInTheFrame: Story = {
+  args: {
+    state: {
+      status: "history",
+      entries: [
+        {
+          ...history[1]!,
+          connectionName:
+            "analytics_warehouse_production_eu_west_3_read_replica",
+          preview: `UPDATE reporting_warehouse_2026.customer_orders_with_shipping_details SET ${"shipping_address_line_two_".repeat(8)}= NULL`,
+        },
+      ],
+    },
+  },
+  play: async ({ canvas }) => {
+    await userEvent.click(
+      canvas.getByRole("button", { name: /Mark reconciled/ })
+    )
+    await expectContainedInFrame(await openFrame("alert-dialog-content"))
+  },
+}
+
+/** The same for deleting a saved query whose title has nothing to break on. */
+export const DeleteLongTitleStaysInTheFrame: Story = {
+  args: {
+    view: "saved",
+    state: {
+      status: "saved",
+      entries: [
+        {
+          ...saved[0]!,
+          title:
+            "reporting_warehouse_2026_customer_orders_with_shipping_details.sql",
+        },
+      ],
+    },
+  },
+  play: async ({ canvas }) => {
+    await userEvent.click(canvas.getByRole("button", { name: /^Delete / }))
+    await expectContainedInFrame(await openFrame("alert-dialog-content"))
   },
 }
 

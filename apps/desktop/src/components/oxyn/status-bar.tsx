@@ -245,7 +245,7 @@ export function StatusBar({
                 data-selectable
                 tabIndex={0}
                 aria-label="Server message"
-                className="max-h-64 overflow-auto rounded-md border bg-muted/40 p-2 font-mono text-xs whitespace-pre-wrap text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                className="max-h-64 overflow-auto rounded-md border bg-muted/40 p-2 font-mono text-xs wrap-anywhere whitespace-pre-wrap text-foreground outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 {failure.message}
               </pre>

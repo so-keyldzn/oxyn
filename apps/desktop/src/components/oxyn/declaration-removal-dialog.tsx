@@ -41,9 +41,11 @@ export function DeclarationRemovalDialog({
         if (!open) onClose()
       }}
     >
-      <AlertDialogContent>
+      {/* A grid track sized by its content would let a long label widen the
+          dialog past its frame. */}
+      <AlertDialogContent className="grid-cols-1">
         <AlertDialogHeader>
-          <AlertDialogTitle>
+          <AlertDialogTitle className="wrap-anywhere">
             {shown
               ? removalQuestion(
                   shown.kind === "provider"

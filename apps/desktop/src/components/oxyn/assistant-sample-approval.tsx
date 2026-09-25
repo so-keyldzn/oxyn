@@ -192,7 +192,10 @@ export function AssistantSampleApproval({
       }}
     >
       <AlertDialogContent
-        className="max-w-xl sm:max-w-xl"
+        // The base width is keyed on `data-size`, so a plain `max-w-xl` loses
+        // to it; and a grid track sized by its content lets a long label widen
+        // the list and the footer past the frame. `grid-cols-1` bounds it.
+        className="grid-cols-1 data-[size=default]:max-w-[calc(100%-2rem)] data-[size=default]:sm:max-w-xl"
         initialFocus={cancelRef}
         // Enter on the dialog body must never reach the action that sends.
         onKeyDown={(event) => {
@@ -267,7 +270,7 @@ function ApprovalBody({
           </AlertDialogTitle>
           <EnvironmentBadge environment={environment} />
         </div>
-        <AlertDialogDescription>
+        <AlertDialogDescription className="wrap-anywhere">
           {request.requestedBy !== null ? (
             <>
               <strong className="font-medium text-foreground">
@@ -376,9 +379,9 @@ function ApprovalBody({
             disabled={deciding || chosen.length === 0}
             onClick={() => onDecide(chosen.map((field) => field.name))}
             // The label says what leaves and where, because this is the last
-            // screen before it does.
+            // screen before it does: it wraps, and is never cut.
             title={`Send ${request.rows} rows of ${chosen.length} columns to ${request.destination}, ${where.label}`}
-            className="max-w-full"
+            className="h-auto min-h-8 min-w-0 shrink py-1.5 text-left whitespace-normal"
           >
             {deciding ? (
               <Spinner data-icon="inline-start" />
@@ -389,7 +392,7 @@ function ApprovalBody({
                 data-icon="inline-start"
               />
             )}
-            <span className="min-w-0 truncate">
+            <span className="min-w-0 wrap-anywhere">
               Send {chosen.length} of {fields.length} columns to{" "}
               <bdi>{request.destination}</bdi> · {where.label}
             </span>

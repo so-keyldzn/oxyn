@@ -3,6 +3,7 @@ import { expect, fn, userEvent, waitFor, within } from "storybook/test"
 
 import { DeleteConnectionDialog } from "./delete-connection-dialog"
 import { summaries } from "./connection-fixtures"
+import { expectContainedInFrame, openFrame } from "./frame-overflow"
 
 const billing = summaries[0]!
 
@@ -94,6 +95,32 @@ export const HostileRightToLeftName: Story = {
     await expect(dialog.getByRole("button", { name: /^Delete/ })).toBeDisabled()
     await expect(args.onConfirm).not.toHaveBeenCalled()
   },
+}
+
+/**
+ * A long name and location with nothing to break on, and a long refusal: the
+ * header, the field and the footer stay inside the frame.
+ */
+export const LongContentStaysInTheFrame: Story = {
+  args: {
+    connection: {
+      ...billing,
+      name: "analytics_warehouse_production_eu_west_3_read_replica",
+      location:
+        "analytics-warehouse-production-eu-west-3.cluster-ro.rds.amazonaws.com:5432/reporting",
+    },
+    error:
+      "keyring: the entry oxyn/analytics-warehouse-production-eu-west-3-read-replica/password could not be removed",
+  },
+  play: async () => {
+    await expectContainedInFrame(await openFrame("alert-dialog-content"))
+  },
+}
+
+/** The same, in a compact window. */
+export const LongContentStaysInTheFrameWhenCompact: Story = {
+  ...LongContentStaysInTheFrame,
+  globals: { viewport: { value: "mobile1" } },
 }
 
 export const Light: Story = { globals: { theme: "light" } }

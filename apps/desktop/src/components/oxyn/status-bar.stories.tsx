@@ -1,6 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/react-vite"
 import { expect, userEvent, waitFor, within } from "storybook/test"
 
+import { expectContainedInFrame, openFrame } from "./frame-overflow"
 import { StatusBar } from "./status-bar"
 
 const postgres = [
@@ -70,6 +71,24 @@ export const FailedWithServerMessage: Story = {
   },
   play: async ({ canvas }) => {
     await expect(canvas.getByRole("button", { name: "Details" })).toBeVisible()
+  },
+}
+
+/**
+ * A server message with nothing to break on: the popover shows it whole,
+ * wrapped, without a sideways scroll and without leaving its frame.
+ */
+export const LongServerMessageStaysInTheFrame: Story = {
+  args: {
+    execution: {
+      status: "failed",
+      message: `ERROR:  could not open file "base/16384/${"pg_toast_2619_index_".repeat(8)}": Permission denied (SQLSTATE 58P01)`,
+      retryable: false,
+    },
+  },
+  play: async ({ canvas }) => {
+    await userEvent.click(canvas.getByRole("button", { name: "Details" }))
+    await expectContainedInFrame(await openFrame("popover-content"))
   },
 }
 

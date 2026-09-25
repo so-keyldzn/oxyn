@@ -65,7 +65,10 @@ export function ApprovalDialog({
       }}
     >
       <AlertDialogContent
-        className="max-w-xl sm:max-w-xl"
+        // The base width is keyed on `data-size`, so a plain `max-w-xl` loses
+        // to it; and a grid track sized by its content lets a long label widen
+        // the footer past the frame. `grid-cols-1` bounds it.
+        className="grid-cols-1 data-[size=default]:max-w-[calc(100%-2rem)] data-[size=default]:sm:max-w-xl"
         initialFocus={cancelRef}
         // Enter on the dialog body must never reach the destructive action.
         onKeyDown={(event) => {
@@ -78,11 +81,11 @@ export function ApprovalDialog({
         }}
       >
         <AlertDialogHeader>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <AlertDialogTitle>Review before running</AlertDialogTitle>
             <EnvironmentBadge environment={environment} />
           </div>
-          <AlertDialogDescription>
+          <AlertDialogDescription className="wrap-anywhere">
             {actor.kind === "agent" ? (
               <>
                 <strong className="font-medium text-foreground">
@@ -140,7 +143,7 @@ export function ApprovalDialog({
             // pushes the action past the dialog, and the label stops being
             // readable at all. The description above carries it in full.
             title={`Run on ${name}`}
-            className="max-w-full"
+            className="min-w-0 shrink"
           >
             {deciding ? <Spinner data-icon="inline-start" /> : null}
             <span className="min-w-0 truncate">

@@ -60,6 +60,9 @@ export function DeleteConnectionDialog<
       }}
     >
       <AlertDialogContent
+        // A grid track sized by its content would let a long name widen the
+        // footer past the frame.
+        className="grid-cols-1"
         initialFocus={cancelRef}
         onKeyDown={(event) => {
           // Enter in the name field must not reach the destructive action.
@@ -72,7 +75,7 @@ export function DeleteConnectionDialog<
         }}
       >
         <AlertDialogHeader>
-          <div className="flex items-center gap-2">
+          <div className="flex w-full min-w-0 items-center gap-2">
             <AlertDialogTitle className="min-w-0 truncate">
               Delete <bdi>{name}</bdi>?
             </AlertDialogTitle>
@@ -80,7 +83,7 @@ export function DeleteConnectionDialog<
               <EnvironmentBadge environment={connection.environment} />
             ) : null}
           </div>
-          <AlertDialogDescription>
+          <AlertDialogDescription className="wrap-anywhere">
             The saved connection{" "}
             <strong className="font-medium text-foreground">
               <bdi>{name}</bdi>
@@ -117,7 +120,9 @@ export function DeleteConnectionDialog<
         {error ? (
           <Alert variant="destructive">
             <AlertTitle>Connection not deleted</AlertTitle>
-            <AlertDescription data-selectable>{error}</AlertDescription>
+            <AlertDescription data-selectable className="wrap-anywhere">
+              {error}
+            </AlertDescription>
           </Alert>
         ) : null}
 
@@ -133,7 +138,7 @@ export function DeleteConnectionDialog<
             }}
             // The name is whatever the user typed: bounded here, in full above.
             title={`Delete ${name}`}
-            className="max-w-full"
+            className="min-w-0 shrink"
           >
             {deleting ? <Spinner data-icon="inline-start" /> : null}
             <span className="min-w-0 truncate">

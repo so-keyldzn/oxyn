@@ -1,6 +1,7 @@
 import type { Meta, StoryObj } from "@storybook/react-vite"
 import { expect, fn, userEvent, waitFor, within } from "storybook/test"
 
+import { expectContainedInFrame, openFrame } from "./frame-overflow"
 import { PreviewControls } from "./preview-controls"
 import { PLAIN_SHAPE } from "@/lib/ipc/metadata"
 
@@ -137,6 +138,32 @@ export const ComposeASortOnTwoColumns: Story = {
     await waitFor(() =>
       expect(document.querySelector("[data-base-ui-focus-guard]")).toBeNull()
     )
+  },
+}
+
+/**
+ * Column names with nothing to break on: the sort keys and their controls
+ * stay inside the popover's frame, which stays inside the window.
+ */
+export const LongColumnNamesStayInTheFrame: Story = {
+  args: {
+    columns: [
+      "shipping_address_line_two_including_building_and_floor_details",
+      "aVeryLongCamelCaseColumnNameWithoutAnyUnderscoreToBreakOn",
+      ...Array.from(
+        { length: 20 },
+        (_, index) => `order_line_attribute_${index}`
+      ),
+    ],
+  },
+  play: async ({ canvas }) => {
+    await userEvent.click(canvas.getByRole("button", { name: /Sort/ }))
+    const popover = within(document.body)
+    await userEvent.click(
+      await popover.findByRole("button", { name: "Add column" })
+    )
+    await userEvent.click(popover.getByRole("button", { name: "Add column" }))
+    await expectContainedInFrame(await openFrame("popover-content"))
   },
 }
 
