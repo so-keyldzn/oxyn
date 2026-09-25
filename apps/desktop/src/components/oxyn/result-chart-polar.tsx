@@ -2,6 +2,7 @@
 // block of shadcn's chart gallery (named on each function), and a legend on
 // every one: a category known only by hovering its slice is not written down.
 
+import type { ReactNode } from "react"
 import {
   Label,
   Pie,
@@ -30,8 +31,9 @@ import {
 } from "@/components/ui/chart"
 import type { ChartConfig } from "@/components/ui/chart"
 
-const POLAR =
-  "mx-auto aspect-square max-h-[250px] min-h-48 [&_.recharts-polar-angle-axis-tick_text]:fill-muted-foreground"
+const POLAR_TICKS =
+  "[&_.recharts-polar-angle-axis-tick_text]:fill-muted-foreground"
+const POLAR = `mx-auto aspect-square max-h-[250px] min-h-48 ${POLAR_TICKS}`
 
 /**
  * The gallery keys a pie's config by category; here by slot (`c0`…), with the
@@ -51,70 +53,116 @@ function sliceConfig(data: ChartData, slices: Array<Slice>): ChartConfig {
   return config
 }
 
-const sliceLegend = (
-  <ChartLegend
-    content={<ChartLegendContent nameKey="slot" />}
-    className="-translate-y-2 flex-wrap gap-2 *:basis-1/4 *:justify-center"
-  />
-)
+/**
+ * chart-pie-legend's content, written beside the drawing rather than inside
+ * it: Recharts takes a legend's height from the plot, so four long labels in
+ * the assistant's panel left a donut of radius zero, and laid over the rings of
+ * radial bars. Under the drawing in a narrow panel, beside it when there is
+ * room; a long label wraps onto two lines, then is cut, and says itself whole
+ * in its tooltip and to a screen reader.
+ */
+function SliceLegend({ slices }: { slices: Array<Slice> }) {
+  return (
+    <ul className="grid w-full min-w-0 grid-cols-1 gap-x-4 gap-y-1.5 text-xs @xs:grid-cols-2 @md:w-auto @md:flex-1 @md:grid-cols-1">
+      {slices.map((slice, index) => (
+        <li key={slice.slot} className="flex min-w-0 items-start gap-1.5">
+          <span
+            aria-hidden
+            className="mt-1 size-2 shrink-0 rounded-[2px]"
+            style={{
+              backgroundColor: CHART_COLORS[index % CHART_COLORS.length],
+            }}
+          />
+          <span title={slice.label} className="line-clamp-2 break-words">
+            {slice.label}
+          </span>
+        </li>
+      ))}
+    </ul>
+  )
+}
+
+/** A polar drawing and its legend, which never share a pixel. */
+function WithLegend({
+  slices,
+  children,
+}: {
+  slices: Array<Slice>
+  children: ReactNode
+}) {
+  return (
+    <div className="@container min-w-0">
+      <div className="flex flex-col items-center gap-3 @md:flex-row">
+        {children}
+        <SliceLegend slices={slices} />
+      </div>
+    </div>
+  )
+}
+
+/**
+ * The gallery's box, sized by its width: Recharts measures it, and a height
+ * left to the content would be measured at zero.
+ */
+const POLAR_BOX = "aspect-square w-full max-w-[250px] min-w-40 shrink-0"
 
 /** chart-pie-simple, chart-pie-donut, chart-pie-donut-text, with chart-pie-legend. */
 function PieDrawing({ shape, data }: { shape: ChartShape; data: ChartData }) {
   const slices = slicesOf(data, "share")
   const total = slices.reduce((sum, slice) => sum + slice.value, 0)
   return (
-    <ChartContainer
-      config={sliceConfig(data, slices)}
-      className="mx-auto aspect-square max-h-[280px] min-h-48"
-    >
-      <PieChart accessibilityLayer>
-        <ChartTooltip
-          cursor={false}
-          content={<ChartTooltipContent hideLabel nameKey="slot" />}
-        />
-        <Pie
-          data={slices}
-          dataKey="value"
-          nameKey="slot"
-          innerRadius={shape === "pie" ? undefined : 60}
-          strokeWidth={shape === "donut-total" ? 5 : undefined}
-          isAnimationActive={false}
-        >
-          {shape === "donut-total" ? (
-            <Label
-              content={({ viewBox }) => {
-                if (viewBox && "cx" in viewBox && "cy" in viewBox)
-                  return (
-                    <text
-                      x={viewBox.cx}
-                      y={viewBox.cy}
-                      textAnchor="middle"
-                      dominantBaseline="middle"
-                    >
-                      <tspan
+    <WithLegend slices={slices}>
+      <ChartContainer config={sliceConfig(data, slices)} className={POLAR_BOX}>
+        <PieChart accessibilityLayer>
+          <ChartTooltip
+            cursor={false}
+            content={<ChartTooltipContent hideLabel nameKey="slot" />}
+          />
+          <Pie
+            data={slices}
+            dataKey="value"
+            nameKey="slot"
+            // The gallery's 60 px, as a share of the radius: a fixed hole is
+            // wider than the ring in a box narrower than the gallery's.
+            innerRadius={shape === "pie" ? undefined : "48%"}
+            strokeWidth={shape === "donut-total" ? 5 : undefined}
+            isAnimationActive={false}
+          >
+            {shape === "donut-total" ? (
+              <Label
+                content={({ viewBox }) => {
+                  if (viewBox && "cx" in viewBox && "cy" in viewBox)
+                    return (
+                      <text
                         x={viewBox.cx}
                         y={viewBox.cy}
-                        className="fill-foreground text-3xl font-bold"
+                        textAnchor="middle"
+                        dominantBaseline="middle"
                       >
-                        {total.toLocaleString()}
-                      </tspan>
-                      <tspan
-                        x={viewBox.cx}
-                        y={viewBox.cy + 24}
-                        className="fill-muted-foreground"
-                      >
-                        {data.series[0]?.name}
-                      </tspan>
-                    </text>
-                  )
-                return null
-              }}
-            />
-          ) : null}
-        </Pie>
-        {sliceLegend}
-      </PieChart>
-    </ChartContainer>
+                        <tspan
+                          x={viewBox.cx}
+                          y={viewBox.cy}
+                          className="fill-foreground text-3xl font-bold"
+                        >
+                          {total.toLocaleString()}
+                        </tspan>
+                        <tspan
+                          x={viewBox.cx}
+                          y={viewBox.cy + 24}
+                          className="fill-muted-foreground"
+                        >
+                          {data.series[0]?.name}
+                        </tspan>
+                      </text>
+                    )
+                  return null
+                }}
+              />
+            ) : null}
+          </Pie>
+        </PieChart>
+      </ChartContainer>
+    </WithLegend>
   )
 }
 
@@ -122,21 +170,26 @@ function PieDrawing({ shape, data }: { shape: ChartShape; data: ChartData }) {
 function RadialDrawing({ data }: { data: ChartData }) {
   const slices = slicesOf(data, "query")
   return (
-    <ChartContainer config={sliceConfig(data, slices)} className={POLAR}>
-      <RadialBarChart
-        accessibilityLayer
-        data={slices}
-        innerRadius={30}
-        outerRadius={110}
+    <WithLegend slices={slices}>
+      <ChartContainer
+        config={sliceConfig(data, slices)}
+        className={`${POLAR_BOX} ${POLAR_TICKS}`}
       >
-        <ChartTooltip
-          cursor={false}
-          content={<ChartTooltipContent hideLabel nameKey="slot" />}
-        />
-        <RadialBar dataKey="value" background isAnimationActive={false} />
-        {sliceLegend}
-      </RadialBarChart>
-    </ChartContainer>
+        <RadialBarChart
+          accessibilityLayer
+          data={slices}
+          // The gallery's 30 and 110 px of a 250 px box, as shares of it.
+          innerRadius="24%"
+          outerRadius="88%"
+        >
+          <ChartTooltip
+            cursor={false}
+            content={<ChartTooltipContent hideLabel nameKey="slot" />}
+          />
+          <RadialBar dataKey="value" background isAnimationActive={false} />
+        </RadialBarChart>
+      </ChartContainer>
+    </WithLegend>
   )
 }
 

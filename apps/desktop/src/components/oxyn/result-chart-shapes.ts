@@ -124,6 +124,13 @@ const VERTICAL_LABEL = 14
 /** A radar under three spokes is a line; over eight, its spokes blur. */
 const RADAR_MIN = 3
 const RADAR_MAX = 8
+/**
+ * A column named as an average, a median or a rate: its values describe each
+ * category on its own, and adding them up makes no whole. Matched on whole
+ * words, `_` and spaces included as separators: `avg_price`, `taux retour`.
+ */
+const NOT_A_PART =
+  /(^|[^a-z])(avg|average|mean|median|ratio|rate|pct|percent|percentage|moy|moyen|moyenne|moyens|moyennes|mediane|taux|pourcentage)([^a-z]|$)/
 
 interface Facts {
   rows: number
@@ -136,6 +143,10 @@ interface Facts {
   distinctLabels: boolean
   longestLabel: number
   scatterPoints: number
+  /** Every value of the first series is whole, as a count or a sum of counts is. */
+  wholeParts: boolean
+  /** The first series is named as a value that does not add up. */
+  namedNotAPart: boolean
 }
 
 function values(data: ChartData, row: ChartRow): Array<number | null> {
@@ -161,6 +172,13 @@ function factsOf(data: ChartData): Facts {
     distinctLabels: new Set(labels).size === labels.length,
     longestLabel: Math.max(0, ...labels.map((label) => label.length)),
     scatterPoints: scatterRows(data).length,
+    wholeParts: data.rows.every((row) => Number.isInteger(row.s0)),
+    namedNotAPart: NOT_A_PART.test(
+      (data.series[0]?.name ?? "")
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+    ),
   }
 }
 
@@ -337,7 +355,12 @@ export function shapeVerdicts(
  * 3. a date axis is a trend: one series fills an area, which reads as volume
  *    over time; several are lines, since overlapping areas hide each other;
  * 4. on categories, one positive series of 2 to 5 distinct parts is a donut —
- *    the share is the point, and the hole leaves room to read it;
+ *    the share is the point, and the hole leaves room to read it — but only
+ *    when the values read as parts of one whole: whole numbers, as counts
+ *    are, in a column not named as an average or a rate. Four averages in
+ *    four units (an amount, points, a price, a mark out of 5) are not shares
+ *    of anything; bars compare them without inventing a total. The donut
+ *    stays one click away when the user knows better;
  * 5. many categories or long labels turn bars horizontal, so every label is
  *    written; otherwise bars stand vertical, grouped when there are several;
  * 6. whatever remains possible, in the picker's order.
@@ -357,7 +380,7 @@ export function autoShape(
   else if (facts.axis === "temporal")
     preferred.push(facts.series === 1 ? "area" : "line-curved")
   else {
-    preferred.push("donut")
+    if (facts.wholeParts && !facts.namedNotAPart) preferred.push("donut")
     if (facts.rows > VERTICAL_CATEGORIES || facts.longestLabel > VERTICAL_LABEL)
       preferred.push("bar-horizontal")
     preferred.push(facts.series === 1 ? "bar-vertical" : "bar-grouped")
