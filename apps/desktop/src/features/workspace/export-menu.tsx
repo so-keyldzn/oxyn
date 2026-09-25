@@ -36,6 +36,36 @@ export function ExportMenu({
   /** A file name suggestion; the backend keeps only a name from it. */
   defaultName?: string
 }) {
+  const exporter = useResultExport({ connection, result, defaultName })
+  return (
+    <ExportMenuView
+      formats={exporter.formats}
+      formatsFailed={exporter.formatsFailed}
+      exportable={exportable && result !== null}
+      reason={reason}
+      state={exporter.state}
+      label={label}
+      scope={scope}
+      onExport={exporter.run}
+      onCancel={exporter.cancel}
+    />
+  )
+}
+
+/**
+ * The export of one result, apart from where it is offered: a footer button
+ * at wide width, a submenu of `Actions` below 1200 px. Held by the view, not
+ * by a menu: a menu unmounts when it closes, and leaving cancels the write.
+ */
+export function useResultExport({
+  connection,
+  result,
+  defaultName = "result",
+}: {
+  connection: string
+  result: string | null
+  defaultName?: string
+}) {
   const [state, setState] = React.useState<ExportState>({ status: "idle" })
   const running = React.useRef<string | null>(null)
   const formats = useQuery({
@@ -107,21 +137,15 @@ export function ExportMenu({
     }
   }
 
-  return (
-    <ExportMenuView
-      formats={formats.data ?? null}
-      formatsFailed={formats.isError}
-      exportable={exportable && result !== null}
-      reason={reason}
-      state={state}
-      label={label}
-      scope={scope}
-      onExport={(format) => void run(format)}
-      onCancel={() => {
-        if (!running.current || state.status !== "exporting") return
-        setState({ ...state, cancelling: true })
-        void backend.cancel(running.current)
-      }}
-    />
-  )
+  return {
+    formats: formats.data ?? null,
+    formatsFailed: formats.isError,
+    state,
+    run: (format: ExportFormatChoice) => void run(format),
+    cancel: () => {
+      if (!running.current || state.status !== "exporting") return
+      setState({ ...state, cancelling: true })
+      void backend.cancel(running.current)
+    },
+  }
 }

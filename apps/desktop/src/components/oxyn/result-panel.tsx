@@ -4,13 +4,14 @@ import {
   Alert02Icon,
   CancelCircleIcon,
   DatabaseIcon,
+  MoreHorizontalIcon,
   PencilEdit02Icon,
   PlayIcon,
   RepeatIcon,
   TableIcon,
 } from "@hugeicons/core-free-icons"
 
-import { ColumnsMenu } from "@/components/oxyn/columns-menu"
+import { ColumnsMenu, ColumnsSubmenu } from "@/components/oxyn/columns-menu"
 import { ResultFooter } from "@/components/oxyn/result-footer"
 import { ResultGrid } from "@/components/oxyn/result-grid"
 import type { FetchPage } from "@/components/oxyn/result-grid"
@@ -18,6 +19,11 @@ import type { GridPosition } from "@/components/oxyn/grid-selection"
 import { rowCount } from "@/components/oxyn/status-bar"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
 import { Button } from "@/components/ui/button"
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu"
 import {
   Empty,
   EmptyContent,
@@ -93,6 +99,13 @@ interface ResultPanelProps {
   toolbar?: React.ReactNode
   /** Drawn at the right of the footer — the export menu, typically. */
   footerActions?: React.ReactNode
+  /**
+   * Below 1200 px: the footer draws one `Actions` menu holding `Columns` and
+   * these items, and no `Columns` button of its own (docs/UX-SPEC.md,
+   * « Largeur réduite »). `footerActions` is still drawn: at this width it
+   * carries only what cannot wait in a menu, such as an export's progress.
+   */
+  compactActions?: React.ReactNode
   /** A quieter statement in the footer: « Total count not requested ». */
   footerNote?: React.ReactNode
   /** The connection and statement an error is about. */
@@ -113,6 +126,7 @@ export const ResultPanel = React.memo(function ResultPanel({
   initialHint = "Run a statement to see its rows here.",
   toolbar,
   footerActions,
+  compactActions,
   footerNote,
   context,
   onEditQuery,
@@ -133,13 +147,39 @@ export const ResultPanel = React.memo(function ResultPanel({
   }>({ result: resultKey, columns: new Set() })
   const hiddenColumns =
     hidden.result === resultKey ? hidden.columns : NO_HIDDEN_COLUMNS
-  const columnsMenu = (columns: Array<ResultColumn>) => (
-    <ColumnsMenu
-      columns={columns}
-      hidden={hiddenColumns}
-      onHiddenChange={(next) => setHidden({ result: resultKey, columns: next })}
-    />
-  )
+  const columnsChoice = (columns: Array<ResultColumn>) => ({
+    columns,
+    hidden: hiddenColumns,
+    onHiddenChange: (next: ReadonlySet<number>) =>
+      setHidden({ result: resultKey, columns: next }),
+  })
+  // What the footer offers besides its own statement: `columns` is null where
+  // hiding one would change nothing on screen.
+  const barActions = (columns: Array<ResultColumn> | null) =>
+    compactActions === undefined ? (
+      <>
+        {columns ? <ColumnsMenu {...columnsChoice(columns)} /> : null}
+        {footerActions}
+      </>
+    ) : (
+      <>
+        {footerActions}
+        <DropdownMenu>
+          <DropdownMenuTrigger render={<Button variant="outline" size="xs" />}>
+            <HugeiconsIcon
+              icon={MoreHorizontalIcon}
+              strokeWidth={2}
+              data-icon="inline-start"
+            />
+            Actions
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-56">
+            {columns ? <ColumnsSubmenu {...columnsChoice(columns)} /> : null}
+            {compactActions}
+          </DropdownMenuContent>
+        </DropdownMenu>
+      </>
+    )
 
   switch (state.status) {
     case "initial":
@@ -187,7 +227,14 @@ export const ResultPanel = React.memo(function ResultPanel({
               note={
                 state.rows === 0 ? "Waiting for the server's first rows." : null
               }
-              actions={columnsMenu(state.columns)}
+              actions={
+                // At wide width a running result offers no export yet.
+                compactActions === undefined ? (
+                  <ColumnsMenu {...columnsChoice(state.columns)} />
+                ) : (
+                  barActions(state.columns)
+                )
+              }
               onCancel={onCancel}
             />
           </div>
@@ -259,7 +306,7 @@ export const ResultPanel = React.memo(function ResultPanel({
                 </EmptyDescription>
               </EmptyHeader>
             </Empty>
-            {footer(footerActions)}
+            {footer(barActions(null))}
           </div>
         )
       }
@@ -278,12 +325,7 @@ export const ResultPanel = React.memo(function ResultPanel({
             onActiveChange={onActiveChange}
             onInspect={onInspect}
           />
-          {footer(
-            <>
-              {columnsMenu(state.columns)}
-              {footerActions}
-            </>
-          )}
+          {footer(barActions(state.columns))}
         </div>
       )
     }

@@ -1,8 +1,11 @@
 import * as React from "react"
+import { HugeiconsIcon } from "@hugeicons/react"
+import { ViewIcon } from "@hugeicons/core-free-icons"
 import { useStore } from "@tanstack/react-store"
 
 import { addressKey } from "@/components/oxyn/catalog-tree"
 import type { OpenTarget } from "@/components/oxyn/catalog-tree"
+import { ExportMenuView, ExportSubmenu } from "@/components/oxyn/export-menu"
 import { FacetFrame } from "@/components/oxyn/facet-frame"
 import {
   ObjectViewFrame,
@@ -22,6 +25,7 @@ import { IncomingKeys, OutgoingKeys } from "@/components/oxyn/relation-keys"
 import { RelationStructure } from "@/components/oxyn/relation-structure"
 import { ResultPanel } from "@/components/oxyn/result-panel"
 import { Alert, AlertDescription, AlertTitle } from "@/components/ui/alert"
+import { DropdownMenuItem } from "@/components/ui/dropdown-menu"
 import {
   previewUnavailable,
   unsupportedReason,
@@ -35,7 +39,7 @@ import {
   gridInspection,
   useReleaseSelection,
 } from "@/features/metadata/value-inspection"
-import { ExportMenu } from "@/features/workspace/export-menu"
+import { useResultExport } from "@/features/workspace/export-menu"
 import { useCompact } from "@/features/workspace/use-compact"
 import { metadata } from "@/lib/ipc/metadata"
 import type { BoundValue } from "@/lib/ipc/metadata"
@@ -67,6 +71,7 @@ export function ObjectView({
   open,
   node,
   initialTab,
+  onInspectRow,
   onOpenRelated,
   onOpenInConsole,
   handleRef,
@@ -76,6 +81,8 @@ export function ObjectView({
   open: OpenConnection
   node: CatalogNode
   initialTab?: OpenTarget
+  /** Shows the selected row's inspector, overlaid at compact width. */
+  onInspectRow?: () => void
   /** Selects another relation, as a click in the explorer would. */
   onOpenRelated?: (address: CatalogAddress) => void
   /**
@@ -221,12 +228,41 @@ export function ObjectView({
     data?.definition.freshness.state === "invalidated" ||
     facets.loads.definition.status === "error"
 
+  const exporter = useResultExport({
+    connection: open.connection,
+    result,
+    defaultName: node.name,
+  })
+  const exportChoice = {
+    formats: exporter.formats,
+    formatsFailed: exporter.formatsFailed,
+    exportable: exportable && result !== null,
+    reason:
+      state.status === "populated"
+        ? "This preview is partial: it was cancelled or truncated."
+        : "Export becomes available once the preview has finished loading.",
+    label: "Export preview…",
+    scope:
+      state.status === "populated"
+        ? `The ${state.rows.toLocaleString("en-US")} preview rows shown · not the entire table`
+        : "The preview rows shown · not the entire table",
+  }
+  const exportMenu = (
+    <ExportMenuView
+      {...exportChoice}
+      state={exporter.state}
+      onExport={exporter.run}
+      onCancel={exporter.cancel}
+    />
+  )
+
   return (
     <ObjectViewFrame
       name={node.name}
       kind={data?.kind ?? node.kind}
       tab={tab}
       onTabChange={setTab}
+      compact={compact}
       dataUnavailable={dataUnavailable}
       onEscape={tab === "data" && preview.running ? preview.cancel : undefined}
       gridFocusRequest={gridFocusRequest}
@@ -295,24 +331,30 @@ export function ObjectView({
                 onRetry={preview.refresh}
                 context={{ connectionName: open.name, statement: null }}
                 footerNote="Preview · total row count not requested"
+                // Compact: the export sits in `Actions`, and the footer shows
+                // only a running export's progress and its Cancel.
                 footerActions={
-                  <ExportMenu
-                    connection={open.connection}
-                    result={result}
-                    exportable={exportable}
-                    reason={
-                      state.status === "populated"
-                        ? "This preview is partial: it was cancelled or truncated."
-                        : "Export becomes available once the preview has finished loading."
-                    }
-                    label="Export preview…"
-                    scope={
-                      state.status === "populated"
-                        ? `The ${state.rows.toLocaleString("en-US")} preview rows shown · not the entire table`
-                        : "The preview rows shown · not the entire table"
-                    }
-                    defaultName={node.name}
-                  />
+                  !compact || exporter.state.status === "exporting"
+                    ? exportMenu
+                    : null
+                }
+                compactActions={
+                  compact ? (
+                    <>
+                      <ExportSubmenu
+                        {...exportChoice}
+                        exporting={exporter.state.status === "exporting"}
+                        onExport={exporter.run}
+                      />
+                      <DropdownMenuItem
+                        disabled={!selected || !onInspectRow}
+                        onClick={onInspectRow}
+                      >
+                        <HugeiconsIcon icon={ViewIcon} strokeWidth={2} />
+                        Inspect row
+                      </DropdownMenuItem>
+                    </>
+                  ) : undefined
                 }
                 {...gridInspection({
                   source,
