@@ -341,6 +341,8 @@ function Canvas({
       aria-label={`Diagram of ${tables.length} ${tables.length === 1 ? "table" : "tables"}`}
       aria-describedby={keysHint}
       onKeyDown={onKeyDown}
+      // Its pinch zooms the diagram, which the page's zoom guard leaves to it.
+      data-own-zoom=""
       className="h-90 min-w-0 outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-inset"
     >
       <span id={keysHint} hidden>

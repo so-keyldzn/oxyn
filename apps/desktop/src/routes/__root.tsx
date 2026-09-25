@@ -25,6 +25,7 @@ import { useAppearance } from "@/features/settings/use-appearance"
 import { useAsidePanels } from "@/features/workspace/aside-panels"
 import { RouteError, RouteNotFound } from "@/features/workspace/route-failures"
 import { WorkspaceHost } from "@/features/workspace/workspace-host"
+import { suppressBrowserDefaults } from "@/lib/browser-defaults"
 import { subscribeToBackendEvents } from "@/lib/ipc/events"
 import type { OpenConnection } from "@/lib/ipc/types"
 import appCss from "../styles.css?url"
@@ -63,6 +64,10 @@ function RootComponent() {
     // Closing the window waits for the drafts this webview still holds.
     subscribeToShutdown()
   }, [])
+
+  // Nothing of the webview shows: no page menu, reload, zoom or history
+  // (ADR-0041 § 8).
+  React.useEffect(() => suppressBrowserDefaults(window), [])
 
   return (
     <QueryClientProvider client={queryClient}>
