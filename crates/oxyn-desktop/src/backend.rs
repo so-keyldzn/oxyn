@@ -25,7 +25,7 @@ use oxyn_data::SinkOutcome;
 use oxyn_driver::DriverRegistry;
 use oxyn_driver_postgres::PostgresDriver;
 use oxyn_driver_sqlite::SqliteDriver;
-use oxyn_exec::{DispatchReport, ExecEvent, Executor, Outcome};
+use oxyn_exec::{DispatchReport, ExecEvent, Executor, Outcome, PendingCommand};
 use oxyn_secrets::{KeyringSecretStore, SecretStore};
 use oxyn_store::Store;
 use parking_lot::Mutex;
@@ -728,6 +728,15 @@ impl Backend {
         if self.confirm_held(command).await? == HostAnswer::Refused {
             return reject("Not confirmed in the Oxyn dialog: nothing was run");
         }
+        // An approved console statement runs from here: the exit lists its
+        // session as `Unknown` until it answers (ADR-0043).
+        let _running = match inner.executor.approvals().peek(command) {
+            Some(PendingCommand {
+                command: Command::Execute { session, .. },
+                ..
+            }) => Some(inner.workbench.consoles.run_on(session)),
+            _ => None,
+        };
         let answer = inner.ai.decisions.answer(command);
         let decided = inner.executor.approve("human", command, &cancel).await;
         answer.report(DispatchReport::decided(command, &decided));
