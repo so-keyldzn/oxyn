@@ -204,6 +204,23 @@ impl LlmError {
         }
     }
 
+    /// Construit l'erreur d'une redirection refusée.
+    ///
+    /// Aucune redirection n'est suivie (voir `http`) : le message dit quoi
+    /// corriger plutôt que de recopier `Location`, qui peut nommer un hôte
+    /// interne. Le statut `3xx` tombe dans la famille permanente : retenter
+    /// redirigerait de nouveau, c'est la configuration qui doit changer.
+    #[must_use]
+    pub fn redirect_refused(provider: ProviderId, status: u16) -> Self {
+        Self::Http {
+            provider,
+            status,
+            message: "the provider answered with a redirect; redirects are not followed — \
+                      set the base URL to the final address"
+                .to_owned(),
+        }
+    }
+
     /// Famille de l'erreur, au sens de `DRIVER-CONTRACT` §4.
     ///
     /// La table des statuts est la seule règle de reprise de cette crate, et

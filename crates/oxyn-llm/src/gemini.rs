@@ -36,6 +36,7 @@ use reqwest::{Client, Url};
 use serde_json::{Map, Value, json};
 
 use crate::error::LlmError;
+use crate::http;
 use crate::provider::{self, LlmProvider, ProviderId};
 use crate::reach;
 use crate::secret::ApiKey;
@@ -87,10 +88,7 @@ impl GeminiProvider {
             provider: id.clone(),
             detail: format!("cannot parse the base URL: {err}"),
         })?;
-        let client = Client::builder().build().map_err(|err| LlmError::Config {
-            provider: id,
-            detail: format!("cannot build the HTTP client: {err}"),
-        })?;
+        let client = http::client(&id)?;
         Ok(Self {
             base_url: provider::normalize_base_url(analysee),
             api_key: api_key.into(),
@@ -211,7 +209,7 @@ impl GeminiProvider {
     /// # Erreurs
     /// Nom de modèle refusé, ou clé non représentable dans un en-tête HTTP —
     /// une clé collée depuis un terminal emporte souvent un saut de ligne.
-    fn prepared_request(&self, model: &str) -> Result<reqwest::RequestBuilder> {
+    pub(crate) fn prepared_request(&self, model: &str) -> Result<reqwest::RequestBuilder> {
         let url = self.stream_url(model)?;
         let mut cle =
             HeaderValue::from_str(self.api_key.expose()).map_err(|_| LlmError::Config {

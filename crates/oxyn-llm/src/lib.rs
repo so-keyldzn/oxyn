@@ -108,6 +108,12 @@ pub mod types;
 /// fournisseur qui court-circuite [`LlmProvider`].
 mod sse;
 
+/// Le transport HTTP : construction du client, lecture d'une réponse d'échec.
+///
+/// Interne : c'est lui qui refuse les redirections, et cette garantie ne vaut
+/// que parce qu'aucun fournisseur ne construit son client autrement.
+mod http;
+
 /// Le pilote de flux annulable, partagé lui aussi.
 ///
 /// Interne pour la même raison que [`sse`] : c'est lui qui garantit qu'un

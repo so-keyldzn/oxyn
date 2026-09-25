@@ -26,7 +26,6 @@ mod wire;
 
 use std::fmt;
 use std::pin::pin;
-use std::time::Duration;
 
 use async_trait::async_trait;
 use futures::future::{Either, select};
@@ -36,19 +35,11 @@ use reqwest::header::{AUTHORIZATION, HeaderName, HeaderValue};
 use reqwest::{Client, RequestBuilder, Url};
 
 use crate::error::LlmError;
+use crate::http;
 use crate::provider::{self, LlmProvider, ProviderId};
 use crate::reach;
 use crate::secret::{ApiKey, redact_key};
 use crate::types::{ChatEvent, ChatRequest, ModelInfo};
-
-/// Délai d'établissement de la connexion TCP et TLS.
-///
-/// Ne borne **que** la mise en relation : une génération peut durer des
-/// minutes, et la borner globalement reviendrait à couper les réponses longues.
-const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
-
-/// En-tête `User-Agent` envoyé à tous les fournisseurs.
-const USER_AGENT: &str = concat!("oxyn/", env!("CARGO_PKG_VERSION"));
 
 /// Point d'accès local d'Ollama.
 ///
@@ -147,7 +138,7 @@ impl OpenAiCompatibleProvider {
             provider: id.clone(),
             detail: format!("cannot parse the base URL: {err}"),
         })?;
-        let client = build_client(&id)?;
+        let client = http::client(&id)?;
         Ok(Self {
             base_url: provider::normalize_base_url(analysee),
             api_key: None,
@@ -315,14 +306,6 @@ impl OpenAiCompatibleProvider {
         Ok(self)
     }
 
-    /// Remplace le client HTTP, pour partager un pool de connexions ou imposer
-    /// une configuration mandataire.
-    #[must_use]
-    pub fn with_client(mut self, client: Client) -> Self {
-        self.client = client;
-        self
-    }
-
     /// URL de base, normalisée.
     #[must_use]
     pub fn base_url(&self) -> &Url {
@@ -445,26 +428,8 @@ impl OpenAiCompatibleProvider {
 
     /// Transforme une réponse d'échec en erreur, corps expurgé.
     async fn failure(&self, response: reqwest::Response) -> LlmError {
-        let statut = response.status().as_u16();
-        // Un corps illisible ne doit pas masquer le statut, qui est la donnée
-        // qui décide de la reprise.
-        let corps = response.text().await.unwrap_or_default();
-        LlmError::from_response(self.id.clone(), statut, &corps, self.api_key.as_ref())
+        http::failure(&self.id, response, self.api_key.as_ref()).await
     }
-}
-
-/// Construit le client HTTP par défaut.
-fn build_client(id: &ProviderId) -> Result<Client> {
-    Client::builder()
-        .connect_timeout(CONNECT_TIMEOUT)
-        .user_agent(USER_AGENT)
-        .build()
-        .map_err(|err| {
-            OxynError::from(LlmError::Config {
-                provider: id.clone(),
-                detail: format!("cannot build the HTTP client: {err}"),
-            })
-        })
 }
 
 /// Valide un nom de déploiement Azure avant de l'insérer dans un chemin.
