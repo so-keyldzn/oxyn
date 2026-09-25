@@ -1391,14 +1391,16 @@ converser, refuser sur `Local`, refuser à un agent — est écrit et éprouvé
   saisie des arguments est revenue à **un argument par ligne**, comme le veut
   l'ADR-0026 : le portage vers Tauri avait réintroduit un découpage sur
   l'espace avec guillemets ;
-- **la nuance « inconnaissable » n'est plus tenue par un test.** L'écran GPUI
-  refusait qu'une destination d'agent se lise comme « inconnue » ou « à
-  mesurer », puisque aucune mesure ne viendra la lever. Aujourd'hui le panneau
-  dit « Oxyn ne voit pas où il envoie la question », ce qui tient la nuance,
-  mais son badge de portée affiche `Unresolved` pour un agent — le mot qu'il
-  emploie aussi pour un point d'accès **pas encore** résolu. Garder le mot
-  commun, qui dit vrai sur la décision (le doute compte comme distant), ou en
-  donner un propre à l'agent, qui dit vrai sur la cause : **non tranché**.
+- ~~**la nuance « inconnaissable » n'est plus tenue par un test.**~~ — tranché
+  le 2026-09-24 pour un mot propre à l'agent, qui dit vrai sur la cause : une
+  destination d'agent est inconnaissable, aucune mesure ne la lèvera, et elle
+  compte comme distante. Le badge de portée de l'en-tête dit `Agent-managed`
+  pour un agent et garde `Unresolved` pour un point d'accès **pas encore**
+  résolu ; les stories `ExternalAgent` et `UnresolvedProvider`
+  (`assistant-header.stories.tsx`) tiennent les deux sens. **Reste :** l'écran
+  d'échantillon dit encore « to an unresolved address » quand un agent le
+  reçoit — pour un échantillon épinglé, il ne sait pas que le destinataire est
+  un agent.
 
 ### Vérification phase par phase, avec les preuves
 

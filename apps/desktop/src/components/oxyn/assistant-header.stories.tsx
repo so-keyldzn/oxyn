@@ -6,6 +6,7 @@ import {
   destinations,
   localProvider,
   remoteProvider,
+  unresolvedProvider,
 } from "./assistant-fixtures"
 
 const meta = {
@@ -87,8 +88,48 @@ export const ExternalAgent: Story = {
     ).toBeNull()
     // Its destination is unknowable, not « unresolved »: said as what it is.
     const canvas = within(canvasElement)
-    await expect(canvas.getByText("Metadata · External agent")).toBeVisible()
+    await expect(canvas.getByText("Metadata · Agent-managed")).toBeVisible()
     await expect(canvas.queryByText(/Unresolved/)).toBeNull()
+    await expect(
+      canvas.getByLabelText("Privacy tier Metadata, destination Agent-managed")
+    ).toBeVisible()
+  },
+}
+
+/**
+ * A provider whose endpoint is not resolved yet keeps « Unresolved »: the word
+ * is its own, and an agent never borrows it (ExternalAgent above).
+ */
+export const UnresolvedProvider: Story = {
+  args: {
+    destinations: [
+      {
+        key: `provider:${unresolvedProvider.id}`,
+        kind: "provider",
+        id: unresolvedProvider.id,
+        label: unresolvedProvider.label,
+        model: unresolvedProvider.model,
+        reach: "unresolved",
+        usable: true,
+        reason: null,
+      },
+    ],
+    selected: {
+      key: `provider:${unresolvedProvider.id}`,
+      kind: "provider",
+      id: unresolvedProvider.id,
+      label: unresolvedProvider.label,
+      model: unresolvedProvider.model,
+      reach: "unresolved",
+      usable: true,
+      reason: null,
+    },
+    model: unresolvedProvider.model,
+  },
+  play: async ({ canvasElement }) => {
+    const canvas = within(canvasElement)
+    await expect(canvas.getByText("Metadata · Unresolved")).toBeVisible()
+    await expect(canvas.queryByText(/Agent-managed/)).toBeNull()
   },
 }
 
