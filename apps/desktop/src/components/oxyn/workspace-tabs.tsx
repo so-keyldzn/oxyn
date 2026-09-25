@@ -23,6 +23,7 @@ import {
 import { tabState, tabTitle } from "@/features/consoles/console-model"
 import type { ConsoleTabInfo } from "@/features/consoles/console-model"
 import { cn } from "@/lib/utils"
+import { actionKeys, ariaKeys } from "@/lib/actions/manifest"
 
 export type WorkspaceTabItem =
   | ({ kind: "console" } & ConsoleTabInfo)
@@ -188,7 +189,7 @@ export function WorkspaceTabs({
                 size="icon-sm"
                 variant="ghost"
                 aria-label="New console"
-                aria-keyshortcuts="Meta+T"
+                aria-keyshortcuts={ariaKeys("console.new")}
                 onClick={onNewConsole}
               />
             }
@@ -198,8 +199,9 @@ export function WorkspaceTabs({
           <TooltipContent className="flex items-center gap-2">
             New console
             <KbdGroup>
-              <Kbd>⌘</Kbd>
-              <Kbd>T</Kbd>
+              {actionKeys("console.new").map((key) => (
+                <Kbd key={key}>{key}</Kbd>
+              ))}
             </KbdGroup>
           </TooltipContent>
         </Tooltip>

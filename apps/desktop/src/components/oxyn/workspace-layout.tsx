@@ -21,6 +21,7 @@ import {
   SidebarInset,
   SidebarProvider,
   SidebarTrigger,
+  useSidebar,
 } from "@/components/ui/sidebar"
 import { Tabs } from "@/components/ui/tabs"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
@@ -29,6 +30,7 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { actionKeys } from "@/lib/actions/manifest"
 import type { Environment } from "@/lib/ipc/types"
 import { cn } from "@/lib/utils"
 
@@ -81,6 +83,27 @@ function IconAction({
 }
 
 /**
+ * Hands the sidebar's toggle to the screen. The provider owns it — including
+ * the compact state the screen does not see — and `⌘B` of the registry runs
+ * it instead of the listener shadcn's sidebar installs, which the dispatcher
+ * stops before it (docs/adr/0041-registre-d-actions-menus-et-raccourcis.md).
+ */
+function SidebarToggle({
+  toggleRef,
+}: {
+  toggleRef: React.RefObject<(() => void) | null>
+}) {
+  const { toggleSidebar } = useSidebar()
+  React.useEffect(() => {
+    toggleRef.current = toggleSidebar
+    return () => {
+      toggleRef.current = null
+    }
+  }, [toggleRef, toggleSidebar])
+  return null
+}
+
+/**
  * The frame of a workspace (ADR-0011): left sidebar, a 48 px top bar that
  * always names the connection, its environment and READ ONLY, the tabs, the
  * work area, the right column and the status bar. Presentational: the screen
@@ -96,6 +119,7 @@ export function WorkspaceLayout({
   sidebar,
   sidebarOpen,
   onSidebarOpenChange,
+  sidebarToggleRef,
   leftView,
   onLeftViewChange,
   connectionName,
@@ -121,6 +145,8 @@ export function WorkspaceLayout({
   /** The wide-screen preference. */
   sidebarOpen: boolean
   onSidebarOpenChange: (open: boolean) => void
+  /** Filled with the sidebar's toggle, for the registry's `Toggle sidebar`. */
+  sidebarToggleRef?: React.RefObject<(() => void) | null>
   leftView: LeftView
   onLeftViewChange: (view: LeftView) => void
   connectionName: string
@@ -239,6 +265,7 @@ export function WorkspaceLayout({
         } as React.CSSProperties
       }
     >
+      {sidebarToggleRef ? <SidebarToggle toggleRef={sidebarToggleRef} /> : null}
       {sidebar}
       <SidebarInset className="min-h-0 overflow-hidden">
         <Tabs
@@ -280,12 +307,14 @@ export function WorkspaceLayout({
               <EnvironmentBadge environment={environment} />
               {readOnly ? <ReadOnlyBadge /> : null}
             </div>
-            <div className="ml-2 min-w-0 flex-1">{tabs}</div>
+            <div data-action-zone="tabs" className="ml-2 min-w-0 flex-1">
+              {tabs}
+            </div>
             {aiEntry}
             {aside !== null && onAsideOpenChange ? (
               <IconAction
                 label="Toggle side panel"
-                keys={["⌘", "⌥", "B"]}
+                keys={actionKeys("view.sidePanel")}
                 variant={asideOpen ? "secondary" : "ghost"}
                 aria-pressed={asideOpen}
                 onClick={() => onAsideOpenChange(!asideOpen)}
@@ -296,7 +325,7 @@ export function WorkspaceLayout({
             {onOpenSettings ? (
               <IconAction
                 label="Settings"
-                keys={["⌘", ","]}
+                keys={actionKeys("app.settings")}
                 onClick={onOpenSettings}
               >
                 <HugeiconsIcon icon={Settings01Icon} strokeWidth={2} />

@@ -1,0 +1,331 @@
+{
+  "$comment": "The static half of the action registry (docs/adr/0041-registre-d-actions-menus-et-raccourcis.md, point 1). Read by registry.ts in the front and by crates/oxyn-desktop/src/menu.rs through include_str!: moving this file breaks the Rust build, which is the point. Nothing here is executable. Shortcuts: `Mod` is ⌘ on macOS and Ctrl elsewhere; `Ctrl` is the Control key on every platform. `binding`: `dispatcher` (default) is bound by lib/actions/keyboard.ts or by the native macOS menu; `component` is handled by the component of its zone and only shown; `system` is the webview's own editing key, only shown. A menu's `roles` are the macOS system items (Edit's Copy, Hide…), placed by group and order among the actions; the web bar of Windows and Linux ignores them.",
+  "menus": [
+    {
+      "id": "app",
+      "title": "Oxyn",
+      "platform": "mac",
+      "roles": [
+        { "role": "about", "group": 0, "order": 0 },
+        { "role": "services", "group": 2, "order": 0 },
+        { "role": "hide", "group": 3, "order": 0 },
+        { "role": "hideOthers", "group": 3, "order": 1 },
+        { "role": "showAll", "group": 3, "order": 2 }
+      ]
+    },
+    { "id": "file", "title": "File", "mnemonic": "f" },
+    {
+      "id": "edit",
+      "title": "Edit",
+      "mnemonic": "e",
+      "roles": [
+        { "role": "undo", "group": 0, "order": 0 },
+        { "role": "redo", "group": 0, "order": 1 },
+        { "role": "cut", "group": 1, "order": 0 },
+        { "role": "copy", "group": 1, "order": 1 },
+        { "role": "paste", "group": 1, "order": 2 },
+        { "role": "selectAll", "group": 1, "order": 3 }
+      ]
+    },
+    {
+      "id": "view",
+      "title": "View",
+      "mnemonic": "v",
+      "roles": [{ "role": "fullscreen", "group": 1, "order": 0 }]
+    },
+    { "id": "query", "title": "Query", "mnemonic": "q" },
+    {
+      "id": "window",
+      "title": "Window",
+      "platform": "mac",
+      "roles": [
+        { "role": "minimize", "group": 0, "order": 0 },
+        { "role": "zoom", "group": 0, "order": 1 }
+      ]
+    }
+  ],
+  "actions": [
+    {
+      "id": "app.settings",
+      "label": "Settings…",
+      "zone": "global",
+      "shortcut": { "mac": "Mod+,", "other": "Mod+," },
+      "menu": {
+        "mac": { "menu": "app", "group": 1, "order": 0 },
+        "other": { "menu": "file", "group": 8, "order": 0, "mnemonic": "t" }
+      }
+    },
+    {
+      "id": "app.quit",
+      "label": { "mac": "Quit Oxyn", "other": "Exit" },
+      "zone": "app",
+      "shortcut": { "mac": "Mod+Q", "other": "Mod+Q" },
+      "menu": {
+        "mac": { "menu": "app", "group": 9, "order": 0 },
+        "other": { "menu": "file", "group": 9, "order": 0, "mnemonic": "x" }
+      }
+    },
+    {
+      "id": "console.new",
+      "label": "New console",
+      "zone": "global",
+      "shortcut": { "mac": "Mod+T", "other": "Mod+T" },
+      "menu": {
+        "mac": { "menu": "file", "group": 0, "order": 0 },
+        "other": { "menu": "file", "group": 0, "order": 0, "mnemonic": "n" }
+      }
+    },
+    {
+      "id": "connection.new",
+      "label": "New connection…",
+      "zone": "global",
+      "menu": {
+        "mac": { "menu": "file", "group": 0, "order": 1 },
+        "other": { "menu": "file", "group": 0, "order": 1, "mnemonic": "c" }
+      }
+    },
+    {
+      "id": "library.open",
+      "label": "Open from library…",
+      "zone": "global",
+      "shortcut": { "mac": "Mod+Shift+H", "other": "Mod+Shift+H" },
+      "menu": {
+        "mac": { "menu": "file", "group": 1, "order": 0 },
+        "other": { "menu": "file", "group": 1, "order": 0, "mnemonic": "o" }
+      }
+    },
+    {
+      "id": "console.save",
+      "label": "Save",
+      "zone": "global",
+      "shortcut": { "mac": "Mod+S", "other": "Mod+S" },
+      "menu": {
+        "mac": { "menu": "file", "group": 2, "order": 0 },
+        "other": { "menu": "file", "group": 2, "order": 0, "mnemonic": "s" }
+      }
+    },
+    {
+      "id": "tab.close",
+      "label": "Close tab",
+      "zone": "global",
+      "shortcut": { "mac": "Mod+W", "other": "Mod+W" },
+      "menu": {
+        "mac": { "menu": "file", "group": 3, "order": 0 },
+        "other": { "menu": "file", "group": 3, "order": 0, "mnemonic": "l" }
+      }
+    },
+    {
+      "id": "tab.next",
+      "label": "Next tab",
+      "zone": "global",
+      "shortcut": { "mac": "Ctrl+Tab", "other": "Ctrl+Tab" }
+    },
+    {
+      "id": "tab.previous",
+      "label": "Previous tab",
+      "zone": "global",
+      "shortcut": { "mac": "Ctrl+Shift+Tab", "other": "Ctrl+Shift+Tab" }
+    },
+    {
+      "id": "edit.undo",
+      "label": "Undo",
+      "zone": "global",
+      "platform": "other",
+      "binding": "system",
+      "shortcut": { "other": "Mod+Z" },
+      "menu": {
+        "other": { "menu": "edit", "group": 0, "order": 0, "mnemonic": "u" }
+      }
+    },
+    {
+      "id": "edit.redo",
+      "label": "Redo",
+      "zone": "global",
+      "platform": "other",
+      "binding": "system",
+      "shortcut": { "other": "Mod+Y" },
+      "menu": {
+        "other": { "menu": "edit", "group": 0, "order": 1, "mnemonic": "r" }
+      }
+    },
+    {
+      "id": "edit.cut",
+      "label": "Cut",
+      "zone": "global",
+      "platform": "other",
+      "binding": "system",
+      "shortcut": { "other": "Mod+X" },
+      "menu": {
+        "other": { "menu": "edit", "group": 1, "order": 0, "mnemonic": "t" }
+      }
+    },
+    {
+      "id": "edit.copy",
+      "label": "Copy",
+      "zone": "global",
+      "platform": "other",
+      "binding": "system",
+      "shortcut": { "other": "Mod+C" },
+      "menu": {
+        "other": { "menu": "edit", "group": 1, "order": 1, "mnemonic": "c" }
+      }
+    },
+    {
+      "id": "edit.paste",
+      "label": "Paste",
+      "zone": "global",
+      "platform": "other",
+      "binding": "system",
+      "shortcut": { "other": "Mod+V" },
+      "menu": {
+        "other": { "menu": "edit", "group": 1, "order": 2, "mnemonic": "p" }
+      }
+    },
+    {
+      "id": "edit.selectAll",
+      "label": "Select All",
+      "zone": "global",
+      "platform": "other",
+      "binding": "system",
+      "shortcut": { "other": "Mod+A" },
+      "menu": {
+        "other": { "menu": "edit", "group": 1, "order": 3, "mnemonic": "a" }
+      }
+    },
+    {
+      "id": "edit.find",
+      "label": "Find",
+      "variants": [
+        { "zone": "editor", "label": "Find in editor" },
+        { "zone": "grid", "label": "Find in results" }
+      ],
+      "zone": "global",
+      "shortcut": { "mac": "Mod+F", "other": "Mod+F" },
+      "menu": {
+        "mac": { "menu": "edit", "group": 2, "order": 0 },
+        "other": { "menu": "edit", "group": 2, "order": 0, "mnemonic": "f" }
+      }
+    },
+    {
+      "id": "editor.toggleComment",
+      "label": "Toggle comment",
+      "zone": "editor",
+      "shortcut": { "mac": "Mod+/", "other": "Mod+/" }
+    },
+    {
+      "id": "help.shortcuts",
+      "label": "Keyboard shortcuts",
+      "zone": "global",
+      "shortcut": { "mac": "Mod+/", "other": "Mod+/" }
+    },
+    {
+      "id": "view.sidebar",
+      "label": "Toggle sidebar",
+      "zone": "global",
+      "shortcut": { "mac": "Mod+B", "other": "Mod+B" },
+      "menu": {
+        "mac": { "menu": "view", "group": 0, "order": 0 },
+        "other": { "menu": "view", "group": 0, "order": 0, "mnemonic": "s" }
+      }
+    },
+    {
+      "id": "view.sidePanel",
+      "label": "Toggle side panel",
+      "zone": "global",
+      "shortcut": { "mac": "Mod+Alt+B", "other": "Mod+Shift+B" },
+      "menu": {
+        "mac": { "menu": "view", "group": 0, "order": 1 },
+        "other": { "menu": "view", "group": 0, "order": 1, "mnemonic": "p" }
+      }
+    },
+    {
+      "id": "view.assistant",
+      "label": "Assistant",
+      "zone": "global",
+      "menu": {
+        "mac": { "menu": "view", "group": 0, "order": 2 },
+        "other": { "menu": "view", "group": 0, "order": 2, "mnemonic": "a" }
+      }
+    },
+    {
+      "id": "view.catalog",
+      "label": "Show catalog",
+      "zone": "global",
+      "shortcut": { "mac": "Mod+1", "other": "Mod+1" }
+    },
+    {
+      "id": "preview.focusGrid",
+      "label": "Go to preview grid",
+      "zone": "global",
+      "shortcut": { "mac": "Mod+2", "other": "Mod+2" }
+    },
+    {
+      "id": "console.focus",
+      "label": "Go to editor",
+      "zone": "global",
+      "shortcut": { "mac": "Mod+J", "other": "Mod+J" }
+    },
+    {
+      "id": "console.run",
+      "label": "Run",
+      "zone": "global",
+      "shortcut": { "mac": "Mod+Enter", "other": "Mod+Enter" },
+      "menu": {
+        "mac": { "menu": "query", "group": 0, "order": 0 },
+        "other": { "menu": "query", "group": 0, "order": 0, "mnemonic": "r" }
+      }
+    },
+    {
+      "id": "console.runAll",
+      "label": "Run all",
+      "zone": "global",
+      "shortcut": { "mac": "Mod+Shift+Enter", "other": "Mod+Shift+Enter" },
+      "menu": {
+        "mac": { "menu": "query", "group": 0, "order": 1 },
+        "other": { "menu": "query", "group": 0, "order": 1, "mnemonic": "a" }
+      }
+    },
+    {
+      "id": "console.explain",
+      "label": "Explain",
+      "zone": "global",
+      "menu": {
+        "mac": { "menu": "query", "group": 0, "order": 2 },
+        "other": { "menu": "query", "group": 0, "order": 2, "mnemonic": "e" }
+      }
+    },
+    {
+      "id": "console.cancel",
+      "label": "Cancel",
+      "zone": "editor",
+      "binding": "component",
+      "shortcut": { "mac": "Escape", "other": "Escape" },
+      "menu": {
+        "mac": { "menu": "query", "group": 1, "order": 0 },
+        "other": { "menu": "query", "group": 1, "order": 0, "mnemonic": "c" }
+      }
+    },
+    {
+      "id": "nav.back",
+      "label": "Back",
+      "zone": "global",
+      "shortcut": { "mac": "Mod+[", "other": ["Alt+ArrowLeft", "Mod+["] }
+    },
+    {
+      "id": "menubar.focus",
+      "label": "Go to the menu bar",
+      "zone": "global",
+      "platform": "other",
+      "shortcut": { "other": "F10" }
+    },
+    {
+      "id": "context-menu.open",
+      "label": "Open context menu",
+      "zone": "global",
+      "shortcut": {
+        "mac": ["Shift+F10", "ContextMenu"],
+        "other": ["Shift+F10", "ContextMenu"]
+      }
+    }
+  ]
+}

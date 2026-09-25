@@ -13,6 +13,8 @@ import { ReactQueryDevtoolsPanel } from "@tanstack/react-query-devtools"
 import { TanStackRouterDevtoolsPanel } from "@tanstack/react-router-devtools"
 
 import { Toaster } from "@/components/ui/toast"
+import { AppMenubarHost } from "@/features/actions/app-menubar-host"
+import { useActionRuntime } from "@/features/actions/use-action-runtime"
 import { TooltipProvider } from "@/components/ui/tooltip"
 import { subscribeToShutdown } from "@/features/consoles/draft-registry"
 import { ProviderSettings } from "@/features/assistant/provider-settings"
@@ -25,6 +27,7 @@ import { useAppearance } from "@/features/settings/use-appearance"
 import { useAsidePanels } from "@/features/workspace/aside-panels"
 import { RouteError, RouteNotFound } from "@/features/workspace/route-failures"
 import { WorkspaceHost } from "@/features/workspace/workspace-host"
+import { platform } from "@/lib/actions/platform"
 import { suppressBrowserDefaults } from "@/lib/browser-defaults"
 import { subscribeToBackendEvents } from "@/lib/ipc/events"
 import type { OpenConnection } from "@/lib/ipc/types"
@@ -53,11 +56,22 @@ const AI_SECTIONS = [
   { id: "ai", label: "AI providers", content: <ProviderSettings /> },
 ]
 
+const noSubscription = () => () => undefined
+
 function RootComponent() {
   const { queryClient } = Route.useRouteContext()
   // The saved theme and reading density, applied to <html> (ADR-0013).
   useAppearance()
   const open = useStore(session, (state) => state.open)
+  // Keyboard, focus zones and the macOS menu bar, for every screen (ADR-0041).
+  useActionRuntime()
+  // The shell is prerendered in Node, which knows no keyboard family: the
+  // web menu bar appears once the window runs, never in the static HTML.
+  const client = React.useSyncExternalStore(
+    noSubscription,
+    () => true,
+    () => false
+  )
 
   React.useEffect(() => {
     subscribeToBackendEvents()
@@ -73,9 +87,16 @@ function RootComponent() {
     <QueryClientProvider client={queryClient}>
       <TooltipProvider>
         <Toaster>
-          <Outlet />
-          {/* Above the routes: the start screen does not destroy it. */}
-          <Workspace open={open} />
+          <div className="flex h-full min-h-0 flex-col">
+            {/* Windows and Linux: the first row, under the system title bar.
+                macOS has its native bar, built in Rust (ADR-0041). */}
+            {client && platform === "other" ? <AppMenubarHost /> : null}
+            <div className="min-h-0 flex-1">
+              <Outlet />
+              {/* Above the routes: the start screen does not destroy it. */}
+              <Workspace open={open} />
+            </div>
+          </div>
           {/* Once, for every screen: ⌘, opens it from the start screen too.
               An edit of the open connection hands back its new marking, which
               the workspace takes without closing a console (I-04). */}

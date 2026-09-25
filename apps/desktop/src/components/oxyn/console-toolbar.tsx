@@ -28,6 +28,8 @@ import {
   TooltipContent,
   TooltipTrigger,
 } from "@/components/ui/tooltip"
+import { actionKeys, actionShortcut, ariaKeys } from "@/lib/actions/manifest"
+import { consoleAvailability } from "@/lib/actions/registry"
 import { cn } from "@/lib/utils"
 import { TextInput } from "./text-field"
 
@@ -144,7 +146,13 @@ export function ConsoleToolbar({
 }) {
   const titleId = React.useId()
   const noticeId = React.useId()
-  const idle = canRun && !running
+  const writing = save.status === "saving" || closing
+  // The registry's conditions, the same for these buttons as for the menu
+  // bar and the keyboard (UX-SPEC, « Barre de menus »).
+  const state = { canRun, running, cancelling, writing }
+  const idle = consoleAvailability("run", state) === true
+  const stoppable = consoleAvailability("cancel", state) === true
+  const savable = consoleAvailability("save", state) === true
   const notice =
     titleError ??
     (save.status === "saving" ? "Saving named query…" : save.notice)
@@ -152,7 +160,6 @@ export function ConsoleToolbar({
     titleError !== null ||
     save.status === "conflict" ||
     save.status === "failed"
-  const writing = save.status === "saving" || closing
   return (
     <div
       data-slot="console-toolbar"
@@ -162,13 +169,13 @@ export function ConsoleToolbar({
         <ButtonGroup aria-label="Execution">
           <Shortcut
             label={target === "selection" ? "Run selection" : "Run statement"}
-            keys={["⌘", "↵"]}
+            keys={actionKeys("console.run")}
           >
             <Button
               size="sm"
               onClick={onRun}
               disabled={!idle}
-              aria-keyshortcuts="Meta+Enter"
+              aria-keyshortcuts={ariaKeys("console.run")}
             >
               <HugeiconsIcon
                 icon={PlayIcon}
@@ -194,7 +201,9 @@ export function ConsoleToolbar({
               <DropdownMenuGroup>
                 <DropdownMenuItem onClick={onRunAll}>
                   Run all
-                  <DropdownMenuShortcut>⌘⇧↵</DropdownMenuShortcut>
+                  <DropdownMenuShortcut>
+                    {actionShortcut("console.runAll")}
+                  </DropdownMenuShortcut>
                 </DropdownMenuItem>
               </DropdownMenuGroup>
             </DropdownMenuContent>
@@ -204,8 +213,8 @@ export function ConsoleToolbar({
           size="sm"
           variant="outline"
           onClick={onCancel}
-          disabled={!running || cancelling}
-          aria-keyshortcuts="Escape"
+          disabled={!stoppable}
+          aria-keyshortcuts={ariaKeys("console.cancel")}
         >
           {cancelling ? (
             <Spinner data-icon="inline-start" />
@@ -217,7 +226,9 @@ export function ConsoleToolbar({
             />
           )}
           {cancelling ? "Cancelling…" : "Stop"}
-          {cancelling ? null : <Kbd className="ml-1">Esc</Kbd>}
+          {cancelling ? null : (
+            <Kbd className="ml-1">{actionShortcut("console.cancel")}</Kbd>
+          )}
         </Button>
         <Button
           size="sm"
@@ -237,7 +248,7 @@ export function ConsoleToolbar({
             ? "Cancellation requested — waiting for the server"
             : running
               ? `Running${elapsedMs === null ? "" : ` · ${formatElapsed(elapsedMs)}`} — Esc cancels`
-              : `⌘Enter executes: ${target === "selection" ? "selection" : "current statement"}`}
+              : `${actionShortcut("console.run")} executes: ${target === "selection" ? "selection" : "current statement"}`}
         </span>
         <Button
           size="sm"
@@ -288,13 +299,13 @@ export function ConsoleToolbar({
             Save as new query
           </Button>
         ) : (
-          <Shortcut label="Save query" keys={["⌘", "S"]}>
+          <Shortcut label="Save query" keys={actionKeys("console.save")}>
             <Button
               size="sm"
               variant="outline"
-              disabled={writing}
+              disabled={!savable}
               onClick={onSave}
-              aria-keyshortcuts="Meta+S"
+              aria-keyshortcuts={ariaKeys("console.save")}
             >
               {save.status === "saving" ? (
                 <Spinner data-icon="inline-start" />

@@ -2,6 +2,7 @@ import type { Meta, StoryObj } from "@storybook/react-vite"
 import { expect, fn, screen, userEvent, waitFor } from "storybook/test"
 
 import { ConsoleToolbar, formatElapsed } from "./console-toolbar"
+import { actionShortcut, ariaKeys } from "@/lib/actions/manifest"
 
 const meta = {
   title: "Oxyn/ConsoleToolbar",
@@ -41,7 +42,9 @@ type Story = StoryObj<typeof meta>
 export const Initial: Story = {
   play: async ({ canvas, args }) => {
     await expect(
-      canvas.getByText("⌘Enter executes: current statement")
+      canvas.getByText(
+        `${actionShortcut("console.run")} executes: current statement`
+      )
     ).toBeVisible()
     await userEvent.click(canvas.getByRole("button", { name: /^Run$/ }))
     await expect(args.onRun).toHaveBeenCalled()
@@ -54,7 +57,9 @@ export const Initial: Story = {
 export const SelectionTarget: Story = {
   args: { target: "selection" },
   play: async ({ canvas }) => {
-    await expect(canvas.getByText("⌘Enter executes: selection")).toBeVisible()
+    await expect(
+      canvas.getByText(`${actionShortcut("console.run")} executes: selection`)
+    ).toBeVisible()
   },
 }
 
@@ -240,7 +245,7 @@ export const ShortcutsAreDeclared: Story = {
   play: async ({ canvas }) => {
     await expect(canvas.getByRole("button", { name: "Run" })).toHaveAttribute(
       "aria-keyshortcuts",
-      "Meta+Enter"
+      ariaKeys("console.run")
     )
     await expect(canvas.getByRole("button", { name: /^Stop/ })).toHaveAttribute(
       "aria-keyshortcuts",

@@ -1,7 +1,6 @@
 import * as React from "react"
 import { HugeiconsIcon } from "@hugeicons/react"
 import { ViewIcon } from "@hugeicons/core-free-icons"
-import { useHotkeys } from "@tanstack/react-hotkeys"
 import type { Meta, StoryObj } from "@storybook/react-vite"
 import { expect, fn, userEvent, waitFor, within } from "storybook/test"
 
@@ -34,6 +33,24 @@ import type { ResultState } from "./result-panel"
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu"
 import { PLAIN_SHAPE } from "@/lib/ipc/metadata"
 import type { ExportFormatChoice } from "@/lib/ipc/results"
+import { useActionSource } from "@/lib/actions/context"
+import type { WorkspaceActions } from "@/lib/actions/context"
+
+const nothing = () => undefined
+const storyWorkspace: WorkspaceActions = {
+  openConsole: nothing,
+  closeActiveTab: nothing,
+  nextTab: nothing,
+  previousTab: nothing,
+  showCatalog: nothing,
+  showLibrary: nothing,
+  focusPreview: nothing,
+  focusConsole: nothing,
+  toggleSidebar: nothing,
+  toggleAside: nothing,
+  openAssistant: nothing,
+  switchConnection: nothing,
+}
 
 // `Mod` is Command on macOS and Control elsewhere, as the hotkeys decide.
 const MOD = /Mac/.test(navigator.platform) ? "Meta" : "Control"
@@ -97,21 +114,31 @@ function Harness({
     "incoming"
   )
   const idle = { status: "idle" } as const
-  // `⌘2` as the workspace binds it for the object on screen.
+  // `⌘2` as the workspace publishes it to the registry for the object on
+  // screen; the rest of the workspace does nothing in a story.
   const [gridFocusRequest, setGridFocusRequest] = React.useState(0)
   const [definitionWidth, setDefinitionWidth] = React.useState<number>(
     DEFINITION_WIDTH.initial
   )
-  useHotkeys([
+  useActionSource(
+    "workspace",
     {
-      hotkey: "Mod+2",
-      callback: () => {
+      activeTab: "object",
+      tabCount: 1,
+      consoleCount: 0,
+      objectActive: true,
+      hasAside: false,
+      hasAssistant: false,
+    },
+    {
+      ...storyWorkspace,
+      focusPreview: () => {
         if (dataUnavailable !== null) return
         setTab("data")
         setGridFocusRequest((count) => count + 1)
       },
-    },
-  ])
+    }
+  )
   const exportChoice = {
     formats: exportFormats,
     formatsFailed: false,

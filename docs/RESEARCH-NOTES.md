@@ -103,7 +103,7 @@ ou de `rfd`** :
 | `@tauri-apps/cli` · `@tauri-apps/api` | `2.11.4` · `2.11.1` | idem | — |
 | `@tanstack/react-start` · `react-router` · `router-plugin` | `1.168.54` · `1.170.36` · `1.168.38` | idem | — |
 | `@tanstack/react-query` · `react-virtual` · `react-form` | `5.102.8` · `3.14.13` · `1.33.5` | idem | — |
-| `@tanstack/react-store` · `react-hotkeys` · `react-pacer` | `0.11.1` · `0.10.0` · `0.23.0` | idem | `react-hotkeys` se déclare **alpha** dans son README |
+| `@tanstack/react-store` · `react-pacer` | `0.11.1` · `0.23.0` | idem | `react-hotkeys` (`0.10.0`, qui se déclarait **alpha** dans son README) est retiré le 2026-09-25 : le répartiteur du registre d'actions le remplace ([ADR-0041](adr/0041-registre-d-actions-menus-et-raccourcis.md), point 3) |
 | `@tanstack/react-table` | `8.21.3` | `9.2.4` | les composants et exemples shadcn supposent l'API v8 |
 | `shadcn` (CLI) · `@base-ui/react` | `4.21.0` · `1.8.0` | idem | style `base-nova` |
 | `@hugeicons/react` · `@hugeicons/core-free-icons` | `1.1.10` · `4.3.3` | idem | UX-SPEC impose Hugeicons |

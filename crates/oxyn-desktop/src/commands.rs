@@ -167,6 +167,7 @@ pub mod ai;
 pub mod consoles;
 pub mod library;
 pub mod location;
+pub mod menu;
 pub mod metadata;
 pub mod object_operations;
 pub mod recovery;

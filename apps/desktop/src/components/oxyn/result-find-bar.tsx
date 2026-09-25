@@ -129,6 +129,8 @@ export function ResultFindBar({
           }}
           placeholder="Find in loaded results…"
           aria-label="Find in loaded results"
+          // Where the registry's `Find` lands from the grid.
+          data-find-field
         />
         {needle !== "" ? (
           <InputGroupAddon align="inline-end">

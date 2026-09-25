@@ -49,6 +49,7 @@ import type {
   FormField,
 } from "@/lib/ipc/types"
 import { cn } from "@/lib/utils"
+import { useActionSource } from "@/lib/actions/context"
 
 export type PendingConnectionApproval = PendingApproval & {
   name: string
@@ -195,37 +196,30 @@ export function ConnectionScreenView(props: ConnectionScreenViewProps) {
   }, [driver, formDirty, leaveDriver, onReturnToWorkspace])
 
   // Never while something is in flight (Esc cancels it then) or under a
-  // dialog. Esc inside a field leaves the form, as a dialog would; on the
-  // screen itself it waits for the field to lose focus, and Alt+← inside a
-  // field moves by word, so it is left to the field.
+  // dialog. ⌘[ and Alt+← are the registry's `Back` (ADR-0041), which leaves
+  // Alt+← to a field, where it moves by word. Esc stays here, in the bubble
+  // phase: a list or a popover it would close sees it first. Inside a field
+  // it leaves the form, as a dialog would; on the screen itself it waits for
+  // the field to lose focus.
   const canGoBack = driver !== null || onReturnToWorkspace !== undefined
+  const backOffered = canGoBack && !busy && !approval && !confirmingLeave
+  useActionSource("navigation", backOffered ? {} : null, { back: goBack })
   React.useEffect(() => {
-    if (!canGoBack || busy || approval || confirmingLeave) return
+    if (!backOffered) return
     const onKey = (event: KeyboardEvent) => {
-      if (event.defaultPrevented) return
+      if (event.defaultPrevented || event.key !== "Escape") return
       const target = event.target
       const typing =
         target instanceof HTMLElement &&
         (target.isContentEditable ||
           ["INPUT", "TEXTAREA", "SELECT"].includes(target.tagName))
-      const back =
-        (event.key === "Escape" && (driver !== null || !typing)) ||
-        (event.key === "[" &&
-          (event.metaKey || event.ctrlKey) &&
-          !event.altKey &&
-          !event.shiftKey) ||
-        (event.key === "ArrowLeft" &&
-          event.altKey &&
-          !event.metaKey &&
-          !event.ctrlKey &&
-          !typing)
-      if (!back) return
+      if (typing && driver === null) return
       event.preventDefault()
       goBack()
     }
     window.addEventListener("keydown", onKey)
     return () => window.removeEventListener("keydown", onKey)
-  }, [canGoBack, busy, approval, confirmingLeave, driver, goBack])
+  }, [backOffered, driver, goBack])
 
   return (
     <div className="flex h-full min-h-0 flex-col bg-background">

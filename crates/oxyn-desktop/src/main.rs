@@ -13,6 +13,7 @@ mod commands;
 mod credentials;
 mod ipc;
 mod logging;
+mod menu;
 #[cfg(test)]
 mod sentinel_tests;
 mod webview_guard;
@@ -78,9 +79,13 @@ fn main() -> Result<()> {
         }
     };
 
-    let builder = tauri::Builder::default();
+    // The menu bar: native on macOS, built from the front's action manifest;
+    // drawn by the front elsewhere (ADR-0041).
+    let builder = tauri::Builder::default()
+        .manage(menu::MenuBar::default())
+        .manage(commands::recovery::ExitJournal(journal.clone()));
     #[cfg(target_os = "macos")]
-    let builder = builder.menu(commands::recovery::application_menu);
+    let builder = builder.menu(menu::application_menu);
     builder
         .plugin(tauri_plugin_dialog::init())
         .manage(backend)
@@ -152,6 +157,10 @@ fn main() -> Result<()> {
             commands::recovery::recovery_status,
             commands::recovery::subscribe_shutdown,
             commands::recovery::shutdown_flushed,
+            // Menu bar and exit: interface plumbing, no `Command` (ADR-0041)
+            commands::menu::subscribe_menu,
+            commands::menu::set_menu_state,
+            commands::recovery::request_exit,
             // Settings: preferences and saved-connection management
             commands::settings::read_preferences,
             commands::settings::write_preferences,

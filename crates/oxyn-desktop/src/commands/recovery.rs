@@ -4,17 +4,15 @@
 use std::time::Duration;
 
 use tauri::ipc::Channel;
-#[cfg(target_os = "macos")]
-use tauri::menu::{AboutMetadata, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::{AppHandle, Manager as _, RunEvent, State, WindowEvent};
 
 use crate::backend::Backend;
 use crate::ipc::recovery::{RecoveryStatus, ShutdownSignal};
 use crate::logging::FileJournal;
+use crate::menu::{self, MenuBar};
 
-/// The menu item that replaces the predefined Quit.
-#[cfg(target_os = "macos")]
-const QUIT: &str = "oxyn-quit";
+/// The journal the exit flushes last, for the exits the front asks for.
+pub struct ExitJournal(pub Option<FileJournal>);
 
 /// How long the exit waits for the journal's last lines to reach the disk.
 ///
@@ -45,55 +43,18 @@ pub fn shutdown_flushed(backend: State<'_, Backend>) {
     backend.shutdown_flushed();
 }
 
-/// Tauri's default macOS menu, with a Quit that goes through the ordered
-/// shutdown.
+/// `File ▸ Exit` of Windows and Linux, and the palette's Quit: the ordered
+/// exit ⌘Q and the window's close button take
+/// ([ADR-0041](../../../../docs/adr/0041-registre-d-actions-menus-et-raccourcis.md),
+/// point 5).
 ///
-/// The predefined Quit sends `terminate:` to the application: macOS then ends
-/// the event loop without an `ExitRequested`, nothing can hold it, and the
-/// close was never recorded — every ⌘Q looked like a crash at the next launch.
-/// Elsewhere Tauri sets no menu, and the window close is the way out
-/// ([ADR-0038](../../../../docs/adr/0038-un-plantage-s-annonce-une-fois.md)).
-///
-/// # Errors
-/// If a menu item cannot be created.
-#[cfg(target_os = "macos")]
-pub fn application_menu(app: &AppHandle) -> tauri::Result<Menu<tauri::Wry>> {
-    let menu = Menu::default(app)?;
-    let package = app.package_info();
-    let about = AboutMetadata {
-        name: Some(package.name.clone()),
-        version: Some(package.version.to_string()),
-        copyright: app.config().bundle.copyright.clone(),
-        authors: app.config().bundle.publisher.clone().map(|p| vec![p]),
-        ..AboutMetadata::default()
-    };
-    let quit = MenuItem::with_id(
-        app,
-        QUIT,
-        format!("Quit {}", package.name),
-        true,
-        Some("CmdOrCtrl+Q"),
-    )?;
-    // The application submenu comes first; it is rebuilt as Tauri builds it,
-    // but for its last item.
-    let application = Submenu::with_items(
-        app,
-        package.name.clone(),
-        true,
-        &[
-            &PredefinedMenuItem::about(app, None, Some(about))?,
-            &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::services(app, None)?,
-            &PredefinedMenuItem::separator(app)?,
-            &PredefinedMenuItem::hide(app, None)?,
-            &PredefinedMenuItem::hide_others(app, None)?,
-            &PredefinedMenuItem::separator(app)?,
-            &quit,
-        ],
-    )?;
-    menu.remove_at(0)?;
-    menu.prepend(&application)?;
-    Ok(menu)
+/// It takes nothing and chooses nothing — no window, no delay, no step to
+/// skip — so a script in the webview can only ask for the exit that flushes
+/// the drafts and records the close. Asked twice, it starts once. It emits no
+/// `Command`: it acts on no data. Synchronous: it only spawns the shutdown.
+#[tauri::command]
+pub fn request_exit(app: AppHandle, journal: State<'_, ExitJournal>) {
+    begin_exit(&app, journal.0.as_ref());
 }
 
 /// Holds the window close and the application exit until drafts are flushed,
@@ -108,16 +69,22 @@ pub fn on_run_event(app: &AppHandle, event: &RunEvent, journal: Option<&FileJour
             ..
         } => {
             api.prevent_close();
-            request_exit(app, journal);
+            begin_exit(app, journal);
         }
-        #[cfg(target_os = "macos")]
-        RunEvent::MenuEvent(menu) if menu.id() == QUIT => request_exit(app, journal),
+        // Quit is the one entry Rust runs itself: a frozen webview must not
+        // keep the user in (ADR-0038). Every other entry is the front's.
+        RunEvent::MenuEvent(event) if event.id() == menu::QUIT => begin_exit(app, journal),
+        RunEvent::MenuEvent(event) => {
+            if let Some(bar) = app.try_state::<MenuBar>() {
+                bar.forward(event.id().as_ref());
+            }
+        }
         RunEvent::ExitRequested { api, .. } => {
             if app.state::<Backend>().shutdown_finished() {
                 return;
             }
             api.prevent_exit();
-            request_exit(app, journal);
+            begin_exit(app, journal);
         }
         RunEvent::Exit => {
             // The Dock's Quit, a logout: macOS ends the loop without asking.
@@ -140,7 +107,7 @@ pub fn on_run_event(app: &AppHandle, event: &RunEvent, journal: Option<&FileJour
 }
 
 /// Begins the ordered shutdown once, then exits.
-fn request_exit(app: &AppHandle, journal: Option<&FileJournal>) {
+fn begin_exit(app: &AppHandle, journal: Option<&FileJournal>) {
     let backend = app.state::<Backend>().inner().clone();
     if !backend.begin_shutdown() {
         return;

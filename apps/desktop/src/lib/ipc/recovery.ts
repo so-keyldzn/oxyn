@@ -32,4 +32,7 @@ export const recovery = {
   },
 
   shutdownFlushed: () => call("shutdown_flushed", Nothing),
+
+  /** The ordered exit of ⌘Q, asked by `File ▸ Exit`: takes nothing, chooses nothing. */
+  requestExit: () => call("request_exit", Nothing),
 }
