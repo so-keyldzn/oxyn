@@ -535,7 +535,12 @@ export const MentionActiveStaysVisible: Story = {
     const field = fieldIn(canvasElement)
     await userEvent.click(field)
     await userEvent.type(field, "@orders")
-    await list()
+    // Once the list answers the whole query: on a loaded machine, an arrow
+    // pressed earlier is undone when Lexical commits the last keystroke.
+    const answering = await list()
+    await waitFor(() =>
+      expect(answering).toHaveAttribute("data-query", "orders")
+    )
     // From the first row, up wraps to the last: far below the fold.
     await userEvent.keyboard("{ArrowUp}")
     const shown = listBox()
