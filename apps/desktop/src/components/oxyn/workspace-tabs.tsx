@@ -28,8 +28,11 @@ export type WorkspaceTabItem =
   | ({ kind: "console" } & ConsoleTabInfo)
   /** `objectKind` is the catalog kind: `table`, `view`, … */
   | { kind: "object"; key: string; title: string; objectKind: string }
-  /** A retained result reopened from history. */
-  | { kind: "result"; key: string; title: string }
+  /**
+   * A retained result reopened from history. While `exporting`, it does not
+   * close: the export must end or be cancelled first.
+   */
+  | { kind: "result"; key: string; title: string; exporting?: boolean }
 
 const STATE_LABEL = {
   closing: "closing",
@@ -37,7 +40,13 @@ const STATE_LABEL = {
   approval: "waiting for approval",
   running: "running",
   unsaved: "unsaved",
+  exporting: "exporting",
 } as const
+
+function stateOf(tab: WorkspaceTabItem): keyof typeof STATE_LABEL | null {
+  if (tab.kind === "console") return tabState(tab)
+  return tab.kind === "result" && tab.exporting ? "exporting" : null
+}
 
 function iconOf(tab: WorkspaceTabItem): IconSvgElement {
   if (tab.kind === "console") return CodeIcon
@@ -58,7 +67,8 @@ export function tabPanelValue(key: string) {
  *
  * Base UI tabs: arrow keys move between tabs, one tab stop, `tabpanel`s wired
  * by ARIA. A tab may own no button, so closing is Delete or Backspace on the
- * focused tab, ⌘W, a middle click, or the mouse-only cross.
+ * focused tab, ⌘W, a middle click, or the mouse-only cross. A result being
+ * exported offers none of them until the export ends.
  */
 export function WorkspaceTabs({
   tabs,
@@ -102,23 +112,31 @@ export function WorkspaceTabs({
       >
         {tabs.map((tab) => {
           const title = tab.kind === "console" ? tabTitle(tab) : tab.title
-          const state = tab.kind === "console" ? tabState(tab) : null
+          const state = stateOf(tab)
+          const closable = state !== "exporting"
+          const close = () => {
+            if (closable) onClose(tab.key)
+          }
           return (
             <TabsTrigger
               key={tab.key}
               value={tabPanelValue(tab.key)}
-              aria-keyshortcuts="Delete"
-              title={title}
+              aria-keyshortcuts={closable ? "Delete" : undefined}
+              title={
+                closable
+                  ? title
+                  : `${title} — finish or cancel the export to close`
+              }
               onKeyDown={(event) => {
                 if (event.key === "Delete" || event.key === "Backspace") {
                   event.preventDefault()
-                  onClose(tab.key)
+                  close()
                 }
               }}
               onAuxClick={(event) => {
                 if (event.button === 1) {
                   event.preventDefault()
-                  onClose(tab.key)
+                  close()
                 }
               }}
               className="group/tab h-8 max-w-56 flex-none gap-1.5 pr-1 text-[length:var(--reading-text)]"
@@ -132,25 +150,27 @@ export function WorkspaceTabs({
                   · {STATE_LABEL[state]}
                 </span>
               ) : null}
-              <span
-                aria-hidden
-                data-slot="tab-close"
-                onMouseDown={(event) => event.preventDefault()}
-                onClick={(event) => {
-                  event.stopPropagation()
-                  onClose(tab.key)
-                }}
-                className={cn(
-                  "flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-sm opacity-60 hover:bg-muted hover:opacity-100",
-                  "group-data-active/tab:opacity-100"
-                )}
-              >
-                <HugeiconsIcon
-                  icon={Cancel01Icon}
-                  strokeWidth={2}
-                  className="size-3"
-                />
-              </span>
+              {closable ? (
+                <span
+                  aria-hidden
+                  data-slot="tab-close"
+                  onMouseDown={(event) => event.preventDefault()}
+                  onClick={(event) => {
+                    event.stopPropagation()
+                    close()
+                  }}
+                  className={cn(
+                    "flex size-5 shrink-0 cursor-pointer items-center justify-center rounded-sm opacity-60 hover:bg-muted hover:opacity-100",
+                    "group-data-active/tab:opacity-100"
+                  )}
+                >
+                  <HugeiconsIcon
+                    icon={Cancel01Icon}
+                    strokeWidth={2}
+                    className="size-3"
+                  />
+                </span>
+              ) : null}
             </TabsTrigger>
           )
         })}

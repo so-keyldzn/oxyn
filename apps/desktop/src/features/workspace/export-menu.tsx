@@ -24,6 +24,7 @@ export function ExportMenu({
   label,
   scope,
   defaultName = "result",
+  onExportingChange,
 }: {
   connection: string
   result: string | null
@@ -35,8 +36,18 @@ export function ExportMenu({
   scope?: string
   /** A file name suggestion; the backend keeps only a name from it. */
   defaultName?: string
+  /**
+   * Told when an export starts and ends, so that the view holding it refuses
+   * to close meanwhile (UX-SPEC § Résultats conservés).
+   */
+  onExportingChange?: (exporting: boolean) => void
 }) {
-  const exporter = useResultExport({ connection, result, defaultName })
+  const exporter = useResultExport({
+    connection,
+    result,
+    defaultName,
+    onExportingChange,
+  })
   return (
     <ExportMenuView
       formats={exporter.formats}
@@ -61,10 +72,13 @@ export function useResultExport({
   connection,
   result,
   defaultName = "result",
+  onExportingChange,
 }: {
   connection: string
   result: string | null
   defaultName?: string
+  /** Told when an export starts and ends; see `ExportMenu`. */
+  onExportingChange?: (exporting: boolean) => void
 }) {
   const [state, setState] = React.useState<ExportState>({ status: "idle" })
   const running = React.useRef<string | null>(null)
@@ -73,8 +87,12 @@ export function useResultExport({
     queryFn: results.exportFormats,
     staleTime: Number.POSITIVE_INFINITY,
   })
+  const exportingChanged = React.useRef(onExportingChange)
+  exportingChanged.current = onExportingChange
 
-  // An export outlives nothing: leaving the view cancels the write.
+  // Switching the side view or the tab keeps this menu mounted: only a view
+  // that really goes away gets here, and its export has no one left to report
+  // to or to cancel it. A view that holds an export refuses to close first.
   React.useEffect(
     () => () => {
       if (running.current) void backend.cancel(running.current)
@@ -88,6 +106,7 @@ export function useResultExport({
     if (!result || !format.supported || running.current) return
     const id = newCommandId()
     running.current = id
+    exportingChanged.current?.(true)
     // The native dialog is modal: while it is open nothing here is reachable,
     // and a Cancel pressed before the write starts has nothing to stop.
     setState({ status: "exporting", format: format.label, cancelling: false })
@@ -134,6 +153,7 @@ export function useResultExport({
     } finally {
       running.current = null
       setState({ status: "idle" })
+      exportingChanged.current?.(false)
     }
   }
 
