@@ -1789,3 +1789,38 @@ Trois constats de la première génération, le 2026-09-25 :
 - onze paquets npm ne livrent aucun fichier de licence, dont
   `@uiw/react-codemirror` et `embla-carousel`. Les mentions reprennent alors
   l'expression SPDX déclarée.
+
+## Contrats externes recoupés pendant l'audit — 2026-09-24
+
+Consultation du **24 septembre 2026**. Aucune dépendance n'a été changée.
+Les versions locales ont été lues dans les manifestes, `Cargo.lock` et les
+sources installées : Rust 1.98.1, Tokio 1.53.1, reqwest 0.13.4, SQLx 0.9.0,
+rusqlite 0.37.0, libsqlite3-sys 0.35.0 (SQLite embarqué 3.50.2), Tauri 2.11.5,
+React 19.3.0, TanStack Query 5.102.8, Store 0.11.1, Base UI 1.8.0, Shiki 4.4.3.
+Les documents `latest` ou `main` ont été recoupés avec les sources installées
+pour les comportements utilisés. PostgreSQL 18 désigne ci-dessous la version
+documentaire consultée, **pas** la version d'un serveur testé.
+
+| Sujet | Fait externe vérifié | Source officielle |
+|---|---|---|
+| Redirection HTTP | Les statuts 307/308 conservent la méthode lors d'une redirection automatique ; le client doit maîtriser sa destination | [RFC 9110, 307](https://www.rfc-editor.org/rfc/rfc9110.html#section-15.4.8), [308](https://www.rfc-editor.org/rfc/rfc9110.html#section-15.4.9) |
+| reqwest | La politique par défaut suit les redirections ; la suppression d'en-têtes entre origines ne couvre pas les noms propriétaires `x-api-key` et `api-key` | [source v0.13.4, redirect.rs](https://github.com/seanmonstar/reqwest/blob/v0.13.4/src/redirect.rs) |
+| Diagnostic HTTP | `Response::text` collecte le corps ; une troncature appliquée ensuite ne borne pas cette lecture | [reqwest 0.13.4](https://docs.rs/reqwest/0.13.4/reqwest/struct.Response.html#method.text) |
+| Flux Anthropic | Des erreurs peuvent arriver dans le flux ; les arguments d'outils arrivent par fragments JSON | [erreurs SSE](https://platform.claude.com/docs/en/build-with-claude/streaming#error-events), [deltas JSON](https://platform.claude.com/docs/en/build-with-claude/streaming#input-json-delta) |
+| PostgreSQL | Une fonction `VOLATILE` peut modifier la base ; `READ ONLY` protège les tables non temporaires et n'est pas un confinement universel des effets de bord | [volatilité](https://www.postgresql.org/docs/18/xfunc-volatility.html), [transactions](https://www.postgresql.org/docs/18/sql-set-transaction.html) |
+| SQLite | `sqlite3_stmt_readonly` classe les commandes transactionnelles comme non mutantes ; cela ne garantit pas la propriété de la transaction | [readonly](https://www.sqlite.org/c3ref/stmt_readonly.html), [transactions](https://www.sqlite.org/lang_transaction.html) |
+| Tokio | `timeout` ne borne que son futur, renvoie une erreur à expiration et ne préempte pas un futur qui ne cède pas | [Tokio 1.53.1](https://docs.rs/tokio/1.53.1/tokio/time/fn.timeout.html) |
+| Fichier Rust | `File::create` tronque immédiatement un fichier existant | [Rust 1.98.1](https://doc.rust-lang.org/std/fs/struct.File.html#method.create) |
+| React | Le handler asynchrone conserve l'état capturé ; une ref mutable persiste ; changer la key réinitialise le sous-arbre | [snapshot](https://react.dev/learn/state-as-a-snapshot#state-over-time), [useRef](https://react.dev/reference/react/useRef#reference), [key](https://react.dev/learn/preserving-and-resetting-state#resetting-state-with-a-key) |
+| TanStack Store | Le store existe hors du cycle React ; ses mises à jour sont explicites | [Quick Start](https://tanstack.com/store/latest/docs/framework/react/quick-start) |
+| TanStack Query | `staleTime: Infinity` maintient la fraîcheur jusqu'à invalidation ; l'invalidation est ciblée par clé | [défauts](https://tanstack.com/query/latest/docs/framework/react/guides/important-defaults), [invalidation](https://tanstack.com/query/latest/docs/framework/react/guides/query-invalidation) |
+| Base UI | `Tabs.Panel.keepMounted` conserve le panneau masqué dans le DOM | [Tabs.Panel](https://base-ui.com/react/components/tabs#panel) |
+| Tauri IPC | Les arguments arrivent au handler et sa réponse est sérialisée ; cela ne remplace pas la validation métier ni la conservation d'un lecteur Rust | [arguments](https://v2.tauri.app/develop/calling-rust/#passing-arguments), [retour](https://v2.tauri.app/develop/calling-rust/#returning-data) |
+| Shiki/TextMate | Le délai de tokenisation est exprimé par ligne ; TextMate peut interrompre le parcours. Le résultat public de Shiki n'expose pas directement `stoppedEarly` | [types Shiki](https://github.com/shikijs/shiki/blob/main/packages/types/src/tokens.ts), [tokenisation TextMate](https://github.com/microsoft/vscode-textmate/blob/main/src/grammar/tokenizeString.ts) |
+| Version Tauri | La version configurée détermine celle de l'application, indépendamment du nom d'un tag Git | [configuration](https://v2.tauri.app/reference/config/#version) |
+| GitHub CLI | `--verify-tag` vérifie l'existence du tag ; `isDraft` est consultable ; `upload --clobber` supprime l'ancien actif avant envoi | [create](https://cli.github.com/manual/gh_release_create), [view](https://cli.github.com/manual/gh_release_view), [upload](https://cli.github.com/manual/gh_release_upload) |
+
+Ces sources établissent les contrats des dépendances. Les défauts propres à
+Oxyn, les reproductions synthétiques et leurs limites sont consignés dans les
+rapports datés de `.claude/audits/` et les issues correspondantes ; un lien
+officiel seul ne constitue pas une reproduction du produit.

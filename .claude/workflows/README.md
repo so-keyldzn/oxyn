@@ -100,6 +100,16 @@ avec la tâche en argument.
    plus de 90 jours ; le hook `SessionStart` le signale
 4. Agent `documentaliste` pour les corrections
 
+## Audit du dépôt et issues GitHub
+
+[`/audit`](../commands/audit.md) suit le
+[workflow multi-agents](audit-multi-agents.md) : référence Git et issues
+existantes, quatre domaines en lecture seule, réfutation indépendante,
+`make qualite`, rapport daté et publication avec `gh` lorsque l'utilisateur la
+demande. Le moteur Claude peut exécuter
+[`audit-multi-agents.js`](audit-multi-agents.js) ; Codex suit la même procédure
+avec les outils de collaboration disponibles. Aucune correction ni commit.
+
 ## Publication
 
 Pas encore de workflow : il n'y a rien à publier, et une procédure écrite avant
