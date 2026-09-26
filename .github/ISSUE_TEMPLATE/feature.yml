@@ -1,0 +1,39 @@
+name: Proposition
+description: Proposer une amélioration ou une fonctionnalité avec son besoin produit.
+title: "[Proposition] "
+labels:
+  - enhancement
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Besoin
+      description: Quel problème utilisateur ou opérationnel cette proposition résout-elle ?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposition
+      description: Décrivez le comportement attendu, y compris les états d'erreur et d'annulation.
+    validations:
+      required: true
+  - type: textarea
+    id: constraints
+    attributes:
+      label: Contraintes et invariants
+      description: Indiquez les documents d'autorité, limites de performance ou règles de sécurité concernés.
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives
+      description: Quelles solutions avez-vous envisagées et pourquoi cette proposition ?
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Vérifications
+      options:
+        - label: J'ai recherché les issues et la documentation existantes.
+          required: true
+        - label: Je n'ai pas inclus de secret ou de donnée sensible.
+          required: true

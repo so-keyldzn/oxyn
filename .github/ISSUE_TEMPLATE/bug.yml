@@ -1,0 +1,65 @@
+name: Bug
+description: Signaler un comportement incorrect ou une régression reproductible.
+title: "[Bug] "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Merci de vérifier qu'une issue ouverte ne décrit pas déjà le problème.
+        Ne mettez jamais de secret, de donnée client ou d'URL privée dans ce formulaire.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Résumé
+      description: Décrivez le comportement observé et le comportement attendu.
+      placeholder: Quand ..., Oxyn ..., alors que ...
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction
+      description: Donnez les étapes minimales et un exemple synthétique reproductible.
+      placeholder: |
+        1. Ouvrir ...
+        2. Exécuter ...
+        3. Observer ...
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Preuves et journaux expurgés
+      description: Ajoutez les tests, logs ou captures utiles, après suppression des secrets.
+  - type: input
+    id: version
+    attributes:
+      label: Version ou commit
+      placeholder: v0.0.1 ou SHA court
+    validations:
+      required: true
+  - type: dropdown
+    id: area
+    attributes:
+      label: Zone
+      options:
+        - Backend Rust
+        - Driver SQLite
+        - Driver PostgreSQL
+        - Interface Tauri
+        - IA ou fournisseur
+        - CI ou livraison
+        - Documentation
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Vérifications
+      options:
+        - label: J'ai recherché les issues existantes.
+          required: true
+        - label: Je n'ai pas inclus de secret ou de donnée sensible.
+          required: true
