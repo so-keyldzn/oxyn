@@ -7,6 +7,20 @@ Invariants concernés : [I-02](../CLAUDE.md#i-02), [I-03](../CLAUDE.md#i-03),
 [I-09](../CLAUDE.md#i-09). La politique d'autorisation elle-même est tranchée par
 [ADR-0004](adr/0004-command-bus.md) et n'est pas recopiée ici.
 
+## Signaler une vulnérabilité
+
+Ne publiez jamais de secret, de preuve d'exploitation ou de donnée utilisateur
+dans une issue ou une pull request. Utilisez le formulaire privé
+[GitHub Security Advisories](https://github.com/so-keyldzn/oxyn/security/advisories/new)
+du dépôt. Décrivez la version ou le commit concerné, le scénario minimal, la
+gravité estimée et les étapes de reproduction après avoir supprimé les secrets.
+
+Le mainteneur accuse réception via le canal privé et coordonne la correction,
+la validation et la publication éventuelle d'un avis. Si le formulaire privé
+n'est pas disponible, contactez le mainteneur via son profil GitHub et indiquez
+uniquement que le signalement concerne la sécurité ; ne transmettez pas les
+détails sensibles dans un message public.
+
 Le modèle de menace d'Oxyn n'est pas celui d'un serveur. L'attaquant n'est pas
 un inconnu sur Internet : ce sont **les données que l'utilisateur ouvre** et
 **les erreurs qu'Oxyn lui laisse commettre**. Un client de base de données tourne

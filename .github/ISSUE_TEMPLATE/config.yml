@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Signaler une vulnérabilité de sécurité
+    url: https://github.com/so-keyldzn/oxyn/security/advisories/new
+    about: Ne publiez jamais un secret ou un exploit dans une issue publique.
+  - name: Lire la documentation du projet
+    url: https://github.com/so-keyldzn/oxyn/tree/main/docs
+    about: Consultez les documents d'autorité avant de proposer un changement.

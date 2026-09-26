@@ -1,0 +1,31 @@
+name: Documentation
+description: Signaler une contradiction, une lacune ou une information périmée.
+title: "[Documentation] "
+labels:
+  - documentation
+body:
+  - type: input
+    id: document
+    attributes:
+      label: Document concerné
+      placeholder: docs/ARCHITECTURE.md
+    validations:
+      required: true
+  - type: textarea
+    id: discrepancy
+    attributes:
+      label: Contradiction ou lacune
+      description: Citez l'affirmation actuelle et l'état observé dans le code ou GitHub.
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Correction proposée
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Vérifications
+      options:
+        - label: J'ai vérifié le document et les fichiers concernés dans la branche main.
+          required: true
