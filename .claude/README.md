@@ -37,6 +37,7 @@ d'un fichier.
 | [`/plan`](commands/plan.md) | trancher avant d'écrire |
 | [`/implementer`](commands/implementer.md) | implémenter un changement |
 | [`/relire`](commands/relire.md) | relire contre les invariants |
+| [`/audit`](commands/audit.md) | auditer le dépôt avec plusieurs agents et suivre les constats sur GitHub |
 | [`/driver`](commands/driver.md) | implémenter un driver |
 | [`/commande`](commands/commande.md) | ajouter une commande au bus |
 | [`/ecran`](commands/ecran.md) | ajouter un écran à l'interface Tauri |

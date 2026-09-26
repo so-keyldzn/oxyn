@@ -27,6 +27,13 @@ redémarrer la session dans le dépôt.
 
 ## Correspondance et limites
 
+Pour auditer le dépôt entier et préparer des issues GitHub, lire la procédure
+commune [`/audit`](../.claude/commands/audit.md). Codex suit son
+[workflow multi-agents](../.claude/workflows/audit-multi-agents.md) avec les
+outils de collaboration de la session ; le fichier JavaScript voisin requiert
+le moteur de workflows Claude. La publication avec `gh` suit la demande de
+l'utilisateur et ne vaut pas autorisation de corriger ou de commiter le produit.
+
 | Élément existant | Traitement dans Codex |
 |---|---|
 | `CLAUDE.md` | Lecture demandée par `AGENTS.md`, invariants conservés à leur source |
