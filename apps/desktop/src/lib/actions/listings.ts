@@ -1,4 +1,4 @@
-  // What the palette and the shortcut sheet list
+// What the palette and the shortcut sheet list
 // (docs/adr/0041-registre-d-actions-menus-et-raccourcis.md, point 7). Both
 // read the manifest and the registry: neither keeps a list of its own, so an
 // action added to the registry appears in them, with the label, combination
