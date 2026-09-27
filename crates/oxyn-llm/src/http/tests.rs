@@ -1,7 +1,7 @@
-//! Le transport, éprouvé sur la boucle locale contre les trois familles.
+//! The transport, tested on the loopback against the three families.
 //!
-//! Aucune clé réelle : la sentinelle ci-dessous n'est valable nulle part, et
-//! la chercher dans ce qui sort suffit à prouver qu'elle n'y est pas.
+//! No real key: the sentinel below is valid nowhere, and looking for it in
+//! what goes out is enough to prove it is not there.
 
 use oxyn_core::{CancelToken, OxynError};
 
@@ -13,23 +13,23 @@ use crate::provider::{LlmProvider, ProviderId};
 use crate::secret::ApiKey;
 use crate::types::{ChatMessage, ChatRequest};
 
-/// Clé factice, reconnaissable partout où elle ne doit pas être.
+/// Fake key, recognizable wherever it must not be.
 const SENTINEL: &str = "sk-sentinel-5f0c1e9a-must-not-leak";
 
-/// Ce que la conversation envoie : on vérifie qu'il ne part pas ailleurs.
+/// What the conversation sends: we check it does not go elsewhere.
 const PROMPT: &str = "prompt-sentinel-customers-table";
 
 fn question() -> ChatRequest {
     ChatRequest::new("model", vec![ChatMessage::user(PROMPT)])
 }
 
-/// Une réponse que la cible rendrait si on la contactait.
+/// A response the target would return if it were contacted.
 fn accepted() -> Vec<u8> {
     b"HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: 0\r\nconnection: close\r\n\r\n"
         .to_vec()
 }
 
-/// La réponse d'échec, que le flux n'ouvre pas.
+/// The failure response, which the stream does not open.
 fn refused(issue: oxyn_core::Result<impl Sized>) -> OxynError {
     match issue {
         Ok(_) => panic!("a redirect must not open a stream"),
@@ -37,7 +37,7 @@ fn refused(issue: oxyn_core::Result<impl Sized>) -> OxynError {
     }
 }
 
-/// Ce que toute redirection refusée doit tenir, quel que soit le fournisseur.
+/// What every refused redirection must hold, whatever the provider.
 fn assert_refused(err: &OxynError, origin: &Server, target: &Server) {
     let rendu = format!("{err} {err:?}");
     assert!(
@@ -60,7 +60,7 @@ fn assert_refused(err: &OxynError, origin: &Server, target: &Server) {
     );
 }
 
-/// Pour chaque statut qui conserve méthode et corps.
+/// For each status that keeps method and body.
 const PRESERVING: [u16; 2] = [307, 308];
 
 #[tokio::test]
@@ -134,8 +134,8 @@ async fn a_model_listing_does_not_follow_a_redirect_either() {
     assert_eq!(target.hits(), 0, "{}", target.seen());
 }
 
-/// Gemini n'envoie pas encore de génération ; son client est pourtant celui
-/// qui partira le jour où il le fera, et c'est lui qu'on éprouve.
+/// Gemini does not send a generation yet; its client is nevertheless the one
+/// that will go out the day it does, and it is the one tested.
 #[tokio::test]
 async fn gemini_client_does_not_follow_a_redirect_with_its_x_goog_api_key() {
     for status in PRESERVING {
@@ -165,9 +165,9 @@ async fn gemini_client_does_not_follow_a_redirect_with_its_x_goog_api_key() {
     }
 }
 
-// ── #8 : une erreur diffusée après un `200` ne recopie pas la clé ─────────
+// ── #8: an error streamed after a `200` does not copy the key ─────────────
 
-/// Un flux `200` dont l'unique trame est une erreur citant la clé.
+/// A `200` stream whose only frame is an error quoting the key.
 fn streamed_error(frame: &str) -> Vec<u8> {
     format!(
         "HTTP/1.1 200 OK\r\ncontent-type: text/event-stream\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{frame}",
@@ -176,7 +176,7 @@ fn streamed_error(frame: &str) -> Vec<u8> {
     .into_bytes()
 }
 
-/// Joue un flux jusqu'au bout et rend tous ses événements.
+/// Plays a stream to the end and returns all its events.
 async fn drained(provider: &dyn LlmProvider) -> Vec<crate::types::ChatEvent> {
     use futures::StreamExt;
     let flux = provider
@@ -186,8 +186,8 @@ async fn drained(provider: &dyn LlmProvider) -> Vec<crate::types::ChatEvent> {
     flux.collect().await
 }
 
-/// Aucun événement, ni par son texte ni par son `Debug`, ne cite la clé ; et
-/// l'erreur est bien là, sinon le test ne prouverait rien.
+/// No event, neither by its text nor by its `Debug`, quotes the key; and the
+/// error is indeed there, otherwise the test would prove nothing.
 fn assert_redacted(events: &[crate::types::ChatEvent]) {
     let rendu = format!("{events:?}");
     assert!(!rendu.contains(SENTINEL), "{rendu}");
@@ -235,7 +235,7 @@ async fn an_anthropic_streamed_error_does_not_repeat_the_key() {
     assert_redacted(&drained(&provider).await);
 }
 
-// ── #12 : un corps hors flux se lit sous borne ─────────────────────────────
+// ── #12: a non-stream body is read under a bound ───────────────────────────
 
 use std::time::Duration;
 
@@ -245,13 +245,13 @@ use super::{
 };
 use crate::error::LlmError;
 
-/// Borne de sécurité des tests : si elle expire, c'est que la lecture attend
-/// un corps qui ne viendra jamais — le défaut que ces tests ferment. Aucun
-/// test ne l'attend pour réussir.
+/// Safety bound of the tests: if it expires, the reading is waiting for a
+/// body that will never come — the defect these tests close. No test waits
+/// for it to succeed.
 const GUARD: Duration = Duration::from_secs(5);
 
-/// Des en-têtes de statut `status`, puis `body`, sur une connexion que le
-/// serveur ne ferme pas.
+/// Headers of status `status`, then `body`, on a connection the server does
+/// not close.
 fn open_body(status: u16, length: Option<usize>, body: &[u8]) -> Vec<u8> {
     let mut reply = format!("HTTP/1.1 {status} Status\r\n").into_bytes();
     if let Some(length) = length {
@@ -262,7 +262,7 @@ fn open_body(status: u16, length: Option<usize>, body: &[u8]) -> Vec<u8> {
     reply
 }
 
-/// Les en-têtes sont reçus : c'est la lecture du corps qu'on éprouve.
+/// The headers are received: it is the reading of the body that is tested.
 async fn headers_of(server: &Server) -> reqwest::Response {
     super::client(&ProviderId::openai())
         .expect("client")
@@ -320,8 +320,8 @@ async fn an_error_body_past_its_delay_keeps_the_status_and_what_arrived() {
 
 #[tokio::test]
 async fn an_error_body_is_never_held_past_its_bound() {
-    // Quatre mébioctets annoncés par rien, puis une connexion qui reste
-    // ouverte : lire jusqu'à la fin attendrait toujours.
+    // Four mebibytes announced by nothing, then a connection that stays open:
+    // reading to the end would wait forever.
     let big = vec![b'x'; 4 * 1024 * 1024];
     let server = Server::start(open_body(500, None, &big), true).await;
     let response = headers_of(&server).await;
@@ -355,7 +355,7 @@ async fn an_error_body_announced_long_is_read_up_to_its_bound_only() {
 
 #[tokio::test]
 async fn a_key_cut_by_the_bound_does_not_leave_its_start_behind() {
-    // Le serveur recopie la clé, et la connexion s'arrête au milieu.
+    // The server copies the key, and the connection stops in the middle.
     let partial = format!("rejected key {}", SENTINEL.get(..12).unwrap_or_default());
     let server = Server::start(open_body(401, Some(10_000), partial.as_bytes()), true).await;
     let response = headers_of(&server).await;
@@ -441,7 +441,7 @@ async fn an_anthropic_model_list_announced_too_large_is_refused_by_name() {
 
 #[tokio::test]
 async fn a_model_list_with_too_many_entries_is_refused_by_name() {
-    // Des entrées minimales : la borne en octets ne les arrête pas.
+    // Minimal entries: the byte bound does not stop them.
     let mut liste = String::from("{\"data\":[");
     liste.push_str(&vec!["{}"; super::MAX_MODELS + 1].join(","));
     liste.push_str("]}");

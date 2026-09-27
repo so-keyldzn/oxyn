@@ -1,25 +1,25 @@
-//! La disposition des fenêtres d'un workspace : où chacune se tient, l'onglet
-//! d'objet qu'elle montrait et ses consoles
-//! ([ADR-0043](../../../docs/adr/0043-multi-fenetre.md), « Persistance »).
+//! The layout of a workspace's windows: where each one sits, the object tab
+//! it was showing and its consoles
+//! ([ADR-0043](../../../docs/adr/0043-multi-fenetre.md), "Persistence").
 //!
-//! # Deux instances sur le même fichier
+//! # Two instances on the same file
 //!
-//! Chaque ligne nomme le lancement qui l'a écrite. Un lancement n'adopte que
-//! les lignes d'un lancement terminé — fermé, abandonné au sens
-//! d'[ADR-0021](../../../docs/adr/0021-marqueur-d-arret.md), ou disparu — et
-//! les réécrit à son nom : les fenêtres d'une instance vivante restent à elle.
+//! Each row names the launch that wrote it. A launch only adopts the rows of
+//! a finished launch — closed, abandoned in the sense of
+//! [ADR-0021](../../../docs/adr/0021-marqueur-d-arret.md), or gone — and
+//! rewrites them in its own name: the windows of a live instance stay its own.
 //!
-//! # Le fichier est une entrée hostile
+//! # The file is hostile input
 //!
-//! Un fichier de workspace se copie, se partage et s'édite avec n'importe quel
-//! client SQLite ([SECURITY](../../../docs/SECURITY.md#input-surface),
-//! surface 3). La lecture borne ce qu'elle rend — 16 fenêtres, 256 consoles
-//! par fenêtre, le surplus retiré du fichier et journalisé, ses documents
-//! laissés dans la bibliothèque —, ramène un rectangle aberrant à ce qu'une
-//! fenêtre peut recevoir et tient pour absent ce qu'elle ne sait pas relire.
+//! A workspace file gets copied, shared and edited with any SQLite client
+//! ([SECURITY](../../../docs/SECURITY.md#input-surface), surface 3). Reading
+//! bounds what it returns — 16 windows, 256 consoles per window, the surplus
+//! removed from the file and logged, its documents left in the library —,
+//! clamps an aberrant rectangle to what a window can accept and treats what
+//! it cannot read back as absent.
 //!
-//! Toutes les méthodes peuvent bloquer : elles ne s'appellent jamais depuis le
-//! thread d'interface ([I-05](../../../CLAUDE.md#i-05)).
+//! Every method may block: they are never called from the UI thread
+//! ([I-05](../../../CLAUDE.md#i-05)).
 
 use chrono::Utc;
 use oxyn_core::{
@@ -30,8 +30,7 @@ use rusqlite::params;
 use crate::sessions::ABANDONED_AFTER;
 use crate::{Result, Store};
 
-/// Accès typé à la disposition des fenêtres. Toutes les méthodes peuvent
-/// bloquer.
+/// Typed access to the window layout. Every method may block.
 #[derive(Debug)]
 pub struct Windows<'a> {
     store: &'a Store,
@@ -42,18 +41,18 @@ impl<'a> Windows<'a> {
         Self { store }
     }
 
-    /// Écrit la ligne d'une fenêtre et remplace ses consoles, au nom du
-    /// lancement `session`.
+    /// Writes a window's row and replaces its consoles, in the name of the
+    /// `session` launch.
     ///
-    /// Une console dont le document n'existe pas — ou pas dans ce workspace —
-    /// est omise : un onglet jamais enregistré n'a encore rien à rouvrir. Une
-    /// console listée par une autre fenêtre la quitte : c'est un déplacement,
-    /// et `UNIQUE (document_id)` refuserait sinon l'écriture.
+    /// A console whose document does not exist — or not in this workspace —
+    /// is omitted: a never-saved tab has nothing to reopen yet. A console
+    /// listed by another window leaves it: it is a move, and
+    /// `UNIQUE (document_id)` would otherwise refuse the write.
     ///
-    /// # Erreurs
-    /// Les erreurs de stockage. Le layout doit avoir passé
-    /// [`WindowLayout::validate`] ; une fenêtre qui porte déjà cet identifiant
-    /// dans un autre workspace n'est pas touchée.
+    /// # Errors
+    /// Storage errors. The layout must have passed
+    /// [`WindowLayout::validate`]; a window that already carries this
+    /// identifier in another workspace is not touched.
     pub fn save(
         &self,
         workspace: WorkspaceId,
@@ -125,12 +124,11 @@ impl<'a> Windows<'a> {
         })
     }
 
-    /// Retire la ligne d'une fenêtre fermée pendant que d'autres restaient.
-    /// Ses consoles partent avec elle ; leurs documents restent dans la
-    /// bibliothèque.
+    /// Removes the row of a window closed while others remained. Its consoles
+    /// go with it; their documents stay in the library.
     ///
-    /// # Erreurs
-    /// Les erreurs de stockage. Silencieux si la ligne n'existe pas.
+    /// # Errors
+    /// Storage errors. Silent if the row does not exist.
     pub fn remove(&self, workspace: WorkspaceId, window: WindowId) -> Result<()> {
         self.store.with_connection(|connection| {
             connection.execute(
@@ -141,18 +139,17 @@ impl<'a> Windows<'a> {
         })
     }
 
-    /// Adopte, au nom de `session`, les fenêtres qu'a laissées un lancement
-    /// terminé, et les rend dans l'ordre de restauration.
+    /// Adopts, in the name of `session`, the windows a finished launch left
+    /// behind, and returns them in restoration order.
     ///
-    /// Les lignes d'une instance vivante sur le même fichier ne sont ni lues
-    /// ni réécrites. Ce qui dépasse les bornes ou ne se relit pas est retiré
-    /// du fichier et journalisé ; les documents concernés restent dans la
-    /// bibliothèque. Une largeur ou une hauteur qui n'est pas un nombre de
-    /// pixels vaut `0` : c'est à l'appelant, qui connaît le minimum du
-    /// gabarit, de l'y ramener.
+    /// The rows of a live instance on the same file are neither read nor
+    /// rewritten. What exceeds the bounds or cannot be read back is removed
+    /// from the file and logged; the documents concerned stay in the library.
+    /// A width or height that is not a number of pixels counts as `0`: it is
+    /// up to the caller, who knows the layout's minimum, to clamp it.
     ///
-    /// # Erreurs
-    /// Les erreurs de stockage.
+    /// # Errors
+    /// Storage errors.
     pub fn adopt(
         &self,
         workspace: WorkspaceId,
@@ -164,8 +161,8 @@ impl<'a> Windows<'a> {
         self.store.with_connection(|connection| {
             let transaction = connection.unchecked_transaction()?;
             let rows = {
-                // Bornée : un fichier qui porte des milliers de lignes ne
-                // retarde pas le lancement ; le reste est oublié plus bas.
+                // Bounded: a file carrying thousands of rows does not delay
+                // the launch; the rest is forgotten below.
                 let mut select = transaction.prepare(&format!(
                     "SELECT w.rowid, w.id, w.ordinal, w.x, w.y, w.width, w.height, w.maximized,
                             w.object_location, w.active_document
@@ -224,8 +221,8 @@ impl<'a> Windows<'a> {
                 )?;
                 layouts.push(layout);
             }
-            // Ce qui dépasse la borne, adoptable et non repris, est oublié en
-            // une requête : les lignes reprises portent désormais `session`.
+            // What exceeds the bound, adoptable and not taken back, is
+            // forgotten in one query: the rows taken back now carry `session`.
             let beyond = transaction.execute(
                 &format!(
                     "DELETE FROM workspace_windows AS w
@@ -246,20 +243,20 @@ impl<'a> Windows<'a> {
     }
 }
 
-/// Une ligne qu'un lancement peut adopter : la sienne, ou celle d'un
-/// lancement terminé — fermé, abandonné, ou disparu. `w` est la ligne, `?2`
-/// la session qui adopte, `?3` le seuil d'abandon.
+/// A row a launch may adopt: its own, or that of a finished launch — closed,
+/// abandoned, or gone. `w` is the row, `?2` the adopting session, `?3` the
+/// abandonment threshold.
 const ADOPTABLE: &str = "(w.app_session_id = ?2 OR NOT EXISTS (
     SELECT 1 FROM app_sessions s
     WHERE s.id = w.app_session_id AND s.closed_at IS NULL AND s.heartbeat_at >= ?3))";
 
-/// Les lignes lues au plus : de quoi remplacer des lignes illisibles jusqu'à
-/// la borne de 16, sans lire un fichier gonflé en entier.
+/// The most rows read: enough to replace unreadable rows up to the bound of
+/// 16, without reading a bloated file in full.
 const READ_WINDOWS: usize = 64;
 
-/// Une ligne telle que le fichier la rend, avant tout contrôle. Chaque
-/// colonne est lue sans échouer : un fichier retouché peut avoir perdu
-/// `STRICT`, et une valeur mal typée rend la ligne illisible, pas la lecture.
+/// A row as the file returns it, before any check. Each column is read
+/// without failing: a hand-edited file may have lost `STRICT`, and a
+/// mistyped value makes the row unreadable, not the read.
 struct Row {
     rowid: i64,
     id: Option<String>,
@@ -289,8 +286,8 @@ impl Row {
         })
     }
 
-    /// Relit la ligne, sans ses consoles. `None` quand même l'identité de la
-    /// fenêtre ne se relit pas : il n'y a alors rien à restaurer.
+    /// Reads the row back, without its consoles. `None` when even the window's
+    /// identity cannot be read back: there is then nothing to restore.
     fn read(self) -> Option<WindowLayout> {
         let window = self.id?.parse::<WindowId>().ok()?;
         let position = |value: Option<f64>| {
@@ -329,10 +326,10 @@ impl Row {
     }
 }
 
-/// Les consoles d'une fenêtre, dans l'ordre des onglets, bornées, et s'il en
-/// reste au-delà de la borne. Seuls les documents encore ouverts reviennent :
-/// une console fermée n'a rien à rouvrir. Lecture bornée à une ligne de plus
-/// que la borne, qui suffit à savoir qu'il y a un surplus.
+/// A window's consoles, in tab order, bounded, and whether some remain beyond
+/// the bound. Only documents still open come back: a closed console has
+/// nothing to reopen. The read is bounded to one row more than the bound,
+/// which is enough to know there is a surplus.
 fn consoles(
     transaction: &rusqlite::Transaction<'_>,
     window: i64,

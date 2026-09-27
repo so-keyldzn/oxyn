@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0043-multi-fenetre.md" sha256="fb15cbca0747" -->
+<!-- oxyn-translation source="docs/adr/0043-multi-fenetre.md" sha256="272551995c65" -->
 
 > Traduction française de [docs/adr/0043-multi-fenetre.md](../../../../docs/adr/0043-multi-fenetre.md). **La version anglaise fait foi.**
 

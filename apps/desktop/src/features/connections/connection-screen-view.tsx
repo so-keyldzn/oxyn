@@ -130,7 +130,7 @@ export interface ConnectionScreenViewProps {
 }
 
 /**
- * The start screen (docs/UX-SPEC.md « Écran d'accueil »): a one-row title bar
+ * The start screen (docs/UX-SPEC.md « Home screen »): a one-row title bar
  * — the mark and two title lines on the left, the window's actions on the
  * right — over one centred column: the saved connections, then the database
  * types this build registers. On a first launch there is nothing to reopen,
@@ -516,7 +516,7 @@ export function ConnectionScreenView(props: ConnectionScreenViewProps) {
 }
 
 /**
- * The form's status bar (docs/UX-SPEC.md « Navigation du premier workspace »):
+ * The form's status bar (docs/UX-SPEC.md « First workspace navigation »):
  * the connection being prepared, then where it stands — `Not tested`, the
  * test's own answer, or the save in flight. It never says `Connected`: nothing
  * here is open, and a passed test is a fact about one moment, not a session.

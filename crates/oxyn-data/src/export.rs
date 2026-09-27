@@ -1,18 +1,18 @@
-//! Export d'un [`ResultBuffer`] vers un fichier.
+//! Export of a [`ResultBuffer`] to a file.
 //!
-//! **En flux, jamais en bloc.** L'export relit les lots un par un — y compris
-//! ceux qui ont débordé sur le disque — et les écrit au fil de l'eau. Exporter
-//! 40 millions de lignes ne demande pas plus de mémoire qu'en exporter mille
+//! **Streamed, never in one block.** The export reads batches back one by one
+//! — including those that spilled to disk — and writes them as it goes.
+//! Exporting 40 million rows takes no more memory than exporting a thousand
 //! ([I-06](../../../CLAUDE.md#i-06)).
 //!
-//! **Ce qui est écrit se relit sans Oxyn.** CSV, JSON et Arrow IPC sont des
-//! formats publics, produits par les écrivains d'`arrow-rs` — les mêmes que ceux
-//! qui formatent la grille, donc le fichier et l'écran ne divergent pas
+//! **What is written reads back without Oxyn.** CSV, JSON and Arrow IPC are
+//! public formats, produced by `arrow-rs`'s writers — the same ones that
+//! format the grid, so the file and the screen do not diverge
 //! ([I-11](../../../CLAUDE.md#i-11)).
 //!
-//! **Un export partiel est refusé par défaut.** Un fichier tronqué qui ressemble
-//! à un fichier complet est une perte de données silencieuse ; l'appelant qui
-//! l'accepte le déclare avec [`ExportOptions::allow_incomplete`].
+//! **A partial export is refused by default.** A truncated file that looks
+//! like a complete file is silent data loss; the caller that accepts it
+//! declares so with [`ExportOptions::allow_incomplete`].
 //!
 //! **A truncated result is always refused.** A buffer closed by a row limit,
 //! saturation, a cancellation or a timeout has finished loading: nothing on
@@ -32,24 +32,24 @@ use serde::{Deserialize, Serialize};
 use crate::buffer::{BatchIndex, ResultBuffer};
 use crate::error::{DataError, Result};
 
-/// Réglages d'un export.
+/// Settings of an export.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct ExportOptions {
-    /// Écrire une ligne d'en-tête. Ne concerne que CSV et TSV.
+    /// Write a header line. Only concerns CSV and TSV.
     pub header: bool,
-    /// Ce qu'écrire à la place d'une valeur absente, pour CSV et TSV.
+    /// What to write in place of an absent value, for CSV and TSV.
     ///
-    /// Vide par défaut, qui est la convention du CSV : `a,,c`. Y mettre `NULL`
-    /// rend le fichier ambigu dès qu'une colonne texte contient ce mot.
+    /// Empty by default, which is the CSV convention: `a,,c`. Putting `NULL`
+    /// there makes the file ambiguous as soon as a text column contains that word.
     pub null_text: Cow<'static, str>,
-    /// Motif de formatage des horodatages, au sens de `chrono`.
+    /// Timestamp formatting pattern, in the `chrono` sense.
     ///
-    /// `None` = RFC 3339, qui est ce que relisent les tableurs et les bases.
+    /// `None` = RFC 3339, which is what spreadsheets and databases read back.
     pub timestamp_format: Option<Cow<'static, str>>,
-    /// Accepter d'exporter un résultat encore en cours de réception.
+    /// Accept exporting a result still being received.
     ///
-    /// L'export prend alors un instantané des lots reçus au moment de l'appel.
+    /// The export then takes a snapshot of the batches received at call time.
     pub allow_incomplete: bool,
 }
 
@@ -65,28 +65,28 @@ impl Default for ExportOptions {
 }
 
 impl ExportOptions {
-    /// Écrire ou non la ligne d'en-tête.
+    /// Whether to write the header line.
     #[must_use]
     pub fn with_header(mut self, header: bool) -> Self {
         self.header = header;
         self
     }
 
-    /// Change le texte des valeurs absentes.
+    /// Changes the text of absent values.
     #[must_use]
     pub fn with_null_text(mut self, texte: impl Into<Cow<'static, str>>) -> Self {
         self.null_text = texte.into();
         self
     }
 
-    /// Change le motif d'horodatage.
+    /// Changes the timestamp pattern.
     #[must_use]
     pub fn with_timestamp_format(mut self, motif: impl Into<Option<Cow<'static, str>>>) -> Self {
         self.timestamp_format = motif.into();
         self
     }
 
-    /// Autorise l'export d'un résultat incomplet.
+    /// Allows exporting an incomplete result.
     #[must_use]
     pub fn allowing_incomplete(mut self) -> Self {
         self.allow_incomplete = true;
@@ -94,28 +94,27 @@ impl ExportOptions {
     }
 }
 
-/// Ce qu'un export a produit.
+/// What an export produced.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub struct ExportSummary {
-    /// Lignes écrites.
+    /// Rows written.
     pub rows: usize,
-    /// Lots relus.
+    /// Batches read back.
     pub batches: usize,
-    /// Octets écrits.
+    /// Bytes written.
     pub bytes: u64,
 }
 
-/// Ce format est-il réellement écrit par [`export`] ?
+/// Is this format really written by [`export`]?
 ///
-/// Existe pour que l'interface n'offre pas un format qu'elle ne peut pas
-/// produire : sans cela, le geste part, le sélecteur de fichier s'ouvre,
-/// l'utilisateur nomme sa destination — et l'échec n'arrive qu'après, en
-/// laissant un fichier vide sur son disque. Ce qui n'est pas disponible
-/// s'annonce avant le clic.
+/// Exists so that the interface does not offer a format it cannot produce:
+/// without it, the action starts, the file picker opens, the user names their
+/// destination — and the failure only comes afterwards, leaving an empty file
+/// on their disk. What is not available is announced before the click.
 ///
-/// Reste aligné sur le `match` d'[`export`] : le test
-/// `chaque_format_declare_ecrivable_secrit_vraiment` échoue sinon.
+/// Stays aligned with [`export`]'s `match`: the test
+/// `every_format_declared_writable_is_really_written` fails otherwise.
 #[must_use]
 pub const fn is_supported(format: ExportFormat) -> bool {
     matches!(
@@ -128,27 +127,27 @@ pub const fn is_supported(format: ExportFormat) -> bool {
     )
 }
 
-/// Écrit le contenu de `buffer` dans `writer`.
+/// Writes the content of `buffer` into `writer`.
 ///
-/// Relit les lots un par un, y compris depuis le fichier de débordement, et
-/// vérifie l'annulation entre chaque lot. Ne matérialise jamais plus d'un lot à
-/// la fois.
+/// Reads batches back one by one, including from the spill file, and checks
+/// cancellation between each batch. Never materializes more than one batch at
+/// a time.
 ///
-/// Un résultat sans aucune ligne produit un fichier **vide**, sans même la ligne
-/// d'en-tête : c'est le comportement de l'écrivain CSV d'Arrow, qui n'écrit
-/// l'en-tête qu'avec le premier lot. L'appelant qui veut un fichier à en-tête
-/// seul doit le composer lui-même.
+/// A result with no row at all produces an **empty** file, without even the
+/// header line: it is the behavior of Arrow's CSV writer, which only writes
+/// the header with the first batch. A caller that wants a header-only file
+/// must compose it itself.
 ///
-/// # Erreurs
+/// # Errors
 ///
-/// * [`DataError::IncompleteResult`] si le résultat coule encore et que
-///   [`ExportOptions::allow_incomplete`] est faux ;
+/// * [`DataError::IncompleteResult`] if the result is still flowing and
+///   [`ExportOptions::allow_incomplete`] is false;
 /// * [`DataError::TruncatedResult`] when rows of the result are missing;
-/// * [`DataError::UnsupportedFormat`] pour Parquet, SQL et Markdown ;
-/// * [`DataError::Cancelled`] si le jeton est déclenché — le fichier
-///   partiellement écrit reste à la charge de l'appelant, qui seul sait s'il
-///   faut l'effacer ;
-/// * [`DataError::Io`], [`DataError::Arrow`] ou [`DataError::Spill`] sinon.
+/// * [`DataError::UnsupportedFormat`] for Parquet, SQL and Markdown;
+/// * [`DataError::Cancelled`] if the token is triggered — the partially
+///   written file is left to the caller, who alone knows whether it must be
+///   deleted;
+/// * [`DataError::Io`], [`DataError::Arrow`] or [`DataError::Spill`] otherwise.
 pub fn export<W: Write>(
     buffer: &ResultBuffer,
     format: ExportFormat,
@@ -158,8 +157,8 @@ pub fn export<W: Write>(
 ) -> Result<ExportSummary> {
     ensure_exportable(buffer, opts)?;
 
-    // Instantané : le nombre de lots est relu une seule fois, pour que l'export
-    // d'un résultat encore en cours ait une fin définie.
+    // Snapshot: the number of batches is read only once, so that the export
+    // of a result still in progress has a defined end.
     let source = Source {
         buffer,
         ct,
@@ -181,8 +180,8 @@ pub fn export<W: Write>(
             let mut sortie = ArrayWriter::new(&mut compteur);
             let resume =
                 source.pour_chaque_lot(|lot| sortie.write(lot).map_err(DataError::from))?;
-            // Sans `finish`, le tableau JSON n'est jamais refermé : le fichier
-            // est illisible et rien ne l'a signalé.
+            // Without `finish`, the JSON array is never closed: the file is
+            // unreadable and nothing reported it.
             sortie.finish()?;
             resume
         }
@@ -190,16 +189,16 @@ pub fn export<W: Write>(
             let mut sortie = IpcFileWriter::try_new(&mut compteur, buffer.schema().as_ref())?;
             let resume =
                 source.pour_chaque_lot(|lot| sortie.write(lot).map_err(DataError::from))?;
-            // Le pied de page porte l'index des blocs : sans lui, le fichier
-            // n'est pas un fichier Arrow.
+            // The footer carries the block index: without it, the file is not
+            // an Arrow file.
             sortie.finish()?;
             resume
         }
-        // TODO(phase 1, ouvert le 2026-09-05) : Parquet attend l'ajout de la
-        // crate `parquet` au manifeste du workspace ; SQL attend la citation
-        // d'identifiants de `oxyn-query` (I-10) ; Markdown attend la mise en
-        // forme décidée par l'interface. Aucun des trois n'est un manque de code
-        // ici : chacun attend une dépendance qui n'existe pas encore.
+        // TODO(phase 1, opened on 2026-09-05): Parquet waits for the `parquet`
+        // crate to be added to the workspace manifest; SQL waits for
+        // identifier quoting from `oxyn-query` (I-10); Markdown waits for the
+        // formatting decided by the interface. None of the three is missing
+        // code here: each waits for a dependency that does not exist yet.
         autre => {
             return Err(DataError::UnsupportedFormat {
                 format: autre.extension(),
@@ -232,10 +231,10 @@ pub fn ensure_exportable(buffer: &ResultBuffer, opts: &ExportOptions) -> Result<
     Ok(())
 }
 
-/// L'instantané des lots à écrire.
+/// The snapshot of the batches to write.
 ///
-/// Le nombre de lots est relevé **une fois**, à la construction : sans cela, un
-/// export lancé sur un résultat encore en cours n'aurait pas de fin définie.
+/// The number of batches is read **once**, at construction: without that, an
+/// export started on a result still in progress would have no defined end.
 #[derive(Debug, Clone, Copy)]
 struct Source<'a> {
     buffer: &'a ResultBuffer,
@@ -244,23 +243,23 @@ struct Source<'a> {
 }
 
 impl Source<'_> {
-    /// Relit les lots de l'instantané et les passe à `ecrire`, en vérifiant
-    /// l'annulation entre chacun.
+    /// Reads the snapshot's batches back and passes them to `ecrire`, checking
+    /// cancellation between each.
     fn pour_chaque_lot<F>(&self, mut ecrire: F) -> Result<ExportSummary>
     where
         F: FnMut(&RecordBatch) -> Result<()>,
     {
         let mut resume = ExportSummary::default();
         for position in 0..self.lots {
-            // Entre deux lots, pas au milieu : un fichier coupé en plein
-            // encodage n'est pas récupérable, alors qu'un fichier coupé sur une
-            // frontière de lot est un préfixe valide.
+            // Between two batches, not in the middle: a file cut in the middle
+            // of encoding cannot be recovered, whereas a file cut on a batch
+            // boundary is a valid prefix.
             if self.ct.is_cancelled() {
                 return Err(DataError::Cancelled);
             }
             let Some(lot) = self.buffer.batch(BatchIndex::new(position))? else {
-                // Le nombre de lots a été relevé avant la boucle ; un trou
-                // signale un invariant rompu, pas une course normale.
+                // The number of batches was read before the loop; a gap
+                // signals a broken invariant, not a normal race.
                 return Err(DataError::Spill(std::io::Error::other(
                     "a batch vanished from the buffer during export",
                 )));
@@ -273,10 +272,10 @@ impl Source<'_> {
     }
 }
 
-/// CSV et TSV : même écrivain, un séparateur près.
+/// CSV and TSV: same writer, but for the separator.
 ///
-/// `arrow::csv::Writer` vide son tampon interne à chaque lot écrit : une sortie
-/// abandonnée en cours de route reste un préfixe valide.
+/// `arrow::csv::Writer` flushes its internal buffer at every batch written: an
+/// output abandoned halfway stays a valid prefix.
 fn ecrire_delimite<W: Write>(
     source: &Source<'_>,
     sortie: &mut CountingWriter<W>,
@@ -297,10 +296,10 @@ fn ecrire_delimite<W: Write>(
     source.pour_chaque_lot(|lot| ecrivain.write(lot).map_err(DataError::from))
 }
 
-/// Écrivain qui compte ce qui le traverse.
+/// Writer that counts what goes through it.
 ///
-/// Le compte sert au retour d'[`ExportSummary`] et à l'affichage de progression :
-/// sans lui, un export de 4 Go n'a aucun repère à montrer.
+/// The count feeds [`ExportSummary`] and the progress display: without it, a
+/// 4 GB export has no landmark to show.
 #[derive(Debug)]
 struct CountingWriter<W> {
     inner: W,
@@ -367,17 +366,17 @@ mod tests {
                 Arc::new(StringArray::from(noms)),
             ],
         )
-        .expect("les colonnes correspondent au schéma construit juste au-dessus")
+        .expect("the columns match the schema built just above")
     }
 
-    /// Tampon clos, avec un budget si petit que tout a débordé sur le disque :
-    /// c'est le cas qui compte, puisque l'export doit relire depuis le fichier
-    /// temporaire.
+    /// Closed buffer, with a budget so small that everything spilled to disk:
+    /// it is the case that matters, since the export must read back from the
+    /// temporary file.
     fn tampon_deborde() -> ResultBuffer {
         let tampon =
             ResultBuffer::with_limits(schema(), BufferLimits::default().with_memory_budget(1));
-        tampon.push(lot(0, 3)).expect("lot accepté");
-        tampon.push(lot(100, 2)).expect("lot accepté");
+        tampon.push(lot(0, 3)).expect("batch accepted");
+        tampon.push(lot(100, 2)).expect("batch accepted");
         tampon.mark_complete(ExecStats::default());
         assert_eq!(tampon.spilled_batches(), 2);
         tampon
@@ -387,42 +386,42 @@ mod tests {
         let tampon = tampon_deborde();
         let mut sortie: Vec<u8> = Vec::new();
         let resume = export(&tampon, format, &mut sortie, opts, &CancelToken::new())
-            .expect("export sans erreur");
+            .expect("export without error");
         (
-            String::from_utf8(sortie).expect("les formats testés sont en UTF-8"),
+            String::from_utf8(sortie).expect("the tested formats are UTF-8"),
             resume,
         )
     }
 
     #[test]
-    fn le_csv_porte_son_en_tete_et_toutes_ses_lignes() {
+    fn csv_carries_its_header_and_all_its_rows() {
         let (texte, resume) = exporter(ExportFormat::Csv, &ExportOptions::default());
         let lignes: Vec<&str> = texte.lines().collect();
 
         assert_eq!(lignes.first(), Some(&"id,nom"));
-        assert_eq!(lignes.len(), 6, "un en-tête et cinq lignes : {texte}");
+        assert_eq!(lignes.len(), 6, "a header and five rows: {texte}");
         assert_eq!(resume.rows, 5);
         assert_eq!(resume.batches, 2);
         assert!(resume.bytes > 0);
     }
 
-    /// Le débordement disque ne doit rien changer au contenu exporté.
+    /// Spilling to disk must change nothing in the exported content.
     #[test]
-    fn l_export_relit_les_lots_debordes() {
+    fn the_export_reads_back_spilled_batches() {
         let (texte, _) = exporter(ExportFormat::Csv, &ExportOptions::default());
         for attendu in ["0,n0", "1,", "2,n2", "100,n100", "101,"] {
-            assert!(texte.contains(attendu), "{attendu} absent de :\n{texte}");
+            assert!(texte.contains(attendu), "{attendu} missing from:\n{texte}");
         }
     }
 
     #[test]
-    fn le_tsv_utilise_la_tabulation() {
+    fn tsv_uses_the_tab() {
         let (texte, _) = exporter(ExportFormat::Tsv, &ExportOptions::default());
         assert!(texte.starts_with("id\tnom"), "{texte}");
     }
 
     #[test]
-    fn l_en_tete_est_optionnel() {
+    fn the_header_is_optional() {
         let (texte, _) = exporter(
             ExportFormat::Csv,
             &ExportOptions::default().with_header(false),
@@ -432,7 +431,7 @@ mod tests {
     }
 
     #[test]
-    fn le_texte_des_valeurs_absentes_est_configurable() {
+    fn the_absent_value_text_is_configurable() {
         let (texte, _) = exporter(
             ExportFormat::Csv,
             &ExportOptions::default().with_null_text("\\N"),
@@ -441,7 +440,7 @@ mod tests {
     }
 
     #[test]
-    fn le_json_par_lignes_produit_un_objet_par_ligne() {
+    fn json_lines_produces_one_object_per_row() {
         let (texte, resume) = exporter(ExportFormat::JsonLines, &ExportOptions::default());
         let lignes: Vec<&str> = texte.lines().filter(|l| !l.is_empty()).collect();
         assert_eq!(lignes.len(), 5, "{texte}");
@@ -453,16 +452,16 @@ mod tests {
     }
 
     #[test]
-    fn le_json_produit_un_tableau_referme() {
+    fn json_produces_a_closed_array() {
         let (texte, _) = exporter(ExportFormat::Json, &ExportOptions::default());
         assert!(texte.starts_with('['), "{texte}");
         assert!(texte.trim_end().ends_with(']'), "{texte}");
     }
 
-    /// L'aller-retour Arrow IPC est le seul export qui ne convertit rien : ce
-    /// qui sort doit être exactement ce qui est entré.
+    /// The Arrow IPC round trip is the only export that converts nothing: what
+    /// comes out must be exactly what went in.
     #[test]
-    fn l_arrow_ipc_fait_un_aller_retour_exact() {
+    fn arrow_ipc_makes_an_exact_round_trip() {
         let tampon = tampon_deborde();
         let mut sortie: Vec<u8> = Vec::new();
         let resume = export(
@@ -472,23 +471,23 @@ mod tests {
             &ExportOptions::default(),
             &CancelToken::new(),
         )
-        .expect("export sans erreur");
+        .expect("export without error");
         assert_eq!(resume.rows, 5);
 
         let lecteur = FileReader::try_new(std::io::Cursor::new(sortie), None)
-            .expect("le fichier écrit doit être un fichier Arrow valide");
+            .expect("the written file must be a valid Arrow file");
         assert_eq!(lecteur.schema().fields(), schema().fields());
 
         let relus: Vec<RecordBatch> = lecteur
             .collect::<std::result::Result<Vec<_>, _>>()
-            .expect("relecture des lots");
+            .expect("reading batches back");
         assert_eq!(relus.len(), 2);
         assert_eq!(relus.first(), Some(&lot(0, 3)));
         assert_eq!(relus.get(1), Some(&lot(100, 2)));
     }
 
     #[test]
-    fn parquet_est_refuse_explicitement() {
+    fn parquet_is_refused_explicitly() {
         let tampon = tampon_deborde();
         let mut sortie: Vec<u8> = Vec::new();
         match export(
@@ -501,14 +500,14 @@ mod tests {
             Err(DataError::UnsupportedFormat { format }) => assert_eq!(format, "parquet"),
             autre => panic!("attendu UnsupportedFormat, obtenu {autre:?}"),
         }
-        assert!(sortie.is_empty(), "rien ne doit être écrit");
+        assert!(sortie.is_empty(), "nothing must be written");
     }
 
-    /// Le mode de panne à éviter : un fichier partiel qui a l'air complet.
+    /// The failure mode to avoid: a partial file that looks complete.
     #[test]
-    fn un_resultat_en_cours_ne_s_exporte_pas_par_accident() {
+    fn a_result_in_progress_is_not_exported_by_accident() {
         let tampon = ResultBuffer::new(schema(), 1 << 20);
-        tampon.push(lot(0, 3)).expect("lot accepté");
+        tampon.push(lot(0, 3)).expect("batch accepted");
         let mut sortie: Vec<u8> = Vec::new();
 
         match export(
@@ -522,7 +521,7 @@ mod tests {
             autre => panic!("attendu IncompleteResult, obtenu {autre:?}"),
         }
 
-        // Déclaré explicitement, c'est autorisé.
+        // Declared explicitly, it is allowed.
         let resume = export(
             &tampon,
             ExportFormat::Csv,
@@ -530,7 +529,7 @@ mod tests {
             &ExportOptions::default().allowing_incomplete(),
             &CancelToken::new(),
         )
-        .expect("export explicite d'un résultat partiel");
+        .expect("explicit export of a partial result");
         assert_eq!(resume.rows, 3);
     }
 
@@ -561,7 +560,7 @@ mod tests {
     }
 
     #[test]
-    fn une_annulation_interrompt_l_export() {
+    fn a_cancellation_interrupts_the_export() {
         let tampon = tampon_deborde();
         let ct = CancelToken::new();
         ct.cancel();
@@ -580,11 +579,11 @@ mod tests {
     }
 
     #[test]
-    fn chaque_format_declare_ecrivable_secrit_vraiment() {
-        // `is_supported` gouverne ce que l'interface propose. Une divergence
-        // entre cette liste et le `match` d'`export` ne casse rien ici : elle
-        // casse trois clics plus loin, après que l'utilisateur a nommé son
-        // fichier, et laisse un fichier vide derrière elle.
+    fn every_format_declared_writable_is_really_written() {
+        // `is_supported` governs what the interface offers. A divergence
+        // between this list and `export`'s `match` breaks nothing here: it
+        // breaks three clicks later, after the user named their file, and
+        // leaves an empty file behind.
         let tampon = tampon_deborde();
         for format in [
             ExportFormat::Csv,
@@ -615,7 +614,7 @@ mod tests {
     }
 
     #[test]
-    fn un_resultat_vide_produit_un_fichier_vide_et_non_une_erreur() {
+    fn an_empty_result_produces_an_empty_file_not_an_error() {
         let tampon = ResultBuffer::new(schema(), 1 << 20);
         tampon.mark_complete(ExecStats::default());
         let mut sortie: Vec<u8> = Vec::new();
@@ -627,7 +626,7 @@ mod tests {
             &ExportOptions::default(),
             &CancelToken::new(),
         )
-        .expect("export sans erreur");
+        .expect("export without error");
 
         assert_eq!(resume.rows, 0);
         assert_eq!(resume.batches, 0);

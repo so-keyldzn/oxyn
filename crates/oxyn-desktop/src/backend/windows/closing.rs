@@ -1,6 +1,6 @@
 //! Closing a window that is not the last, and letting go of what a window
 //! held ([ADR-0043](../../../../../docs/adr/0043-multi-fenetre.md),
-//! « Fermeture »).
+//! « Closing »).
 //!
 //! Closing the last window quits: that is the ordered exit of
 //! `backend/exit.rs` and `backend/recovery.rs`, unchanged. Closing another

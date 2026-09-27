@@ -1,31 +1,29 @@
-//! L'ouverture de l'état local et l'accès sérialisé à SQLite.
+//! Opening the local state and serialized access to SQLite.
 //!
-//! # Une seule connexion, derrière un verrou
+//! # A single connection, behind a lock
 //!
-//! [`Store`] encapsule **une** `rusqlite::Connection` dans un
-//! [`parking_lot::Mutex`]. Ce n'est pas un pis-aller de pool : l'état local
-//! d'Oxyn est écrit par petites touches — une ligne d'historique, une ligne de
-//! journal, un instantané de catalogue — et un pool ne ferait qu'ajouter des
-//! écrivains concurrents à une base que SQLite sérialise de toute façon à
-//! l'écriture. Le verrou rend cette sérialisation visible dans les types plutôt
-//! que dans un `SQLITE_BUSY` intermittent.
+//! [`Store`] wraps **one** `rusqlite::Connection` in a
+//! [`parking_lot::Mutex`]. It is not a poor man's pool: Oxyn's local state is
+//! written in small touches — a history row, a journal row, a catalog
+//! snapshot — and a pool would only add concurrent writers to a database
+//! SQLite serializes on write anyway. The lock makes that serialization
+//! visible in the types rather than in an intermittent `SQLITE_BUSY`.
 //!
-//! **Conséquence pour l'appelant : aucune méthode de cette crate ne doit être
-//! appelée depuis le thread UI** (I-05). Elles sont synchrones et prennent un
-//! verrou ; c'est à `oxyn-exec` de les porter sur le pool bloquant.
+//! **Consequence for the caller: no method of this crate may be called from
+//! the UI thread** (I-05). They are synchronous and take a lock; it is up to
+//! `oxyn-exec` to carry them onto the blocking pool.
 //!
-//! # Les réglages d'ouverture, et ce qu'ils achètent
+//! # The opening settings, and what they buy
 //!
-//! | PRAGMA | Valeur | Pourquoi |
+//! | PRAGMA | Value | Why |
 //! |---|---|---|
-//! | `journal_mode` | `WAL` | un lecteur ne bloque plus un écrivain : la grille peut relire l'historique pendant qu'une commande s'inscrit au journal |
-//! | `synchronous` | `NORMAL` | le compagnon usuel de WAL : durable au crash de processus, une transaction récente peut se perdre à la coupure de courant |
-//! | `foreign_keys` | activé | SQLite les ignore **par défaut** ; sans ce réglage les cascades du schéma ne s'appliquent pas |
-//! | `busy_timeout` | 5 s | une seconde instance d'Oxyn attend plutôt que d'échouer |
+//! | `journal_mode` | `WAL` | a reader no longer blocks a writer: the grid can read the history back while a command is being logged |
+//! | `synchronous` | `NORMAL` | WAL's usual companion: durable across a process crash, a recent transaction can be lost on power loss |
+//! | `foreign_keys` | on | SQLite ignores them **by default**; without this setting the schema's cascades do not apply |
+//! | `busy_timeout` | 5 s | a second Oxyn instance waits rather than failing |
 //!
-//! `foreign_keys` est le piège classique : le schéma déclare des `REFERENCES`
-//! qui ne font strictement rien tant que ce pragma n'est pas posé, **par
-//! connexion**.
+//! `foreign_keys` is the classic trap: the schema declares `REFERENCES` that
+//! do strictly nothing until this pragma is set, **per connection**.
 
 use std::fmt;
 use std::path::{Path, PathBuf};
@@ -42,26 +40,26 @@ use crate::journal::Journal;
 use crate::schema;
 use crate::workspaces::Workspaces;
 
-/// Nom du fichier de base sous le répertoire de données de l'OS.
+/// Name of the database file under the OS data directory.
 pub const DATABASE_FILE_NAME: &str = "oxyn.sqlite3";
 
-/// Attente maximale sur une base occupée par un autre processus.
+/// Maximum wait on a database busy with another process.
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
-/// Composants du chemin de données, au sens de `directories`.
+/// Components of the data path, in the `directories` sense.
 const APP_QUALIFIER: &str = "dev";
-/// Organisation, au sens de `directories`.
+/// Organization, in the `directories` sense.
 const APP_ORGANIZATION: &str = "keyldzn";
-/// Application, au sens de `directories`.
+/// Application, in the `directories` sense.
 const APP_NAME: &str = "oxyn";
 
-/// L'état local persistant : workspaces, connexions, historique, journal
-/// d'audit, documents.
+/// The persistent local state: workspaces, connections, history, audit
+/// journal, documents.
 ///
-/// Le type est `Send + Sync` : il se partage par `Arc` entre le bus
-/// d'exécution et les tâches de fond.
+/// The type is `Send + Sync`: it is shared through `Arc` between the execution
+/// bus and background tasks.
 ///
-/// # Exemple
+/// # Example
 ///
 /// ```
 /// use oxyn_store::Store;
@@ -73,33 +71,33 @@ const APP_NAME: &str = "oxyn";
 /// # Ok::<(), oxyn_store::StoreError>(())
 /// ```
 pub struct Store {
-    /// `None` pour une base en mémoire.
+    /// `None` for an in-memory database.
     path: Option<PathBuf>,
     conn: Mutex<Connection>,
 }
 
 impl Store {
-    /// Ouvre l'état local à son emplacement standard sous le répertoire de
-    /// données de l'utilisateur, en créant l'arborescence si besoin.
+    /// Opens the local state at its standard location under the user's data
+    /// directory, creating the tree if needed.
     ///
-    /// # Erreurs
-    /// * [`StoreError::DataDirUnavailable`] si le système n'expose pas de
-    ///   répertoire de données ;
-    /// * [`StoreError::Io`] si l'arborescence ne peut pas être créée ;
-    /// * les erreurs de [`Store::open_at`].
+    /// # Errors
+    /// * [`StoreError::DataDirUnavailable`] if the system exposes no data
+    ///   directory;
+    /// * [`StoreError::Io`] if the tree cannot be created;
+    /// * the errors of [`Store::open_at`].
     pub fn open_default() -> Result<Self> {
         Self::open_at(Self::default_path()?)
     }
 
-    /// Ouvre — ou crée — l'état local à un chemin donné.
+    /// Opens — or creates — the local state at a given path.
     ///
-    /// Le répertoire parent est créé si nécessaire. Les migrations manquantes
-    /// sont appliquées avant que la méthode ne rende la main : un `Store`
-    /// existant a toujours un schéma à jour.
+    /// The parent directory is created if needed. Missing migrations are
+    /// applied before the method returns: an existing `Store` always has an
+    /// up-to-date schema.
     ///
-    /// # Erreurs
+    /// # Errors
     /// [`StoreError::Io`], [`StoreError::Sqlite`],
-    /// [`StoreError::SchemaTooRecent`] ou [`StoreError::Migration`].
+    /// [`StoreError::SchemaTooRecent`] or [`StoreError::Migration`].
     pub fn open_at(path: impl AsRef<Path>) -> Result<Self> {
         let path = path.as_ref().to_path_buf();
         if let Some(parent) = path.parent()
@@ -111,63 +109,63 @@ impl Store {
         Self::from_connection(conn, Some(path))
     }
 
-    /// Ouvre un état local en mémoire, migré et vide.
+    /// Opens an in-memory local state, migrated and empty.
     ///
-    /// Destiné aux tests — les siens comme ceux des crates qui en dépendent.
-    /// Rien n'est écrit sur le disque, et `journal_mode` reste `memory` : WAL
-    /// n'a pas de sens sans fichier.
+    /// Meant for tests — its own as well as those of the crates depending on
+    /// it. Nothing is written to disk, and `journal_mode` stays `memory`: WAL
+    /// makes no sense without a file.
     ///
-    /// # Erreurs
-    /// [`StoreError::Sqlite`] ou [`StoreError::Migration`].
+    /// # Errors
+    /// [`StoreError::Sqlite`] or [`StoreError::Migration`].
     pub fn open_in_memory() -> Result<Self> {
         let conn = Connection::open_in_memory()?;
         Self::from_connection(conn, None)
     }
 
-    /// Chemin standard du fichier d'état local pour cet utilisateur.
+    /// Standard path of the local state file for this user.
     ///
-    /// # Erreurs
-    /// [`StoreError::DataDirUnavailable`] si le système n'expose pas de
-    /// répertoire de données — cas d'un environnement sans variable `HOME`.
+    /// # Errors
+    /// [`StoreError::DataDirUnavailable`] if the system exposes no data
+    /// directory — the case of an environment without a `HOME` variable.
     pub fn default_path() -> Result<PathBuf> {
         let dirs = directories::ProjectDirs::from(APP_QUALIFIER, APP_ORGANIZATION, APP_NAME)
             .ok_or(StoreError::DataDirUnavailable)?;
         Ok(dirs.data_dir().join(DATABASE_FILE_NAME))
     }
 
-    /// Chemin du fichier, ou `None` pour une base en mémoire.
+    /// Path of the file, or `None` for an in-memory database.
     #[must_use]
     pub fn path(&self) -> Option<&Path> {
         self.path.as_deref()
     }
 
-    /// Version de schéma inscrite dans le fichier.
+    /// Schema version recorded in the file.
     ///
-    /// # Erreurs
-    /// [`StoreError::Sqlite`] si la table de suivi est illisible.
+    /// # Errors
+    /// [`StoreError::Sqlite`] if the tracking table is unreadable.
     pub fn schema_version(&self) -> Result<u32> {
         self.with_connection(schema::current_version)
     }
 
-    /// Les workspaces.
+    /// The workspaces.
     #[must_use]
     pub fn workspaces(&self) -> Workspaces<'_> {
         Workspaces::new(self)
     }
 
-    /// Les connexions configurées.
+    /// The configured connections.
     #[must_use]
     pub fn connections(&self) -> Connections<'_> {
         Connections::new(self)
     }
 
-    /// L'historique des exécutions.
+    /// The execution history.
     #[must_use]
     pub fn history(&self) -> History<'_> {
         History::new(self)
     }
 
-    /// La piste d'audit, en ajout seul.
+    /// The audit trail, append-only.
     #[must_use]
     pub fn journal(&self) -> Journal<'_> {
         Journal::new(self)
@@ -179,56 +177,56 @@ impl Store {
         crate::preferences::Preferences::new(self)
     }
 
-    /// Les sessions d'application : ce qui distingue un arrêt propre d'un
-    /// plantage. Ne jamais appeler depuis le thread d'interface.
+    /// Application sessions: what tells a clean shutdown from a crash. Never
+    /// call from the UI thread.
     #[must_use]
     pub fn sessions(&self) -> crate::sessions::Sessions<'_> {
         crate::sessions::Sessions::new(self)
     }
 
-    /// La disposition des fenêtres ([ADR-0043](../../../docs/adr/0043-multi-fenetre.md)).
-    /// Ne jamais appeler depuis le thread d'interface.
+    /// The window layout ([ADR-0043](../../../docs/adr/0043-multi-fenetre.md)).
+    /// Never call from the UI thread.
     #[must_use]
     pub fn windows(&self) -> crate::windows::Windows<'_> {
         crate::windows::Windows::new(self)
     }
 
-    /// Les documents du workspace.
+    /// The workspace's documents.
     #[must_use]
     pub fn documents(&self) -> Documents<'_> {
         Documents::new(self)
     }
 
-    /// Le journal des sorties de données vers un destinataire IA, en ajout
-    /// seul. Ne jamais appeler depuis le thread d'interface.
+    /// The log of data egress to an AI recipient, append-only. Never call from
+    /// the UI thread.
     #[must_use]
     pub fn egress(&self) -> crate::egress::Egress<'_> {
         crate::egress::Egress::new(self)
     }
 
-    /// Les conversations de l'assistant et leur transcription. Ne jamais
-    /// appeler depuis le thread d'interface.
+    /// The assistant's conversations and their transcript. Never call from the
+    /// UI thread.
     #[must_use]
     pub fn conversations(&self) -> crate::conversations::Conversations<'_> {
         crate::conversations::Conversations::new(self)
     }
 
-    /// Les fournisseurs de modèles déclarés — **par machine**, pas par
-    /// workspace (ADR-0023). Ne jamais appeler depuis le thread d'interface.
+    /// The declared model providers — **per machine**, not per workspace
+    /// (ADR-0023). Never call from the UI thread.
     #[must_use]
     pub fn providers(&self) -> crate::providers::Providers<'_> {
         crate::providers::Providers::new(self)
     }
 
-    /// Les agents externes déclarés — **par machine**, et **sans secret**
-    /// ([ADR-0026](../../../docs/adr/0026-agents-externes-acp.md)). Ne jamais
-    /// appeler depuis le thread d'interface.
+    /// The declared external agents — **per machine**, and **without a
+    /// secret** ([ADR-0026](../../../docs/adr/0026-agents-externes-acp.md)).
+    /// Never call from the UI thread.
     #[must_use]
     pub fn external_agents(&self) -> crate::agents::ExternalAgents<'_> {
         crate::agents::ExternalAgents::new(self)
     }
 
-    /// Configure puis migre une connexion fraîche.
+    /// Configures then migrates a fresh connection.
     fn from_connection(mut conn: Connection, path: Option<PathBuf>) -> Result<Self> {
         Self::configure(&conn)?;
         schema::migrate(&mut conn)?;
@@ -238,15 +236,15 @@ impl Store {
         })
     }
 
-    /// Pose les quatre réglages d'ouverture décrits en tête de module.
+    /// Sets the four opening settings described at the top of the module.
     fn configure(conn: &Connection) -> Result<()> {
         conn.busy_timeout(BUSY_TIMEOUT)?;
-        // Sur une base en mémoire, SQLite répond `memory` et ignore la demande :
-        // c'est attendu, et ce n'est pas une erreur.
+        // On an in-memory database, SQLite answers `memory` and ignores the
+        // request: that is expected, and not an error.
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
-        // Booléen — donc l'entier 1 — plutôt que la chaîne `ON` : le pragma
-        // accepte les deux, l'entier ne dépend pas de la citation.
+        // Boolean — hence the integer 1 — rather than the string `ON`: the
+        // pragma accepts both, the integer does not depend on quoting.
         conn.pragma_update(None, "foreign_keys", true)?;
         // Without it, a deleted row stays readable in SQLite's free pages: an
         // answer erased because its exchange received a sample, a purged
@@ -294,8 +292,8 @@ impl Store {
 }
 
 impl fmt::Debug for Store {
-    /// Ne rend que le chemin : le contenu de l'état local — instructions,
-    /// journal, catalogue — n'a rien à faire dans un `{store:?}`.
+    /// Only shows the path: the content of the local state — statements,
+    /// journal, catalog — has no business in a `{store:?}`.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("Store")
             .field(
@@ -314,40 +312,40 @@ mod tests {
     use super::*;
 
     #[test]
-    fn une_base_en_memoire_est_migree_a_l_ouverture() {
-        let store = Store::open_in_memory().expect("ouverture en mémoire");
+    fn an_in_memory_database_is_migrated_on_open() {
+        let store = Store::open_in_memory().expect("open in memory");
         assert_eq!(
-            store.schema_version().expect("version lisible"),
+            store.schema_version().expect("readable version"),
             schema::latest_version()
         );
         assert!(store.path().is_none());
     }
 
     #[test]
-    fn le_store_se_partage_entre_threads() {
-        // La documentation du type l'affirme ; le compilateur le vérifie.
-        // `rusqlite::Connection` est `Send` mais pas `Sync` : c'est le `Mutex`
-        // qui rend `Store` partageable, et le retirer casserait ce test.
+    fn the_store_is_shared_between_threads() {
+        // The type's documentation claims it; the compiler checks it.
+        // `rusqlite::Connection` is `Send` but not `Sync`: the `Mutex` is what
+        // makes `Store` shareable, and removing it would break this test.
         fn exige_send_sync<T: Send + Sync>() {}
         exige_send_sync::<Store>();
     }
 
     #[test]
-    fn les_cles_etrangeres_sont_actives() {
-        // SQLite les ignore par défaut : sans ce réglage, les cascades du
-        // schéma seraient décoratives.
-        let store = Store::open_in_memory().expect("ouverture");
+    fn foreign_keys_are_enabled() {
+        // SQLite ignores them by default: without this setting, the schema's
+        // cascades would be decorative.
+        let store = Store::open_in_memory().expect("open");
         let actif: i64 = store
             .with_connection(
                 |conn| Ok(conn.query_row("PRAGMA foreign_keys", [], |row| row.get(0))?),
             )
-            .expect("lecture du pragma");
+            .expect("read the pragma");
         assert_eq!(actif, 1);
     }
 
     #[test]
-    fn un_fichier_est_cree_avec_son_repertoire_et_se_rouvre() {
-        let racine = tempfile::tempdir().expect("répertoire temporaire");
+    fn a_file_is_created_with_its_directory_and_reopens() {
+        let racine = tempfile::tempdir().expect("temporary directory");
         let chemin = racine
             .path()
             .join("profond")
@@ -355,67 +353,67 @@ mod tests {
             .join("oxyn.sqlite3");
 
         {
-            let store = Store::open_at(&chemin).expect("première ouverture");
+            let store = Store::open_at(&chemin).expect("first open");
             store
                 .workspaces()
                 .create("atelier")
-                .expect("création de workspace");
+                .expect("workspace creation");
             assert_eq!(store.path(), Some(chemin.as_path()));
         }
 
-        let store = Store::open_at(&chemin).expect("réouverture");
+        let store = Store::open_at(&chemin).expect("reopen");
         assert_eq!(
             store.schema_version().expect("version"),
             schema::latest_version(),
-            "réouvrir ne doit pas rejouer les migrations"
+            "reopening must not replay the migrations"
         );
         assert_eq!(
-            store.workspaces().list().expect("liste").len(),
+            store.workspaces().list().expect("list").len(),
             1,
-            "l'état écrit doit survivre à la fermeture"
+            "the written state must survive closing"
         );
     }
 
     #[test]
-    fn un_fichier_est_en_wal() {
-        let racine = tempfile::tempdir().expect("répertoire temporaire");
-        let store = Store::open_at(racine.path().join("oxyn.sqlite3")).expect("ouverture");
+    fn a_file_is_in_wal_mode() {
+        let racine = tempfile::tempdir().expect("temporary directory");
+        let store = Store::open_at(racine.path().join("oxyn.sqlite3")).expect("open");
         let mode: String = store
             .with_connection(
                 |conn| Ok(conn.query_row("PRAGMA journal_mode", [], |row| row.get(0))?),
             )
-            .expect("lecture du pragma");
+            .expect("read the pragma");
         assert_eq!(mode, "wal");
     }
 
     #[test]
-    fn le_debug_ne_montre_pas_le_contenu() {
-        let store = Store::open_in_memory().expect("ouverture");
+    fn debug_does_not_show_the_content() {
+        let store = Store::open_in_memory().expect("open");
         let rendu = format!("{store:?}");
         assert!(rendu.contains("Store"));
         assert!(
             !rendu.contains("audit_journal"),
-            "le Debug ne doit rien dire du contenu : {rendu}"
+            "Debug must say nothing about the content: {rendu}"
         );
     }
 
     #[test]
-    fn une_migration_qui_echoue_ne_laisse_pas_le_schema_a_moitie_pose() {
-        // La migration s'applique dans une transaction ; SQLite sait annuler du
-        // DDL, donc un lot refusé ne laisse aucune table derrière lui.
-        // La collision porte sur `documents`, créée en dernier : les cinq
-        // tables précédentes sont donc bien posées avant l'échec, et c'est leur
-        // disparition qui prouve l'annulation.
-        let mut conn = Connection::open_in_memory().expect("base en mémoire");
+    fn a_failing_migration_does_not_leave_the_schema_half_applied() {
+        // The migration applies in a transaction; SQLite can roll back DDL,
+        // so a refused batch leaves no table behind.
+        // The collision is on `documents`, created last: the five previous
+        // tables are therefore in place before the failure, and their
+        // disappearance is what proves the rollback.
+        let mut conn = Connection::open_in_memory().expect("in-memory database");
         conn.execute_batch("CREATE TABLE documents (bloquante INTEGER);")
-            .expect("table qui entrera en collision");
+            .expect("table that will collide");
 
-        let erreur = schema::migrate(&mut conn).expect_err("`documents` existe déjà");
+        let erreur = schema::migrate(&mut conn).expect_err("`documents` already exists");
         assert!(matches!(erreur, StoreError::Migration { version: 1, .. }));
         assert_eq!(
             schema::current_version(&conn).expect("version"),
             0,
-            "aucune migration ne doit être inscrite"
+            "no migration must be recorded"
         );
 
         let audit: i64 = conn
@@ -424,18 +422,18 @@ mod tests {
                 [],
                 |row| row.get(0),
             )
-            .expect("interrogation du schéma");
-        assert_eq!(audit, 0, "le lot devait être annulé en entier");
+            .expect("query the schema");
+        assert_eq!(audit, 0, "the batch had to be rolled back in full");
     }
 
     #[test]
-    fn une_base_neuve_n_a_aucun_workspace() {
-        let store = Store::open_in_memory().expect("ouverture");
+    fn a_new_database_has_no_workspace() {
+        let store = Store::open_in_memory().expect("open");
         assert!(
-            store.workspaces().list().expect("liste").is_empty(),
-            "migrer crée le schéma, pas des données"
+            store.workspaces().list().expect("list").is_empty(),
+            "migrating creates the schema, not data"
         );
-        assert_eq!(store.journal().count().expect("comptage"), 0);
+        assert_eq!(store.journal().count().expect("count"), 0);
     }
 }
 

@@ -186,8 +186,8 @@ const MAX_SUGGESTED_NAME: usize = 120;
 /// Only a **name**: separators, control characters and leading dots are
 /// dropped, so that a suggestion built from a hostile object name cannot point
 /// the dialog elsewhere. The user still chooses the folder and the final name
-/// in the native dialog; the webview never sends a path (SECURITY, « Surface
-/// d'entrée »).
+/// in the native dialog; the webview never sends a path (SECURITY, « Input
+/// surface »).
 #[must_use]
 pub fn suggested_file_name(suggestion: &str, extension: &str) -> String {
     let cleaned: String = suggestion

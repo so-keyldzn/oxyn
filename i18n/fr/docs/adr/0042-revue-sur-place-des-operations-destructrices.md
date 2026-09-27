@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0042-revue-sur-place-des-operations-destructrices.md" sha256="aceb3c5f38cd" -->
+<!-- oxyn-translation source="docs/adr/0042-revue-sur-place-des-operations-destructrices.md" sha256="f49bbce2317f" -->
 
 > Traduction française de [docs/adr/0042-revue-sur-place-des-operations-destructrices.md](../../../../docs/adr/0042-revue-sur-place-des-operations-destructrices.md). **La version anglaise fait foi.**
 
@@ -312,7 +312,7 @@ Les trois entrées sont des actions humaines du registre d'ADR-0041. Elles
 n'apparaissent dans aucun menu ni aucune liste construite pour un
 `Actor::Agent`. Aucun outil d'`oxyn-ai` n'atteint `review_object_operation` ni
 `run_object_operation`. Un test `object_operations_are_not_tools`, voisin de
-`le_changement_de_schema_n_est_pas_un_outil` dans `oxyn-ai/src/tools.rs`,
+`schema_change_is_not_a_tool` dans `oxyn-ai/src/tools.rs`,
 échoue le jour où un tel outil apparaît. Un agent qui veut supprimer une table
 écrit du SQL comme n'importe qui. En production, le gate le **refuse**
 ([I-02](../../CLAUDE.md#i-02), [I-07](../../CLAUDE.md#i-07)). Ailleurs, il

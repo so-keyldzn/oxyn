@@ -294,14 +294,14 @@ ownership constraint must be held by the file itself:
 CREATE TABLE workspace_windows (
     id               TEXT PRIMARY KEY NOT NULL,  -- WindowKey
     workspace_id     TEXT NOT NULL REFERENCES workspaces(id) ON DELETE CASCADE,
-    app_session_id   TEXT NOT NULL,              -- dernier lancement qui l'a écrite
-    ordinal          INTEGER NOT NULL,           -- ordre de restauration
-    x                REAL,                       -- pixels logiques ; NULL = placement du système
+    app_session_id   TEXT NOT NULL,              -- last launch that wrote it
+    ordinal          INTEGER NOT NULL,           -- restore order
+    x                REAL,                       -- logical pixels; NULL = system placement
     y                REAL,
     width            REAL NOT NULL,
     height           REAL NOT NULL,
     maximized        INTEGER NOT NULL,
-    object_location  TEXT,                       -- même forme que dans les préférences
+    object_location  TEXT,                       -- same shape as in the preferences
     active_document  TEXT REFERENCES documents(id) ON DELETE SET NULL,
     revision         INTEGER NOT NULL,
     updated_at       TEXT NOT NULL

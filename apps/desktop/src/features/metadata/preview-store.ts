@@ -65,7 +65,7 @@ function resultOf(entry: PreviewEntry | undefined) {
  * The preview store: which relation previews exist, and what each shows.
  *
  * A preview is **kept** once read, so that coming back to an object does not
- * read it again (docs/UX-SPEC.md, « Données d'une table sélectionnée »), and
+ * read it again (docs/UX-SPEC.md, « Data of a selected table »), and
  * **cancelled** when the last view showing it goes away mid-read: work nobody
  * will see is not left running at the server. A late answer — from a read
  * that was replaced, cancelled or abandoned — is never shown, and its result

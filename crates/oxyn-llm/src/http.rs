@@ -1,38 +1,37 @@
-//! Le transport HTTP partagé par les trois familles de fournisseurs.
+//! The HTTP transport shared by the three provider families.
 //!
-//! Un seul endroit construit le client et lit une réponse d'échec : ce sont
-//! les deux gestes où une omission ne se voit pas, et trois copies finissent
-//! toujours par diverger.
+//! A single place builds the client and reads a failure response: these are
+//! the two moves where an omission does not show, and three copies always end
+//! up diverging.
 //!
-//! # Aucune redirection n'est suivie
+//! # No redirection is followed
 //!
-//! La portée d'un fournisseur ([`Reach`](crate::Reach)) est mesurée sur l'hôte
-//! de son URL de base, avant l'envoi, et c'est elle que le niveau de la
-//! connexion autorise ou refuse (I-04). Une redirection suivie par la pile
-//! HTTP renverrait le corps — l'invite, donc le contexte de la base — vers une
-//! autre origine **sans nouveau contrôle**, et la trace `ai_egress` garderait
-//! la portée de la première. Un `307` ou un `308` conserve la méthode et le
-//! corps : c'est exactement ce que la RFC 9110 leur demande.
+//! A provider's reach ([`Reach`](crate::Reach)) is measured on the host of its
+//! base URL, before sending, and it is that reach that the connection's tier
+//! allows or refuses (I-04). A redirection followed by the HTTP stack would
+//! send the body — the prompt, hence the database context — to another origin
+//! **without a new check**, and the `ai_egress` trace would keep the reach of
+//! the first one. A `307` or a `308` keeps the method and the body: that is
+//! exactly what RFC 9110 asks of them.
 //!
-//! La clé suivrait aussi : la pile HTTP retire `Authorization` d'une origine à
-//! l'autre, mais ne connaît pas `x-api-key`, `api-key` ni `x-goog-api-key`, qui
-//! partiraient tels quels (I-03).
+//! The key would follow too: the HTTP stack removes `Authorization` from one
+//! origin to another, but does not know `x-api-key`, `api-key` or
+//! `x-goog-api-key`, which would go out as they are (I-03).
 //!
-//! Revalider chaque saut aurait demandé une résolution DNS dans la politique de
-//! redirection, qui est synchrone, et un second classement à tenir cohérent
-//! avec le premier. Refuser est plus simple et se dit en une phrase : un
-//! `3xx` devient une erreur qui demande de pointer l'URL de base sur l'adresse
-//! finale.
+//! Revalidating each hop would have required a DNS resolution in the
+//! redirection policy, which is synchronous, and a second classification to
+//! keep consistent with the first. Refusing is simpler and fits in one
+//! sentence: a `3xx` becomes an error that asks to point the base URL at the
+//! final address.
 //!
-//! # Aucun corps n'est lu sans borne
+//! # No body is read without a bound
 //!
-//! Hors flux, un corps se lit en entier avant d'être analysé : un corps
-//! d'erreur pour son diagnostic, une liste de modèles, un comptage. Chacun est
-//! lu **par morceaux**, sous trois bornes à la fois — une taille, vérifiée sur
-//! la longueur annoncée avant toute lecture puis à chaque morceau ; un délai ;
-//! et le jeton d'annulation quand l'appelant en tient un. Un fournisseur qui
-//! envoie un statut d'échec puis un corps qui ne finit pas ne retient donc ni
-//! la mémoire ni le bouton « Annuler ».
+//! Outside a stream, a body is read whole before being parsed: an error body
+//! for its diagnostic, a list of models, a count. Each is read **in chunks**,
+//! under three bounds at once — a size, checked on the announced length before
+//! any reading then at each chunk; a timeout; and the cancellation token when
+//! the caller holds one. A provider that sends a failure status then a body
+//! that never ends therefore holds neither memory nor the "Cancel" button.
 
 use std::pin::pin;
 use std::time::Duration;
@@ -49,22 +48,22 @@ use crate::error::{LlmError, classify_json_error};
 use crate::provider::ProviderId;
 use crate::secret::ApiKey;
 
-/// Délai d'établissement de la connexion TCP et TLS.
+/// Timeout for establishing the TCP and TLS connection.
 ///
-/// Ne borne **que** la mise en relation : une génération peut durer des
-/// minutes, et la borner globalement reviendrait à couper les réponses longues.
+/// Bounds **only** the connection setup: a generation can last minutes, and
+/// bounding it globally would cut long responses.
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// En-tête `User-Agent` envoyé à tous les fournisseurs.
+/// `User-Agent` header sent to every provider.
 const USER_AGENT: &str = concat!("oxyn/", env!("CARGO_PKG_VERSION"));
 
-/// Construit le client HTTP d'un fournisseur.
+/// Builds a provider's HTTP client.
 ///
-/// C'est le **seul** constructeur de client de cette crate : un fournisseur qui
-/// en bâtirait un autre retrouverait la politique de redirection par défaut.
+/// It is the **only** client constructor of this crate: a provider that built
+/// another one would get back the default redirection policy.
 ///
-/// # Erreurs
-/// [`LlmError::Config`] si la pile TLS ne s'initialise pas.
+/// # Errors
+/// [`LlmError::Config`] if the TLS stack does not initialize.
 pub(crate) fn client(id: &ProviderId) -> Result<Client, LlmError> {
     Client::builder()
         .connect_timeout(CONNECT_TIMEOUT)
@@ -77,17 +76,17 @@ pub(crate) fn client(id: &ProviderId) -> Result<Client, LlmError> {
         })
 }
 
-/// Transforme une réponse d'échec en erreur, corps expurgé.
+/// Turns a failure response into an error, body scrubbed.
 ///
-/// Le statut décide de la reprise ; le corps ne sert qu'à l'affichage. Une
-/// redirection n'a pas de corps utile : son message dit quoi corriger, et ne
-/// recopie pas l'en-tête `Location`, qui peut nommer un hôte interne.
+/// The status decides the retry; the body only serves display. A redirection
+/// has no useful body: its message says what to fix, and does not copy the
+/// `Location` header, which can name an internal host.
 ///
-/// Le corps est lu sous borne ([`MAX_ERROR_BODY_BYTES`], [`ERROR_BODY_TIMEOUT`],
-/// `cancel`). Tronqué, expiré ou rompu, il ne masque pas le statut : l'erreur
-/// garde sa classe, avec le diagnostic reçu jusque-là. Seule l'annulation
-/// change l'issue, en [`LlmError::Cancelled`] : l'utilisateur a demandé que
-/// ça s'arrête, pas un diagnostic.
+/// The body is read under bounds ([`MAX_ERROR_BODY_BYTES`],
+/// [`ERROR_BODY_TIMEOUT`], `cancel`). Truncated, expired or broken, it does
+/// not hide the status: the error keeps its class, with the diagnostic
+/// received so far. Only cancellation changes the outcome, into
+/// [`LlmError::Cancelled`]: the user asked for it to stop, not for a diagnostic.
 pub(crate) async fn failure(
     id: &ProviderId,
     response: Response,
@@ -97,8 +96,8 @@ pub(crate) async fn failure(
     failure_within(id, response, key, cancel, ERROR_BODY_TIMEOUT).await
 }
 
-/// [`failure`], sous un délai choisi. Séparée pour que les tests éprouvent le
-/// délai sans l'attendre dix secondes.
+/// [`failure`], under a chosen timeout. Separate so that the tests exercise
+/// the timeout without waiting ten seconds for it.
 async fn failure_within(
     id: &ProviderId,
     response: Response,
@@ -114,10 +113,10 @@ async fn failure_within(
         Read::Cancelled => return LlmError::Cancelled,
         Read::Complete(corps) => corps,
         Read::Overflow(mut corps) | Read::TimedOut(mut corps) | Read::Broken(mut corps) => {
-            // Un corps coupé peut l'être au milieu d'une recopie de la clé :
-            // son début échapperait à l'expurgation, qui ne cherche que la clé
-            // entière. Retirer autant d'octets que la clé en compte ferme ce
-            // cas, au prix de quelques octets d'un diagnostic déjà incomplet.
+            // A cut body can be cut in the middle of a copy of the key: its
+            // beginning would escape the scrubbing, which only looks for the
+            // whole key. Removing as many bytes as the key has closes this
+            // case, at the cost of a few bytes of an already incomplete diagnostic.
             let marge = key.map_or(0, ApiKey::len);
             corps.truncate(corps.len().saturating_sub(marge));
             corps
@@ -127,18 +126,17 @@ async fn failure_within(
     LlmError::from_response(id.clone(), statut.as_u16(), &corps, key)
 }
 
-/// Lit et analyse un corps JSON hors flux, sous [`MAX_JSON_BODY_BYTES`] et
+/// Reads and parses a non-stream JSON body, under [`MAX_JSON_BODY_BYTES`] and
 /// [`JSON_BODY_TIMEOUT`].
 ///
-/// `subject` nomme ce qu'on lit (« model list »), pour que le refus dise quoi
-/// a dépassé la limite. Un corps trop grand est **refusé**, jamais tronqué
-/// puis analysé : une liste de modèles coupée se lirait comme une liste
-/// complète plus courte.
+/// `subject` names what is being read ("model list"), so that the refusal says
+/// what exceeded the limit. A body too large is **refused**, never truncated
+/// then parsed: a cut list of models would read as a shorter complete list.
 ///
-/// # Erreurs
-/// [`LlmError::Decode`] pour un corps trop grand ou illisible,
-/// [`LlmError::ConnectionLost`] pour un corps expiré ou rompu — la requête est
-/// partie —, [`LlmError::Cancelled`] sur annulation.
+/// # Errors
+/// [`LlmError::Decode`] for a body too large or unreadable,
+/// [`LlmError::ConnectionLost`] for an expired or broken body — the request
+/// went out —, [`LlmError::Cancelled`] on cancellation.
 pub(crate) async fn read_json<T: DeserializeOwned>(
     id: &ProviderId,
     response: Response,
@@ -148,7 +146,7 @@ pub(crate) async fn read_json<T: DeserializeOwned>(
     read_json_within(id, response, subject, cancel, MAX_JSON_BODY_BYTES).await
 }
 
-/// [`read_json`], sous une taille choisie. Séparée pour les tests.
+/// [`read_json`], under a chosen size. Separate for the tests.
 async fn read_json_within<T: DeserializeOwned>(
     id: &ProviderId,
     response: Response,
@@ -160,7 +158,7 @@ async fn read_json_within<T: DeserializeOwned>(
         provider: id.clone(),
         detail: format!("the {subject} is larger than {limit} bytes; Oxyn refuses to read it"),
     };
-    // Une longueur annoncée au-delà de la limite suffit : rien n'est lu.
+    // An announced length beyond the limit is enough: nothing is read.
     if response
         .content_length()
         .is_some_and(|annonce| usize::try_from(annonce).map_or(true, |n| n > limit))
@@ -195,48 +193,46 @@ async fn read_json_within<T: DeserializeOwned>(
     })
 }
 
-/// Octets lus, au plus, d'un corps de réponse d'échec.
+/// Bytes read, at most, from a failure response body.
 ///
-/// Le message affiché n'en garde que le début (`error::MAX_MESSAGE_LEN`) ;
-/// lire au-delà ne servirait qu'à remplir la mémoire. Seize kibioctets
-/// laissent à une page d'erreur de mandataire la place d'arriver jusqu'à son
-/// texte utile.
+/// The displayed message keeps only its beginning (`error::MAX_MESSAGE_LEN`);
+/// reading beyond would only fill memory. Sixteen kibibytes leave a proxy's
+/// error page room to reach its useful text.
 const MAX_ERROR_BODY_BYTES: usize = 16 * 1024;
 
-/// Temps laissé au corps d'une réponse d'échec, en-têtes reçus.
+/// Time left for the body of a failure response, headers received.
 ///
-/// Le statut est déjà connu, et c'est lui qui classe l'erreur : attendre plus
-/// longtemps un diagnostic ne changerait pas la décision, seulement le temps
-/// passé devant un bouton « Annuler ».
+/// The status is already known, and it is what classifies the error: waiting
+/// longer for a diagnostic would not change the decision, only the time spent
+/// in front of a "Cancel" button.
 const ERROR_BODY_TIMEOUT: Duration = Duration::from_secs(10);
 
-/// Octets lus, au plus, d'une réponse JSON hors flux : liste des modèles,
-/// comptage de jetons.
+/// Bytes read, at most, from a non-stream JSON response: model list, token
+/// count.
 ///
-/// Une liste de modèles est une métadonnée — des noms et quelques capacités
-/// par modèle. Seize mébioctets sont très au-dessus de ce qu'un sélecteur de
-/// modèle peut présenter ; au-delà, la réponse est refusée plutôt que lue.
+/// A model list is metadata — names and a few capabilities per model. Sixteen
+/// mebibytes are far above what a model picker can present; beyond that, the
+/// response is refused rather than read.
 pub(crate) const MAX_JSON_BODY_BYTES: usize = 16 * 1024 * 1024;
 
-/// Entrées d'une liste de modèles, au plus — par réponse, et au total quand
-/// la liste est paginée.
+/// Entries of a model list, at most — per response, and in total when the
+/// list is paginated.
 ///
-/// La borne en octets ne suffit pas : une entrée minimale fait une dizaine
-/// d'octets, et chacune devient une valeur JSON puis une fiche bien plus
-/// lourdes. Cinq mille modèles, c'est déjà plus qu'un sélecteur ne peut
-/// présenter ; au-delà, la liste est refusée.
+/// The byte bound is not enough: a minimal entry is about ten bytes, and each
+/// becomes a JSON value then a much heavier record. Five thousand models is
+/// already more than a picker can present; beyond that, the list is refused.
 pub(crate) const MAX_MODELS: usize = 5000;
 
-/// Préfixe du refus levé pendant l'analyse, reconnu par [`read_json`] pour
-/// en faire une erreur qui nomme la limite. Il est à nous : jamais une donnée
-/// du serveur.
+/// Prefix of the refusal raised during parsing, recognized by [`read_json`]
+/// to turn it into an error that names the limit. It is ours: never server
+/// data.
 const TOO_MANY_ENTRIES: &str = "oxyn: too many entries";
 
-/// Désérialise une liste en refusant son entrée n° [`MAX_MODELS`] + 1
-/// **avant** de l'allouer.
+/// Deserializes a list, refusing its entry number [`MAX_MODELS`] + 1
+/// **before** allocating it.
 ///
-/// # Erreurs
-/// Une erreur de désérialisation au-delà de [`MAX_MODELS`] entrées.
+/// # Errors
+/// A deserialization error beyond [`MAX_MODELS`] entries.
 pub(crate) fn bounded_entries<'de, D: Deserializer<'de>>(
     deserializer: D,
 ) -> Result<Vec<Value>, D::Error> {
@@ -262,7 +258,7 @@ pub(crate) fn bounded_entries<'de, D: Deserializer<'de>>(
     deserializer.deserialize_seq(Bornee)
 }
 
-/// Le refus explicite d'une liste de modèles trop longue.
+/// The explicit refusal of a model list that is too long.
 pub(crate) fn too_many_models(id: &ProviderId) -> LlmError {
     LlmError::Decode {
         provider: id.clone(),
@@ -272,24 +268,24 @@ pub(crate) fn too_many_models(id: &ProviderId) -> LlmError {
     }
 }
 
-/// Temps laissé au corps d'une réponse JSON, en-têtes reçus.
+/// Time left for the body of a JSON response, headers received.
 ///
-/// Ces requêtes sont courtes et le trait ne leur passe pas de jeton
-/// d'annulation : sans borne, un serveur qui n'achève pas son corps
-/// retiendrait l'appel indéfiniment.
+/// These requests are short and the trait passes them no cancellation token:
+/// without a bound, a server that does not finish its body would hold the call
+/// indefinitely.
 const JSON_BODY_TIMEOUT: Duration = Duration::from_secs(30);
 
-/// Ce qu'une lecture bornée a obtenu.
+/// What a bounded read obtained.
 enum Read {
-    /// Le corps entier, sous la limite.
+    /// The whole body, under the limit.
     Complete(Vec<u8>),
-    /// La limite est atteinte : ce qui précède, jamais davantage.
+    /// The limit is reached: what came before, never more.
     Overflow(Vec<u8>),
-    /// Le délai a expiré : ce qui était arrivé.
+    /// The timeout expired: what had arrived.
     TimedOut(Vec<u8>),
-    /// Le transport a rompu : ce qui était arrivé.
+    /// The transport broke: what had arrived.
     Broken(Vec<u8>),
-    /// L'appelant a annulé.
+    /// The caller cancelled.
     Cancelled,
 }
 
@@ -300,13 +296,13 @@ enum Step {
     Chunk(reqwest::Result<Option<Bytes>>),
 }
 
-/// Lit un corps sans jamais retenir plus de `limit` octets, en cédant à
-/// l'annulation et au délai.
+/// Reads a body without ever holding more than `limit` bytes, yielding to
+/// cancellation and to the timeout.
 ///
-/// La lecture s'arrête au premier octet de trop, quelle que soit la longueur
-/// annoncée ; le tampon n'est jamais réservé au-delà de la limite. Refuser un
-/// corps sur sa seule annonce est l'affaire de l'appelant : un diagnostic
-/// d'erreur annoncé long se lit quand même jusqu'à la limite.
+/// The reading stops at the first byte too many, whatever the announced
+/// length; the buffer is never reserved beyond the limit. Refusing a body on
+/// its announcement alone is the caller's business: an error diagnostic
+/// announced as long is still read up to the limit.
 async fn read_limited(
     mut response: Response,
     limit: usize,
@@ -318,8 +314,8 @@ async fn read_limited(
         .and_then(|n| usize::try_from(n).ok());
     let mut lu = Vec::with_capacity(annonce.unwrap_or(0).min(limit));
     let mut echeance = pin!(tokio::time::sleep(within));
-    // Un jeton neuf, jamais annulé, quand l'appelant n'en a pas : une seule
-    // boucle, au lieu de deux qui divergeraient.
+    // A fresh token, never cancelled, when the caller has none: a single loop,
+    // instead of two that would diverge.
     let jamais = CancelToken::new();
     let cancel = cancel.unwrap_or(&jamais);
     loop {

@@ -1,64 +1,64 @@
-//! Où part une requête : sur cette machine, ou dehors.
+//! Where a request goes: on this machine, or outside.
 //!
-//! [`AI-PROVIDERS`](../../../docs/AI-PROVIDERS.md) pose la règle et le piège :
+//! [`AI-PROVIDERS`](../../../docs/AI-PROVIDERS.md) sets the rule and the trap:
 //!
-//! > Un point d'accès « compatible OpenAI » pointé sur `localhost` peut être un
-//! > proxy qui réémet vers le nuage. Le classement local/distant se fait sur
-//! > l'hôte réel **après résolution**, jamais sur la présence de `localhost`
-//! > dans l'URL, et il se re-vérifie à chaque changement de configuration.
+//! > An "OpenAI-compatible" endpoint pointed at `localhost` can be a proxy
+//! > that re-emits to the cloud. The local/remote classification is made on
+//! > the real host **after resolution**, never on the presence of `localhost`
+//! > in the URL, and it is re-checked at every configuration change.
 //!
-//! D'où deux fonctions et non une : [`literal_reach`] tranche sans réseau les
-//! cas décidables (une adresse IP littérale), [`resolve_reach`] fait la
-//! résolution DNS pour les autres.
+//! Hence two functions and not one: [`literal_reach`] settles without a
+//! network the decidable cases (a literal IP address), [`resolve_reach`] does
+//! the DNS resolution for the others.
 //!
-//! # Ce que `Local` promet, et ce qu'il ne promet pas
+//! # What `Local` promises, and what it does not
 //!
-//! [`Reach::Local`] dit que **la connexion TCP se termine sur cette machine**.
-//! Il ne dit pas que la donnée y reste : un proxy en écoute sur `127.0.0.1` peut
-//! réémettre vers n'importe où, et aucune inspection du point d'accès ne le
-//! détectera. Ce que le classement apporte, c'est l'élimination du cas
-//! inverse — un point d'accès nommé `localhost.mon-nuage.example` qui n'a de
-//! local que le nom.
+//! [`Reach::Local`] says that **the TCP connection ends on this machine**. It
+//! does not say that the data stays there: a proxy listening on `127.0.0.1`
+//! can re-emit anywhere, and no inspection of the endpoint will detect it.
+//! What the classification brings is the elimination of the opposite case —
+//! an endpoint named `localhost.my-cloud.example` that is local only in
+//! name.
 
 use std::fmt;
 use std::net::{IpAddr, ToSocketAddrs};
 
 use reqwest::Url;
 
-/// Classement d'un point d'accès.
+/// Classification of an endpoint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum Reach {
-    /// L'hôte est une adresse de bouclage : la connexion ne quitte pas la
-    /// machine. Voir la réserve du module.
+    /// The host is a loopback address: the connection does not leave the
+    /// machine. See the module's caveat.
     Local,
-    /// L'hôte est joignable ailleurs que sur la boucle locale. Les données
-    /// **quittent la machine**.
+    /// The host is reachable elsewhere than on the loopback. The data
+    /// **leaves the machine**.
     Remote,
-    /// L'hôte n'a pas pu être résolu, ou l'URL n'a pas d'hôte du tout.
+    /// The host could not be resolved, or the URL has no host at all.
     ///
-    /// À traiter comme [`Remote`](Self::Remote) partout où une décision doit
-    /// être prise : dans le doute, on protège.
+    /// To be treated as [`Remote`](Self::Remote) wherever a decision must be
+    /// made: when in doubt, protect.
     Unresolved,
 }
 
 impl Reach {
-    /// Les données quittent-elles la machine, en l'état de ce qu'on sait ?
+    /// Does the data leave the machine, as far as is known?
     ///
-    /// [`Unresolved`](Self::Unresolved) répond `true` : un point d'accès qu'on
-    /// n'a pas su classer n'obtient pas le bénéfice du doute.
+    /// [`Unresolved`](Self::Unresolved) answers `true`: an endpoint that could
+    /// not be classified does not get the benefit of the doubt.
     #[must_use]
     pub const fn leaves_machine(&self) -> bool {
         !matches!(self, Self::Local)
     }
 
-    /// Nom stable, pour l'affichage et l'audit.
+    /// Stable name, for display and audit.
     ///
-    /// **En anglais**, comme tout ce qui traverse la frontière du code source
-    /// (CLAUDE.md) : cette valeur est montrée telle quelle par l'écran de
-    /// configuration des fournisseurs, et le reste de l'interface d'Oxyn est en
-    /// anglais. Un libellé de domaine dans une autre langue que l'écran qui
-    /// l'affiche oblige chaque appelant à le retraduire — donc à réinventer une
-    /// correspondance par variante, qui divergera.
+    /// **In English**, like everything that crosses the source code boundary
+    /// (CLAUDE.md): this value is shown as is by the provider configuration
+    /// screen, and the rest of Oxyn's interface is in English. A domain label
+    /// in another language than the screen displaying it forces every caller
+    /// to translate it again — hence to reinvent a mapping per variant, which
+    /// will diverge.
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
@@ -75,10 +75,10 @@ impl fmt::Display for Reach {
     }
 }
 
-/// Extrait l'adresse IP littérale d'une URL, quand son hôte en est une.
+/// Extracts the literal IP address of a URL, when its host is one.
 ///
-/// `host_str` rend un IPv6 entre crochets (`[::1]`) : ils sont retirés avant
-/// analyse.
+/// `host_str` returns an IPv6 between brackets (`[::1]`): they are removed
+/// before parsing.
 fn literal_ip(url: &Url) -> Option<IpAddr> {
     let hote = url.host_str()?;
     let nu = hote
@@ -88,11 +88,11 @@ fn literal_ip(url: &Url) -> Option<IpAddr> {
     nu.parse::<IpAddr>().ok()
 }
 
-/// Classe un point d'accès **sans réseau**, quand c'est possible.
+/// Classifies an endpoint **without a network**, when possible.
 ///
-/// Rend `Some` uniquement pour une adresse IP littérale — le seul cas où la
-/// question se tranche sans résolution. Un nom de domaine, `localhost` compris,
-/// rend `None` : c'est exactement le piège que la règle vise.
+/// Returns `Some` only for a literal IP address — the only case where the
+/// question is settled without resolution. A domain name, `localhost`
+/// included, returns `None`: that is exactly the trap the rule targets.
 #[must_use]
 pub fn literal_reach(url: &Url) -> Option<Reach> {
     literal_ip(url).map(|ip| {
@@ -104,20 +104,18 @@ pub fn literal_reach(url: &Url) -> Option<Reach> {
     })
 }
 
-/// Classe un point d'accès, en résolvant son nom si nécessaire.
+/// Classifies an endpoint, resolving its name if needed.
 ///
-/// Un hôte n'est [`Reach::Local`] que si **toutes** ses adresses résolues sont
-/// de bouclage : un nom qui résout à la fois vers `127.0.0.1` et vers une
-/// adresse publique est distant, parce que c'est la seconde qui sera peut-être
-/// utilisée.
+/// A host is [`Reach::Local`] only if **all** its resolved addresses are
+/// loopback: a name that resolves both to `127.0.0.1` and to a public address
+/// is remote, because the second one is the one that may be used.
 ///
-/// # Bloquant
+/// # Blocking
 ///
-/// La résolution DNS de la bibliothèque standard est **bloquante**. Cette
-/// fonction ne doit jamais être appelée depuis le fil d'interface (I-05), ni
-/// depuis une tâche asynchrone sans passer par un pool bloquant. Elle est faite
-/// pour être appelée à l'inscription d'un fournisseur et à chaque changement de
-/// sa configuration, pas à chaque requête.
+/// The standard library's DNS resolution is **blocking**. This function must
+/// never be called from the UI thread (I-05), nor from an async task without
+/// going through a blocking pool. It is meant to be called when a provider is
+/// registered and at each change of its configuration, not at each request.
 #[must_use]
 pub fn resolve_reach(url: &Url) -> Reach {
     if let Some(immediat) = literal_reach(url) {
@@ -126,8 +124,8 @@ pub fn resolve_reach(url: &Url) -> Reach {
     let Some(hote) = url.host_str() else {
         return Reach::Unresolved;
     };
-    // Le port est indifférent à la résolution ; `0` évite d'imposer un défaut
-    // arbitraire quand l'URL n'en porte pas et que le schéma n'en impose pas.
+    // The port does not matter to resolution; `0` avoids imposing an arbitrary
+    // default when the URL carries none and the scheme imposes none.
     let port = url.port_or_known_default().unwrap_or(0);
     let Ok(adresses) = (hote, port).to_socket_addrs() else {
         return Reach::Unresolved;
@@ -142,25 +140,25 @@ pub fn resolve_reach(url: &Url) -> Reach {
     if vu { Reach::Local } else { Reach::Unresolved }
 }
 
-/// Classe un point d'accès donné sous forme de chaîne.
+/// Classifies an endpoint given as a string.
 ///
-/// C'est la porte d'entrée pour un appelant qui tient une
-/// [`AiProviderConfig::base_url`](oxyn_core::AiProviderConfig) — une `String` —
-/// et n'a aucune raison de dépendre du client HTTP pour analyser une URL.
+/// It is the entry point for a caller that holds an
+/// [`AiProviderConfig::base_url`](oxyn_core::AiProviderConfig) — a `String` —
+/// and has no reason to depend on the HTTP client to parse a URL.
 ///
-/// Une URL **illisible rend [`Reach::Unresolved`]**, jamais une erreur : un
-/// point d'accès qu'on ne sait pas classer compte comme distant partout où une
-/// décision se prend ([`Reach::leaves_machine`] répond déjà `true` dessus).
-/// Rendre un `Result` obligerait chaque appelant à choisir un défaut, et le
-/// mauvais défaut — « local » — est silencieux.
+/// An **unreadable URL returns [`Reach::Unresolved`]**, never an error: an
+/// endpoint that cannot be classified counts as remote wherever a decision is
+/// made ([`Reach::leaves_machine`] already answers `true` on it). Returning a
+/// `Result` would force every caller to choose a default, and the wrong
+/// default — "local" — is silent.
 ///
-/// # Bloquant
+/// # Blocking
 ///
-/// La résolution DNS de la bibliothèque standard est **bloquante**. Comme
-/// [`resolve_reach`], cette fonction ne doit jamais être appelée depuis le fil
-/// d'interface (I-05), ni depuis une tâche asynchrone sans passer par un pool
-/// bloquant. Elle est faite pour être appelée à l'enregistrement d'un
-/// fournisseur et à chaque ouverture de runtime, pas à chaque requête.
+/// The standard library's DNS resolution is **blocking**. Like
+/// [`resolve_reach`], this function must never be called from the UI thread
+/// (I-05), nor from an async task without going through a blocking pool. It is
+/// meant to be called when a provider is registered and at each runtime
+/// opening, not at each request.
 #[must_use]
 pub fn endpoint_reach(base_url: &str) -> Reach {
     match Url::parse(base_url) {
@@ -169,17 +167,16 @@ pub fn endpoint_reach(base_url: &str) -> Reach {
     }
 }
 
-/// Rend une URL montrable, débarrassée de ses identifiants.
+/// Returns a URL that can be shown, stripped of its credentials.
 ///
-/// Une URL peut porter un couple `utilisateur:motdepasse` dans sa partie
-/// autorité. Le recopier dans un message d'erreur ou dans un `Debug` est une
-/// fuite (I-03) — et c'est exactement ce que fait l'affichage naturel d'une
-/// [`Url`].
+/// A URL can carry a `user:password` pair in its authority part. Copying it
+/// into an error message or a `Debug` is a leak (I-03) — and that is exactly
+/// what the natural display of a [`Url`] does.
 #[must_use]
 pub fn redacted(url: &Url) -> String {
     let mut propre = url.clone();
-    // `set_username` et `set_password` échouent sur les URL sans autorité
-    // (`data:`, `mailto:`) : il n'y a alors pas d'identifiant à retirer.
+    // `set_username` and `set_password` fail on URLs without an authority
+    // (`data:`, `mailto:`): there is then no credential to remove.
     let _ = propre.set_username("");
     let _ = propre.set_password(None);
     propre.to_string()
@@ -190,11 +187,11 @@ mod tests {
     use super::*;
 
     fn url(brut: &str) -> Url {
-        Url::parse(brut).expect("URL de test valide")
+        Url::parse(brut).expect("valid test URL")
     }
 
     #[test]
-    fn une_adresse_de_bouclage_litterale_se_tranche_sans_dns() {
+    fn a_literal_loopback_address_is_settled_without_dns() {
         assert_eq!(
             literal_reach(&url("http://127.0.0.1:11434/v1")),
             Some(Reach::Local)
@@ -210,7 +207,7 @@ mod tests {
     }
 
     #[test]
-    fn une_adresse_publique_litterale_est_distante() {
+    fn a_literal_public_address_is_remote() {
         assert_eq!(
             literal_reach(&url("https://93.184.216.34/v1")),
             Some(Reach::Remote)
@@ -218,31 +215,31 @@ mod tests {
         assert_eq!(
             literal_reach(&url("http://192.168.1.10:11434/v1")),
             Some(Reach::Remote),
-            "le réseau local n'est pas la machine locale : les données sortent"
+            "the local network is not the local machine: the data leaves"
         );
     }
 
     #[test]
-    fn un_nom_de_domaine_ne_se_tranche_pas_sur_sa_forme() {
-        // Le piège d'AI-PROVIDERS, sous ses deux faces.
+    fn a_domain_name_is_not_settled_on_its_shape() {
+        // The AI-PROVIDERS trap, from both sides.
         assert_eq!(literal_reach(&url("http://localhost:11434/v1")), None);
         assert_eq!(
             literal_reach(&url("https://localhost.mon-nuage.example/v1")),
             None,
-            "un nom qui contient `localhost` ne prouve rien"
+            "a name containing `localhost` proves nothing"
         );
     }
 
     #[test]
-    fn un_point_d_acces_non_resolu_ne_beneficie_pas_du_doute() {
+    fn an_unresolved_endpoint_gets_no_benefit_of_the_doubt() {
         assert!(Reach::Unresolved.leaves_machine());
         assert!(Reach::Remote.leaves_machine());
         assert!(!Reach::Local.leaves_machine());
     }
 
     #[test]
-    fn une_adresse_litterale_se_resout_sans_reseau() {
-        // `resolve_reach` court-circuite : ce test ne dépend d'aucun résolveur.
+    fn a_literal_address_resolves_without_network() {
+        // `resolve_reach` short-circuits: this test depends on no resolver.
         assert_eq!(
             resolve_reach(&url("http://127.0.0.1:11434/v1")),
             Reach::Local
@@ -251,8 +248,8 @@ mod tests {
     }
 
     #[test]
-    fn une_chaine_illisible_ne_beneficie_pas_du_doute() {
-        // Le mauvais défaut serait « local », et il serait silencieux.
+    fn an_unreadable_string_gets_no_benefit_of_the_doubt() {
+        // The wrong default would be "local", and it would be silent.
         for brut in ["", "pas une url", "://", "mailto:quelquun@example.com"] {
             assert_eq!(endpoint_reach(brut), Reach::Unresolved, "{brut}");
             assert!(endpoint_reach(brut).leaves_machine(), "{brut}");
@@ -260,14 +257,14 @@ mod tests {
     }
 
     #[test]
-    fn une_chaine_litterale_se_classe_sans_reseau() {
+    fn a_literal_string_is_classified_without_network() {
         assert_eq!(endpoint_reach("http://127.0.0.1:11434"), Reach::Local);
         assert_eq!(endpoint_reach("http://[::1]:1234/v1"), Reach::Local);
         assert_eq!(endpoint_reach("https://93.184.216.34/v1"), Reach::Remote);
     }
 
     #[test]
-    fn les_identifiants_d_une_url_ne_s_affichent_pas() {
+    fn the_credentials_of_a_url_are_not_displayed() {
         let avec = url("https://alice:motdepasse@api.example.com/v1/");
         let rendu = redacted(&avec);
         assert!(!rendu.contains("motdepasse"), "{rendu}");
@@ -276,7 +273,7 @@ mod tests {
     }
 
     #[test]
-    fn une_url_sans_identifiants_est_rendue_telle_quelle() {
+    fn a_url_without_credentials_is_returned_as_is() {
         let simple = url("http://localhost:11434/v1/");
         assert_eq!(redacted(&simple), "http://localhost:11434/v1/");
     }

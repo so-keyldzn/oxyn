@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Tests de `script/livraison`, avec un `gh` simulé.
+"""Tests of `script/livraison`, with a simulated `gh`.
 
-Le faux `gh` tient l'état d'une release dans un fichier JSON et journalise
-chaque appel : un test prépare l'état, lance le script, puis regarde ce qui a
-été appelé et ce qui reste. Il reproduit le comportement documenté de
-`gh release upload --clobber` — l'ancien fichier est supprimé avant l'envoi —
-pour qu'un retour de l'option se voie ici.
+The fake `gh` keeps a release's state in a JSON file and logs every call: a
+test prepares the state, runs the script, then looks at what was called and
+what remains. It reproduces the documented behavior of
+`gh release upload --clobber` — the old file is deleted before the upload — so
+that the option coming back shows here.
 
-Appelé par `make socle`, donc par `make qualite`.
+Called by `make socle`, hence by `make qualite`.
 """
 
 from __future__ import annotations
@@ -44,8 +44,8 @@ FAUX_GH = textwrap.dedent(
     if verbe == "view":
         if release is None:
             sortir(1, "release not found")
-        # Une publication humaine pendant les builds : la release bascule
-        # après un nombre donné de lectures.
+        # A human publication during the builds: the release flips after a
+        # given number of reads.
         etat["lectures"] += 1
         if etat["publier_apres"] is not None and etat["lectures"] > etat["publier_apres"]:
             release["isDraft"] = False
@@ -66,7 +66,7 @@ FAUX_GH = textwrap.dedent(
             sortir(1, "HTTP 502: upload failed")
         release["assets"].append({"name": nom})
         sortir(0)
-    sortir(2, "verbe inattendu")
+    sortir(2, "unexpected verb")
     """
 )
 
@@ -122,7 +122,7 @@ class Livraison(unittest.TestCase):
     def verbes(self) -> list[str]:
         return [appel[1] for appel in self.etat()["appels"]]
 
-    # --- #30 : le tag porte la version de tauri.conf.json -------------------
+    # --- #30: the tag carries the version of tauri.conf.json ---------------
 
     def test_version_normale_cree_un_brouillon_sans_preversion(self) -> None:
         sortie = self.lancer("brouillon", "v0.0.1", DEPOT)
@@ -151,8 +151,8 @@ class Livraison(unittest.TestCase):
                 self.ecrire_etat(release=None)
                 sortie = self.lancer("brouillon", tag, DEPOT)
                 self.assertEqual(sortie.returncode, 1)
-                self.assertIn("attendu v0.0.1", sortie.stderr)
-                self.assertEqual(self.etat()["appels"], [], "gh appelé malgré un tag faux")
+                self.assertIn("expected v0.0.1", sortie.stderr)
+                self.assertEqual(self.etat()["appels"], [], "gh called despite a wrong tag")
 
     def test_preversion_configuree_refuse_le_tag_sans_suffixe(self) -> None:
         self.version("0.1.0-rc.1")
@@ -170,26 +170,26 @@ class Livraison(unittest.TestCase):
         self.version("../../apps/desktop/package.json")
         sortie = self.lancer("brouillon", "v0.0.1", DEPOT)
         self.assertEqual(sortie.returncode, 1)
-        self.assertIn("non pris en charge", sortie.stderr)
+        self.assertIn("not supported here", sortie.stderr)
 
-    # --- #20 : rien ne touche une release publiée ---------------------------
+    # --- #20: nothing touches a published release -------------------------
 
     def test_relance_sur_une_release_publiee_echoue_au_premier_job(self) -> None:
         actifs = [{"name": "Oxyn_0.0.1.dmg"}]
         self.ecrire_etat(release={"isDraft": False, "assets": actifs})
         sortie = self.lancer("brouillon", "v0.0.1", DEPOT)
         self.assertEqual(sortie.returncode, 1)
-        self.assertIn("est publiée", sortie.stderr)
+        self.assertIn("is published", sortie.stderr)
         self.assertEqual(self.verbes(), ["view", "view"])
         self.assertEqual(self.etat()["release"]["assets"], actifs)
 
     def test_relance_sur_une_release_publiee_n_altere_aucun_actif(self) -> None:
         actifs = [{"name": "Oxyn_0.0.1.dmg"}]
         self.ecrire_etat(release={"isDraft": False, "assets": actifs})
-        # Un paquet absent de la release publique : seul le statut l'arrête.
+        # A package absent from the public release: only the status stops it.
         sortie = self.lancer("deposer", "v0.0.1", DEPOT, self.paquet("oxyn_0.0.1.deb"))
         self.assertEqual(sortie.returncode, 1)
-        self.assertIn("est publiée", sortie.stderr)
+        self.assertIn("is published", sortie.stderr)
         self.assertNotIn("upload", self.verbes())
         self.assertEqual(self.etat()["release"]["assets"], actifs)
 
@@ -206,25 +206,25 @@ class Livraison(unittest.TestCase):
         self.assertEqual(self.etat()["release"]["assets"], [])
 
     def test_statut_relu_avant_chaque_fichier(self) -> None:
-        # Publiée après les deux lectures qui encadrent le premier envoi : le
-        # premier paquet part, le second est refusé avant tout envoi.
+        # Published after the two reads around the first upload: the first
+        # package goes, the second is refused before any upload.
         self.ecrire_etat(release={"isDraft": True, "assets": []}, publier_apres=2)
         sortie = self.lancer(
             "deposer", "v0.0.1", DEPOT, self.paquet("oxyn_0.0.1.deb"), self.paquet("oxyn-0.0.1.rpm")
         )
         self.assertEqual(sortie.returncode, 1)
-        self.assertIn("est publiée", sortie.stderr)
+        self.assertIn("is published", sortie.stderr)
         self.assertEqual(self.verbes(), ["view", "upload", "view", "view"])
         self.assertEqual(self.etat()["release"]["assets"], [{"name": "oxyn_0.0.1.deb"}])
 
     def test_publication_pendant_l_envoi_arrete_le_depot(self) -> None:
-        # Publiée entre la lecture et la fin de l'envoi du premier paquet.
+        # Published between the read and the end of the first package's upload.
         self.ecrire_etat(release={"isDraft": True, "assets": []}, publier_apres=1)
         sortie = self.lancer(
             "deposer", "v0.0.1", DEPOT, self.paquet("oxyn_0.0.1.deb"), self.paquet("oxyn-0.0.1.rpm")
         )
         self.assertEqual(sortie.returncode, 1)
-        self.assertIn("pendant l'envoi de oxyn_0.0.1.deb", sortie.stderr)
+        self.assertIn("while uploading oxyn_0.0.1.deb", sortie.stderr)
         self.assertEqual(self.verbes(), ["view", "upload", "view"])
 
     def test_depot_dans_un_brouillon(self) -> None:
@@ -248,7 +248,7 @@ class Livraison(unittest.TestCase):
         self.ecrire_etat(release={"isDraft": True, "assets": actifs})
         sortie = self.lancer("deposer", "v0.0.1", DEPOT, self.paquet("Oxyn_0.0.1.dmg"))
         self.assertEqual(sortie.returncode, 1)
-        self.assertIn("n'est pas remplacé", sortie.stderr)
+        self.assertIn("is not replaced", sortie.stderr)
         self.assertNotIn("upload", self.verbes())
         self.assertEqual(self.etat()["release"]["assets"], actifs)
 

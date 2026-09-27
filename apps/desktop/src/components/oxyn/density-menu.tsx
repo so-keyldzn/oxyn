@@ -16,8 +16,8 @@ import type { DensityChoice } from "@/lib/ipc/settings"
 
 /**
  * The text size, from the result bar: the same two presets as the settings,
- * and the same preference (docs/UX-SPEC.md « Lisibilité et hauteur de
- * grille »). Changing it redraws the rows and reruns nothing.
+ * and the same preference (docs/UX-SPEC.md « Readability and grid height »).
+ * Changing it redraws the rows and reruns nothing.
  */
 export function DensityMenu({
   value,

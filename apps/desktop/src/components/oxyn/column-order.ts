@@ -1,9 +1,9 @@
 // The order the grid draws a result's columns in, when the user moved some
-// (UX-SPEC « Souris et glisser »). A display state, like visibility: the
+// (UX-SPEC « Mouse and drag »). A display state, like visibility: the
 // Arrow indexes, the rows received, the SQL and the export keep the result's
 // own order — an export writes what the query returned, not how it was laid
-// out, the same rule `Columns` follows for hidden columns (« Colonnes et
-// inspection des valeurs »). A copy, which is of what is shown, follows it.
+// out, the same rule `Columns` follows for hidden columns (« Columns and value
+// inspection »). A copy, which is of what is shown, follows it.
 
 import * as React from "react"
 

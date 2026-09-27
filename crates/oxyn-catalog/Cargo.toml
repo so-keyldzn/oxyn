@@ -1,10 +1,10 @@
 [package]
 name = "oxyn-catalog"
-description = "Modèle de métadonnées unifié et cache d'introspection"
+description = "Unified metadata model and introspection cache"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-# Apache-2.0 et non la GPL du workspace : un driver tiers lie cette crate
+# Apache-2.0 and not the workspace's GPL: a third-party driver links this crate
 # (ADR-0044).
 license = "Apache-2.0"
 repository.workspace = true

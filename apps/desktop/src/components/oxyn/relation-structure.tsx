@@ -151,7 +151,7 @@ const columns: Array<ColumnDef<RelationField>> = [
  *
  * A failed read and a refused one are said as such, with the server's words
  * and whether trying again can help; neither is « not loaded »
- * (docs/UX-SPEC.md, « États d'une vue »). A structure already read stays on
+ * (docs/UX-SPEC.md, « States of a view »). A structure already read stays on
  * screen under a failed refresh, marked as possibly outdated. The list is
  * virtualized: a relation of a thousand columns renders the visible ones.
  * With `renameColumn`, a right click on a column offers `Rename…`.

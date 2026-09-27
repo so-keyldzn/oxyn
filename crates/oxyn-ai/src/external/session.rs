@@ -1,30 +1,31 @@
-//! Une session avec un agent externe, qui dure plus d'une question.
+//! A session with an external agent, lasting more than one question.
 //!
-//! Autorité : [ADR-0026](../../../../docs/adr/0026-agents-externes-acp.md).
+//! Authority: [ADR-0026](../../../../docs/adr/0026-agents-externes-acp.md).
 //!
-//! # Pourquoi une session et pas un tour
+//! # Why a session and not a turn
 //!
-//! [`run_turn`](super::turn::run_turn) lance le processus, pose une invite et le
-//! termine. C'est juste pour une question isolée, et c'est faux pour une
-//! conversation : l'agent oublie tout entre deux questions, et relance à chaque
-//! fois un `npx` qui peut prendre plusieurs secondes. Ici, le processus vit tant
-//! que la [`ExternalSession`] vit, et les invites s'y succèdent.
+//! [`run_turn`](super::turn::run_turn) launches the process, sends a prompt and
+//! terminates it. That is right for an isolated question, and wrong for a
+//! conversation: the agent forgets everything between two questions, and
+//! relaunches every time an `npx` that can take several seconds. Here, the
+//! process lives as long as the [`ExternalSession`] lives, and the prompts
+//! follow one another in it.
 //!
-//! # Ce qui ne change pas
+//! # What does not change
 //!
-//! * les autorisations sur la machine sont refusées par
-//!   [`permission_for`], sans bouton qui les accorderait ;
-//! * rien de ce que l'agent écrit ne s'exécute : il n'a aucun outil d'Oxyn ;
-//! * lâcher la session termine le **groupe** de processus — voir l'en-tête de
-//!   [`super::turn`], qui cite la source de `agent-client-protocol`.
+//! * permissions on the machine are refused by [`permission_for`], with no
+//!   button that would grant them;
+//! * nothing the agent writes runs: it has no Oxyn tool;
+//! * dropping the session terminates the process **group** — see the header
+//!   of [`super::turn`], which quotes the source of `agent-client-protocol`.
 //!
-//! # L'annulation suit le protocole
+//! # Cancellation follows the protocol
 //!
-//! Annuler envoie `session/cancel` et rend la main **tout de suite** : le bouton
-//! d'arrêt ne peut pas attendre la bonne volonté de l'agent. La session reste
-//! ouverte, et la réponse `cancelled` de l'agent est attendue avant la question
-//! suivante — deux invites mêlées dans la même session se liraient comme une
-//! seule. Un agent qui ne répond jamais se termine en lâchant la session.
+//! Cancelling sends `session/cancel` and returns **immediately**: the stop
+//! button cannot wait for the agent's goodwill. The session stays open, and the
+//! agent's `cancelled` answer is awaited before the next question — two prompts
+//! mixed in the same session would read as one. An agent that never answers is
+//! terminated by dropping the session.
 
 use std::pin::pin;
 use std::sync::{Arc, Mutex, PoisonError};

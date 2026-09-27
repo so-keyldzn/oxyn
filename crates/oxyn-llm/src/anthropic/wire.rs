@@ -1,16 +1,15 @@
-//! Les structures qui circulent réellement sur le fil, côté Anthropic.
+//! The structures that really travel on the wire, Anthropic side.
 //!
-//! Tout ce qui est écrit ici est **vérifié et daté** dans
-//! [`RESEARCH-NOTES`](../../../docs/RESEARCH-NOTES.md) § « Fournisseur
-//! Anthropic » (I-12) : chemins, en-têtes, noms d'événements, noms de champs et
-//! valeurs d'énumération. Aucun n'est écrit de mémoire — une valeur plausible
-//! et fausse ne se voit ni à la compilation, ni aux tests, ni en revue.
+//! Everything written here is **checked and dated** in
+//! [`RESEARCH-NOTES`](../../../docs/RESEARCH-NOTES.md) § "Anthropic provider"
+//! (I-12): paths, headers, event names, field names and enumeration values.
+//! None is written from memory — a plausible and wrong value shows up neither
+//! at compile time, nor in tests, nor in review.
 //!
-//! Comme du côté compatible OpenAI, toutes les structures de **réponse** sont
-//! tolérantes : chaque champ porte un défaut, aucune n'est
-//! `deny_unknown_fields`. La documentation annonce explicitement que de
-//! nouveaux types d'événements peuvent apparaître, et un serveur renvoie de
-//! toute façon ce qu'il veut (I-09).
+//! As on the OpenAI-compatible side, all **response** structures are
+//! tolerant: each field has a default, none is `deny_unknown_fields`. The
+//! documentation explicitly announces that new event types can appear, and a
+//! server returns whatever it wants anyway (I-09).
 
 use serde::Deserialize;
 use serde_json::{Map, Value, json};
@@ -18,22 +17,22 @@ use serde_json::{Map, Value, json};
 use crate::reasoning::{ReasoningBlock, ReasoningEffort};
 use crate::types::{ChatMessage, ChatRequest, ModelInfo, Role, Support};
 
-/// Nombre maximal de marqueurs de cache acceptés dans une requête.
+/// Maximum number of cache markers accepted in a request.
 ///
-/// Au-delà, l'API refuse la requête entière. Oxyn s'arrête donc **avant** la
-/// limite plutôt que de laisser un `400` arriver à l'utilisateur pour un
-/// réglage qu'il n'a pas conscience d'avoir posé.
+/// Beyond it, the API refuses the whole request. Oxyn therefore stops
+/// **before** the limit rather than let a `400` reach the user for a setting
+/// they are not aware of having set.
 pub(crate) const MAX_CACHE_BREAKPOINTS: usize = 4;
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Requête
+// Request
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Compteur de marqueurs de cache, borné.
+/// Counter of cache markers, bounded.
 ///
-/// Passé de proche en proche pendant la construction : c'est le seul moyen de
-/// respecter la borne globale alors que les marqueurs viennent de trois
-/// endroits (outils, consigne système, messages).
+/// Passed along during construction: it is the only way to respect the global
+/// bound while the markers come from three places (tools, system instruction,
+/// messages).
 struct CacheBudget(usize);
 
 impl CacheBudget {
@@ -41,7 +40,7 @@ impl CacheBudget {
         Self(MAX_CACHE_BREAKPOINTS)
     }
 
-    /// Consomme un marqueur s'il en reste un.
+    /// Consumes a marker if one is left.
     fn take(&mut self) -> bool {
         if self.0 == 0 {
             return false;
@@ -51,12 +50,12 @@ impl CacheBudget {
     }
 }
 
-/// Le marqueur de cache, tel qu'il part sur le fil.
+/// The cache marker, as it goes on the wire.
 fn cache_control() -> Value {
     json!({ "type": "ephemeral" })
 }
 
-/// Pose le marqueur de cache sur un bloc, si le budget le permet.
+/// Sets the cache marker on a block, if the budget allows.
 fn mark_cached(bloc: &mut Value, budget: &mut CacheBudget) {
     if let Some(objet) = bloc.as_object_mut()
         && budget.take()
@@ -70,12 +69,12 @@ fn text_block(texte: &str) -> Value {
     json!({ "type": "text", "text": texte })
 }
 
-/// Rassemble les consignes système en un seul champ de premier niveau.
+/// Gathers the system instructions into a single top-level field.
 ///
-/// Plusieurs messages `System` sont concaténés plutôt que d'être perdus : c'est
-/// le seul recours pour un protocole qui n'en accepte qu'un. La consigne part
-/// comme une **liste de blocs** et non comme une chaîne, parce qu'un marqueur
-/// de cache ne peut se poser que sur un bloc.
+/// Several `System` messages are concatenated rather than lost: it is the only
+/// recourse for a protocol that accepts only one. The instruction goes out as
+/// a **list of blocks** and not as a string, because a cache marker can only
+/// be set on a block.
 fn system_prompt(messages: &[ChatMessage], budget: &mut CacheBudget) -> Option<Value> {
     let morceaux: Vec<&ChatMessage> = messages
         .iter()
@@ -93,17 +92,16 @@ fn system_prompt(messages: &[ChatMessage], budget: &mut CacheBudget) -> Option<V
     Some(Value::Array(vec![bloc]))
 }
 
-/// Projette la conversation vers la liste de messages du protocole.
+/// Projects the conversation onto the protocol's list of messages.
 ///
-/// Trois traductions à faire, et elles sont la raison d'être de ce module :
+/// Three translations to make, and they are the reason this module exists:
 ///
-/// * un résultat d'outil devient un bloc `tool_result` dans un message de rôle
-///   `user` ;
-/// * les blocs de raisonnement d'un tour d'assistant se placent **en tête** de
-///   son contenu, dans l'ordre reçu et sans être modifiés ;
-/// * deux messages consécutifs de même rôle sont **fusionnés** — l'API exige
-///   l'alternance, et deux résultats d'outils successifs sont le cas courant
-///   quand le modèle en a demandé plusieurs.
+/// * a tool result becomes a `tool_result` block in a message of role `user`;
+/// * the reasoning blocks of an assistant turn are placed **at the head** of
+///   its content, in the order received and without being modified;
+/// * two consecutive messages of the same role are **merged** — the API
+///   requires alternation, and two successive tool results are the common
+///   case when the model asked for several.
 fn conversation(
     messages: &[ChatMessage],
     budget: &mut CacheBudget,
@@ -127,9 +125,9 @@ fn conversation(
             }
             Role::Assistant => {
                 let mut blocs = Vec::new();
-                // Les blocs de raisonnement d'abord, tels qu'ils ont été reçus.
-                // Les réordonner, en éditer un ou en perdre un fait refuser la
-                // requête : l'API vérifie leur signature.
+                // The reasoning blocks first, as they were received.
+                // Reordering them, editing one or losing one makes the request
+                // refused: the API checks their signature.
                 for bloc in &message.reasoning {
                     blocs.push(reasoning_block(bloc)?);
                 }
@@ -151,17 +149,17 @@ fn conversation(
             }
         };
 
-        // Le marqueur se pose sur le **dernier** bloc du message : il ferme un
-        // préfixe, il ne l'ouvre pas.
+        // The marker is set on the **last** block of the message: it closes a
+        // prefix, it does not open it.
         if message.cache_breakpoint
             && let Some(dernier) = blocs.last_mut()
         {
             mark_cached(dernier, budget);
         }
 
-        // `last()` puis `last_mut()` en deux temps : un `match` sur
-        // `last_mut()` garderait l'emprunt mutable vivant dans le bras qui
-        // pousse, et le vérificateur d'emprunts le refuse.
+        // `last()` then `last_mut()` in two steps: a `match` on `last_mut()`
+        // would keep the mutable borrow alive in the arm that pushes, and the
+        // borrow checker refuses it.
         if sorties
             .last()
             .is_some_and(|(precedent, _)| *precedent == role)
@@ -180,16 +178,16 @@ fn conversation(
         .collect())
 }
 
-/// Un bloc de raisonnement que ce protocole ne sait pas renvoyer.
+/// A reasoning block this protocol cannot send back.
 ///
-/// [`ReasoningBlock`] est défini dans `oxyn-core` et `#[non_exhaustive]` : une
-/// variante peut y apparaître sans que ce module la connaisse. L'omettre ferait
-/// refuser la requête pour signature invalide — ou, pire, l'accepter avec un
-/// raisonnement tronqué. On refuse donc avant l'envoi.
+/// [`ReasoningBlock`] is defined in `oxyn-core` and `#[non_exhaustive]`: a
+/// variant can appear there without this module knowing it. Omitting it would
+/// make the request refused for an invalid signature — or, worse, accepted
+/// with a truncated reasoning. So it is refused before sending.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct UnrenderableReasoning;
 
-/// Rend un bloc de raisonnement au format du protocole, **sans le modifier**.
+/// Renders a reasoning block in the protocol's format, **without modifying it**.
 fn reasoning_block(bloc: &ReasoningBlock) -> Result<Value, UnrenderableReasoning> {
     match bloc {
         ReasoningBlock::Summarized { text, signature } => {
@@ -221,14 +219,14 @@ fn tools(request: &ChatRequest, budget: &mut CacheBudget) -> Option<Value> {
             json!({
                 "name": outil.name,
                 "description": outil.description,
-                // `input_schema` et non `parameters` : c'est le nom du champ
-                // dans ce protocole.
+                // `input_schema` and not `parameters`: that is the field's
+                // name in this protocol.
                 "input_schema": outil.parameters,
             })
         })
         .collect();
-    // Le marqueur se pose sur le **dernier** outil : il couvre toutes les
-    // définitions qui le précèdent.
+    // The marker is set on the **last** tool: it covers all the definitions
+    // that precede it.
     if request.cache_tools
         && let Some(dernier) = outils.last_mut()
     {
@@ -237,14 +235,13 @@ fn tools(request: &ChatRequest, budget: &mut CacheBudget) -> Option<Value> {
     Some(Value::Array(outils))
 }
 
-/// Construit le corps de `POST /v1/messages`.
+/// Builds the body of `POST /v1/messages`.
 ///
-/// `stream` gouverne le champ du même nom : la diffusion pour une génération,
-/// son absence pour un comptage de jetons — le point d'accès de comptage
-/// refuse `stream`.
+/// `stream` governs the field of the same name: streaming for a generation,
+/// its absence for a token count — the counting endpoint refuses `stream`.
 ///
-/// Échoue seulement si la conversation porte un bloc de raisonnement que ce
-/// protocole ne sait pas renvoyer ([`UnrenderableReasoning`]).
+/// Fails only if the conversation carries a reasoning block this protocol
+/// cannot send back ([`UnrenderableReasoning`]).
 pub(crate) fn build_request(
     request: &ChatRequest,
     default_max_tokens: u32,
@@ -254,10 +251,10 @@ pub(crate) fn build_request(
     let mut corps = Map::new();
 
     corps.insert("model".to_owned(), json!(request.model));
-    // L'ordre d'application du budget suit celui du préfixe : les outils
-    // d'abord, puis la consigne système, puis les messages. C'est l'ordre dans
-    // lequel le fournisseur assemble l'invite, donc celui où un marqueur a une
-    // chance de servir.
+    // The order in which the budget is applied follows that of the prefix:
+    // tools first, then the system instruction, then the messages. It is the
+    // order in which the provider assembles the prompt, hence the one where a
+    // marker has a chance to be useful.
     if let Some(outils) = tools(request, &mut budget) {
         corps.insert("tools".to_owned(), outils);
     }
@@ -280,18 +277,18 @@ pub(crate) fn build_request(
         corps.insert("temperature".to_owned(), json!(temperature));
     }
 
-    // Un budget de réflexion demande le mode explicite ; l'effort seul passe
-    // par `output_config` et laisse le modèle décider s'il réfléchit. Envoyer
-    // un mode de réflexion non demandé ferait échouer la requête sur les
-    // modèles qui ne le connaissent pas.
+    // A thinking budget requires the explicit mode; effort alone goes through
+    // `output_config` and lets the model decide whether it thinks. Sending a
+    // thinking mode that was not requested would make the request fail on
+    // models that do not know it.
     if let Some(budget_jetons) = request.reasoning_budget_tokens {
         corps.insert(
             "thinking".to_owned(),
             json!({
                 "type": "enabled",
                 "budget_tokens": budget_jetons,
-                // Sans cela le raisonnement revient vide : le défaut de
-                // plusieurs modèles est de ne pas le rendre.
+                // Without it the reasoning comes back empty: the default of
+                // several models is not to return it.
                 "display": "summarized",
             }),
         );
@@ -307,14 +304,14 @@ pub(crate) fn build_request(
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Événements du flux
+// Stream events
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Le champ `type` d'une trame, quand elle en porte un.
+/// The `type` field of a frame, when it carries one.
 ///
-/// Le nom de l'événement SSE et le champ `type` de sa charge sont redondants
-/// dans ce protocole. On lit le **champ**, pas le nom de l'événement : une
-/// trame réassemblée par un mandataire peut perdre son nom, jamais sa charge.
+/// The name of the SSE event and the `type` field of its payload are redundant
+/// in this protocol. We read the **field**, not the event name: a frame
+/// reassembled by a proxy can lose its name, never its payload.
 #[derive(Debug, Default, Deserialize)]
 pub(crate) struct Envelope {
     #[serde(default)]
@@ -349,17 +346,17 @@ pub(crate) struct ContentBlock {
     pub(crate) id: Option<String>,
     #[serde(default)]
     pub(crate) name: Option<String>,
-    /// Présent sur un bloc de raisonnement déjà complet.
+    /// Present on an already complete reasoning block.
     #[serde(default)]
     pub(crate) thinking: Option<String>,
     #[serde(default)]
     pub(crate) signature: Option<String>,
-    /// Charge d'un bloc de raisonnement chiffré.
+    /// Payload of an encrypted reasoning block.
     #[serde(default)]
     pub(crate) data: Option<String>,
 }
 
-/// La charge d'un `content_block_delta` ou d'un `message_delta`.
+/// The payload of a `content_block_delta` or of a `message_delta`.
 #[derive(Debug, Default, Deserialize)]
 pub(crate) struct Delta {
     #[serde(default)]
@@ -367,7 +364,7 @@ pub(crate) struct Delta {
     /// `text_delta`.
     #[serde(default)]
     pub(crate) text: Option<String>,
-    /// `input_json_delta` : fragment de la chaîne JSON des arguments.
+    /// `input_json_delta`: fragment of the arguments' JSON string.
     #[serde(default)]
     pub(crate) partial_json: Option<String>,
     /// `thinking_delta`.
@@ -376,16 +373,16 @@ pub(crate) struct Delta {
     /// `signature_delta`.
     #[serde(default)]
     pub(crate) signature: Option<String>,
-    /// Porté par `message_delta`.
+    /// Carried by `message_delta`.
     #[serde(default)]
     pub(crate) stop_reason: Option<String>,
 }
 
-/// Consommation déclarée.
+/// Declared usage.
 ///
-/// Les champs sont des `i64` optionnels et non des `u32` : un serveur peut
-/// envoyer une valeur négative, et une désérialisation stricte ferait alors
-/// échouer la trame entière (I-09).
+/// The fields are optional `i64`s and not `u32`s: a server can send a negative
+/// value, and a strict deserialization would then make the whole frame fail
+/// (I-09).
 #[derive(Debug, Default, Deserialize)]
 pub(crate) struct WireUsage {
     #[serde(default)]
@@ -399,7 +396,7 @@ pub(crate) struct WireUsage {
 }
 
 impl WireUsage {
-    /// Jetons d'entrée hors cache.
+    /// Input tokens outside the cache.
     pub(crate) fn input(&self) -> u32 {
         clamp_tokens(self.input_tokens)
     }
@@ -409,22 +406,22 @@ impl WireUsage {
         clamp_tokens(self.output_tokens)
     }
 
-    /// Jetons écrits dans le cache, quand le fournisseur le déclare.
+    /// Tokens written to the cache, when the provider declares it.
     pub(crate) fn cache_write(&self) -> Option<u32> {
         self.cache_creation_input_tokens
             .map(|brut| clamp_tokens(Some(brut)))
     }
 
-    /// Jetons lus dans le cache, quand le fournisseur le déclare.
+    /// Tokens read from the cache, when the provider declares it.
     pub(crate) fn cache_read(&self) -> Option<u32> {
         self.cache_read_input_tokens
             .map(|brut| clamp_tokens(Some(brut)))
     }
 
-    /// La trame porte-t-elle une information exploitable ?
+    /// Does the frame carry usable information?
     ///
-    /// `message_start` annonce une consommation partielle ; l'émettre telle
-    /// quelle ferait clignoter un compteur qui n'a pas de sens avant la fin.
+    /// `message_start` announces a partial usage; emitting it as is would make
+    /// a counter flicker that has no meaning before the end.
     pub(crate) fn is_empty(&self) -> bool {
         self.input_tokens.is_none()
             && self.output_tokens.is_none()
@@ -433,16 +430,16 @@ impl WireUsage {
     }
 }
 
-/// Ramène un compte de jetons venu du réseau dans un `u32`.
+/// Brings a token count coming from the network into a `u32`.
 ///
-/// Absent ou négatif vaut `0` — « non déclaré » — et une valeur démesurée
-/// sature plutôt que de déborder silencieusement (`as` est interdit).
+/// Missing or negative counts as `0` — "not declared" — and an outsized value
+/// saturates rather than overflowing silently (`as` is forbidden).
 fn clamp_tokens(brut: Option<i64>) -> u32 {
     let valeur = brut.unwrap_or(0).max(0);
     u32::try_from(valeur).unwrap_or(u32::MAX)
 }
 
-/// Erreur transportée dans le flux, ou rendue par un statut d'échec.
+/// Error carried in the stream, or returned by a failure status.
 #[derive(Debug, Default, Deserialize)]
 pub(crate) struct WireError {
     #[serde(default)]
@@ -452,7 +449,7 @@ pub(crate) struct WireError {
 }
 
 impl WireError {
-    /// Message montrable, sans jamais rendre une chaîne vide.
+    /// Showable message, never returning an empty string.
     pub(crate) fn describe(&self) -> String {
         match (&self.r#type, &self.message) {
             (Some(genre), Some(message)) if !message.is_empty() => format!("{message} ({genre})"),
@@ -464,14 +461,14 @@ impl WireError {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Liste des modèles
+// Model list
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Corps de `GET /v1/models`.
 #[derive(Debug, Default, Deserialize)]
 pub(crate) struct ModelsResponse {
-    /// Volontairement non typée : une entrée malformée ne doit pas faire
-    /// échouer la liste entière.
+    /// Deliberately untyped: a malformed entry must not make the whole list
+    /// fail.
     #[serde(default, deserialize_with = "crate::http::bounded_entries")]
     pub(crate) data: Vec<Value>,
     #[serde(default)]
@@ -480,20 +477,20 @@ pub(crate) struct ModelsResponse {
     pub(crate) last_id: Option<String>,
 }
 
-/// Une entrée de la liste des modèles.
+/// An entry of the model list.
 #[derive(Debug, Deserialize)]
 pub(crate) struct WireModel {
     id: String,
     #[serde(default)]
     display_name: Option<String>,
-    /// Fenêtre de contexte, en jetons.
+    /// Context window, in tokens.
     #[serde(default)]
     max_input_tokens: Option<u32>,
     #[serde(default)]
     capabilities: Option<Capabilities>,
 }
 
-/// Ce que le modèle déclare savoir faire.
+/// What the model declares it can do.
 #[derive(Debug, Default, Deserialize)]
 struct Capabilities {
     #[serde(default)]
@@ -502,14 +499,14 @@ struct Capabilities {
     effort: Option<EffortCapability>,
 }
 
-/// Déclaration de la capacité de réflexion.
+/// Declaration of the thinking capability.
 #[derive(Debug, Default, Deserialize)]
 struct ThinkingCapability {
     #[serde(default)]
     supported: Option<bool>,
 }
 
-/// Déclaration de la capacité d'effort, niveau par niveau.
+/// Declaration of the effort capability, level by level.
 #[derive(Debug, Default, Deserialize)]
 struct EffortCapability {
     #[serde(default)]
@@ -526,7 +523,7 @@ struct EffortCapability {
     max: Option<Supported>,
 }
 
-/// Le témoin `{"supported": bool}` répété partout dans cette réponse.
+/// The `{"supported": bool}` flag repeated everywhere in this response.
 #[derive(Debug, Default, Deserialize)]
 struct Supported {
     #[serde(default)]
@@ -534,7 +531,7 @@ struct Supported {
 }
 
 impl EffortCapability {
-    /// Les niveaux réellement acceptés, dans l'ordre de l'échelle.
+    /// The levels actually accepted, in the order of the scale.
     fn levels(&self) -> Vec<ReasoningEffort> {
         [
             (self.low.as_ref(), ReasoningEffort::Low),
@@ -553,9 +550,9 @@ impl From<WireModel> for ModelInfo {
     fn from(brut: WireModel) -> Self {
         let capacites = brut.capabilities.unwrap_or_default();
 
-        // Le raisonnement est déclaré par deux voies indépendantes : un modèle
-        // qui accepte l'effort sait raisonner, même s'il ne déclare pas de mode
-        // de réflexion. L'une suffit.
+        // Reasoning is declared through two independent routes: a model that
+        // accepts effort can reason, even if it declares no thinking mode.
+        // Either one is enough.
         let reflexion = capacites
             .thinking
             .as_ref()
@@ -583,10 +580,9 @@ impl From<WireModel> for ModelInfo {
         }
         fiche = fiche
             .with_reasoning_support(raisonnement)
-            // Le point d'accès ne dit rien de ces deux-là. `Unknown` est la
-            // seule réponse honnête : tous les modèles de ce fournisseur les
-            // acceptent en pratique, mais « en pratique » n'est pas une
-            // déclaration (I-12).
+            // The endpoint says nothing about these two. `Unknown` is the only
+            // honest answer: every model of this provider accepts them in
+            // practice, but "in practice" is not a declaration (I-12).
             .with_tool_support(Support::Unknown)
             .with_streaming_support(Support::Unknown);
         if let Some(niveaux) = capacites.effort.as_ref().map(EffortCapability::levels)
@@ -594,16 +590,16 @@ impl From<WireModel> for ModelInfo {
         {
             fiche = fiche.with_reasoning_efforts(niveaux);
         }
-        // `cost` reste `None` : ce point d'accès ne publie aucun tarif, et un
-        // tarif recopié de mémoire est une valeur plausible et fausse (I-12).
+        // `cost` stays `None`: this endpoint publishes no price, and a price
+        // copied from memory is a plausible and wrong value (I-12).
         fiche
     }
 }
 
-/// Analyse la liste des modèles, entrée par entrée.
+/// Parses the model list, entry by entry.
 ///
-/// Une entrée illisible est **ignorée**, pas fatale : un modèle exotique ne
-/// doit pas rendre les vingt autres invisibles.
+/// An unreadable entry is **ignored**, not fatal: an exotic model must not
+/// make the twenty others invisible.
 pub(crate) fn parse_models(reponse: ModelsResponse) -> Vec<ModelInfo> {
     let mut fiches = Vec::with_capacity(reponse.data.len());
     let mut ignorees = 0_usize;
@@ -614,8 +610,8 @@ pub(crate) fn parse_models(reponse: ModelsResponse) -> Vec<ModelInfo> {
         }
     }
     if ignorees > 0 {
-        // Le contenu de l'entrée n'est pas journalisé.
-        tracing::debug!(ignorees, "entrées de la liste des modèles illisibles");
+        // The entry's content is not logged.
+        tracing::debug!(ignorees, "unreadable entries in the model list");
     }
     fiches
 }
@@ -624,10 +620,10 @@ pub(crate) fn parse_models(reponse: ModelsResponse) -> Vec<ModelInfo> {
 // Comptage de jetons
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Corps de `POST /v1/messages/count_tokens`.
+/// Body of `POST /v1/messages/count_tokens`.
 ///
-/// Le type ne s'appelle pas `TokenCount` : ce dépôt refuse un `Debug` dérivé
-/// sur un type dont le nom évoque un secret, et le contrôle porte sur le nom.
+/// The type is not called `TokenCount`: this repository refuses a derived
+/// `Debug` on a type whose name evokes a secret, and the check is on the name.
 #[derive(Debug, Default, Deserialize)]
 pub(crate) struct CountResponse {
     #[serde(default)]
@@ -635,7 +631,7 @@ pub(crate) struct CountResponse {
 }
 
 impl CountResponse {
-    /// Le compte, ramené dans le domaine du possible.
+    /// The count, brought back into the realm of the possible.
     pub(crate) fn count(&self) -> u32 {
         clamp_tokens(self.input_tokens)
     }

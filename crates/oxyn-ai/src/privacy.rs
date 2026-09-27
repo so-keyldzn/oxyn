@@ -1,81 +1,80 @@
-//! Le niveau de confidentialité d'une connexion, appliqué à un point d'accès.
+//! A connection's privacy tier, applied to an endpoint.
 //!
-//! Autorité : [ADR-0006](../../../docs/adr/0006-ai-privacy-tiers.md). Le tableau
-//! des niveaux y vit et n'est pas recopié ici.
+//! Authority: [ADR-0006](../../../docs/adr/0006-ai-privacy-tiers.md). The table
+//! of tiers lives there and is not copied here.
 //!
-//! # Le type vit dans `oxyn-core`, et c'est le sujet
+//! # The type lives in `oxyn-core`, and that is the point
 //!
-//! [`PrivacyTier`] est défini dans
-//! [`oxyn_core::connection`] et ré-exporté ici. Il n'y a
-//! **qu'une** définition dans le dépôt, et elle se trouve à côté de la
-//! [`ConnectionConfig`](oxyn_core::ConnectionConfig) qui la porte : un niveau
-//! rangé dans la crate d'IA serait un niveau attaché au workspace IA, donc un
-//! réglage global sous un autre nom — exactement ce qu'ADR-0006 refuse.
+//! [`PrivacyTier`] is defined in
+//! [`oxyn_core::connection`] and re-exported here. There is **only one**
+//! definition in the repository, and it sits next to the
+//! [`ConnectionConfig`](oxyn_core::ConnectionConfig) that carries it: a tier
+//! stored in the AI crate would be a tier attached to the AI workspace, hence a
+//! global setting under another name — exactly what ADR-0006 refuses.
 //!
-//! Ce module ne porte donc que ce qui a besoin d'`oxyn-llm` : la confrontation
-//! du niveau avec le classement d'un point d'accès.
+//! This module therefore only carries what needs `oxyn-llm`: confronting the
+//! tier with an endpoint's classification.
 //!
-//! # `Local` est une garantie, pas une préférence
+//! # `Local` is a guarantee, not a preference
 //!
-//! [`PrivacyTier::allows_remote_provider`] rend `false` pour `Local`, et
-//! [`AgentRuntime::run`](crate::runtime::AgentRuntime::run) refuse avant
-//! d'assembler quoi que ce soit : il n'existe pas de chemin qui envoie une
-//! invite hors de la machine sous ce niveau. La vérification a lieu sur la
-//! **session**, parce que c'est le seul endroit où le niveau de la connexion
-//! est connu.
+//! [`PrivacyTier::allows_remote_provider`] returns `false` for `Local`, and
+//! [`AgentRuntime::run`](crate::runtime::AgentRuntime::run) refuses before
+//! assembling anything: there is no path that sends a prompt off the machine
+//! under this tier. The check happens on the **session**, because it is the
+//! only place where the connection's tier is known.
 //!
-//! # Le piège du mandataire sur `localhost`
+//! # The `localhost` proxy trap
 //!
-//! Le classement local/distant se fait sur l'hôte réel **après résolution**
-//! ([`Reach`]), jamais sur la présence de `localhost` dans une URL : un point
-//! d'accès compatible OpenAI en écoute sur la boucle locale peut être un
-//! mandataire qui réémet vers le nuage. Il se re-vérifie à chaque changement de
-//! configuration, parce que le nom qui résolvait vers `127.0.0.1` hier peut
-//! résoudre ailleurs aujourd'hui.
+//! The local/remote classification is made on the real host **after
+//! resolution** ([`Reach`]), never on the presence of `localhost` in a URL: an
+//! OpenAI-compatible endpoint listening on the loopback can be a proxy that
+//! forwards to the cloud. It is re-checked at every configuration change,
+//! because the name that resolved to `127.0.0.1` yesterday may resolve
+//! elsewhere today.
 
 use oxyn_llm::Reach;
 
 pub use oxyn_core::PrivacyTier;
 
-/// Ce point d'accès est-il utilisable sous ce niveau ?
+/// Is this endpoint usable under this tier?
 ///
-/// [`Reach::Unresolved`] est traité comme distant : un point d'accès qu'on n'a
-/// pas su classer n'obtient pas le bénéfice du doute
+/// [`Reach::Unresolved`] is treated as remote: an endpoint we could not
+/// classify does not get the benefit of the doubt
 /// ([`Reach::leaves_machine`]).
 ///
-/// Fonction libre plutôt que méthode : le classement d'un point d'accès vit
-/// dans `oxyn-llm`, dont `oxyn-core` ne dépend pas — et ne doit pas dépendre.
+/// A free function rather than a method: an endpoint's classification lives in
+/// `oxyn-llm`, which `oxyn-core` does not depend on — and must not depend on.
 #[must_use]
 pub const fn allows_endpoint(tier: PrivacyTier, reach: Reach) -> bool {
     !reach.leaves_machine() || tier.allows_remote_provider()
 }
 
-/// La portée d'un agent externe : **inconnaissable**, donc [`Reach::Unresolved`].
+/// The reach of an external agent: **unknowable**, hence [`Reach::Unresolved`].
 ///
-/// Ce n'est pas la même chose qu'un point d'accès mal résolu. Un fournisseur
-/// déclaré a une URL qu'on peut résoudre, et dont la résolution peut être
-/// périmée ([ADR-0023](../../../docs/adr/0023-fournisseurs-declares-et-provenance.md)).
-/// Un agent externe est un **processus opaque** : il peut parler à un modèle
-/// local, à un service distant, ou changer entre deux tours, et rien dans le
-/// protocole ne permet de le lui demander
+/// It is not the same thing as a badly resolved endpoint. A declared provider
+/// has a URL that can be resolved, and whose resolution can be stale
+/// ([ADR-0023](../../../docs/adr/0023-fournisseurs-declares-et-provenance.md)).
+/// An external agent is an **opaque process**: it can talk to a local model,
+/// to a remote service, or switch between two turns, and nothing in the
+/// protocol allows asking it
 /// ([ADR-0026](../../../docs/adr/0026-agents-externes-acp.md)).
 ///
-/// La fonction prend la déclaration pour que l'appelant ne puisse pas se
-/// tromper de valeur, et rend une constante parce qu'il n'y a rien à calculer :
-/// c'est l'absence d'information qui est modélisée, pas une mesure ratée.
+/// The function takes the declaration so that the caller cannot pick the wrong
+/// value, and returns a constant because there is nothing to compute: it is
+/// the absence of information that is modeled, not a failed measurement.
 #[must_use]
 pub const fn agent_reach(_agent: &oxyn_core::ExternalAgentConfig) -> Reach {
     Reach::Unresolved
 }
 
-/// Cet agent externe est-il utilisable sous ce niveau ?
+/// Is this external agent usable under this tier?
 ///
-/// Conséquence directe d'[`agent_reach`] : **non sous `Local`**, oui sous
-/// `Metadata` et `Sampled`. Un utilisateur dont l'agent tourne réellement
-/// contre un modèle local trouvera la restriction excessive, et il aura raison
-/// sur le fond — mais la lever demanderait de le croire sur parole, et `Local`
-/// promet « rien ne sort de la machine ». Une promesse assortie d'une case à
-/// cocher n'est plus une promesse.
+/// A direct consequence of [`agent_reach`]: **not under `Local`**, yes under
+/// `Metadata` and `Sampled`. A user whose agent really runs against a local
+/// model will find the restriction excessive, and they will be right in
+/// substance — but lifting it would require taking their word for it, and
+/// `Local` promises "nothing leaves the machine". A promise that comes with a
+/// checkbox is no longer a promise.
 #[must_use]
 pub const fn allows_external_agent(
     tier: PrivacyTier,
@@ -88,17 +87,17 @@ pub const fn allows_external_agent(
 mod tests {
     use super::*;
 
-    /// Un agent externe ne sert jamais une connexion `Local`.
+    /// An external agent never serves a `Local` connection.
     ///
-    /// C'est la conséquence qui compte d'ADR-0026, et elle ne tient à aucune
-    /// mécanique nouvelle : un agent est `Unresolved`, et « dans le doute, on
-    /// protège » était déjà la règle.
+    /// It is the consequence of ADR-0026 that matters, and it relies on no new
+    /// mechanism: an agent is `Unresolved`, and "when in doubt, protect" was
+    /// already the rule.
     #[test]
-    fn un_agent_externe_ne_sert_jamais_une_connexion_locale() {
+    fn an_external_agent_never_serves_a_local_connection() {
         use oxyn_core::{ExternalAgentConfig, ProviderId};
 
         let agent = ExternalAgentConfig::new(
-            ProviderId::new("agent-local").expect("un identifiant valide"),
+            ProviderId::new("agent-local").expect("a valid identifier"),
             "Claude Code",
             "claude",
         )
@@ -107,35 +106,35 @@ mod tests {
         assert_eq!(
             agent_reach(&agent),
             Reach::Unresolved,
-            "un processus opaque n'a pas de portée connaissable"
+            "an opaque process has no knowable reach"
         );
         assert!(
             !allows_external_agent(PrivacyTier::Local, &agent),
-            "`Local` promet que rien ne sort : un agent dont on ne voit pas la sortie ne peut pas le tenir"
+            "`Local` promises nothing leaves: an agent whose output we cannot see cannot keep that promise"
         );
-        // Les deux autres niveaux l'acceptent, sans quoi le mode n'existerait
-        // pour personne.
+        // The two other tiers accept it, otherwise the mode would exist for
+        // nobody.
         assert!(allows_external_agent(PrivacyTier::Metadata, &agent));
         assert!(allows_external_agent(PrivacyTier::Sampled, &agent));
     }
 
     #[test]
-    fn un_point_d_acces_non_resolu_est_traite_comme_distant() {
-        // Le piège d'AI-PROVIDERS : un mandataire en écoute sur localhost. Le
-        // classement vient de `Reach`, jamais de la forme de l'URL.
+    fn an_unresolved_endpoint_is_treated_as_remote() {
+        // The AI-PROVIDERS trap: a proxy listening on localhost. The
+        // classification comes from `Reach`, never from the URL's shape.
         assert!(allows_endpoint(PrivacyTier::Local, Reach::Local));
         assert!(!allows_endpoint(PrivacyTier::Local, Reach::Remote));
         assert!(
             !allows_endpoint(PrivacyTier::Local, Reach::Unresolved),
-            "dans le doute, on protège"
+            "when in doubt, protect"
         );
         assert!(allows_endpoint(PrivacyTier::Metadata, Reach::Unresolved));
     }
 
     #[test]
-    fn le_niveau_rendu_ici_est_bien_celui_du_domaine() {
-        // Une seule définition dans le dépôt : si quelqu'un en réintroduisait
-        // une locale, cette égalité de types ne compilerait plus.
+    fn the_tier_returned_here_is_the_domain_one() {
+        // A single definition in the repository: if someone reintroduced a
+        // local one, this type equality would no longer compile.
         let du_domaine: oxyn_core::PrivacyTier = oxyn_core::PrivacyTier::Metadata;
         let reexporte: PrivacyTier = du_domaine;
         assert_eq!(reexporte, PrivacyTier::default());

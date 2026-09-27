@@ -1,36 +1,35 @@
-//! Classification d'intention : ce qui alimente le `PolicyGate`.
+//! Intent classification: what feeds the `PolicyGate`.
 //!
-//! C'est le point critique de la crate. Le `PolicyGate` d'`oxyn-core` fait
-//! confiance à l'intention qu'on lui donne (`oxyn-core::query`) ; c'est ici
-//! qu'elle est établie. Si ce module classe mal, la sécurité tombe : un
-//! `DELETE` classé `Read` s'exécute en production sans confirmation.
+//! It is the critical point of the crate. The `PolicyGate` of `oxyn-core`
+//! trusts the intent it is given (`oxyn-core::query`); this is where it is
+//! established. If this module misclassifies, security falls: a `DELETE`
+//! classified `Read` runs in production without confirmation.
 //!
-//! # Les trois règles qui gouvernent ce module
+//! # The three rules that govern this module
 //!
-//! **Ce qui ne se lit pas est mutant.** Un texte que `sqlparser` refuse, une
-//! instruction dont la forme n'est pas reconnue, un lot vide : tout cela donne
-//! [`StatementIntent::Unknown`], qui `is_mutating()` (I-02). Il n'existe aucun
-//! chemin par lequel un échec d'analyse produit `Read`.
+//! **What does not parse is mutating.** A text `sqlparser` refuses, a
+//! statement whose form is not recognized, an empty batch: all of these give
+//! [`StatementIntent::Unknown`], which `is_mutating()` (I-02). There is no
+//! path through which a parse failure produces `Read`.
 //!
-//! **Le nom de l'instruction ne suffit pas.** `EXPLAIN ANALYZE DELETE FROM t`
-//! commence par `EXPLAIN` et supprime toutes les lignes de la table — c'est
-//! l'exemple que I-07 donne. `WITH x AS (DELETE FROM t RETURNING *) SELECT *`
-//! commence par `WITH` et fait la même chose. On classe donc sur l'AST, pas sur
-//! le premier mot, et on descend dans les clauses `WITH` et les corps
-//! d'`EXPLAIN`.
+//! **The name of the statement is not enough.** `EXPLAIN ANALYZE DELETE FROM t`
+//! starts with `EXPLAIN` and deletes every row of the table — it is the example
+//! I-07 gives. `WITH x AS (DELETE FROM t RETURNING *) SELECT *` starts with
+//! `WITH` and does the same. Classification therefore works on the AST, not
+//! on the first word, and descends into `WITH` clauses and `EXPLAIN` bodies.
 //!
-//! **Un filet sous l'AST.** Après la classification, une instruction jugée
-//! `Read` est relue : si un mot-clé mutant apparaît hors chaîne et hors
-//! commentaire alors que l'AST n'a vu aucune mutation, c'est que l'analyse a
-//! manqué quelque chose, et l'instruction retombe en `Unknown`. Ce filet ne
-//! peut que **restreindre** ; il ne relâche jamais rien.
+//! **A safety net under the AST.** After classification, a statement judged
+//! `Read` is reread: if a mutating keyword appears outside strings and
+//! comments while the AST saw no mutation, the analysis missed something, and
+//! the statement falls back to `Unknown`. This net can only **restrict**; it
+//! never relaxes anything.
 //!
-//! # Agrégation d'un lot
+//! # Aggregating a batch
 //!
-//! Un lot prend l'intention la plus élevée de ses instructions :
-//! `Read < Write < {Ddl, Unknown} < Grant`. À égalité entre `Ddl` et `Unknown`,
-//! `Unknown` l'emporte : les deux sont aussi contraignants, et `Unknown` dit la
-//! vérité — quelque chose n'a pas été compris.
+//! A batch takes the highest intent of its statements:
+//! `Read < Write < {Ddl, Unknown} < Grant`. On a tie between `Ddl` and
+//! `Unknown`, `Unknown` wins: both are as restrictive, and `Unknown` tells the
+//! truth — something was not understood.
 
 use std::cmp::Ordering;
 use std::ops::Range;
@@ -48,31 +47,31 @@ use crate::dialect::parser_dialect;
 use crate::error::QueryError;
 use crate::split::{self, Fragment, Word};
 
-/// Sur quoi repose la classification d'une instruction.
+/// What the classification of a statement rests on.
 ///
-/// Sert au journal et à l'interface : une approbation demandée parce qu'on n'a
-/// pas su lire l'instruction ne se présente pas comme une approbation demandée
-/// parce qu'elle supprime une table.
+/// Serves the journal and the interface: an approval asked because the
+/// statement could not be read is not presented like an approval asked
+/// because it drops a table.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum Basis {
-    /// L'instruction a été lue et sa forme reconnue.
+    /// The statement was read and its form recognized.
     Ast,
-    /// L'instruction n'a pas pu être lue : classée `Unknown` par défaut.
+    /// The statement could not be read: classified `Unknown` by default.
     Unparsed,
-    /// L'AST disait `Read`, un mot-clé mutant nu a été trouvé : déclassée.
+    /// The AST said `Read`, a bare mutating keyword was found: downgraded.
     KeywordSweep,
 }
 
 impl Basis {
-    /// La classification vient-elle d'une lecture réussie et non corrigée ?
+    /// Does the classification come from a successful, uncorrected reading?
     #[must_use]
     pub const fn is_certain(&self) -> bool {
         matches!(self, Self::Ast)
     }
 
-    /// Nom stable, pour l'audit.
+    /// Stable name, for the audit.
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
@@ -89,83 +88,83 @@ impl std::fmt::Display for Basis {
     }
 }
 
-/// Une instruction d'un lot, classée.
+/// A statement of a batch, classified.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StatementInfo {
-    /// Le texte de l'instruction, sans son point-virgule.
+    /// The text of the statement, without its semicolon.
     pub text: String,
-    /// Ses bornes en octets dans le lot d'origine, pour l'éditeur.
+    /// Its byte bounds in the original batch, for the editor.
     pub span: Range<usize>,
-    /// Ce qu'elle fait.
+    /// What it does.
     pub intent: StatementIntent,
-    /// Le risque que sa forme laisse voir.
+    /// The risk its form reveals.
     pub risk: MutationRisk,
-    /// D'où vient cette classification.
+    /// Where this classification comes from.
     pub basis: Basis,
-    /// Message de l'analyseur, quand il a refusé de lire.
+    /// Parser message, when it refused to read.
     pub error: Option<String>,
     /// Whether it begins, ends or marks a transaction: see
     /// [`ExecRequest::transaction_control`].
     pub transaction_control: bool,
 }
 
-/// Le résultat de l'analyse d'un lot.
+/// The result of analyzing a batch.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Classification {
-    /// L'intention du lot : la plus élevée de ses instructions.
+    /// The intent of the batch: the highest of its statements.
     pub intent: StatementIntent,
-    /// Le risque du lot : le plus grave de ses instructions.
+    /// The risk of the batch: the most serious of its statements.
     pub risk: MutationRisk,
     /// Whether any of its statements controls a transaction.
     pub transaction_control: bool,
-    /// Le détail, instruction par instruction, dans l'ordre du texte.
+    /// The detail, statement by statement, in text order.
     pub statements: Vec<StatementInfo>,
 }
 
 impl Classification {
-    /// Le lot peut-il modifier quelque chose ?
+    /// Can the batch modify anything?
     #[must_use]
     pub const fn is_mutating(&self) -> bool {
         self.intent.is_mutating() || self.risk.is_some()
     }
 
-    /// Le lot est-il certainement en lecture seule ?
+    /// Is the batch certainly read-only?
     #[must_use]
     pub const fn is_read_only(&self) -> bool {
         self.intent.is_read_only() && !self.risk.is_some()
     }
 
-    /// Toutes les instructions ont-elles été lues et reconnues ?
+    /// Were all the statements read and recognized?
     ///
-    /// `false` signale qu'au moins une instruction est classée par défaut : la
-    /// décision reste sûre, mais l'interface a intérêt à le dire.
+    /// `false` signals that at least one statement is classified by default:
+    /// the decision stays safe, but the interface had better say so.
     #[must_use]
     pub fn is_fully_understood(&self) -> bool {
         !self.statements.is_empty() && self.statements.iter().all(|s| s.basis.is_certain())
     }
 
-    /// Le nombre d'instructions du lot.
+    /// The number of statements in the batch.
     #[must_use]
     pub fn len(&self) -> usize {
         self.statements.len()
     }
 
-    /// Le lot ne contient-il aucune instruction exécutable ?
+    /// Does the batch contain no executable statement?
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.statements.is_empty()
     }
 
-    /// Les instructions qui portent un risque, dans l'ordre du texte.
+    /// The statements that carry a risk, in text order.
     pub fn risky(&self) -> impl Iterator<Item = &StatementInfo> {
         self.statements.iter().filter(|s| s.risk.is_some())
     }
 
-    /// Réécrit l'intention et le risque d'une demande d'exécution.
+    /// Rewrites the intent and risk of an execution request.
     ///
-    /// C'est le geste que fait `oxyn-exec` avant de soumettre au `PolicyGate` :
-    /// l'intention **déclarée** par l'appelant n'est pas digne de confiance, un
-    /// agent ne peut pas s'auto-déclarer en lecture seule (ARCHITECTURE §8).
+    /// It is what `oxyn-exec` does before submitting to the `PolicyGate`: the
+    /// intent **declared** by the caller is not trustworthy, an agent cannot
+    /// declare itself read-only (ARCHITECTURE §8).
     #[must_use]
     pub fn qualify(&self, request: ExecRequest) -> ExecRequest {
         let mut request = request.with_intent(self.intent).with_risk(self.risk);
@@ -173,7 +172,7 @@ impl Classification {
         request
     }
 
-    /// Le lot dont on ne sait rien : une instruction opaque, `Unknown`.
+    /// The batch nothing is known about: one opaque statement, `Unknown`.
     ///
     /// Its language is not SQL, so no transaction verb of SQL can be looked
     /// for: `Unknown` already sends it to a human's approval, preview shown.
@@ -197,22 +196,22 @@ impl Classification {
     }
 }
 
-/// Analyse un lot SQL et en déduit intention et risque.
+/// Analyzes a SQL batch and deduces intent and risk from it.
 ///
-/// Ne renvoie jamais d'erreur : ce qui ne se lit pas est classé
-/// [`Unknown`](StatementIntent::Unknown). Pour obtenir le message de
-/// l'analyseur, voir [`crate::validate`].
+/// Never returns an error: what does not parse is classified
+/// [`Unknown`](StatementIntent::Unknown). To get the parser's message, see
+/// [`crate::validate`].
 ///
 /// ```
 /// use oxyn_core::{MutationRisk, SqlDialect, StatementIntent};
 /// use oxyn_query::classify;
 ///
-/// // Le piège : `EXPLAIN ANALYZE` exécute réellement ce qu'il analyse.
+/// // The trap: `EXPLAIN ANALYZE` really runs what it analyzes.
 /// let lu = classify("EXPLAIN ANALYZE DELETE FROM commandes", SqlDialect::Postgres);
 /// assert_eq!(lu.intent, StatementIntent::Write);
 /// assert_eq!(lu.risk, MutationRisk::UnboundedDelete);
 ///
-/// // Sans `ANALYZE`, seul le plan est calculé.
+/// // Without `ANALYZE`, only the plan is computed.
 /// let lu = classify("EXPLAIN DELETE FROM commandes", SqlDialect::Postgres);
 /// assert_eq!(lu.intent, StatementIntent::Read);
 /// ```
@@ -232,10 +231,10 @@ pub fn classify(sql: &str, dialect: SqlDialect) -> Classification {
         statements.push(info);
     }
 
-    // Un lot sans instruction — texte vide, que des commentaires, ou découpage
-    // qui a tout écarté — vaut `Unknown` et non `Read`. Un bogue du découpage
-    // qui perdrait des instructions ne doit pas ouvrir la porte : « aucune
-    // instruction » n'est pas une preuve de lecture seule.
+    // A batch without statements — empty text, comments only, or a split that
+    // dropped everything — counts as `Unknown`, not `Read`. A splitting bug
+    // that lost statements must not open the door: "no statement" is no proof
+    // of read-only.
     let facts = aggregate.unwrap_or(Facts::UNKNOWN);
 
     Classification {
@@ -246,11 +245,11 @@ pub fn classify(sql: &str, dialect: SqlDialect) -> Classification {
     }
 }
 
-/// Analyse un texte dans son langage déclaré.
+/// Analyzes a text in its declared language.
 ///
-/// Un langage qui n'est pas du SQL n'est pas analysé : le résultat est
-/// `Unknown`, donc mutant. Supposer qu'une commande Redis ou un Cypher
-/// « ressemble à une lecture » serait exactement l'erreur que I-02 interdit.
+/// A language that is not SQL is not analyzed: the result is `Unknown`, hence
+/// mutating. Assuming that a Redis command or a Cypher query "looks like a
+/// read" would be exactly the mistake I-02 forbids.
 #[must_use]
 pub fn classify_language(language: QueryLanguage, sql: &str) -> Classification {
     match language.sql_dialect() {
@@ -262,19 +261,18 @@ pub fn classify_language(language: QueryLanguage, sql: &str) -> Classification {
     }
 }
 
-/// Vérifie que tout le texte se lit dans le dialecte demandé.
+/// Checks that the whole text parses in the requested dialect.
 ///
-/// C'est le pendant strict de [`classify`] : là où celui-ci retombe en
-/// silence sur `Unknown`, celui-ci rend le message de l'analyseur et les
-/// bornes de l'instruction fautive, pour que l'éditeur puisse la souligner.
+/// It is the strict counterpart of [`classify`]: where that one silently
+/// falls back on `Unknown`, this one returns the parser's message and the
+/// bounds of the faulty statement, so that the editor can underline it.
 ///
-/// **Ne jamais s'en servir pour décider d'une autorisation.** Un texte qui
-/// échoue ici n'est pas « refusé » : il est `Unknown`, donc soumis à
-/// approbation comme n'importe quelle mutation.
+/// **Never use it to decide an authorization.** A text that fails here is not
+/// "refused": it is `Unknown`, hence subject to approval like any mutation.
 ///
-/// # Erreurs
+/// # Errors
 ///
-/// [`QueryError::Syntax`] à la première instruction que l'analyseur refuse.
+/// [`QueryError::Syntax`] at the first statement the parser refuses.
 pub fn validate(sql: &str, dialect: SqlDialect) -> Result<(), QueryError> {
     let grammar = parser_dialect(dialect);
     for fragment in split::split(sql, dialect) {
@@ -294,22 +292,22 @@ pub fn validate(sql: &str, dialect: SqlDialect) -> Result<(), QueryError> {
     Ok(())
 }
 
-/// Reclassifie une demande d'exécution à partir de son seul texte.
+/// Reclassifies an execution request from its text alone.
 ///
-/// `oxyn-exec` appelle ceci avant chaque soumission au `PolicyGate` :
-/// l'intention portée par la `Command` vient de l'appelant, et un agent est un
-/// appelant (ARCHITECTURE §8, I-07).
+/// `oxyn-exec` calls this before each submission to the `PolicyGate`: the
+/// intent carried by the `Command` comes from the caller, and an agent is a
+/// caller (ARCHITECTURE §8, I-07).
 #[must_use]
 pub fn reclassify(request: &ExecRequest) -> Classification {
     classify_language(request.language, &request.text)
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Faits d'une instruction
+// Facts of a statement
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Intention et risque, transportés ensemble parce qu'ils se déduisent
-/// ensemble et s'agrègent ensemble.
+/// Intent and risk, carried together because they are deduced together and
+/// aggregated together.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 struct Facts {
     intent: StatementIntent,
@@ -327,7 +325,7 @@ impl Facts {
         Self { intent, risk }
     }
 
-    /// Le pire des deux, champ par champ.
+    /// The worse of the two, field by field.
     fn merge(self, other: Self) -> Self {
         Self {
             intent: max_intent(self.intent, other.intent),
@@ -338,7 +336,7 @@ impl Facts {
 
 /// `Read < Write < {Ddl, Unknown} < Grant`.
 ///
-/// `Unknown` est placé au niveau de `Ddl` : c'est ce que dit ARCHITECTURE §8.
+/// `Unknown` is placed at the level of `Ddl`: it is what ARCHITECTURE §8 says.
 const fn intent_rank(intent: StatementIntent) -> u8 {
     match intent {
         StatementIntent::Read => 0,
@@ -352,7 +350,7 @@ fn max_intent(a: StatementIntent, b: StatementIntent) -> StatementIntent {
     match intent_rank(a).cmp(&intent_rank(b)) {
         Ordering::Greater => a,
         Ordering::Less => b,
-        // À rang égal, `Unknown` gagne : aussi contraignant, et plus honnête.
+        // At equal rank, `Unknown` wins: as restrictive, and more honest.
         Ordering::Equal => {
             if a == StatementIntent::Unknown || b == StatementIntent::Unknown {
                 StatementIntent::Unknown
@@ -363,13 +361,13 @@ fn max_intent(a: StatementIntent, b: StatementIntent) -> StatementIntent {
     }
 }
 
-/// Gravité d'un risque, du moins au plus grave.
+/// Seriousness of a risk, from least to most serious.
 ///
-/// L'ordre ne sert qu'à choisir **le motif affiché** quand un lot en porte
-/// plusieurs : pour le `PolicyGate`, tout risque non nul vaut approbation.
-/// `DROP` passe devant `TRUNCATE` parce qu'il emporte la structure avec les
-/// données ; une variante ajoutée plus tard à l'énumération (elle est
-/// `#[non_exhaustive]`) est traitée comme la plus grave, faute de savoir.
+/// The order only serves to choose **the displayed reason** when a batch
+/// carries several: for the `PolicyGate`, any non-null risk means approval.
+/// `DROP` comes before `TRUNCATE` because it takes the structure along with the
+/// data; a variant added to the enumeration later (it is `#[non_exhaustive]`)
+/// is treated as the most serious, for want of knowing.
 const fn risk_rank(risk: MutationRisk) -> u8 {
     match risk {
         MutationRisk::None => 0,
@@ -386,7 +384,7 @@ fn max_risk(a: MutationRisk, b: MutationRisk) -> MutationRisk {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Classification d'un fragment
+// Classifying a fragment
 // ─────────────────────────────────────────────────────────────────────────────
 
 /// Why a fragment holding an [`unreadable_comment`](Fragment::unreadable_comment)
@@ -422,10 +420,11 @@ fn classify_fragment(
                 .reduce(Facts::merge)
                 .unwrap_or(Facts::UNKNOWN);
 
-            // Un `EXPLAIN` d'une mutation contient forcément le mot-clé mutant,
-            // et sa forme a déjà été tranchée par l'AST — avec ou sans
-            // `ANALYZE`. Laisser le filet agir ferait d'`EXPLAIN DELETE …`,
-            // qui ne fait que calculer un plan, une instruction à approuver.
+            // An `EXPLAIN` of a mutation necessarily contains the mutating
+            // keyword, and its form was already settled by the AST — with or
+            // without `ANALYZE`. Letting the net act would turn
+            // `EXPLAIN DELETE …`, which only computes a plan, into a statement
+            // to approve.
             let sweepable = parsed.iter().all(|statement| {
                 !matches!(
                     statement,
@@ -443,8 +442,8 @@ fn classify_fragment(
                 (facts, Basis::Ast, None)
             }
         }
-        // `split` ne rend que des fragments porteurs de code : n'obtenir aucune
-        // instruction est déjà une anomalie.
+        // `split` only returns fragments that carry code: getting no statement
+        // is already an anomaly.
         Ok(_) => (
             Facts::UNKNOWN,
             Basis::Unparsed,
@@ -471,15 +470,15 @@ fn classify_fragment(
     }
 }
 
-/// Ce qu'une instruction fait, d'après sa forme.
+/// What a statement does, according to its form.
 ///
-/// Toute forme non listée retombe sur [`Facts::UNKNOWN`]. C'est délibéré :
-/// `sqlparser` connaît plus de cent formes d'instructions, la liste bougera à
-/// chaque montée de version, et une forme nouvelle doit demander une
-/// approbation, pas passer pour une lecture.
+/// Any form not listed falls back on [`Facts::UNKNOWN`]. It is deliberate:
+/// `sqlparser` knows more than a hundred statement forms, the list will move
+/// with every version bump, and a new form must ask for an approval, not pass
+/// for a read.
 fn statement_facts(statement: &Statement) -> Facts {
     match statement {
-        // ── Lecture ─────────────────────────────────────────────────────────
+        // ── Read ────────────────────────────────────────────────────────────
         Statement::Query(query) => query_facts(query),
 
         Statement::Explain {
@@ -489,8 +488,8 @@ fn statement_facts(statement: &Statement) -> Facts {
             ..
         } => {
             if *analyze || analyze_requested(options.as_deref()) {
-                // `EXPLAIN ANALYZE` exécute réellement ce qu'il analyse (I-07) :
-                // l'instruction hérite de tout, intention comme risque.
+                // `EXPLAIN ANALYZE` really runs what it analyzes (I-07): the
+                // statement inherits everything, intent as well as risk.
                 statement_facts(inner)
             } else {
                 Facts::READ
@@ -514,12 +513,12 @@ fn statement_facts(statement: &Statement) -> Facts {
         | Statement::ShowViews { .. }
         | Statement::ShowCollation { .. } => Facts::READ,
 
-        // Contrôle de transaction et changement de contexte : ces instructions
-        // ne lisent ni n'écrivent d'elles-mêmes. Les compter comme mutantes
-        // ferait demander une approbation pour `BEGIN; SELECT 1; COMMIT;` ; le
-        // lot prend de toute façon l'intention de ce qu'il contient. What the
-        // transaction verbs do to the session's open transaction is carried
-        // apart, by `controls_a_transaction`.
+        // Transaction control and context change: these statements neither
+        // read nor write by themselves. Counting them as mutating would ask for
+        // an approval for `BEGIN; SELECT 1; COMMIT;`; the batch takes the
+        // intent of what it contains anyway. What the transaction verbs do to
+        // the session's open transaction is carried apart, by
+        // `controls_a_transaction`.
         Statement::StartTransaction { .. }
         | Statement::Commit { .. }
         | Statement::Rollback { .. }
@@ -527,10 +526,10 @@ fn statement_facts(statement: &Statement) -> Facts {
         | Statement::ReleaseSavepoint { .. }
         | Statement::Use(_) => Facts::READ,
 
-        // ── Écriture ────────────────────────────────────────────────────────
+        // ── Write ───────────────────────────────────────────────────────────
         Statement::Insert(insert) => match &insert.source {
-            // `INSERT INTO t WITH d AS (DELETE …) SELECT …` : la source peut
-            // porter sa propre mutation.
+            // `INSERT INTO t WITH d AS (DELETE …) SELECT …`: the source can
+            // carry its own mutation.
             Some(source) => Facts::WRITE.merge(query_facts(source)),
             None => Facts::WRITE,
         },
@@ -553,10 +552,10 @@ fn statement_facts(statement: &Statement) -> Facts {
             },
         ),
 
-        // `MERGE` est borné par sa condition `ON` : pas de risque de portée.
+        // `MERGE` is bounded by its `ON` condition: no scope risk.
         Statement::Merge(_) => Facts::WRITE,
 
-        // `COPY t FROM …` charge dans la table ; `COPY t TO …` exporte.
+        // `COPY t FROM …` loads into the table; `COPY t TO …` exports.
         Statement::Copy { to, .. } => {
             if *to {
                 Facts::READ
@@ -573,7 +572,7 @@ fn statement_facts(statement: &Statement) -> Facts {
         Statement::Truncate(_) => Facts::new(StatementIntent::Ddl, MutationRisk::Truncate),
 
         Statement::Drop { object_type, .. } => match object_type {
-            // `DROP ROLE` / `DROP USER` touchent aux droits, pas au schéma.
+            // `DROP ROLE` / `DROP USER` touch rights, not the schema.
             ObjectType::Role | ObjectType::User => Facts::GRANT,
             _ => Facts::new(StatementIntent::Ddl, MutationRisk::DropObject),
         },
@@ -631,7 +630,7 @@ fn statement_facts(statement: &Statement) -> Facts {
         | Statement::AttachDuckDBDatabase { .. }
         | Statement::DetachDuckDBDatabase { .. } => Facts::DDL,
 
-        // ── Droits ──────────────────────────────────────────────────────────
+        // ── Rights ──────────────────────────────────────────────────────────
         Statement::Grant(_)
         | Statement::Revoke(_)
         | Statement::Deny(_)
@@ -640,29 +639,29 @@ fn statement_facts(statement: &Statement) -> Facts {
         | Statement::CreateUser(_)
         | Statement::AlterUser(_) => Facts::GRANT,
 
-        // `SET ROLE` et `SET SESSION AUTHORIZATION` changent l'identité sous
-        // laquelle tout le reste s'exécute.
+        // `SET ROLE` and `SET SESSION AUTHORIZATION` change the identity under
+        // which everything else runs.
         Statement::Set(Set::SetRole { .. } | Set::SetSessionAuthorization(_)) => Facts::GRANT,
-        // Les autres `SET` ne sont pas anodins non plus : `SET TRANSACTION READ
-        // WRITE` défait une session en lecture seule. Faute de pouvoir les
-        // distinguer un par un, ils restent `Unknown`.
+        // The other `SET`s are not harmless either: `SET TRANSACTION READ
+        // WRITE` undoes a read-only session. For want of telling them apart one
+        // by one, they stay `Unknown`.
         Statement::Set(_) => Facts::UNKNOWN,
 
-        // ── Le reste ────────────────────────────────────────────────────────
-        // `ANALYZE`, `VACUUM`, `PRAGMA`, curseurs, `EXECUTE` d'une instruction
-        // préparée, appels de procédure : autant de formes qui peuvent écrire
-        // sans le dire.
-        // TODO(phase 1) : affiner au cas par cas quand les drivers réels
-        // montreront lesquelles comptent, avec un test par forme ajoutée.
+        // ── The rest ────────────────────────────────────────────────────────
+        // `ANALYZE`, `VACUUM`, `PRAGMA`, cursors, `EXECUTE` of a prepared
+        // statement, procedure calls: so many forms that can write without
+        // saying so.
+        // TODO(phase 1): refine case by case when the real drivers show which
+        // ones matter, with one test per added form.
         _ => Facts::UNKNOWN,
     }
 }
 
-/// Ce qu'une requête fait, clauses `WITH` comprises.
+/// What a query does, `WITH` clauses included.
 ///
-/// PostgreSQL autorise `WITH x AS (DELETE FROM t RETURNING *) SELECT * FROM x`.
-/// L'instruction commence par `WITH`, `sqlparser` la rend comme une `Query`, et
-/// elle supprime des lignes.
+/// PostgreSQL allows `WITH x AS (DELETE FROM t RETURNING *) SELECT * FROM x`.
+/// The statement starts with `WITH`, `sqlparser` renders it as a `Query`, and
+/// it deletes rows.
 fn query_facts(query: &Query) -> Facts {
     let mut facts = Facts::READ;
     if let Some(with) = &query.with {
@@ -675,12 +674,11 @@ fn query_facts(query: &Query) -> Facts {
 
 fn set_expr_facts(body: &SetExpr) -> Facts {
     match body {
-        // Une sous-requête d'un `SELECT` ne peut pas muter : seule la clause
-        // `WITH` de plus haut niveau le peut, et elle est traitée ailleurs.
-        // Sauf `SELECT … INTO t` : PostgreSQL et SQL Server y créent la table
-        // `t` et la remplissent. C'est un `CREATE TABLE AS` qui commence par
-        // `SELECT` ; lu comme une lecture, il passait sans la confirmation qui
-        // nomme la connexion (I-02).
+        // A subquery of a `SELECT` cannot mutate: only the top-level `WITH`
+        // clause can, and it is handled elsewhere. Except `SELECT … INTO t`:
+        // PostgreSQL and SQL Server create table `t` there and fill it. It is a
+        // `CREATE TABLE AS` that starts with `SELECT`; read as a read, it went
+        // through without the confirmation that names the connection (I-02).
         SetExpr::Select(select) if select.into.is_some() => Facts::DDL,
         SetExpr::Select(_) | SetExpr::Values(_) | SetExpr::Table(_) => Facts::READ,
         SetExpr::Query(inner) => query_facts(inner),
@@ -694,12 +692,12 @@ fn set_expr_facts(body: &SetExpr) -> Facts {
     }
 }
 
-/// `EXPLAIN (ANALYZE, VERBOSE) …` de PostgreSQL passe par les options, pas par
-/// le drapeau `analyze` de l'AST.
+/// PostgreSQL's `EXPLAIN (ANALYZE, VERBOSE) …` goes through the options, not
+/// through the AST's `analyze` flag.
 ///
-/// L'argument de l'option n'est pas regardé : `EXPLAIN (ANALYZE false) DELETE`
-/// est traité comme s'il analysait. Sur-classer coûte une confirmation ;
-/// sous-classer exécute le `DELETE`.
+/// The option's argument is not looked at: `EXPLAIN (ANALYZE false) DELETE` is
+/// treated as if it analyzed. Over-classifying costs a confirmation;
+/// under-classifying runs the `DELETE`.
 fn analyze_requested(options: Option<&[UtilityOption]>) -> bool {
     options.is_some_and(|options| {
         options
@@ -709,14 +707,14 @@ fn analyze_requested(options: Option<&[UtilityOption]>) -> bool {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Portée d'une mutation
+// Scope of a mutation
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// La clause `WHERE` laisse-t-elle passer toutes les lignes ?
+/// Does the `WHERE` clause let every row through?
 ///
-/// Absence de `WHERE` et `WHERE` trivialement vrai comptent pareil : `DELETE
-/// FROM t WHERE 1=1` supprime exactement ce que `DELETE FROM t` supprime, et
-/// c'est la forme qu'on écrit quand on assemble un `WHERE` par morceaux.
+/// No `WHERE` and a trivially true `WHERE` count the same: `DELETE FROM t
+/// WHERE 1=1` deletes exactly what `DELETE FROM t` deletes, and it is the form
+/// one writes when assembling a `WHERE` piece by piece.
 fn where_is_unbounded(selection: Option<&Expr>) -> bool {
     match selection {
         None => true,
@@ -724,12 +722,12 @@ fn where_is_unbounded(selection: Option<&Expr>) -> bool {
     }
 }
 
-/// L'expression vaut-elle vrai sans regarder une seule ligne ?
+/// Is the expression true without looking at a single row?
 ///
-/// Volontairement incomplet : ce n'est pas un évaluateur. Toute expression que
-/// cette fonction ne sait pas trancher est déclarée non triviale, ce qui donne
-/// [`MutationRisk::None`] — l'écriture reste une écriture, et le `PolicyGate`
-/// la traite comme telle ; seul le motif « toutes les lignes » manque.
+/// Deliberately incomplete: it is not an evaluator. Any expression this
+/// function cannot settle is declared non-trivial, which gives
+/// [`MutationRisk::None`] — the write stays a write, and the `PolicyGate`
+/// treats it as such; only the "every row" reason is missing.
 fn is_trivially_true(expr: &Expr) -> bool {
     match expr {
         Expr::Nested(inner) => is_trivially_true(inner),
@@ -741,8 +739,8 @@ fn is_trivially_true(expr: &Expr) -> bool {
         Expr::BinaryOp { left, op, right } => match op {
             BinaryOperator::Or => is_trivially_true(left) || is_trivially_true(right),
             BinaryOperator::And => is_trivially_true(left) && is_trivially_true(right),
-            // `1=1`, `'x'='x'`, et aussi `id = id` : sur une colonne non nulle,
-            // ce dernier ne borne rien du tout.
+            // `1=1`, `'x'='x'`, and also `id = id`: on a non-null column, the
+            // latter bounds nothing at all.
             BinaryOperator::Eq => {
                 same_pure_expr(left, right)
                     || compare_numbers(left, right).is_some_and(Ordering::is_eq)
@@ -780,22 +778,22 @@ fn is_trivially_false(expr: &Expr) -> bool {
     }
 }
 
-/// Vérité d'un littéral. `NULL` n'est ni vrai ni faux : `WHERE NULL` ne
-/// sélectionne rien, mais ce n'est pas à cette fonction de le dire.
+/// Truth of a literal. `NULL` is neither true nor false: `WHERE NULL` selects
+/// nothing, but it is not this function's job to say so.
 fn literal_truth(value: &Value) -> Option<bool> {
     match value {
         Value::Boolean(state) => Some(*state),
-        // `WHERE 1` de MySQL. `0.0` compte pour faux.
+        // MySQL's `WHERE 1`. `0.0` counts as false.
         Value::Number(text, _) => text.parse::<f64>().ok().map(|number| number != 0.0),
         _ => None,
     }
 }
 
-/// Les deux côtés sont-ils la même expression sans effet de bord ?
+/// Are both sides the same side-effect-free expression?
 ///
-/// La comparaison se fait sur le rendu, pour ignorer les positions de source
-/// que porte l'AST. Restreinte aux identifiants et aux littéraux : un appel de
-/// fonction identique des deux côtés (`random() = random()`) n'est pas vrai.
+/// The comparison is done on the rendering, to ignore the source positions the
+/// AST carries. Restricted to identifiers and literals: an identical function
+/// call on both sides (`random() = random()`) is not true.
 fn same_pure_expr(left: &Expr, right: &Expr) -> bool {
     is_pure(left) && is_pure(right) && left.to_string() == right.to_string()
 }
@@ -834,28 +832,27 @@ fn numeric_literal(expr: &Expr) -> Option<f64> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Le filet sous l'AST
+// The safety net under the AST
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Mots dont la présence nue trahit une mutation que l'AST n'a pas rapportée.
+/// Words whose bare presence betrays a mutation the AST did not report.
 ///
-/// `CREATE` et `ALTER` en sont absents à dessein : `SHOW CREATE TABLE t` est
-/// une lecture, et une forme `CREATE` imbriquée dans une requête n'existe pas.
+/// `CREATE` and `ALTER` are left out on purpose: `SHOW CREATE TABLE t` is a
+/// read, and a `CREATE` form nested in a query does not exist.
 const MUTATING_WORDS: [&str; 8] = [
     "delete", "update", "insert", "merge", "truncate", "drop", "grant", "revoke",
 ];
 
-/// Une instruction que l'AST a classée `Read` cache-t-elle une mutation ?
+/// Does a statement the AST classified `Read` hide a mutation?
 ///
-/// N'est appelée **que** sur les instructions classées `Read` sans risque, et
-/// ne peut que les déclasser en `Unknown`. C'est une défense en profondeur
-/// contre une forme d'imbrication non anticipée dans [`statement_facts`] : le
-/// coût d'un faux positif est une confirmation, celui d'un faux négatif est un
-/// `DELETE` silencieux.
+/// Called **only** on statements classified `Read` without risk, and can only
+/// downgrade them to `Unknown`. It is a defense in depth against a form of
+/// nesting not anticipated in [`statement_facts`]: the cost of a false positive
+/// is a confirmation, that of a false negative is a silent `DELETE`.
 fn hides_a_mutation(text: &str, dialect: SqlDialect) -> bool {
     let words = split::words(text, dialect);
     for (index, word) in words.iter().enumerate() {
-        // `TRUNCATE(x, 2)` et `INSERT('abc', 1, 1, 'z')` sont des fonctions.
+        // `TRUNCATE(x, 2)` and `INSERT('abc', 1, 1, 'z')` are functions.
         if word.call {
             continue;
         }
@@ -865,7 +862,7 @@ fn hides_a_mutation(text: &str, dialect: SqlDialect) -> bool {
         {
             continue;
         }
-        // `SELECT … FOR UPDATE` verrouille des lignes, il ne les modifie pas.
+        // `SELECT … FOR UPDATE` locks rows, it does not modify them.
         if word.text.eq_ignore_ascii_case("update") && locked_for_update(&words, index) {
             continue;
         }
@@ -913,8 +910,8 @@ const TRANSACTION_VERBS: [&str; 8] = [
     "xa",
 ];
 
-/// PostgreSQL écrit `FOR UPDATE` mais aussi `FOR NO KEY UPDATE`, d'où une
-/// fenêtre de trois mots en arrière.
+/// PostgreSQL writes `FOR UPDATE` but also `FOR NO KEY UPDATE`, hence a
+/// three-word window backwards.
 fn locked_for_update(words: &[Word<'_>], index: usize) -> bool {
     let from = index.saturating_sub(3);
     words.get(from..index).is_some_and(|window| {
@@ -934,7 +931,7 @@ mod tests {
         classify(sql, SqlDialect::Postgres)
     }
 
-    // ── La table de cas des règles de base ───────────────────────────────────
+    // ── The case table of the basic rules ────────────────────────────────────
 
     #[rstest]
     #[case("SELECT 1", StatementIntent::Read)]
@@ -973,13 +970,13 @@ mod tests {
     #[case("DROP ROLE analyste", StatementIntent::Grant)]
     #[case("VACUUM FULL", StatementIntent::Unknown)]
     #[case("ceci n'est pas du SQL", StatementIntent::Unknown)]
-    fn la_table_des_regles(#[case] sql: &str, #[case] attendu: StatementIntent) {
+    fn the_rule_table(#[case] sql: &str, #[case] attendu: StatementIntent) {
         let lu = pg(sql);
         assert_eq!(lu.intent, attendu, "{sql} → {lu:?}");
     }
 
     #[test]
-    fn describe_et_show_sont_des_lectures() {
+    fn describe_and_show_are_reads() {
         assert_eq!(
             classify("DESCRIBE clients", SqlDialect::MySql).intent,
             StatementIntent::Read
@@ -991,18 +988,18 @@ mod tests {
     }
 
     #[test]
-    fn rename_est_du_ddl() {
+    fn rename_is_ddl() {
         assert_eq!(
             classify("RENAME TABLE a TO b", SqlDialect::MySql).intent,
             StatementIntent::Ddl
         );
     }
 
-    // ── Les pièges ───────────────────────────────────────────────────────────
+    // ── The traps ────────────────────────────────────────────────────────────
 
-    /// I-07, mot pour mot : `EXPLAIN ANALYZE` exécute la requête qu'il analyse.
+    /// I-07, word for word: `EXPLAIN ANALYZE` runs the query it analyzes.
     #[test]
-    fn explain_analyze_d_un_delete_n_est_pas_une_lecture() {
+    fn explain_analyze_of_a_delete_is_not_a_read() {
         let lu = pg("EXPLAIN ANALYZE DELETE FROM commandes");
         assert_eq!(lu.intent, StatementIntent::Write, "{lu:?}");
         assert_eq!(lu.risk, MutationRisk::UnboundedDelete);
@@ -1010,9 +1007,9 @@ mod tests {
         assert!(!lu.is_read_only());
     }
 
-    /// La forme PostgreSQL passe par les options et non par le mot-clé nu.
+    /// The PostgreSQL form goes through the options and not the bare keyword.
     #[test]
-    fn explain_avec_options_analyze_n_est_pas_une_lecture() {
+    fn explain_with_analyze_options_is_not_a_read() {
         for sql in [
             "EXPLAIN (ANALYZE) DELETE FROM commandes",
             "EXPLAIN (ANALYZE, VERBOSE) DELETE FROM commandes",
@@ -1024,7 +1021,7 @@ mod tests {
     }
 
     #[test]
-    fn explain_sans_analyze_reste_une_lecture() {
+    fn explain_without_analyze_stays_a_read() {
         assert_eq!(
             pg("EXPLAIN DELETE FROM commandes").intent,
             StatementIntent::Read
@@ -1035,9 +1032,9 @@ mod tests {
         );
     }
 
-    /// L'instruction commence par `WITH` et supprime toutes les lignes.
+    /// The statement starts with `WITH` and deletes every row.
     #[test]
-    fn un_with_qui_supprime_n_est_pas_une_lecture() {
+    fn a_with_that_deletes_is_not_a_read() {
         let lu =
             pg("WITH partis AS (DELETE FROM commandes RETURNING *) SELECT count(*) FROM partis");
         assert_eq!(lu.intent, StatementIntent::Write, "{lu:?}");
@@ -1045,36 +1042,36 @@ mod tests {
     }
 
     #[test]
-    fn un_with_suivi_d_un_delete_n_est_pas_une_lecture() {
+    fn a_with_followed_by_a_delete_is_not_a_read() {
         let lu = pg(
             "WITH cibles AS (SELECT id FROM t) DELETE FROM u WHERE id IN (SELECT id FROM cibles)",
         );
         assert_eq!(lu.intent, StatementIntent::Write, "{lu:?}");
-        assert_eq!(lu.risk, MutationRisk::None, "le DELETE est borné");
+        assert_eq!(lu.risk, MutationRisk::None, "the DELETE is bounded");
     }
 
     #[test]
-    fn un_with_qui_met_a_jour_est_signale() {
+    fn a_with_that_updates_is_flagged() {
         let lu = pg("WITH m AS (UPDATE t SET a = 1 RETURNING *) SELECT * FROM m");
         assert_eq!(lu.intent, StatementIntent::Write);
         assert_eq!(lu.risk, MutationRisk::UnboundedUpdate);
     }
 
     #[test]
-    fn un_sql_invalide_est_inconnu_donc_mutant() {
+    fn invalid_sql_is_unknown_hence_mutating() {
         let lu = pg("SELEKT * FORM t");
         assert_eq!(lu.intent, StatementIntent::Unknown);
-        assert!(lu.is_mutating(), "Unknown doit compter pour mutant");
+        assert!(lu.is_mutating(), "Unknown must count as mutating");
         assert_eq!(lu.statements.len(), 1);
         assert_eq!(lu.statements[0].basis, Basis::Unparsed);
         assert!(lu.statements[0].error.is_some());
         assert!(!lu.is_fully_understood());
     }
 
-    /// Le point-virgule d'un commentaire ne doit pas fabriquer une seconde
-    /// instruction — et surtout pas une qui se lirait comme une lecture.
+    /// The semicolon of a comment must not fabricate a second statement — and
+    /// above all not one that would read as a read.
     #[test]
-    fn un_commentaire_contenant_un_point_virgule_ne_coupe_pas() {
+    fn a_comment_containing_a_semicolon_does_not_cut() {
         let lu = pg("DELETE FROM t -- garder ; ceci\n");
         assert_eq!(lu.statements.len(), 1, "{lu:?}");
         assert_eq!(lu.intent, StatementIntent::Write);
@@ -1082,13 +1079,13 @@ mod tests {
     }
 
     #[test]
-    fn un_point_virgule_dans_une_chaine_ne_coupe_pas() {
+    fn a_semicolon_inside_a_string_does_not_cut() {
         let lu = pg("SELECT ';' FROM t");
         assert_eq!(lu.statements.len(), 1);
         assert_eq!(lu.intent, StatementIntent::Read);
     }
 
-    // ── Détection de portée ──────────────────────────────────────────────────
+    // ── Scope detection ──────────────────────────────────────────────────────
 
     #[rstest]
     #[case("DELETE FROM t", MutationRisk::UnboundedDelete)]
@@ -1108,7 +1105,7 @@ mod tests {
     #[case("DELETE FROM t WHERE 1=1 AND id = 2", MutationRisk::None)]
     #[case("DELETE FROM t WHERE actif", MutationRisk::None)]
     #[case("DELETE FROM t WHERE 1 = 2", MutationRisk::None)]
-    fn la_portee_d_un_delete(#[case] sql: &str, #[case] attendu: MutationRisk) {
+    fn the_scope_of_a_delete(#[case] sql: &str, #[case] attendu: MutationRisk) {
         assert_eq!(pg(sql).risk, attendu, "{sql}");
     }
 
@@ -1117,12 +1114,12 @@ mod tests {
     #[case("UPDATE t SET a = 1 WHERE 1=1", MutationRisk::UnboundedUpdate)]
     #[case("UPDATE t SET a = 1 WHERE true", MutationRisk::UnboundedUpdate)]
     #[case("UPDATE t SET a = 1 WHERE id = 2", MutationRisk::None)]
-    fn la_portee_d_un_update(#[case] sql: &str, #[case] attendu: MutationRisk) {
+    fn the_scope_of_an_update(#[case] sql: &str, #[case] attendu: MutationRisk) {
         assert_eq!(pg(sql).risk, attendu, "{sql}");
     }
 
     #[test]
-    fn truncate_et_drop_portent_leur_risque() {
+    fn truncate_and_drop_carry_their_risk() {
         assert_eq!(pg("TRUNCATE TABLE t").risk, MutationRisk::Truncate);
         assert_eq!(pg("DROP TABLE t").risk, MutationRisk::DropObject);
         assert_eq!(pg("DROP VIEW v").risk, MutationRisk::DropObject);
@@ -1130,42 +1127,42 @@ mod tests {
     }
 
     #[test]
-    fn un_appel_de_fonction_homonyme_ne_declenche_rien() {
-        // `TRUNCATE(x, 2)` est une fonction numérique, pas un vidage de table.
+    fn a_homonymous_function_call_triggers_nothing() {
+        // `TRUNCATE(x, 2)` is a numeric function, not a table truncation.
         let lu = classify("SELECT TRUNCATE(1.234, 2)", SqlDialect::MySql);
         assert_eq!(lu.intent, StatementIntent::Read, "{lu:?}");
         assert_eq!(lu.risk, MutationRisk::None);
     }
 
-    /// `SELECT … FOR UPDATE` verrouille des lignes sans les modifier : le
-    /// filet par mots-clés ne doit pas le déclasser.
+    /// `SELECT … FOR UPDATE` locks rows without modifying them: the keyword
+    /// net must not downgrade it.
     #[test]
-    fn un_verrou_de_ligne_reste_une_lecture() {
+    fn a_row_lock_stays_a_read() {
         let lu = pg("SELECT * FROM t WHERE id = 1 FOR UPDATE");
         assert_eq!(lu.intent, StatementIntent::Read, "{lu:?}");
         assert_eq!(lu.statements[0].basis, Basis::Ast);
     }
 
-    /// Le filet ne s'applique pas à un `EXPLAIN`, dont la forme est déjà
-    /// tranchée : sans lui, `EXPLAIN DELETE …` demanderait une approbation
-    /// pour un calcul de plan.
+    /// The net does not apply to an `EXPLAIN`, whose form is already settled:
+    /// without that, `EXPLAIN DELETE …` would ask for an approval for a plan
+    /// computation.
     #[test]
-    fn le_filet_epargne_un_explain() {
+    fn the_net_spares_an_explain() {
         let lu = pg("EXPLAIN DELETE FROM commandes");
         assert_eq!(lu.intent, StatementIntent::Read, "{lu:?}");
         assert_eq!(lu.statements[0].basis, Basis::Ast);
     }
 
     #[test]
-    fn un_mot_clef_mutant_dans_une_chaine_ne_declenche_rien() {
+    fn a_mutating_keyword_inside_a_string_triggers_nothing() {
         let lu = pg("SELECT * FROM audit WHERE action = 'DELETE FROM clients'");
         assert_eq!(lu.intent, StatementIntent::Read, "{lu:?}");
     }
 
-    // ── Agrégation d'un lot ──────────────────────────────────────────────────
+    // ── Aggregating a batch ──────────────────────────────────────────────────
 
     #[test]
-    fn un_lot_prend_l_intention_la_plus_elevee() {
+    fn a_batch_takes_the_highest_intent() {
         let lu = pg("SELECT 1; UPDATE t SET a = 1 WHERE id = 2; SELECT 2");
         assert_eq!(lu.intent, StatementIntent::Write);
         assert_eq!(lu.statements.len(), 3);
@@ -1174,7 +1171,7 @@ mod tests {
     }
 
     #[test]
-    fn un_lot_prend_le_risque_le_plus_grave() {
+    fn a_batch_takes_the_most_serious_risk() {
         let lu = pg("UPDATE t SET a = 1; DROP TABLE u");
         assert_eq!(lu.intent, StatementIntent::Ddl);
         assert_eq!(lu.risk, MutationRisk::DropObject);
@@ -1182,35 +1179,35 @@ mod tests {
     }
 
     #[test]
-    fn une_instruction_illisible_contamine_le_lot() {
+    fn an_unparsable_statement_contaminates_the_batch() {
         let lu = pg("SELECT 1; ceci n'est pas du SQL");
         assert_eq!(lu.intent, StatementIntent::Unknown);
         assert!(lu.is_mutating());
     }
 
     #[test]
-    fn unknown_l_emporte_sur_ddl_a_rang_egal() {
+    fn unknown_beats_ddl_at_equal_rank() {
         let lu = pg("DROP TABLE t; ceci n'est pas du SQL");
         assert_eq!(lu.intent, StatementIntent::Unknown, "{lu:?}");
-        // Le risque du `DROP` reste visible malgré tout.
+        // The `DROP`'s risk stays visible all the same.
         assert_eq!(lu.risk, MutationRisk::DropObject);
     }
 
     #[test]
-    fn grant_l_emporte_sur_tout() {
+    fn grant_beats_everything() {
         let lu = pg("SELECT 1; DROP TABLE t; GRANT SELECT ON u TO r");
         assert_eq!(lu.intent, StatementIntent::Grant);
     }
 
     #[test]
-    fn une_transaction_ne_gonfle_pas_une_lecture() {
+    fn a_transaction_does_not_inflate_a_read() {
         let lu = pg("BEGIN; SELECT 1; COMMIT");
         assert_eq!(lu.intent, StatementIntent::Read, "{lu:?}");
         assert!(lu.is_read_only());
     }
 
     #[test]
-    fn une_transaction_ne_masque_pas_une_ecriture() {
+    fn a_transaction_does_not_hide_a_write() {
         let lu = pg("BEGIN; DELETE FROM t; COMMIT");
         assert_eq!(lu.intent, StatementIntent::Write);
         assert_eq!(lu.risk, MutationRisk::UnboundedDelete);
@@ -1223,7 +1220,7 @@ mod tests {
     #[case::begin("BEGIN")]
     #[case::start("START TRANSACTION READ WRITE")]
     #[case::commit("COMMIT")]
-    #[case::commit_commente("/* fin */ commit")]
+    #[case::commented_commit("/* fin */ commit")]
     #[case::end("END")]
     #[case::rollback("ROLLBACK")]
     #[case::abort("ABORT")]
@@ -1233,7 +1230,7 @@ mod tests {
     #[case::prepare_transaction("PREPARE TRANSACTION 'x'")]
     #[case::commit_prepared("COMMIT PREPARED 'x'")]
     #[case::in_a_batch("SELECT 1; ROLLBACK")]
-    fn le_controle_de_transaction_est_signale(#[case] sql: &str) {
+    fn transaction_control_is_flagged(#[case] sql: &str) {
         let lu = pg(sql);
         assert!(lu.transaction_control, "{lu:?}");
         let request = lu.qualify(ExecRequest::new(
@@ -1244,17 +1241,17 @@ mod tests {
     }
 
     #[rstest]
-    #[case::lecture("SELECT 1")]
-    #[case::ecriture("DELETE FROM t WHERE id = 1")]
-    #[case::instruction_preparee("PREPARE plan AS SELECT 1")]
-    #[case::nom_de_colonne("SELECT commit, rollback FROM journal")]
-    #[case::chaine("SELECT 'COMMIT'")]
-    fn le_reste_ne_l_est_pas(#[case] sql: &str) {
+    #[case::read("SELECT 1")]
+    #[case::write("DELETE FROM t WHERE id = 1")]
+    #[case::prepared_statement("PREPARE plan AS SELECT 1")]
+    #[case::column_name("SELECT commit, rollback FROM journal")]
+    #[case::string("SELECT 'COMMIT'")]
+    fn the_rest_is_not(#[case] sql: &str) {
         assert!(!pg(sql).transaction_control, "{sql}");
     }
 
     #[test]
-    fn qualify_remplace_ce_que_l_appelant_declare() {
+    fn qualify_replaces_what_the_caller_declares() {
         let mut declare = ExecRequest::new(QueryLanguage::Sql(SqlDialect::Postgres), "COMMIT");
         declare.transaction_control = false;
         assert!(pg("COMMIT").qualify(declare).transaction_control);
@@ -1264,10 +1261,10 @@ mod tests {
         assert!(!pg("SELECT 1").qualify(declare).transaction_control);
     }
 
-    /// Un lot vide ne se lit pas comme une lecture : un découpage qui perdrait
-    /// des instructions ne doit pas ouvrir la porte.
+    /// An empty batch does not read as a read: a split that lost statements
+    /// must not open the door.
     #[test]
-    fn un_lot_vide_est_inconnu() {
+    fn an_empty_batch_is_unknown() {
         for sql in ["", "   ", ";;", "-- juste une note"] {
             let lu = pg(sql);
             assert_eq!(lu.intent, StatementIntent::Unknown, "{sql:?} → {lu:?}");
@@ -1277,10 +1274,10 @@ mod tests {
         }
     }
 
-    // ── Langages non SQL ─────────────────────────────────────────────────────
+    // ── Non-SQL languages ────────────────────────────────────────────────────
 
     #[test]
-    fn un_langage_non_sql_n_est_pas_devine() {
+    fn a_non_sql_language_is_not_guessed() {
         let lu = classify_language(QueryLanguage::Cypher, "MATCH (n) RETURN n");
         assert_eq!(lu.intent, StatementIntent::Unknown);
         assert!(lu.is_mutating());
@@ -1289,17 +1286,17 @@ mod tests {
     }
 
     #[test]
-    fn un_sql_declare_passe_par_son_dialecte() {
+    fn declared_sql_goes_through_its_dialect() {
         let lu = classify_language(QueryLanguage::Sql(SqlDialect::MySql), "SELECT 1");
         assert_eq!(lu.intent, StatementIntent::Read);
     }
 
     // ── Requalification ──────────────────────────────────────────────────────
 
-    /// Le scénario d'ARCHITECTURE §8 : un agent déclare une lecture, le texte
-    /// dit autre chose. C'est le texte qui gagne.
+    /// The scenario of ARCHITECTURE §8: an agent declares a read, the text
+    /// says otherwise. The text wins.
     #[test]
-    fn une_intention_declaree_a_tort_est_corrigee() {
+    fn a_wrongly_declared_intent_is_corrected() {
         let demande = ExecRequest::new(
             QueryLanguage::Sql(SqlDialect::Postgres),
             "DELETE FROM clients",
@@ -1315,10 +1312,10 @@ mod tests {
         assert!(requalifiee.is_mutating());
     }
 
-    // ── Le filet sous l'AST ──────────────────────────────────────────────────
+    // ── The safety net under the AST ─────────────────────────────────────────
 
     #[test]
-    fn le_filet_reconnait_un_mot_clef_mutant_nu() {
+    fn the_net_recognizes_a_bare_mutating_keyword() {
         assert!(hides_a_mutation(
             "SELECT * FROM (DELETE FROM t)",
             SqlDialect::Postgres
@@ -1327,7 +1324,7 @@ mod tests {
     }
 
     #[test]
-    fn le_filet_ne_se_declenche_pas_a_tort() {
+    fn the_net_does_not_fire_wrongly() {
         for (sql, dialecte) in [
             (
                 "SELECT * FROM audit WHERE action = 'DELETE FROM t'",
@@ -1340,25 +1337,25 @@ mod tests {
             ("SELECT deleted_at, drop_date FROM t", SqlDialect::Postgres),
             (r#"SELECT "delete" FROM t"#, SqlDialect::Postgres),
         ] {
-            assert!(!hides_a_mutation(sql, dialecte), "faux positif : {sql}");
+            assert!(!hides_a_mutation(sql, dialecte), "false positive: {sql}");
         }
     }
 
-    // ── Vérification stricte ─────────────────────────────────────────────────
+    // ── Strict check ─────────────────────────────────────────────────────────
 
     #[test]
-    fn la_verification_stricte_situe_le_fautif() {
+    fn the_strict_check_locates_the_culprit() {
         assert!(validate("SELECT 1; SELECT 2", SqlDialect::Postgres).is_ok());
 
         let sql = "SELECT 1; SELEKT 2";
         let Err(QueryError::Syntax { span, .. }) = validate(sql, SqlDialect::Postgres) else {
-            panic!("l'instruction fautive aurait dû être signalée");
+            panic!("the faulty statement should have been reported");
         };
         assert_eq!(sql.get(span), Some("SELEKT 2"));
     }
 
     #[test]
-    fn les_bornes_permettent_de_retrouver_l_instruction() {
+    fn the_bounds_lead_back_to_the_statement() {
         let sql = "SELECT 1;\n  DELETE FROM t";
         let lu = pg(sql);
         for statement in &lu.statements {

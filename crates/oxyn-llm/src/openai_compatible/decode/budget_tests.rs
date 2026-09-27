@@ -1,5 +1,5 @@
-//! Chaque budget d'une génération, dépassé par une suite de trames dont
-//! aucune, seule, n'approche de la borne d'une trame SSE.
+//! Each budget of a generation, exceeded by a sequence of frames none of
+//! which, alone, comes close to the bound of an SSE frame.
 
 use serde_json::json;
 
@@ -8,12 +8,12 @@ use crate::budget::{
     MAX_GENERATION_BYTES, MAX_TOOL_ARGUMENTS_BYTES, MAX_TOOL_CALLS, MAX_TOOL_NAME_BYTES,
 };
 
-/// Une trame de fragment `delta`, sérialisée comme un serveur le ferait.
+/// A `delta` fragment frame, serialized as a server would.
 fn trame(delta: &serde_json::Value) -> String {
     json!({ "choices": [{ "delta": delta }] }).to_string()
 }
 
-/// Joue les trames une à une et rend tout ce qui est sorti.
+/// Plays the frames one by one and returns everything that came out.
 fn jouer(trames: impl IntoIterator<Item = String>) -> (Vec<ChatEvent>, bool) {
     let mut decodeur = ChunkDecoder::new();
     let mut sorties = Vec::new();
@@ -26,8 +26,8 @@ fn jouer(trames: impl IntoIterator<Item = String>) -> (Vec<ChatEvent>, bool) {
     (sorties, decodeur.is_done())
 }
 
-/// Ce que tout dépassement doit tenir : une erreur qui nomme la limite, une
-/// coupure et non une fin, et aucun appel d'outil proposé.
+/// What every overrun must hold: an error that names the limit, a cut and
+/// not an end, and no tool call proposed.
 fn arrete(sorties: &[ChatEvent], termine: bool, limite: usize) {
     assert!(termine, "the decoder stops at the first overrun");
     let erreur = sorties
@@ -87,7 +87,7 @@ fn arguments_past_their_budget_stop_the_call_even_with_an_announced_end() {
             { "index": 0, "function": { "arguments": fragment } }
         ] }))
     }));
-    // La fin annoncée arrive trop tard : l'appel est déjà jeté.
+    // The announced end arrives too late: the call is already thrown away.
     trames.push(json!({ "choices": [{ "delta": {}, "finish_reason": "tool_calls" }] }).to_string());
     let (sorties, termine) = jouer(trames);
     arrete(&sorties, termine, MAX_TOOL_ARGUMENTS_BYTES);
@@ -95,7 +95,7 @@ fn arguments_past_their_budget_stop_the_call_even_with_an_announced_end() {
 
 #[test]
 fn a_name_fragmented_past_its_budget_stops_the_stream_although_nothing_was_emitted() {
-    // Après le premier fragment, le nom grossit sans rien émettre.
+    // After the first fragment, the name grows without emitting anything.
     let fragment = "n".repeat(100);
     let trames = (0..4).map(|_| {
         trame(&json!({ "tool_calls": [

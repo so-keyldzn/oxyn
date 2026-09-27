@@ -83,8 +83,8 @@ function initialValues(
   return {
     name: existing?.name ?? prefill?.name ?? "",
     // Every new connection starts as production until changed explicitly —
-    // a copy of a staging one included (I-02, docs/UX-SPEC.md « Navigation
-    // du premier workspace »).
+    // a copy of a staging one included (I-02, docs/UX-SPEC.md « First workspace
+    // navigation »).
     environment: existing?.environment ?? "production",
     // ADR-0006's default, never Sampled: the tier belongs to the connection,
     // and a copy is another one (I-04).
@@ -185,7 +185,7 @@ export function missingFields(
  * are typed, and nothing is saved until the user connects.
  *
  * While `submitting`, the only live action is `onAbort` (Esc), which cancels
- * the opening on the server side (docs/UX-SPEC.md « Annulation »). The submit
+ * the opening on the server side (docs/UX-SPEC.md « Cancellation »). The submit
  * stays disabled while a required field is empty, and says which.
  *
  * With `onTest`, a Test action sends the same draft to be opened and closed

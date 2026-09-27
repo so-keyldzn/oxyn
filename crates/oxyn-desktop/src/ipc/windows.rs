@@ -39,8 +39,7 @@ pub struct WindowConsoles {
     pub active: Option<String>,
 }
 
-/// `Open in new window` on a tab: what moves (ADR-0043, « Déplacer une
-/// console »).
+/// `Open in new window` on a tab: what moves (ADR-0043, « Moving a console »).
 ///
 /// **No `Debug` derive**: a console's bound values travel with it, and a
 /// `{request:?}` added later would print them (I-03).

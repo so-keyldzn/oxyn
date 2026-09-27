@@ -182,7 +182,7 @@ export function CatalogPanel({
             // One meaning per place: this action refreshes, and is inert while
             // a refresh runs. Cancelling is the button in the status line
             // below, so a missed click never restarts what was to be stopped
-            // (docs/UX-SPEC.md, « Portée de Run »).
+            // (docs/UX-SPEC.md, « Scope of Run in a SQL console »).
             <Tooltip>
               <TooltipTrigger
                 render={

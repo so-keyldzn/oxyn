@@ -1,6 +1,6 @@
 // The behaviours of the context menus' entries
 // (docs/adr/0041-registre-d-actions-menus-et-raccourcis.md, point 6; UX-SPEC,
-// « Menus contextuels »). Each acts on the target its menu put in the
+// « Context menus »). Each acts on the target its menu put in the
 // context (`menuContext`), through the handlers the surface gave — the same
 // functions its buttons call (I-01).
 //
@@ -42,9 +42,9 @@ const COPY_LIMIT = MAX_COPY_ROWS.toLocaleString("en-US")
  * An entry of the `key` surface running `pick`'s handler.
  *
  * Absent when the menu is not this surface's, or when `check` says the
- * target is not one the entry applies to — the cases UX-SPEC fixes (« Une
- * action, un libellé, un raccourci »). A handler the surface did not give
- * never hides an entry: it is greyed with `missing`, which says what the
+ * target is not one the entry applies to — the cases UX-SPEC fixes (« One
+ * action, one label, one shortcut »). A handler the surface did not give never
+ * hides an entry: it is greyed with `missing`, which says what the
  * entry cannot do here **and where it is done** — never « not available
  * here », which leaves the user nowhere to go. Two targets of the same kind
  * always offer the same menu.
@@ -78,8 +78,8 @@ function onTarget<TKey extends TargetKey>(
 
 /**
  * An entry the surface lists but Oxyn cannot do yet: greyed with what is
- * missing wherever its surface is, absent elsewhere. Each one is an écart of
- * the plan (« Interactions d'une application de bureau », lot 3).
+ * missing wherever its surface is, absent elsewhere. Each one is a deviation
+ * from the plan (« Desktop application interactions », batch 3).
  */
 function notYet(key: TargetKey, reason: string): ActionBehaviour {
   return {
@@ -135,8 +135,8 @@ function valueFilter(): ActionBehaviour {
       if (!grid || grid.state.target !== "cell") return "absent"
       const shape = previewShape(grid.state, "filterable")
       if (shape !== true) return shape
-      // TODO(2026-12-31, débloqué par la fusion du lot apercus-execution,
-      // issues #14 et #16) — the preview's shape carries the user's predicate
+      // TODO(2026-12-31, unblocked by the merge of the apercus-execution batch,
+      // issues #14 and #16) — the preview's shape carries the user's predicate
       // as text only; a composed predicate needs a bound value beside it.
       return { reason: "Not available yet: the preview cannot bind a value" }
     },
@@ -622,7 +622,7 @@ export const menuBehaviours: Record<string, ActionBehaviour> = {
     (state) => (state.relation ? true : "absent")
   ),
   // Only where a console's session context can be this schema (UX-SPEC,
-  // « Contexte de session d'une console »).
+  // « Session context of a console »).
   "catalog.newConsoleOnSchema": onTarget(
     "catalogNode",
     (source) => source.actions.newConsoleOnSchema,

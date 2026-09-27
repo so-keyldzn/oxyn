@@ -71,7 +71,7 @@ export function stateFromOutcome(outcome: CommandOutcome): {
 /**
  * One cancellable execution slot: the SQL console has one, the object preview
  * another. Starting a new run in a slot cancels the previous one and ignores
- * its late answer (docs/UX-SPEC.md, « Données d'une table sélectionnée »).
+ * its late answer (docs/UX-SPEC.md, « Data of a selected table »).
  */
 export function useExecution({
   serverCancel,
@@ -117,7 +117,7 @@ export function useExecution({
   )
   // The result is addressable from `schemaReady` on, before the last batch:
   // its columns are read once so the grid fills while the stream runs
-  // (docs/UX-SPEC.md, « États d'une vue »).
+  // (docs/UX-SPEC.md, « States of a view »).
   const streaming = running ? (progress?.result ?? null) : null
   const [streamed, setStreamed] = React.useState<{
     result: string
@@ -299,7 +299,7 @@ export function useExecution({
     [state, liveRows, streaming, liveColumns]
   )
   // Cancelling is said as soon as Stop is pressed, before the server confirms
-  // (UX-SPEC « Annulation »): the status bar announces it once.
+  // (UX-SPEC « Cancellation »): the status bar announces it once.
   const liveSummary = React.useMemo<ExecutionSummary>(() => {
     if (summary.status !== "running") return summary
     const rows = liveRows ?? summary.rows

@@ -1,32 +1,31 @@
-//! Le vocabulaire d'un échange avec un modèle.
+//! The vocabulary of an exchange with a model.
 //!
-//! Ces types sont **indépendants du fournisseur** : ce sont eux que manipule
-//! `oxyn-ai`, et c'est chaque implémentation de
-//! [`LlmProvider`](crate::provider::LlmProvider) qui les traduit vers son
-//! protocole. Ils ne portent donc aucune trace d'OpenAI, d'Anthropic ou de
-//! Gemini.
+//! These types are **provider-independent**: they are what `oxyn-ai`
+//! handles, and it is each implementation of
+//! [`LlmProvider`](crate::provider::LlmProvider) that translates them to its
+//! protocol. They therefore carry no trace of OpenAI, Anthropic or Gemini.
 //!
-//! # Ce qui est masqué dans `Debug`, et pourquoi
+//! # What is masked in `Debug`, and why
 //!
-//! [`ChatMessage`] et [`ChatRequest`] masquent le **contenu** dans leur `Debug`.
-//! Un message sortant porte le contexte que `oxyn-ai` a assemblé : au niveau
-//! `Sampled` d'[ADR-0006](../../../docs/adr/0006-ai-privacy-tiers.md), ce sont
-//! des lignes réelles de la base de l'utilisateur. Un
-//! `tracing::debug!("{req:?}")` les écrirait dans un fichier de journal, sur
-//! disque, en clair — exactement la panne qu'I-03 décrit.
+//! [`ChatMessage`] and [`ChatRequest`] mask the **content** in their `Debug`.
+//! An outgoing message carries the context `oxyn-ai` assembled: at the
+//! `Sampled` tier of [ADR-0006](../../../docs/adr/0006-ai-privacy-tiers.md),
+//! these are real rows from the user's database. A
+//! `tracing::debug!("{req:?}")` would write them into a log file, on disk, in
+//! clear — exactly the failure I-03 describes.
 //!
-//! [`ChatEvent`], à l'inverse, dérive un `Debug` complet : c'est la sortie du
-//! modèle, et c'est précisément ce qu'il faut voir quand un flux se comporte
-//! mal. Qui journalise un flux d'événements doit savoir que le modèle peut y
-//! recopier ce qu'on lui a donné.
+//! [`ChatEvent`], conversely, derives a complete `Debug`: it is the model's
+//! output, and it is precisely what needs to be seen when a stream misbehaves.
+//! Whoever logs a stream of events must know the model can copy into it what
+//! it was given.
 //!
-//! # Le contenu d'un message n'est pas une consigne
+//! # The content of a message is not an instruction
 //!
-//! Un nom de table, un commentaire de colonne ou une valeur de cellule peuvent
-//! imiter une instruction. Ce sont des **données**, y compris une fois dans une
-//! invite ([`AI-PROVIDERS`](../../../docs/AI-PROVIDERS.md)). Cette crate ne
-//! fait qu'acheminer ; c'est `oxyn-ai` qui encadre le contenu non fiable, et le
-//! `PolicyGate` qui empêche toute sortie de modèle de s'exécuter (I-07).
+//! A table name, a column comment or a cell value can imitate an instruction.
+//! They are **data**, including once in a prompt
+//! ([`AI-PROVIDERS`](../../../docs/AI-PROVIDERS.md)). This crate only carries;
+//! it is `oxyn-ai` that frames untrusted content, and the `PolicyGate` that
+//! prevents any model output from executing (I-07).
 
 use std::fmt;
 
@@ -34,72 +33,71 @@ use serde::{Deserialize, Serialize};
 
 use crate::reasoning::{ReasoningBlock, ReasoningEffort};
 
-/// Qui parle, et pourquoi un flux s'est arrêté.
+/// Who speaks, and why a stream stopped.
 ///
-/// Définis dans [`oxyn_core::ai`] et ré-exportés ici : ils sont **persistés**
-/// avec la conversation, et la persistance ne doit pas dépendre d'un client
-/// HTTP pour les lire. Une seule définition dans le dépôt, comme
+/// Defined in [`oxyn_core::ai`] and re-exported here: they are **persisted**
+/// with the conversation, and persistence must not depend on an HTTP client to
+/// read them. A single definition in the repository, like
 /// [`ProviderId`](crate::provider::ProviderId).
 ///
-/// La traduction depuis une chaîne de protocole, elle, reste chez chaque
-/// fournisseur : le cœur ne connaît aucun protocole.
+/// The translation from a protocol string, however, stays at each provider:
+/// the core knows no protocol.
 pub use oxyn_core::ai::{Role, StopReason};
 
-/// Un tour de conversation.
+/// A conversation turn.
 ///
-/// Le `Debug` est écrit à la main : il montre le rôle et la taille, jamais le
-/// texte. Voir la note du module.
+/// The `Debug` is written by hand: it shows the role and the size, never the
+/// text. See the module note.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct ChatMessage {
     /// Qui parle.
     pub role: Role,
-    /// Le texte. Vide est licite pour un tour d'assistant qui n'appelle que des
-    /// outils.
+    /// The text. Empty is legitimate for an assistant turn that only calls
+    /// tools.
     pub content: String,
-    /// Outils que le modèle a demandé d'appeler dans ce tour. Toujours vide
-    /// hors [`Role::Assistant`].
+    /// Tools the model asked to call in this turn. Always empty outside
+    /// [`Role::Assistant`].
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tool_calls: Vec<ToolCall>,
-    /// Identifiant de l'appel auquel ce message répond. Obligatoire pour
-    /// [`Role::Tool`], absent partout ailleurs.
+    /// Identifier of the call this message answers. Mandatory for
+    /// [`Role::Tool`], absent everywhere else.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub tool_call_id: Option<String>,
-    /// Blocs de raisonnement produits par le modèle pendant ce tour.
+    /// Reasoning blocks produced by the model during this turn.
     ///
-    /// Toujours vide hors [`Role::Assistant`]. Ils sont conservés **tels
-    /// quels** et renvoyés au tour suivant : c'est ce que les protocoles
-    /// exigent quand un tour de raisonnement précède un appel d'outil, et un
-    /// bloc reconstruit fait refuser la requête
-    /// ([`crate::reasoning`]).
+    /// Always empty outside [`Role::Assistant`]. They are kept **as they are**
+    /// and sent back at the next turn: that is what the protocols require when
+    /// a reasoning turn precedes a tool call, and a rebuilt block makes the
+    /// request refused ([`crate::reasoning`]).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub reasoning: Vec<ReasoningBlock>,
-    /// Ce message termine-t-il un préfixe **stable** de la conversation ?
+    /// Does this message end a **stable** prefix of the conversation?
     ///
-    /// C'est une indication de mise en cache, pas un ordre : un fournisseur qui
-    /// sait réutiliser un préfixe pose sa marque ici, les autres l'ignorent.
-    /// La cible naturelle est le contexte assemblé par `oxyn-ai`, qui ne change
-    /// pas d'un tour à l'autre alors que la question de l'utilisateur, si.
+    /// It is a caching hint, not an order: a provider that can reuse a prefix
+    /// sets its marker here, the others ignore it. The natural target is the
+    /// context assembled by `oxyn-ai`, which does not change from one turn to
+    /// the next whereas the user's question does.
     ///
-    /// Marquer un message qui **change** à chaque tour n'est pas une erreur,
-    /// c'est simplement inutile : le préfixe ne sera jamais retrouvé.
+    /// Marking a message that **changes** at every turn is not an error, it is
+    /// simply useless: the prefix will never be found again.
     #[serde(default, skip_serializing_if = "is_false")]
     pub cache_breakpoint: bool,
 }
 
-/// Prédicat de sérialisation : omet un drapeau faux.
+/// Serialization predicate: omits a false flag.
 ///
-/// `bool::then` ne convient pas ici — `skip_serializing_if` veut une fonction
-/// nommée prenant une référence.
+/// `bool::then` does not fit here — `skip_serializing_if` wants a named
+/// function taking a reference.
 #[expect(
     clippy::trivially_copy_pass_by_ref,
-    reason = "signature imposée par serde's skip_serializing_if"
+    reason = "signature imposed by serde's skip_serializing_if"
 )]
 const fn is_false(value: &bool) -> bool {
     !*value
 }
 
 impl ChatMessage {
-    /// Construit un message d'un rôle donné.
+    /// Builds a message of a given role.
     #[must_use]
     pub fn new(role: Role, content: impl Into<String>) -> Self {
         Self {
@@ -124,16 +122,16 @@ impl ChatMessage {
         Self::new(Role::User, content)
     }
 
-    /// Tour du modèle.
+    /// The model's turn.
     #[must_use]
     pub fn assistant(content: impl Into<String>) -> Self {
         Self::new(Role::Assistant, content)
     }
 
-    /// Résultat d'un outil, rattaché à l'appel qui l'a demandé.
+    /// Result of a tool, attached to the call that requested it.
     ///
-    /// L'identifiant vient de [`ToolCall::id`] : sans lui, le modèle ne peut
-    /// pas relier la réponse à sa demande quand il en a lancé plusieurs.
+    /// The identifier comes from [`ToolCall::id`]: without it, the model cannot
+    /// link the response to its request when it started several.
     #[must_use]
     pub fn tool_result(call_id: impl Into<String>, content: impl Into<String>) -> Self {
         Self {
@@ -146,27 +144,26 @@ impl ChatMessage {
         }
     }
 
-    /// Attache des appels d'outils à un tour d'assistant.
+    /// Attaches tool calls to an assistant turn.
     #[must_use]
     pub fn with_tool_calls(mut self, calls: Vec<ToolCall>) -> Self {
         self.tool_calls = calls;
         self
     }
 
-    /// Attache les blocs de raisonnement d'un tour d'assistant.
+    /// Attaches the reasoning blocks of an assistant turn.
     ///
-    /// À passer **tels qu'ils ont été reçus**, dans l'ordre : c'est la
-    /// condition pour que le tour suivant soit accepté
-    /// ([`crate::reasoning`]).
+    /// To pass **as they were received**, in order: it is the condition for
+    /// the next turn to be accepted ([`crate::reasoning`]).
     #[must_use]
     pub fn with_reasoning(mut self, blocks: Vec<ReasoningBlock>) -> Self {
         self.reasoning = blocks;
         self
     }
 
-    /// Marque ce message comme fin d'un préfixe stable.
+    /// Marks this message as the end of a stable prefix.
     ///
-    /// Voir [`ChatMessage::cache_breakpoint`].
+    /// See [`ChatMessage::cache_breakpoint`].
     #[must_use]
     pub const fn cached(mut self) -> Self {
         self.cache_breakpoint = true;
@@ -181,41 +178,41 @@ impl fmt::Debug for ChatMessage {
             .field("content", &Masked(self.content.len()))
             .field("tool_calls", &self.tool_calls.len())
             .field("tool_call_id", &self.tool_call_id)
-            // Compté et non rendu : un bloc de raisonnement reprend le contexte
-            // qu'on a donné au modèle, et ce message sort d'une conversation
-            // dont le contenu est masqué juste au-dessus.
+            // Counted and not rendered: a reasoning block repeats the context
+            // given to the model, and this message comes out of a conversation
+            // whose content is masked just above.
             .field("reasoning", &self.reasoning.len())
             .field("cache_breakpoint", &self.cache_breakpoint)
             .finish()
     }
 }
 
-/// Marqueur de champ masqué, rendu `<masqué, N octets>`.
+/// Marker of a masked field, rendered `<masked, N bytes>`.
 struct Masked(usize);
 
 impl fmt::Debug for Masked {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "<masqué, {} octets>", self.0)
+        write!(f, "<masked, {} bytes>", self.0)
     }
 }
 
-/// Un outil offert au modèle.
+/// A tool offered to the model.
 ///
-/// `parameters` est un schéma JSON. Cette crate ne le valide pas : elle
-/// l'achemine. C'est `oxyn-ai` qui le construit — à partir des `Command` du
-/// bus, et de rien d'autre (I-01).
+/// `parameters` is a JSON schema. This crate does not validate it: it carries
+/// it. It is `oxyn-ai` that builds it — from the bus's `Command`s, and from
+/// nothing else (I-01).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolSpec {
-    /// Nom de l'outil, tel que le modèle devra l'appeler.
+    /// Name of the tool, as the model will have to call it.
     pub name: String,
-    /// Ce que fait l'outil, en une phrase destinée au modèle.
+    /// What the tool does, in one sentence meant for the model.
     pub description: String,
-    /// Schéma JSON des arguments attendus.
+    /// JSON schema of the expected arguments.
     pub parameters: serde_json::Value,
 }
 
 impl ToolSpec {
-    /// Déclare un outil.
+    /// Declares a tool.
     #[must_use]
     pub fn new(
         name: impl Into<String>,
@@ -230,19 +227,18 @@ impl ToolSpec {
     }
 }
 
-/// Un appel d'outil demandé par le modèle.
+/// A tool call requested by the model.
 ///
-/// **Ce n'est pas une action.** C'est une proposition : elle devient une
-/// `Command` portant `Actor::Agent` et traverse le `PolicyGate` avant tout
-/// effet (I-07).
+/// **It is not an action.** It is a proposal: it becomes a `Command` carrying
+/// `Actor::Agent` and goes through the `PolicyGate` before any effect (I-07).
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ToolCall {
-    /// Identifiant donné par le fournisseur, à recopier dans la réponse.
+    /// Identifier given by the provider, to copy into the response.
     pub id: String,
-    /// Nom de l'outil demandé.
+    /// Name of the requested tool.
     pub name: String,
-    /// Arguments, déjà analysés. Les protocoles les transportent en chaîne
-    /// JSON ; le décodage a lieu à la frontière, pas chez l'appelant.
+    /// Arguments, already parsed. The protocols carry them as a JSON string;
+    /// decoding happens at the boundary, not at the caller's.
     pub arguments: serde_json::Value,
 }
 
@@ -262,67 +258,66 @@ impl ToolCall {
     }
 }
 
-/// Ce qu'on demande à un modèle.
+/// What a model is asked.
 ///
-/// Le `Debug` est écrit à la main : les messages y sont comptés, pas rendus.
+/// The `Debug` is written by hand: messages are counted in it, not rendered.
 #[derive(Clone, PartialEq, Serialize, Deserialize)]
 pub struct ChatRequest {
-    /// Identifiant du modèle chez le fournisseur (`gpt-4o-mini`, `llama3.2`…).
+    /// Identifier of the model at the provider (`gpt-4o-mini`, `llama3.2`…).
     pub model: String,
-    /// La conversation, dans l'ordre.
+    /// The conversation, in order.
     pub messages: Vec<ChatMessage>,
-    /// Outils offerts pour ce tour. Vide = aucun outil.
+    /// Tools offered for this turn. Empty = no tool.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub tools: Vec<ToolSpec>,
-    /// Température, quand l'appelant veut la fixer. `None` laisse le défaut du
-    /// fournisseur — qui n'est pas le même partout, et qu'on ne devine pas.
+    /// Temperature, when the caller wants to set it. `None` leaves the
+    /// provider's default — which is not the same everywhere, and is not guessed.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub temperature: Option<f32>,
-    /// Plafond de jetons produits. `None` laisse le défaut du fournisseur.
+    /// Ceiling of produced tokens. `None` leaves the provider's default.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max_tokens: Option<u32>,
-    /// Préférence de l'appelant pour un rendu incrémental.
+    /// The caller's preference for incremental rendering.
     ///
-    /// [`LlmProvider::stream`](crate::provider::LlmProvider::stream) est
-    /// aujourd'hui le seul chemin d'appel et diffuse toujours : ce drapeau
-    /// enregistre l'intention pour un chemin non diffusé, s'il en apparaît un.
-    /// Il ne désactive rien.
+    /// [`LlmProvider::stream`](crate::provider::LlmProvider::stream) is today
+    /// the only call path and always streams: this flag records the intent
+    /// for a non-streamed path, should one appear. It disables nothing.
     #[serde(default = "vrai")]
     pub stream: bool,
-    /// Combien de travail on demande au modèle. `None` laisse le défaut du
-    /// fournisseur, qui n'est pas le même partout.
+    /// How much work the model is asked for. `None` leaves the provider's
+    /// default, which is not the same everywhere.
     ///
-    /// Un fournisseur qui ne connaît pas ce réglage **l'omet** ; un modèle qui
-    /// le refuse explicitement produit un
-    /// [`LlmError::Unsupported`](crate::error::LlmError::Unsupported). Ce qui
-    /// n'arrive jamais, c'est qu'il parte à l'aveugle : plusieurs points
-    /// d'accès rejettent la requête entière sur un champ inconnu.
+    /// A provider that does not know this setting **omits** it; a model that
+    /// explicitly refuses it produces an
+    /// [`LlmError::Unsupported`](crate::error::LlmError::Unsupported). What
+    /// never happens is that it goes out blindly: several endpoints reject the
+    /// whole request on an unknown field.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_effort: Option<ReasoningEffort>,
-    /// Plafond de jetons que le modèle peut dépenser à réfléchir.
+    /// Ceiling of tokens the model can spend thinking.
     ///
-    /// Distinct de [`max_tokens`](Self::max_tokens), qui borne **toute** la
-    /// production — réflexion comprise chez les fournisseurs qui facturent la
-    /// réflexion comme de la sortie. Un budget supérieur au plafond global est
-    /// une contradiction que le fournisseur signale.
+    /// Distinct from [`max_tokens`](Self::max_tokens), which bounds **all** the
+    /// production — thinking included at providers that bill thinking as
+    /// output. A budget above the global ceiling is a contradiction the
+    /// provider reports.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reasoning_budget_tokens: Option<u32>,
-    /// Les définitions d'outils sont-elles un préfixe stable ?
+    /// Are the tool definitions a stable prefix?
     ///
-    /// Même nature que [`ChatMessage::cache_breakpoint`] : une indication, pas
-    /// un ordre. Les outils d'Oxyn viennent du bus de commandes et ne changent
-    /// pas d'un tour à l'autre, ce qui en fait une cible évidente.
+    /// Same nature as [`ChatMessage::cache_breakpoint`]: a hint, not an order.
+    /// Oxyn's tools come from the command bus and do not change from one turn
+    /// to the next, which makes them an obvious target.
     #[serde(default, skip_serializing_if = "is_false")]
     pub cache_tools: bool,
 }
 
-/// Valeur par défaut de [`ChatRequest::stream`] à la désérialisation.
+/// Default value of [`ChatRequest::stream`] at deserialization.
 const fn vrai() -> bool {
     true
 }
 
 impl ChatRequest {
-    /// Construit une requête sur un modèle et une conversation.
+    /// Builds a request on a model and a conversation.
     #[must_use]
     pub fn new(model: impl Into<String>, messages: Vec<ChatMessage>) -> Self {
         Self {
@@ -338,14 +333,14 @@ impl ChatRequest {
         }
     }
 
-    /// Offre des outils au modèle.
+    /// Offers tools to the model.
     #[must_use]
     pub fn with_tools(mut self, tools: Vec<ToolSpec>) -> Self {
         self.tools = tools;
         self
     }
 
-    /// Fixe la température.
+    /// Sets the temperature.
     #[must_use]
     pub fn with_temperature(mut self, temperature: f32) -> Self {
         self.temperature = Some(temperature);
@@ -366,35 +361,34 @@ impl ChatRequest {
         self
     }
 
-    /// Fixe le budget de réflexion, en jetons.
+    /// Sets the thinking budget, in tokens.
     #[must_use]
     pub const fn with_reasoning_budget_tokens(mut self, tokens: u32) -> Self {
         self.reasoning_budget_tokens = Some(tokens);
         self
     }
 
-    /// Déclare les définitions d'outils comme préfixe stable.
+    /// Declares the tool definitions as a stable prefix.
     #[must_use]
     pub const fn with_cached_tools(mut self) -> Self {
         self.cache_tools = true;
         self
     }
 
-    /// L'appelant demande-t-il du raisonnement, d'une façon ou d'une autre ?
+    /// Does the caller ask for reasoning, in one way or another?
     ///
-    /// Sert aux fournisseurs qui doivent refuser plutôt qu'omettre : un effort
-    /// demandé et silencieusement ignoré fait payer une réponse qui n'est pas
-    /// celle qu'on a demandée.
+    /// Used by providers that must refuse rather than omit: an effort requested
+    /// and silently ignored bills a response that is not the one asked for.
     #[must_use]
     pub const fn wants_reasoning(&self) -> bool {
         self.reasoning_effort.is_some() || self.reasoning_budget_tokens.is_some()
     }
 
-    /// Nombre total d'octets de contenu envoyés.
+    /// Total number of content bytes sent.
     ///
-    /// Sert aux garde-fous de taille de contexte, en attendant un vrai
-    /// comptage de jetons. Ce n'est **pas** une estimation de jetons : le
-    /// rapport octets/jetons dépend du tokeniseur du modèle.
+    /// Used by the context size guards, until a real token count exists. It is
+    /// **not** a token estimate: the bytes/tokens ratio depends on the model's
+    /// tokenizer.
     #[must_use]
     pub fn content_bytes(&self) -> usize {
         self.messages.iter().map(|m| m.content.len()).sum()
@@ -421,142 +415,142 @@ impl fmt::Debug for ChatRequest {
     }
 }
 
-/// Ce qui remonte d'un flux de génération.
+/// What comes up from a generation stream.
 ///
-/// L'énumération est `#[non_exhaustive]` : les protocoles gagnent des types
-/// d'événements (raisonnement, citations, mémoire) et un appelant qui en ignore
-/// un nouveau reste correct.
+/// The enumeration is `#[non_exhaustive]`: the protocols gain event types
+/// (reasoning, citations, memory) and a caller that ignores a new one stays
+/// correct.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum ChatEvent {
-    /// Fragment de texte produit par le modèle.
+    /// Text fragment produced by the model.
     TextDelta(String),
-    /// Un appel d'outil commence. Émis une fois par appel, dès que le
-    /// fournisseur a donné son identifiant et son nom.
+    /// A tool call starts. Emitted once per call, as soon as the provider has
+    /// given its identifier and its name.
     ToolCallStarted {
-        /// Position de l'appel dans le tour, telle que le fournisseur la
-        /// numérote. C'est la clé de recollement des fragments.
+        /// Position of the call in the turn, as the provider numbers it. It is
+        /// the reassembly key of the fragments.
         index: u32,
-        /// Identifiant à recopier dans [`ChatMessage::tool_result`].
+        /// Identifier to copy into [`ChatMessage::tool_result`].
         id: String,
-        /// Nom de l'outil demandé.
+        /// Name of the requested tool.
         name: String,
     },
-    /// Fragment d'arguments d'un appel d'outil, à concaténer.
+    /// Fragment of the arguments of a tool call, to concatenate.
     ToolCallDelta {
-        /// Position de l'appel concerné.
+        /// Position of the call concerned.
         index: u32,
-        /// Morceau de la chaîne JSON d'arguments, brut.
+        /// Piece of the arguments' JSON string, raw.
         arguments: String,
     },
-    /// Un appel d'outil est complet et ses arguments sont analysés.
+    /// A tool call is complete and its arguments are parsed.
     ToolCallComplete(ToolCall),
-    /// Fragment de raisonnement **rédigé**, à concaténer.
+    /// Fragment of **written-out** reasoning, to concatenate.
     ///
-    /// N'arrive que si le fournisseur accepte de montrer le raisonnement. Un
-    /// bloc chiffré ne produit aucun fragment : il n'y a rien à montrer.
+    /// Only arrives if the provider agrees to show the reasoning. An encrypted
+    /// block produces no fragment: there is nothing to show.
     ReasoningDelta {
-        /// Position du bloc dans le tour. Deux blocs de raisonnement peuvent
-        /// se succéder autour d'un appel d'outil.
+        /// Position of the block in the turn. Two reasoning blocks can follow
+        /// each other around a tool call.
         index: u32,
         /// Morceau de texte, brut.
         text: String,
     },
-    /// Un bloc de raisonnement est complet.
+    /// A reasoning block is complete.
     ///
-    /// À **conserver tel quel** et à replacer dans le tour d'assistant
-    /// ([`ChatMessage::reasoning`]) : sans lui, le tour suivant est refusé par
-    /// les fournisseurs qui signent leurs blocs.
+    /// To **keep as is** and put back into the assistant turn
+    /// ([`ChatMessage::reasoning`]): without it, the next turn is refused by
+    /// the providers that sign their blocks.
     ReasoningComplete {
-        /// Position du bloc dans le tour.
+        /// Position of the block in the turn.
         index: u32,
-        /// Le bloc, à transporter sans le modifier.
+        /// The block, to carry without modifying it.
         block: ReasoningBlock,
     },
-    /// Fragment d'un refus du modèle, à concaténer.
+    /// Fragment of a refusal by the model, to concatenate.
     ///
-    /// Un refus n'est pas une erreur : la requête a abouti, le modèle a
-    /// répondu qu'il ne répondrait pas. Le distinguer d'un
-    /// [`TextDelta`](Self::TextDelta) permet à l'interface de ne pas le
-    /// présenter comme une réponse.
+    /// A refusal is not an error: the request succeeded, the model answered
+    /// that it would not answer. Distinguishing it from a
+    /// [`TextDelta`](Self::TextDelta) lets the interface not present it as an
+    /// answer.
     RefusalDelta(String),
-    /// Consommation déclarée par le fournisseur.
+    /// Usage declared by the provider.
     ///
-    /// Les quatre derniers champs sont `Option` et non `0` : « non déclaré »
-    /// et « zéro » sont deux faits différents, et afficher « 0 jeton lu en
-    /// cache » là où le fournisseur n'a rien dit ferait croire à un cache qui
-    /// ne fonctionne pas.
+    /// The last four fields are `Option` and not `0`: "not declared" and "zero"
+    /// are two different facts, and displaying "0 tokens read from cache"
+    /// where the provider said nothing would suggest a cache that does not
+    /// work.
     Usage {
-        /// Jetons d'entrée facturés, hors cache.
+        /// Input tokens billed, outside the cache.
         prompt_tokens: u32,
         /// Jetons produits.
         completion_tokens: u32,
-        /// Jetons **écrits** dans le cache de préfixe.
+        /// Tokens **written** to the prefix cache.
         cache_write_tokens: Option<u32>,
-        /// Jetons **lus** dans le cache de préfixe. Ils ne sont pas dans
-        /// `prompt_tokens` : le total d'entrée est la somme des trois.
+        /// Tokens **read** from the prefix cache. They are not in
+        /// `prompt_tokens`: the input total is the sum of the three.
         cache_read_tokens: Option<u32>,
-        /// Jetons dépensés à réfléchir, quand le fournisseur les isole.
+        /// Tokens spent thinking, when the provider isolates them.
         reasoning_tokens: Option<u32>,
     },
-    /// Fin du flux. Émis **exactement une fois**, en dernier.
+    /// End of the stream. Emitted **exactly once**, last.
     Done {
-        /// Pourquoi le flux s'arrête.
+        /// Why the stream stops.
         stop_reason: StopReason,
     },
-    /// Incident non fatal ou fatal signalé dans le flux.
+    /// Non-fatal or fatal incident reported in the stream.
     ///
-    /// Un flux peut porter une erreur après avoir déjà produit du texte : c'est
-    /// pourquoi elle est un événement et non une valeur de retour.
+    /// A stream can carry an error after having already produced text: that is
+    /// why it is an event and not a return value.
     Error(String),
 }
 
 impl ChatEvent {
-    /// Cet événement termine-t-il le flux ?
+    /// Does this event end the stream?
     #[must_use]
     pub const fn is_terminal(&self) -> bool {
         matches!(self, Self::Done { .. })
     }
 }
 
-/// Ce qu'on sait d'une capacité d'un modèle.
+/// What is known of a model's capability.
 ///
-/// Trois états et non un `bool`, parce que la plupart des points d'accès
-/// compatibles OpenAI listent leurs modèles **sans** dire ce qu'ils savent
-/// faire. Répondre `false` reviendrait à masquer une fonctionnalité disponible ;
-/// répondre `true`, à la proposer puis échouer. `Unknown` se montre dans
-/// l'interface — « rien n'est simulé, rien n'est grisé sans raison »
+/// Three states and not a `bool`, because most OpenAI-compatible endpoints
+/// list their models **without** saying what they can do. Answering `false`
+/// would hide an available feature; answering `true`, offer it then fail.
+/// `Unknown` is shown in the interface — "nothing is simulated, nothing is
+/// greyed out without a reason"
 /// ([`ARCHITECTURE` §4.2](../../../docs/ARCHITECTURE.md)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Support {
     /// Le fournisseur l'annonce.
     Yes,
-    /// Le fournisseur annonce le contraire.
+    /// The provider announces the opposite.
     No,
-    /// Le fournisseur ne dit rien. **C'est le défaut.**
+    /// The provider says nothing. **This is the default.**
     #[default]
     Unknown,
 }
 
 impl Support {
-    /// Traduit un booléen connu.
+    /// Translates a known boolean.
     #[must_use]
     pub const fn known(value: bool) -> Self {
         if value { Self::Yes } else { Self::No }
     }
 
-    /// La capacité est-elle annoncée présente ?
+    /// Is the capability announced present?
     ///
-    /// `Unknown` répond `false` : on ne promet pas ce qu'on ignore.
+    /// `Unknown` answers `false`: we do not promise what we do not know.
     #[must_use]
     pub const fn is_yes(&self) -> bool {
         matches!(self, Self::Yes)
     }
 
-    /// La capacité est-elle annoncée absente ?
+    /// Is the capability announced absent?
     ///
-    /// `Unknown` répond `false` : on ne masque pas ce qu'on ignore.
+    /// `Unknown` answers `false`: we do not hide what we do not know.
     #[must_use]
     pub const fn is_no(&self) -> bool {
         matches!(self, Self::No)
@@ -579,24 +573,24 @@ impl fmt::Display for Support {
     }
 }
 
-/// Tarif d'un modèle, tel que le **fournisseur** le déclare.
+/// Price of a model, as the **provider** declares it.
 ///
-/// Aucune valeur de ce type n'est écrite en dur dans Oxyn : un tarif recopié de
-/// mémoire est une valeur plausible et fausse, invisible à la compilation
-/// comme aux tests (I-12). Ce champ n'est renseigné que lorsque la réponse du
-/// fournisseur le porte — OpenRouter est aujourd'hui le seul à le faire.
+/// No value of this type is hard-coded in Oxyn: a price copied from memory is
+/// a plausible and wrong value, invisible at compile time as in tests (I-12).
+/// This field is only filled when the provider's response carries it —
+/// OpenRouter is today the only one to do so.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Cost {
-    /// Coût d'un million de jetons d'entrée.
+    /// Cost of a million input tokens.
     pub input_per_million: f64,
-    /// Coût d'un million de jetons produits.
+    /// Cost of a million produced tokens.
     pub output_per_million: f64,
-    /// Devise, telle que le fournisseur la documente.
+    /// Currency, as the provider documents it.
     pub currency: String,
 }
 
 impl Cost {
-    /// Construit un tarif à partir de valeurs venues du fournisseur.
+    /// Builds a price from values coming from the provider.
     #[must_use]
     pub fn new(
         input_per_million: f64,
@@ -611,38 +605,38 @@ impl Cost {
     }
 }
 
-/// Ce qu'on sait d'un modèle offert par un fournisseur.
+/// What is known of a model offered by a provider.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ModelInfo {
-    /// Identifiant à mettre dans [`ChatRequest::model`].
+    /// Identifier to put in [`ChatRequest::model`].
     pub id: String,
-    /// Nom montrable. À défaut d'un nom fourni, c'est l'identifiant.
+    /// Showable name. Failing a provided name, it is the identifier.
     pub display_name: String,
-    /// Taille de la fenêtre de contexte en jetons, quand le fournisseur la
-    /// déclare. `None` signifie « non déclarée » et **jamais** « illimitée ».
+    /// Size of the context window in tokens, when the provider declares it.
+    /// `None` means "not declared" and **never** "unlimited".
     pub context_window: Option<u32>,
-    /// Le modèle accepte-t-il des outils ?
+    /// Does the model accept tools?
     pub supports_tools: Support,
-    /// Le modèle accepte-t-il la diffusion incrémentale ?
+    /// Does the model accept incremental streaming?
     pub supports_streaming: Support,
-    /// Le modèle sait-il raisonner — effort, budget, ou les deux ?
+    /// Can the model reason — effort, budget, or both?
     ///
-    /// `Unknown` est le cas courant : la plupart des points d'accès listent
-    /// leurs modèles sans rien déclarer. C'est ce qui décide si un
-    /// [`ChatRequest::reasoning_effort`] est omis ou refusé.
+    /// `Unknown` is the common case: most endpoints list their models without
+    /// declaring anything. It is what decides whether a
+    /// [`ChatRequest::reasoning_effort`] is omitted or refused.
     pub supports_reasoning: Support,
-    /// Niveaux d'effort que le modèle accepte, quand le fournisseur les
-    /// publie. Vide signifie « non déclaré », jamais « aucun ».
+    /// Effort levels the model accepts, when the provider publishes them.
+    /// Empty means "not declared", never "none".
     ///
-    /// Ordonné et sans doublon : c'est une liste montrée à l'utilisateur, et
-    /// elle ne doit pas se réordonner d'une ouverture à l'autre.
+    /// Ordered and without duplicates: it is a list shown to the user, and it
+    /// must not reorder from one opening to the next.
     pub reasoning_efforts: Vec<ReasoningEffort>,
-    /// Tarif déclaré par le fournisseur, s'il en publie un.
+    /// Price declared by the provider, if it publishes one.
     pub cost: Option<Cost>,
 }
 
 impl ModelInfo {
-    /// Construit une fiche minimale : un identifiant, et rien d'affirmé.
+    /// Builds a minimal record: an identifier, and nothing asserted.
     #[must_use]
     pub fn new(id: impl Into<String>) -> Self {
         let id = id.into();
@@ -665,37 +659,37 @@ impl ModelInfo {
         self
     }
 
-    /// Déclare la taille de la fenêtre de contexte.
+    /// Declares the size of the context window.
     #[must_use]
     pub fn with_context_window(mut self, tokens: u32) -> Self {
         self.context_window = Some(tokens);
         self
     }
 
-    /// Déclare la prise en charge des outils.
+    /// Declares support for tools.
     #[must_use]
     pub fn with_tool_support(mut self, support: Support) -> Self {
         self.supports_tools = support;
         self
     }
 
-    /// Déclare la prise en charge de la diffusion.
+    /// Declares support for streaming.
     #[must_use]
     pub fn with_streaming_support(mut self, support: Support) -> Self {
         self.supports_streaming = support;
         self
     }
 
-    /// Déclare la prise en charge du raisonnement.
+    /// Declares support for reasoning.
     #[must_use]
     pub fn with_reasoning_support(mut self, support: Support) -> Self {
         self.supports_reasoning = support;
         self
     }
 
-    /// Déclare les niveaux d'effort acceptés.
+    /// Declares the accepted effort levels.
     ///
-    /// La liste est triée et dédoublonnée : elle est montrée telle quelle.
+    /// The list is sorted and deduplicated: it is shown as is.
     #[must_use]
     pub fn with_reasoning_efforts(mut self, mut efforts: Vec<ReasoningEffort>) -> Self {
         efforts.sort_unstable();
@@ -704,7 +698,7 @@ impl ModelInfo {
         self
     }
 
-    /// Déclare le tarif publié par le fournisseur.
+    /// Declares the price published by the provider.
     #[must_use]
     pub fn with_cost(mut self, cost: Cost) -> Self {
         self.cost = Some(cost);
@@ -717,19 +711,22 @@ mod tests {
     use super::*;
 
     #[test]
-    fn le_debug_d_un_message_ne_montre_pas_son_contenu() {
-        // La panne visée : `tracing::debug!("{msg:?}")` écrit une ligne de la
-        // base cliente dans un fichier de journal (I-03).
+    fn a_message_debug_does_not_show_its_content() {
+        // The targeted failure: `tracing::debug!("{msg:?}")` writes a row of
+        // the customer database into a log file (I-03).
         let msg = ChatMessage::user("client 4711, IBAN FR76 3000 6000 0112 3456 7890 189");
         let rendu = format!("{msg:?}");
         assert!(!rendu.contains("FR76"), "{rendu}");
         assert!(!rendu.contains("4711"), "{rendu}");
-        assert!(rendu.contains("masqué"), "{rendu}");
-        assert!(rendu.contains("User"), "le rôle reste utile au diagnostic");
+        assert!(rendu.contains("masked"), "{rendu}");
+        assert!(
+            rendu.contains("User"),
+            "the role remains useful for diagnosis"
+        );
     }
 
     #[test]
-    fn le_debug_d_une_requete_ne_montre_pas_les_messages() {
+    fn a_request_debug_does_not_show_the_messages() {
         let req = ChatRequest::new(
             "gpt-4o-mini",
             vec![
@@ -746,22 +743,19 @@ mod tests {
         let rendu = format!("{req:?}");
         assert!(!rendu.contains("hiv_status"), "{rendu}");
         assert!(!rendu.contains("patients"), "{rendu}");
-        assert!(rendu.contains("gpt-4o-mini"), "le modèle reste visible");
-        assert!(
-            rendu.contains("execute"),
-            "les noms d'outils restent visibles"
-        );
+        assert!(rendu.contains("gpt-4o-mini"), "the model remains visible");
+        assert!(rendu.contains("execute"), "tool names remain visible");
     }
 
     #[test]
-    fn un_message_d_outil_porte_l_identifiant_de_l_appel() {
+    fn a_tool_message_carries_the_call_identifier() {
         let msg = ChatMessage::tool_result("call_42", "3 lignes");
         assert_eq!(msg.role, Role::Tool);
         assert_eq!(msg.tool_call_id.as_deref(), Some("call_42"));
     }
 
     #[test]
-    fn une_capacite_inconnue_ne_promet_ni_ne_masque() {
+    fn an_unknown_capability_neither_promises_nor_hides() {
         let inconnue = Support::default();
         assert_eq!(inconnue, Support::Unknown);
         assert!(!inconnue.is_yes());
@@ -771,7 +765,7 @@ mod tests {
     }
 
     #[test]
-    fn une_fiche_de_modele_n_affirme_rien_par_defaut() {
+    fn a_model_record_asserts_nothing_by_default() {
         let fiche = ModelInfo::new("llama3.2");
         assert_eq!(fiche.display_name, "llama3.2");
         assert_eq!(fiche.context_window, None);
@@ -780,7 +774,7 @@ mod tests {
     }
 
     #[test]
-    fn seul_done_termine_un_flux() {
+    fn only_done_ends_a_stream() {
         assert!(
             ChatEvent::Done {
                 stop_reason: StopReason::EndTurn
@@ -790,23 +784,22 @@ mod tests {
         assert!(!ChatEvent::TextDelta("a".to_owned()).is_terminal());
         assert!(
             !ChatEvent::Error("boum".to_owned()).is_terminal(),
-            "une erreur peut précéder d'autres événements"
+            "an error can precede other events"
         );
     }
 
     #[test]
-    fn une_requete_serialisee_se_relit() {
+    fn a_serialized_request_reads_back() {
         let req = ChatRequest::new("m", vec![ChatMessage::user("bonjour")]).with_max_tokens(64);
-        let json = serde_json::to_string(&req).expect("sérialisation");
-        let relue: ChatRequest = serde_json::from_str(&json).expect("désérialisation");
+        let json = serde_json::to_string(&req).expect("serialization");
+        let relue: ChatRequest = serde_json::from_str(&json).expect("deserialization");
         assert_eq!(relue, req);
     }
 
     #[test]
-    fn une_requete_neuve_ne_demande_ni_effort_ni_budget() {
-        // Le défaut doit rester « ce que le fournisseur fait d'habitude » :
-        // imposer un effort ferait payer un raisonnement que personne n'a
-        // demandé.
+    fn a_new_request_asks_for_neither_effort_nor_budget() {
+        // The default must remain "what the provider usually does": imposing
+        // an effort would bill a reasoning nobody asked for.
         let req = ChatRequest::new("m", vec![ChatMessage::user("a")]);
         assert_eq!(req.reasoning_effort, None);
         assert_eq!(req.reasoning_budget_tokens, None);
@@ -815,35 +808,35 @@ mod tests {
     }
 
     #[test]
-    fn les_reglages_de_raisonnement_survivent_a_un_aller_retour() {
+    fn reasoning_settings_survive_a_round_trip() {
         let req = ChatRequest::new("m", vec![ChatMessage::user("a")])
             .with_reasoning_effort(ReasoningEffort::XHigh)
             .with_reasoning_budget_tokens(8192)
             .with_cached_tools();
         assert!(req.wants_reasoning());
 
-        let json = serde_json::to_value(&req).expect("sérialisation");
+        let json = serde_json::to_value(&req).expect("serialization");
         assert_eq!(json["reasoning_effort"], "xhigh");
         assert_eq!(json["reasoning_budget_tokens"], 8192);
         assert_eq!(json["cache_tools"], true);
 
-        let relue: ChatRequest = serde_json::from_value(json).expect("désérialisation");
+        let relue: ChatRequest = serde_json::from_value(json).expect("deserialization");
         assert_eq!(relue, req);
     }
 
     #[test]
-    fn un_reglage_absent_ne_part_pas_sur_le_fil() {
-        // Plusieurs points d'accès rejettent la requête entière sur un champ
-        // inconnu : un `null` n'est pas une omission.
+    fn a_missing_setting_does_not_go_on_the_wire() {
+        // Several endpoints reject the whole request on an unknown field: a
+        // `null` is not an omission.
         let req = ChatRequest::new("m", vec![ChatMessage::user("a")]);
-        let json = serde_json::to_value(&req).expect("sérialisation");
+        let json = serde_json::to_value(&req).expect("serialization");
         assert!(json.get("reasoning_effort").is_none(), "{json}");
         assert!(json.get("reasoning_budget_tokens").is_none(), "{json}");
         assert!(json.get("cache_tools").is_none(), "{json}");
     }
 
     #[test]
-    fn un_bloc_de_raisonnement_se_rattache_au_tour_d_assistant() {
+    fn a_reasoning_block_attaches_to_the_assistant_turn() {
         let blocs = vec![
             ReasoningBlock::summarized("je compte", Some("sig".to_owned())),
             ReasoningBlock::redacted("chiffre"),
@@ -851,17 +844,17 @@ mod tests {
         let msg = ChatMessage::assistant("42").with_reasoning(blocs.clone());
         assert_eq!(msg.reasoning, blocs);
 
-        // Le tour se sérialise et se relit à l'identique : c'est la condition
-        // pour que le tour suivant soit accepté.
-        let json = serde_json::to_string(&msg).expect("sérialisation");
-        let relu: ChatMessage = serde_json::from_str(&json).expect("désérialisation");
+        // The turn serializes and reads back identically: that is the
+        // condition for the next turn to be accepted.
+        let json = serde_json::to_string(&msg).expect("serialization");
+        let relu: ChatMessage = serde_json::from_str(&json).expect("deserialization");
         assert_eq!(relu.reasoning, blocs);
     }
 
     #[test]
-    fn le_debug_d_un_message_ne_montre_pas_le_raisonnement() {
-        // Un bloc de raisonnement reprend ce qu'on a donné au modèle — au
-        // niveau `Sampled`, des lignes de la base (I-03).
+    fn a_message_debug_does_not_show_the_reasoning() {
+        // A reasoning block repeats what was given to the model — at the
+        // `Sampled` tier, database rows (I-03).
         let msg = ChatMessage::assistant("ok").with_reasoning(vec![ReasoningBlock::summarized(
             "la table patients a une colonne hiv_status",
             None,
@@ -872,22 +865,22 @@ mod tests {
     }
 
     #[test]
-    fn un_message_marque_comme_stable_le_reste_apres_serialisation() {
+    fn a_message_marked_stable_stays_so_after_serialization() {
         let msg = ChatMessage::system("contexte du schéma").cached();
         assert!(msg.cache_breakpoint);
-        let json = serde_json::to_value(&msg).expect("sérialisation");
+        let json = serde_json::to_value(&msg).expect("serialization");
         assert_eq!(json["cache_breakpoint"], true);
 
         let ordinaire = ChatMessage::user("et les doublons ?");
-        let json = serde_json::to_value(&ordinaire).expect("sérialisation");
+        let json = serde_json::to_value(&ordinaire).expect("serialization");
         assert!(
             json.get("cache_breakpoint").is_none(),
-            "un drapeau faux ne part pas : {json}"
+            "a false flag does not go out: {json}"
         );
     }
 
     #[test]
-    fn une_fiche_de_modele_n_affirme_rien_sur_le_raisonnement_par_defaut() {
+    fn a_model_record_asserts_nothing_about_reasoning_by_default() {
         let fiche = ModelInfo::new("llama3.2");
         assert_eq!(fiche.supports_reasoning, Support::Unknown);
         assert!(fiche.reasoning_efforts.is_empty());
@@ -902,12 +895,12 @@ mod tests {
         assert_eq!(
             declaree.reasoning_efforts,
             vec![ReasoningEffort::Low, ReasoningEffort::High],
-            "la liste est triée et dédoublonnée : elle est montrée telle quelle"
+            "the list is sorted and deduplicated: it is shown as is"
         );
     }
 
     #[test]
-    fn une_consommation_non_declaree_se_distingue_d_un_zero() {
+    fn an_undeclared_usage_is_distinct_from_zero() {
         let evenement = ChatEvent::Usage {
             prompt_tokens: 10,
             completion_tokens: 2,
@@ -921,9 +914,9 @@ mod tests {
             ..
         } = evenement
         else {
-            panic!("variante inattendue");
+            panic!("unexpected variant");
         };
-        assert_eq!(cache_write_tokens, None, "le fournisseur n'a rien dit");
-        assert_eq!(cache_read_tokens, Some(0), "le fournisseur a dit zéro");
+        assert_eq!(cache_write_tokens, None, "the provider said nothing");
+        assert_eq!(cache_read_tokens, Some(0), "the provider said zero");
     }
 }

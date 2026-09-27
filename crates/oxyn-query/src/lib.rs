@@ -1,41 +1,40 @@
-//! Analyse des requêtes : dialectes, découpage, classification d'intention,
-//! reformatage.
+//! Query analysis: dialects, splitting, intent classification,
+//! reformatting.
 //!
-//! `oxyn-query` répond à une seule question, et c'est celle dont dépend la
-//! sécurité du produit : **que fait ce texte ?** Le `PolicyGate` d'`oxyn-core`
-//! décide à partir d'un [`StatementIntent`](oxyn_core::StatementIntent) et d'un
-//! [`MutationRisk`](oxyn_core::MutationRisk) qu'on lui donne ; c'est ici qu'ils
-//! sont établis. Une erreur de classification ici n'échoue nulle part : elle
-//! laisse simplement passer une écriture.
+//! `oxyn-query` answers a single question, and it is the one the product's
+//! security depends on: **what does this text do?** The `PolicyGate` of
+//! `oxyn-core` decides from a [`StatementIntent`](oxyn_core::StatementIntent)
+//! and a [`MutationRisk`](oxyn_core::MutationRisk) it is given; this is where
+//! they are established. A classification error here fails nowhere: it simply
+//! lets a write through.
 //!
-//! # Ce qu'on y trouve
+//! # What it contains
 //!
-//! | Module | Sujet |
+//! | Module | Subject |
 //! |---|---|
-//! | [`dialect`](mod@dialect) | correspondance `SqlDialect` ↔ grammaire `sqlparser`, dialecte d'un driver |
-//! | [`split`](mod@split) | découpage d'un lot en instructions, lecture des mots nus |
-//! | [`classify`](mod@classify) | intention et risque d'un texte — le point critique |
-//! | [`format`](mod@format) | reformatage par le rendu de l'AST |
-//! | [`error`](mod@error) | les échecs que la crate sait nommer |
+//! | [`dialect`](mod@dialect) | `SqlDialect` ↔ `sqlparser` grammar mapping, dialect of a driver |
+//! | [`split`](mod@split) | splitting a batch into statements, reading bare words |
+//! | [`classify`](mod@classify) | intent and risk of a text — the critical point |
+//! | [`format`](mod@format) | reformatting by rendering the AST |
+//! | [`error`](mod@error) | the failures the crate knows how to name |
 //!
-//! # Les trois règles
+//! # The three rules
 //!
-//! **L'analyse ne signale jamais d'échec au `PolicyGate`.** Ce qui ne se lit
-//! pas devient [`Unknown`](oxyn_core::StatementIntent::Unknown), qui compte pour
-//! mutant (I-02). [`classify()`] ne renvoie pas de `Result` : il n'y a pas de
-//! chemin par lequel un échec produirait une lecture.
+//! **Analysis never reports a failure to the `PolicyGate`.** What does not
+//! parse becomes [`Unknown`](oxyn_core::StatementIntent::Unknown), which counts
+//! as mutating (I-02). [`classify()`] does not return a `Result`: there is no
+//! path through which a failure would produce a read.
 //!
-//! **On classe sur l'arbre, pas sur le premier mot.** `EXPLAIN ANALYZE DELETE`
-//! exécute réellement le `DELETE` (I-07), `WITH x AS (DELETE …) SELECT` aussi.
-//! L'analyse descend dans les clauses `WITH` et les corps d'`EXPLAIN`, et un
-//! filet par mots-clés relit ce qu'elle a classé en lecture.
+//! **Classification works on the tree, not on the first word.** `EXPLAIN
+//! ANALYZE DELETE` really runs the `DELETE` (I-07), and so does `WITH x AS
+//! (DELETE …) SELECT`. The analysis descends into `WITH` clauses and `EXPLAIN`
+//! bodies, and a keyword safety net rereads what it classified as a read.
 //!
-//! **Une erreur de découpage coûte une confirmation, jamais une écriture.**
-//! Quand le scanner doute — chaîne non fermée, commentaire non fermé — il
-//! fusionne au lieu de couper : le résultat ne se lit plus, donc il est
-//! `Unknown`.
+//! **A splitting error costs a confirmation, never a write.** When the scanner
+//! is in doubt — unclosed string, unclosed comment — it merges instead of
+//! cutting: the result no longer parses, so it is `Unknown`.
 //!
-//! # Exemple
+//! # Example
 //!
 //! ```
 //! use oxyn_core::{DriverId, MutationRisk, StatementIntent};
@@ -43,16 +42,16 @@
 //!
 //! let dialecte = dialect_for(&DriverId::postgres());
 //!
-//! // Le piège que SECURITY demande de tester explicitement.
+//! // The trap SECURITY asks to test explicitly.
 //! let lu = classify("EXPLAIN ANALYZE DELETE FROM commandes", dialecte);
 //! assert_eq!(lu.intent, StatementIntent::Write);
 //! assert_eq!(lu.risk, MutationRisk::UnboundedDelete);
 //!
-//! // Un `WHERE` trivialement vrai ne borne rien.
+//! // A trivially true `WHERE` bounds nothing.
 //! let lu = classify("UPDATE clients SET actif = false WHERE 1=1", dialecte);
 //! assert_eq!(lu.risk, MutationRisk::UnboundedUpdate);
 //!
-//! // Ce qui ne se lit pas est mutant, pas « probablement inoffensif ».
+//! // What does not parse is mutating, not "probably harmless".
 //! let lu = classify("SELEKT * FORM t", dialecte);
 //! assert_eq!(lu.intent, StatementIntent::Unknown);
 //! assert!(lu.is_mutating());
@@ -82,20 +81,19 @@ mod tests {
 
     use crate::{classify, reclassify};
 
-    /// Le trajet complet de la phase 0, du texte à la décision : un agent
-    /// annonce une lecture, `oxyn-query` requalifie, le `PolicyGate` refuse.
+    /// The full path of phase 0, from text to decision: an agent announces a
+    /// read, `oxyn-query` requalifies it, the `PolicyGate` refuses.
     ///
-    /// C'est l'enchaînement que décrit ARCHITECTURE §8 — l'intention portée par
-    /// une commande n'est pas digne de confiance — vérifié de bout en bout avec
-    /// les vrais types.
+    /// It is the sequence ARCHITECTURE §8 describes — the intent carried by a
+    /// command is not trustworthy — checked end to end with the real types.
     #[test]
-    fn un_agent_ne_peut_pas_s_auto_declarer_en_lecture_seule() {
+    fn an_agent_cannot_declare_itself_read_only() {
         let politique = DefaultPolicy::new();
         let connexion = ConnectionConfig::new("base client", DriverId::postgres())
             .with_environment(Environment::Production);
         politique.register(&connexion);
 
-        // L'agent déclare une lecture. Le texte dit autre chose.
+        // The agent declares a read. The text says otherwise.
         let demande = ExecRequest::new(
             QueryLanguage::Sql(SqlDialect::Postgres),
             "WITH partis AS (DELETE FROM commandes RETURNING *) SELECT count(*) FROM partis",
@@ -117,9 +115,9 @@ mod tests {
         assert!(decision.is_denied(), "{decision:?}");
     }
 
-    /// Le même trajet pour une vraie lecture : rien ne doit être demandé.
+    /// The same path for a real read: nothing must be asked.
     #[test]
-    fn une_lecture_reste_une_lecture_jusqu_au_gate() {
+    fn a_read_stays_a_read_up_to_the_gate() {
         let politique = DefaultPolicy::new();
         let connexion = ConnectionConfig::new("atelier", DriverId::sqlite())
             .with_environment(Environment::Local);
@@ -141,10 +139,10 @@ mod tests {
         assert_eq!(decision, Decision::Allow);
     }
 
-    /// Un texte vide ne passe pas pour une lecture : c'est la porte que le
-    /// choix « lot vide = `Unknown` » ferme.
+    /// An empty text does not pass for a read: it is the door the choice
+    /// "empty batch = `Unknown`" closes.
     #[test]
-    fn un_lot_vide_ne_passe_pas_pour_une_lecture() {
+    fn an_empty_batch_does_not_pass_for_a_read() {
         let lu = classify("", SqlDialect::Postgres);
         assert!(lu.is_mutating());
         assert!(!lu.is_read_only());

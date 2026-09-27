@@ -1,22 +1,21 @@
-//! La table `ai_providers` : les fournisseurs de modèles déclarés.
+//! The `ai_providers` table: the declared model providers.
 //!
-//! **Par machine, pas par workspace** — la table n'a pas de `workspace_id`, et
-//! c'est la décision d'[ADR-0023](../../../docs/adr/0023-fournisseurs-declares-et-provenance.md) :
-//! un Ollama qui écoute sur la machine sert tous les workspaces. Ce qui reste
-//! par connexion, c'est le niveau de confidentialité.
+//! **Per machine, not per workspace** — the table has no `workspace_id`, and
+//! that is the decision of [ADR-0023](../../../docs/adr/0023-fournisseurs-declares-et-provenance.md):
+//! an Ollama listening on the machine serves every workspace. What stays per
+//! connection is the privacy tier.
 //!
-//! **Aucune clé n'est écrite ici.** `secret_ref` désigne une entrée du
-//! trousseau du système, exactement comme pour les connexions (I-03). C'est
-//! aussi ici qu'une URL de base porteuse d'identifiants est refusée : c'est le
-//! dernier point avant le disque.
+//! **No key is written here.** `secret_ref` designates an entry of the system
+//! keychain, exactly as for connections (I-03). This is also where a base URL
+//! carrying credentials is refused: it is the last point before the disk.
 //!
-//! **Aucun classement local/distant n'est persisté.** `Reach` n'a pas de
-//! colonne et n'en aura pas : une valeur en base serait une réponse DNS d'hier
-//! appliquée à un envoi d'aujourd'hui. Rien dans ce module ne résout un nom ;
-//! rien n'ouvre de connexion réseau.
+//! **No local/remote classification is persisted.** `Reach` has no column and
+//! will not have one: a stored value would be yesterday's DNS answer applied to
+//! today's send. Nothing in this module resolves a name; nothing opens a
+//! network connection.
 //!
-//! Toutes les méthodes peuvent bloquer : elles ne s'appellent jamais depuis le
-//! thread d'interface ([I-05](../../../CLAUDE.md#i-05)).
+//! Every method may block: they are never called from the UI thread
+//! ([I-05](../../../CLAUDE.md#i-05)).
 
 use chrono::Utc;
 use oxyn_core::{AiProviderConfig, AiProviderKind, ProviderId};
@@ -25,35 +24,35 @@ use rusqlite::{Row, params};
 use crate::error::{Result, StoreError};
 use crate::store::Store;
 
-/// Accès typé à la table `ai_providers`.
+/// Typed access to the `ai_providers` table.
 #[derive(Debug)]
 pub struct Providers<'a> {
     store: &'a Store,
 }
 
 impl<'a> Providers<'a> {
-    /// Rattache l'accesseur à son `Store`.
+    /// Binds the accessor to its `Store`.
     pub(crate) fn new(store: &'a Store) -> Self {
         Self { store }
     }
 
-    /// Les fournisseurs déclarés, par nom.
+    /// The declared providers, by name.
     ///
-    /// Une liste **vide** est l'installation par défaut d'Oxyn et non un état
-    /// dégradé : c'est elle qui décide si le workspace IA existe (ADR-0006).
+    /// An **empty** list is Oxyn's default installation and not a degraded
+    /// state: it decides whether the AI workspace exists (ADR-0006).
     ///
-    /// L'ordre est celui du nom donné par l'utilisateur, départagé par
-    /// l'identifiant : une liste de réglages qui se réordonne d'une ouverture à
-    /// l'autre se lit comme un défaut.
+    /// The order is that of the name given by the user, tie-broken by the
+    /// identifier: a settings list that reorders itself from one opening to
+    /// the next reads as a defect.
     ///
-    /// Une ligne que ce binaire ne sait pas relire — famille de protocole d'une
-    /// version ultérieure, URL devenue illisible sous un éditeur SQLite — est
-    /// **écartée** avec un `warn`, pas propagée en erreur : un fournisseur
-    /// qu'on ne saurait pas instancier ne doit pas être proposé, et une seule
-    /// ligne étrange ne doit pas rendre l'écran de configuration inutilisable.
+    /// A row this binary cannot read back — a protocol family from a later
+    /// version, a URL made unreadable in an SQLite editor — is **skipped**
+    /// with a `warn`, not propagated as an error: a provider that could not be
+    /// instantiated must not be offered, and a single odd row must not make
+    /// the configuration screen unusable.
     ///
-    /// # Erreurs
-    /// [`StoreError::Sqlite`] si la lecture échoue.
+    /// # Errors
+    /// [`StoreError::Sqlite`] if the read fails.
     pub fn list(&self) -> Result<Vec<AiProviderConfig>> {
         self.store.with_connection(|conn| {
             let mut requete = conn.prepare(
@@ -72,22 +71,21 @@ impl<'a> Providers<'a> {
         })
     }
 
-    /// Déclare un fournisseur, ou remplace la déclaration portant son
-    /// identifiant.
+    /// Declares a provider, or replaces the declaration carrying its
+    /// identifier.
     ///
-    /// `created_at` n'est jamais écrasé : la date de déclaration ne change pas
-    /// parce qu'on a corrigé un modèle par défaut.
+    /// `created_at` is never overwritten: the declaration date does not change
+    /// because a default model was corrected.
     ///
-    /// La configuration est **revalidée** ici, même si l'exécuteur l'a déjà
-    /// fait : c'est le dernier endroit où une URL portant un couple
-    /// `utilisateur:motdepasse` peut être arrêtée avant le disque, et une
-    /// vérification qui ne vit qu'en amont est une vérification qu'un second
-    /// appelant contournera.
+    /// The configuration is **revalidated** here, even if the executor
+    /// already did it: it is the last place where a URL carrying a
+    /// `user:password` pair can be stopped before the disk, and a check that
+    /// only lives upstream is a check a second caller will bypass.
     ///
-    /// # Erreurs
-    /// [`StoreError::Corrupted`] si la déclaration est invalide — le message
-    /// nomme la raison, jamais la valeur ; [`StoreError::Sqlite`] si
-    /// l'écriture échoue.
+    /// # Errors
+    /// [`StoreError::Corrupted`] if the declaration is invalid — the message
+    /// names the reason, never the value; [`StoreError::Sqlite`] if the write
+    /// fails.
     pub fn save(&self, config: &AiProviderConfig) -> Result<()> {
         config.validate().map_err(|erreur| StoreError::Corrupted {
             field: "ai_providers",
@@ -121,15 +119,15 @@ impl<'a> Providers<'a> {
         })
     }
 
-    /// Retire une déclaration. Rend `true` si une ligne a disparu.
+    /// Removes a declaration. Returns `true` if a row disappeared.
     ///
-    /// N'efface **rien** d'autre : les documents écrits par un agent gardent
-    /// leur provenance, qui dit d'où venait un texte et non quel fournisseur
-    /// est encore déclaré. Le secret référencé, lui, vit dans le trousseau du
-    /// système et se révoque là-bas.
+    /// Erases **nothing** else: documents written by an agent keep their
+    /// provenance, which says where a text came from and not which provider is
+    /// still declared. The referenced secret lives in the system keychain and
+    /// is revoked there.
     ///
-    /// # Erreurs
-    /// [`StoreError::Sqlite`] si la suppression échoue.
+    /// # Errors
+    /// [`StoreError::Sqlite`] if the deletion fails.
     pub fn remove(&self, id: &ProviderId) -> Result<bool> {
         self.store.with_connection(|conn| {
             let effacees = conn.execute(
@@ -141,12 +139,12 @@ impl<'a> Providers<'a> {
     }
 }
 
-/// Reconstruit une déclaration à partir d'une ligne.
+/// Rebuilds a declaration from a row.
 ///
-/// Rend `Ok(None)` pour une ligne que le domaine ne sait pas relire : la
-/// distinction avec `Err` est ce qui permet de propager une vraie panne SQLite
-/// tout en écartant une ligne écrite par une version ultérieure. Aucun message
-/// ne recopie la valeur fautive (I-03).
+/// Returns `Ok(None)` for a row the domain cannot read back: the distinction
+/// with `Err` is what makes it possible to propagate a real SQLite failure
+/// while skipping a row written by a later version. No message copies the
+/// faulty value (I-03).
 fn depuis_ligne(row: &Row<'_>) -> Result<Option<AiProviderConfig>> {
     let id: String = row.get("id")?;
     let kind: String = row.get("kind")?;
@@ -186,7 +184,7 @@ mod tests {
 
     fn declaration(id: &str, label: &str) -> AiProviderConfig {
         AiProviderConfig::new(
-            ProviderId::new(id).expect("identifiant de test valide"),
+            ProviderId::new(id).expect("valid test identifier"),
             AiProviderKind::OpenAiCompatible,
             label,
             "http://localhost:11434/v1",
@@ -195,64 +193,60 @@ mod tests {
     }
 
     #[test]
-    fn sans_declaration_la_liste_est_vide() {
-        // ADR-0006 : c'est l'installation par défaut, et c'est ce que
-        // l'interface interroge pour décider si le workspace IA existe.
-        let store = Store::open_in_memory().expect("ouverture");
-        assert!(store.providers().list().expect("liste").is_empty());
+    fn without_declaration_the_list_is_empty() {
+        // ADR-0006: this is the default installation, and it is what the
+        // interface queries to decide whether the AI workspace exists.
+        let store = Store::open_in_memory().expect("open");
+        assert!(store.providers().list().expect("list").is_empty());
     }
 
     #[test]
-    fn un_fournisseur_survit_a_la_suppression_de_tous_les_workspaces() {
-        // La table n'a pas de `workspace_id` : c'est la décision d'ADR-0023.
-        // Ce test rougit si quelqu'un lui ajoute une portée par workspace.
-        let store = Store::open_in_memory().expect("ouverture");
+    fn a_provider_survives_the_deletion_of_every_workspace() {
+        // The table has no `workspace_id`: that is ADR-0023's decision. This
+        // test turns red if someone gives it a per-workspace scope.
+        let store = Store::open_in_memory().expect("open");
         let atelier = store.workspaces().create("atelier").expect("workspace");
         store
             .providers()
             .save(&declaration("ollama", "Ollama"))
-            .expect("déclaration");
+            .expect("declaration");
 
-        assert!(store.workspaces().delete(atelier.id).expect("suppression"));
+        assert!(store.workspaces().delete(atelier.id).expect("deletion"));
 
-        let restants = store.providers().list().expect("liste");
-        assert_eq!(restants.len(), 1, "un fournisseur sert toutes les fenêtres");
+        let restants = store.providers().list().expect("list");
+        assert_eq!(restants.len(), 1, "a provider serves every window");
         assert_eq!(restants[0].label, "Ollama");
     }
 
     #[test]
-    fn enregistrer_deux_fois_le_meme_identifiant_remplace_sans_dater_a_neuf() {
-        let store = Store::open_in_memory().expect("ouverture");
+    fn saving_the_same_identifier_twice_replaces_without_redating() {
+        let store = Store::open_in_memory().expect("open");
         let origine = declaration("ollama", "Ollama");
-        store.providers().save(&origine).expect("déclaration");
+        store.providers().save(&origine).expect("declaration");
 
         let mut corrigee = declaration("ollama", "Ollama du portable");
         corrigee.model = "qwen2.5-coder".to_owned();
-        // Même si l'appelant se trompe de date de création.
+        // Even if the caller gets the creation date wrong.
         corrigee.created_at = Utc::now();
         store.providers().save(&corrigee).expect("correction");
 
-        let liste = store.providers().list().expect("liste");
-        assert_eq!(
-            liste.len(),
-            1,
-            "l'écriture est un remplacement, pas un ajout"
-        );
+        let liste = store.providers().list().expect("list");
+        assert_eq!(liste.len(), 1, "the write is a replacement, not an insert");
         assert_eq!(liste[0].label, "Ollama du portable");
         assert_eq!(liste[0].model, "qwen2.5-coder");
         assert_eq!(
             liste[0].created_at.timestamp_millis(),
             origine.created_at.timestamp_millis(),
-            "corriger un modèle ne redate pas la déclaration"
+            "correcting a model does not redate the declaration"
         );
         assert!(liste[0].updated_at >= liste[0].created_at);
     }
 
     #[test]
-    fn la_liste_est_ordonnee_par_nom() {
-        // Une liste de réglages qui se réordonne d'une ouverture à l'autre se
-        // lit comme un défaut.
-        let store = Store::open_in_memory().expect("ouverture");
+    fn the_list_is_ordered_by_name() {
+        // A settings list that reorders itself from one opening to the next
+        // reads as a defect.
+        let store = Store::open_in_memory().expect("open");
         for (id, label) in [
             ("openrouter", "Passerelle"),
             ("ollama", "Ollama"),
@@ -261,12 +255,12 @@ mod tests {
             store
                 .providers()
                 .save(&declaration(id, label))
-                .expect("déclaration");
+                .expect("declaration");
         }
         let labels: Vec<String> = store
             .providers()
             .list()
-            .expect("liste")
+            .expect("list")
             .into_iter()
             .map(|config| config.label)
             .collect();
@@ -274,28 +268,28 @@ mod tests {
     }
 
     #[test]
-    fn aucune_url_porteuse_d_identifiants_n_atteint_le_disque() {
-        // I-03 : le dernier point d'arrêt avant le fichier. Le refus est une
-        // erreur, pas un nettoyage silencieux.
-        let store = Store::open_in_memory().expect("ouverture");
+    fn no_url_carrying_credentials_reaches_the_disk() {
+        // I-03: the last stopping point before the file. The refusal is an
+        // error, not a silent cleanup.
+        let store = Store::open_in_memory().expect("open");
         let mut declaration = declaration("openai", "OpenAI");
         declaration.base_url = "https://cle:motdepasse@api.example.com/v1".to_owned();
 
         let erreur = store
             .providers()
             .save(&declaration)
-            .expect_err("une URL avec identifiants ne s'écrit pas");
+            .expect_err("a URL with credentials is not written");
         assert!(!erreur.to_string().contains("motdepasse"), "{erreur}");
-        assert!(store.providers().list().expect("liste").is_empty());
+        assert!(store.providers().list().expect("list").is_empty());
     }
 
     #[test]
-    fn seule_une_reference_de_secret_est_persistee() {
-        let store = Store::open_in_memory().expect("ouverture");
+    fn only_a_secret_reference_is_persisted() {
+        let store = Store::open_in_memory().expect("open");
         store
             .providers()
             .save(&declaration("ollama", "Ollama").with_secret_ref("keychain://oxyn/ollama"))
-            .expect("déclaration");
+            .expect("declaration");
 
         let colonnes: Vec<String> = store
             .with_connection(|conn| {
@@ -304,45 +298,45 @@ mod tests {
                 let noms = requete.query_map([], |row| row.get(0))?;
                 Ok(noms.collect::<rusqlite::Result<Vec<String>>>()?)
             })
-            .expect("schéma de la table");
+            .expect("table schema");
         assert!(
             !colonnes
                 .iter()
                 .any(|nom| nom == "api_key" || nom == "reach"),
-            "ni clé ni classement en base : {colonnes:?}"
+            "neither key nor classification in the database: {colonnes:?}"
         );
 
-        let relu = store.providers().list().expect("liste").remove(0);
+        let relu = store.providers().list().expect("list").remove(0);
         assert_eq!(relu.secret_ref.as_deref(), Some("keychain://oxyn/ollama"));
     }
 
     #[test]
-    fn retirer_une_declaration_est_idempotent() {
-        let store = Store::open_in_memory().expect("ouverture");
+    fn removing_a_declaration_is_idempotent() {
+        let store = Store::open_in_memory().expect("open");
         let id = ProviderId::ollama();
         store
             .providers()
             .save(&declaration("ollama", "Ollama"))
-            .expect("déclaration");
+            .expect("declaration");
 
-        assert!(store.providers().remove(&id).expect("retrait"));
+        assert!(store.providers().remove(&id).expect("removal"));
         assert!(
-            !store.providers().remove(&id).expect("second retrait"),
-            "retirer ce qui n'existe plus n'est pas une erreur"
+            !store.providers().remove(&id).expect("second removal"),
+            "removing what no longer exists is not an error"
         );
-        assert!(store.providers().list().expect("liste").is_empty());
+        assert!(store.providers().list().expect("list").is_empty());
     }
 
     #[test]
-    fn une_famille_inconnue_est_ecartee_sans_faire_tomber_la_liste() {
-        // Le cas réel : un état local écrit par une version ultérieure d'Oxyn.
-        // Un fournisseur qu'on ne saurait pas instancier ne doit pas être
-        // proposé, et l'écran de configuration doit rester utilisable.
-        let store = Store::open_in_memory().expect("ouverture");
+    fn an_unknown_family_is_skipped_without_bringing_down_the_list() {
+        // The real case: a local state written by a later version of Oxyn. A
+        // provider that could not be instantiated must not be offered, and the
+        // configuration screen must stay usable.
+        let store = Store::open_in_memory().expect("open");
         store
             .providers()
             .save(&declaration("ollama", "Ollama"))
-            .expect("déclaration");
+            .expect("declaration");
         store
             .with_connection(|conn| {
                 conn.execute(
@@ -353,9 +347,9 @@ mod tests {
                 )?;
                 Ok(())
             })
-            .expect("ligne d'une version ultérieure");
+            .expect("row from a later version");
 
-        let liste = store.providers().list().expect("liste");
+        let liste = store.providers().list().expect("list");
         assert_eq!(liste.len(), 1);
         assert_eq!(liste[0].id, ProviderId::ollama());
     }

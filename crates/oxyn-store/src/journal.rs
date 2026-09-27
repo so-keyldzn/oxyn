@@ -1,46 +1,45 @@
-//! La table `audit_journal` : la piste d'audit, en **ajout seul**.
+//! The `audit_journal` table: the audit trail, **append-only**.
 //!
-//! C'est l'historique de l'utilisateur *et* le journal des agents — un seul
-//! mécanisme, comme le veut ARCHITECTURE §8. Une commande **refusée** y figure
-//! aussi : un journal qui ne consigne que ce qui a marché ne dit rien de ce
-//! qu'un agent a tenté.
+//! It is the user's history *and* the agents' journal — a single mechanism, as
+//! ARCHITECTURE §8 requires. A **refused** command is recorded too: a journal
+//! that only records what worked says nothing of what an agent attempted.
 //!
-//! # L'inviolabilité tient à deux endroits, et il en faut deux
+//! # Tamper-proofing holds in two places, and two are needed
 //!
-//! * **L'API.** [`Journal`] expose [`append`](Journal::append) et des lectures.
-//!   Il n'y a ni `update` ni `delete` ni `purge` : ce qui n'existe pas ne
-//!   s'appelle pas par mégarde, et aucun outil d'agent ne peut l'atteindre
-//!   puisque les outils sont exactement les `Command` (ADR-0004).
-//! * **Le fichier.** Deux déclencheurs SQLite avortent tout `UPDATE` et tout
-//!   `DELETE` sur la table — `audit_journal_forbid_update` et
-//!   `audit_journal_forbid_delete`, posés par la migration initiale. C'est ce
-//!   qui fait tenir la garantie même quand quelqu'un ouvre l'état local avec le
-//!   `sqlite3` en ligne de commande.
+//! * **The API.** [`Journal`] exposes [`append`](Journal::append) and reads.
+//!   There is no `update`, `delete` or `purge`: what does not exist cannot be
+//!   called by mistake, and no agent tool can reach it since the tools are
+//!   exactly the `Command`s (ADR-0004).
+//! * **The file.** Two SQLite triggers abort any `UPDATE` and any `DELETE` on
+//!   the table — `audit_journal_forbid_update` and
+//!   `audit_journal_forbid_delete`, set by the initial migration. That is what
+//!   keeps the guarantee even when someone opens the local state with the
+//!   command-line `sqlite3`.
 //!
-//! L'API seule ne serait qu'une convention ; le déclencheur seul laisserait
-//! passer un `DELETE` écrit à l'intérieur de la crate.
+//! The API alone would only be a convention; the trigger alone would let
+//! through a `DELETE` written inside the crate.
 //!
-//! Ce que le déclencheur **ne** couvre **pas** : un `DROP TABLE`, un
-//! `PRAGMA writable_schema`, la réécriture du fichier avec un éditeur
-//! hexadécimal. La protection vise l'erreur et l'agent qui voudrait effacer sa
-//! trace par les moyens ordinaires du produit — pas un attaquant qui a déjà les
-//! droits d'écriture sur le disque de l'utilisateur.
+//! What the trigger does **not** cover: a `DROP TABLE`, a
+//! `PRAGMA writable_schema`, rewriting the file with a hex editor. The
+//! protection targets mistakes and the agent that would want to erase its
+//! trace through the product's ordinary means — not an attacker who already
+//! has write access to the user's disk.
 //!
-//! # Relire ce qu'on ne comprend pas
+//! # Reading back what is not understood
 //!
-//! Les colonnes qui ont une valeur **conservatrice** y retombent quand elles
-//! sont illisibles : `intent` devient
-//! [`Unknown`](oxyn_core::StatementIntent::Unknown), qui compte pour mutant, et
-//! `policy_decision` devient [`PolicyOutcome::Denied`]. Celles qui n'en ont pas
-//! — `risk` — font échouer la lecture : inventer un risque serait pire que
-//! renvoyer l'opérateur vers la ligne brute, qui reste lisible au `sqlite3`
+//! Columns that have a **conservative** value fall back to it when
+//! unreadable: `intent` becomes
+//! [`Unknown`](oxyn_core::StatementIntent::Unknown), which counts as mutating,
+//! and `policy_decision` becomes [`PolicyOutcome::Denied`]. Those that have
+//! none — `risk` — make the read fail: inventing a risk would be worse than
+//! sending the operator to the raw row, which stays readable with `sqlite3`
 //! (I-11).
 //!
-//! # Ce qui n'entre jamais ici
+//! # What never goes in here
 //!
-//! Le **texte** de l'instruction est consigné : c'est l'objet de l'audit. Les
-//! **valeurs liées** ne le sont pas — [`Command::statement_text`] ne les rend
-//! pas — et aucun secret ne transite par ce module (I-03).
+//! The statement's **text** is recorded: it is the object of the audit.
+//! **Bound values** are not — [`Command::statement_text`] does not return
+//! them — and no secret goes through this module (I-03).
 
 use chrono::{DateTime, Utc};
 use oxyn_core::{
@@ -57,21 +56,21 @@ use crate::encoding::{
 use crate::error::Result;
 use crate::store::Store;
 
-/// Qui a émis la commande, réduit à ce qui se range dans une colonne.
+/// Who issued the command, reduced to what fits in a column.
 ///
-/// Énumération **fermée**, comme [`Actor`] dont elle dérive : la dichotomie
-/// humain/agent porte toute la politique (ADR-0004), et un troisième acteur
-/// serait une décision d'ADR.
+/// A **closed** enum, like [`Actor`] from which it derives: the human/agent
+/// dichotomy carries the whole policy (ADR-0004), and a third actor would be
+/// an ADR decision.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ActorKind {
-    /// L'utilisateur, par l'interface.
+    /// The user, through the interface.
     Human,
-    /// Un agent IA.
+    /// An AI agent.
     Agent,
 }
 
 impl ActorKind {
-    /// Nom stable, celui qui est écrit dans la colonne `actor_kind`.
+    /// Stable name, the one written in the `actor_kind` column.
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
@@ -80,12 +79,12 @@ impl ActorKind {
         }
     }
 
-    /// Relit la colonne `actor_kind`.
+    /// Reads back the `actor_kind` column.
     ///
-    /// Une valeur inconnue rend [`Agent`](Self::Agent) : dans une piste
-    /// d'audit, la retombée sûre est celle qui **déclenche** l'examen, pas
-    /// celle qui l'évite. Attribuer à un humain une action qu'on ne sait pas
-    /// attribuer serait exactement l'erreur à ne pas commettre.
+    /// An unknown value returns [`Agent`](Self::Agent): in an audit trail,
+    /// the safe fallback is the one that **triggers** scrutiny, not the one
+    /// that avoids it. Attributing to a human an action that cannot be
+    /// attributed would be exactly the mistake not to make.
     #[must_use]
     pub fn from_text(raw: &str) -> Self {
         match raw {
@@ -101,7 +100,7 @@ impl ActorKind {
         }
     }
 
-    /// Est-ce un agent ?
+    /// Is it an agent?
     #[must_use]
     pub const fn is_agent(&self) -> bool {
         matches!(self, Self::Agent)
@@ -124,22 +123,22 @@ impl std::fmt::Display for ActorKind {
     }
 }
 
-/// Ce que le `PolicyGate` a répondu, réduit à ce qui se range dans une colonne.
+/// What the `PolicyGate` answered, reduced to what fits in a column.
 ///
-/// Énumération **fermée**, comme [`Decision`] : la triade d'ADR-0004 est le
-/// contrat du bus.
+/// A **closed** enum, like [`Decision`]: ADR-0004's triad is the bus
+/// contract.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum PolicyOutcome {
-    /// `Allow` : la commande a pu s'exécuter.
+    /// `Allow`: the command could run.
     Allowed,
-    /// `RequireApproval` : un accord explicite était nécessaire.
+    /// `RequireApproval`: explicit consent was required.
     ApprovalRequired,
-    /// `Deny` : la commande n'a pas eu lieu.
+    /// `Deny`: the command did not happen.
     Denied,
 }
 
 impl PolicyOutcome {
-    /// Nom stable, celui qui est écrit dans la colonne `policy_decision`.
+    /// Stable name, the one written in the `policy_decision` column.
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
@@ -149,13 +148,13 @@ impl PolicyOutcome {
         }
     }
 
-    /// Relit la colonne `policy_decision`.
+    /// Reads back the `policy_decision` column.
     ///
-    /// Une valeur inconnue rend [`Denied`](Self::Denied). La question à
-    /// laquelle sert une relecture du journal est « qu'est-ce qui a été
-    /// autorisé ? » : une ligne qu'on ne sait pas classer ne doit pas grossir
-    /// ce compte. L'incohérence reste visible — une ligne `denied` portant une
-    /// durée et des lignes affectées se remarque, et c'est le but.
+    /// An unknown value returns [`Denied`](Self::Denied). The question a
+    /// journal reading serves is "what was allowed?": a row that cannot be
+    /// classified must not inflate that count. The inconsistency stays
+    /// visible — a `denied` row carrying a duration and affected rows stands
+    /// out, and that is the point.
     #[must_use]
     pub fn from_text(raw: &str) -> Self {
         match raw {
@@ -172,7 +171,7 @@ impl PolicyOutcome {
         }
     }
 
-    /// La commande a-t-elle été autorisée sans autre formalité ?
+    /// Was the command allowed without further formality?
     #[must_use]
     pub const fn is_allowed(&self) -> bool {
         matches!(self, Self::Allowed)
@@ -195,70 +194,70 @@ impl std::fmt::Display for PolicyOutcome {
     }
 }
 
-/// Ce qu'on ajoute au journal.
+/// What gets appended to the journal.
 ///
-/// Le chemin normal est [`JournalRecord::new`], qui dérive tout ce qu'il peut
-/// de la commande et de la décision plutôt que de laisser l'appelant le
-/// recopier — un champ recopié à la main est un champ qui finira par mentir.
+/// The normal path is [`JournalRecord::new`], which derives everything it can
+/// from the command and the decision rather than letting the caller copy it —
+/// a field copied by hand is a field that will end up lying.
 #[derive(Debug, Clone)]
 pub struct JournalRecord {
-    /// Quand la commande a été soumise.
+    /// When the command was submitted.
     pub ts: DateTime<Utc>,
-    /// Clé de corrélation avec la demande d'approbation et l'historique.
+    /// Correlation key with the approval request and the history.
     pub command_id: Option<CommandId>,
-    /// Humain ou agent.
+    /// Human or agent.
     pub actor_kind: ActorKind,
-    /// Quel agent, le cas échéant.
+    /// Which agent, if any.
     pub actor_id: Option<AgentId>,
-    /// Dans quelle conversation, le cas échéant.
+    /// In which conversation, if any.
     pub agent_session: Option<AgentSessionId>,
-    /// La connexion visée, quand la commande en vise une.
+    /// The targeted connection, when the command targets one.
     pub connection: Option<ConnectionId>,
-    /// Nom stable de la commande ([`Command::name`]).
+    /// Stable name of the command ([`Command::name`]).
     pub command_kind: String,
-    /// Le texte de l'instruction, sans les valeurs liées.
+    /// The statement's text, without the bound values.
     pub statement: Option<String>,
-    /// L'intention retenue au moment de la décision.
+    /// The intent retained at decision time.
     pub intent: StatementIntent,
-    /// Le risque retenu au moment de la décision.
+    /// The risk retained at decision time.
     pub risk: MutationRisk,
-    /// Ce que le `PolicyGate` a répondu.
+    /// What the `PolicyGate` answered.
     pub decision: PolicyOutcome,
-    /// Le motif rendu avec la décision, quand il y en a un.
+    /// The reason returned with the decision, when there is one.
     pub decision_reason: Option<String>,
-    /// Qui a approuvé, pour une commande qui exigeait un accord.
+    /// Who approved, for a command that required consent.
     pub approved_by: Option<String>,
-    /// Durée d'exécution, quand la commande a été exécutée.
+    /// Execution duration, when the command was run.
     pub duration: Option<Duration>,
-    /// Lignes affectées, quand le driver les rend.
+    /// Affected rows, when the driver returns them.
     pub rows_affected: Option<u64>,
-    /// Message d'erreur, si l'exécution a échoué.
+    /// Error message, if the execution failed.
     pub error: Option<String>,
-    /// La famille de l'erreur, quand il y en a une.
+    /// The error's class, when there is one.
     ///
-    /// Séparée du message pour la même raison qu'elle l'est dans
-    /// [`HistoryRecord`](crate::HistoryRecord) : un message se reformule, et un
-    /// lecteur qui l'analysait se trompe alors en silence. Ici l'enjeu est
-    /// pourtant plus grand qu'ailleurs — c'est la piste d'audit, celle qu'on
-    /// relit **après** l'incident, et elle est append-only : ce qui n'y a pas
-    /// été écrit au bon moment ne s'y ajoute jamais.
+    /// Kept apart from the message for the same reason as in
+    /// [`HistoryRecord`](crate::HistoryRecord): a message gets reworded, and a
+    /// reader that parsed it then silently gets it wrong. Here, though, the
+    /// stakes are higher than elsewhere — it is the audit trail, the one read
+    /// **after** the incident, and it is append-only: what was not written at
+    /// the right moment is never added.
     ///
-    /// [`Ambiguous`](ErrorClass::Ambiguous) est le cas qui justifie la colonne :
-    /// il dit qu'on ne sait pas si le serveur a appliqué l'écriture, ce qu'aucun
-    /// message ne dit de lui-même ([I-13](../../../CLAUDE.md#i-13)).
+    /// [`Ambiguous`](ErrorClass::Ambiguous) is the case that justifies the
+    /// column: it says it is not known whether the server applied the write,
+    /// which no message says by itself ([I-13](../../../CLAUDE.md#i-13)).
     ///
-    /// `None` sur une commande qui n'a pas échoué — et sur toute ligne écrite
-    /// par une version d'Oxyn antérieure à la colonne, où il signifie « famille
-    /// inconnue ». Les deux sens se départagent par [`Self::error`].
+    /// `None` on a command that did not fail — and on any row written by an
+    /// Oxyn version older than the column, where it means "unknown class".
+    /// The two meanings are told apart by [`Self::error`].
     pub error_class: Option<ErrorClass>,
 }
 
 impl JournalRecord {
-    /// Construit une entrée à partir de la commande et de la décision rendue.
+    /// Builds an entry from the command and the decision returned.
     ///
-    /// L'horodatage est pris maintenant. Ce qui n'est connu qu'après
-    /// l'exécution — durée, lignes, erreur — s'ajoute par
-    /// [`completed`](Self::completed) ou [`failed`](Self::failed).
+    /// The timestamp is taken now. What is only known after execution —
+    /// duration, rows, error — is added by [`completed`](Self::completed) or
+    /// [`failed`](Self::failed).
     #[must_use]
     pub fn new(actor: &Actor, command: &Command, decision: &Decision) -> Self {
         let (actor_id, agent_session) = match actor {
@@ -293,22 +292,22 @@ impl JournalRecord {
         }
     }
 
-    /// Rattache l'identifiant de commande, clé de corrélation avec
-    /// l'historique et la demande d'approbation.
+    /// Attaches the command identifier, the correlation key with the history
+    /// and the approval request.
     #[must_use]
     pub fn with_command_id(mut self, command_id: CommandId) -> Self {
         self.command_id = Some(command_id);
         self
     }
 
-    /// Note qui a donné l'accord.
+    /// Records who gave consent.
     #[must_use]
     pub fn approved_by(mut self, who: impl Into<String>) -> Self {
         self.approved_by = Some(who.into());
         self
     }
 
-    /// Note une exécution réussie.
+    /// Records a successful execution.
     #[must_use]
     pub fn completed(mut self, duration: Duration, rows_affected: Option<u64>) -> Self {
         self.duration = Some(duration);
@@ -318,18 +317,17 @@ impl JournalRecord {
         self
     }
 
-    /// Note un échec, avec sa famille.
+    /// Records a failure, with its class.
     ///
-    /// Le message est celui de l'erreur du domaine. `oxyn-core` garantit qu'il
-    /// ne porte ni secret ni valeur liée (I-03) ; c'est la responsabilité de
-    /// qui construit la variante, pas de ce module.
+    /// The message is the domain error's. `oxyn-core` guarantees it carries
+    /// neither secret nor bound value (I-03); that is the responsibility of
+    /// whoever builds the variant, not of this module.
     ///
-    /// La famille est retenue **à part**, dans
-    /// [`error_class`](Self::error_class) : c'est elle, et non le texte, qui dit
-    /// si l'effet côté serveur est connu. Une piste d'audit relue après incident
-    /// où cette information n'existerait que sous forme de phrase française
-    /// obligerait son lecteur à interpréter — exactement ce que
-    /// [`ErrorClass`] existe pour éviter ([I-13](../../../CLAUDE.md#i-13)).
+    /// The class is kept **apart**, in [`error_class`](Self::error_class): it,
+    /// and not the text, says whether the server-side effect is known. An
+    /// audit trail read after an incident where this information only existed
+    /// as a sentence would force its reader to interpret — exactly what
+    /// [`ErrorClass`] exists to avoid ([I-13](../../../CLAUDE.md#i-13)).
     #[must_use]
     pub fn failed(mut self, error: &OxynError) -> Self {
         self.error = Some(error.to_string());
@@ -338,36 +336,36 @@ impl JournalRecord {
     }
 }
 
-/// Une entrée relue du journal.
+/// A journal entry read back.
 #[derive(Debug, Clone)]
 pub struct JournalEntry {
-    /// Numéro d'ordre, croissant et jamais réutilisé.
+    /// Sequence number, increasing and never reused.
     pub id: i64,
-    /// Le contenu de l'entrée.
+    /// The entry's content.
     pub record: JournalRecord,
 }
 
-/// Accès typé à la table `audit_journal`.
+/// Typed access to the `audit_journal` table.
 ///
-/// **Il n'existe volontairement aucune méthode d'écriture autre que
-/// [`append`](Self::append).** L'absence est la moitié de la garantie ; l'autre
-/// moitié est dans les déclencheurs SQLite du schéma.
+/// **There is deliberately no write method other than
+/// [`append`](Self::append).** The absence is half of the guarantee; the other
+/// half is in the schema's SQLite triggers.
 #[derive(Debug)]
 pub struct Journal<'a> {
     store: &'a Store,
 }
 
 impl<'a> Journal<'a> {
-    /// Rattache l'accesseur à son `Store`.
+    /// Binds the accessor to its `Store`.
     pub(crate) fn new(store: &'a Store) -> Self {
         Self { store }
     }
 
-    /// Ajoute une entrée et rend son numéro d'ordre.
+    /// Appends an entry and returns its sequence number.
     ///
-    /// # Erreurs
-    /// [`crate::StoreError::Sqlite`] si l'écriture échoue,
-    /// [`crate::StoreError::Json`] si le risque n'est pas sérialisable.
+    /// # Errors
+    /// [`crate::StoreError::Sqlite`] if the write fails,
+    /// [`crate::StoreError::Json`] if the risk is not serializable.
     pub fn append(&self, record: &JournalRecord) -> Result<i64> {
         let risk = tag_to_json(&record.risk)?;
 
@@ -403,14 +401,14 @@ impl<'a> Journal<'a> {
         })
     }
 
-    /// Les `limit` dernières entrées, la plus récente d'abord.
+    /// The last `limit` entries, most recent first.
     ///
-    /// L'ordre est celui des numéros d'ordre, pas celui des horodatages :
-    /// dans une piste d'audit, c'est l'ordre d'inscription qui fait foi, et il
-    /// ne dépend pas de l'horloge de la machine.
+    /// The order is that of sequence numbers, not timestamps: in an audit
+    /// trail, recording order is what is authoritative, and it does not
+    /// depend on the machine's clock.
     ///
-    /// # Erreurs
-    /// [`crate::StoreError::Sqlite`] ou [`crate::StoreError::Corrupted`].
+    /// # Errors
+    /// [`crate::StoreError::Sqlite`] or [`crate::StoreError::Corrupted`].
     pub fn recent(&self, limit: usize) -> Result<Vec<JournalEntry>> {
         self.store.with_connection(|conn| {
             let mut requete =
@@ -421,13 +419,13 @@ impl<'a> Journal<'a> {
         })
     }
 
-    /// Les `limit` dernières entrées visant une connexion donnée.
+    /// The last `limit` entries targeting a given connection.
     ///
-    /// Ces entrées survivent à la suppression de la connexion : la table ne
-    /// porte aucune clé étrangère vers `connections`.
+    /// These entries survive the connection's deletion: the table carries no
+    /// foreign key to `connections`.
     ///
-    /// # Erreurs
-    /// [`crate::StoreError::Sqlite`] ou [`crate::StoreError::Corrupted`].
+    /// # Errors
+    /// [`crate::StoreError::Sqlite`] or [`crate::StoreError::Corrupted`].
     pub fn for_connection(
         &self,
         connection: ConnectionId,
@@ -446,10 +444,10 @@ impl<'a> Journal<'a> {
         })
     }
 
-    /// Les `limit` dernières entrées imputées à un agent.
+    /// The last `limit` entries attributed to an agent.
     ///
-    /// # Erreurs
-    /// [`crate::StoreError::Sqlite`] ou [`crate::StoreError::Corrupted`].
+    /// # Errors
+    /// [`crate::StoreError::Sqlite`] or [`crate::StoreError::Corrupted`].
     pub fn for_agent(&self, agent: AgentId, limit: usize) -> Result<Vec<JournalEntry>> {
         self.store.with_connection(|conn| {
             let mut requete = conn.prepare(&format!(
@@ -464,10 +462,10 @@ impl<'a> Journal<'a> {
         })
     }
 
-    /// Nombre total d'entrées. Ne décroît jamais.
+    /// Total number of entries. Never decreases.
     ///
-    /// # Erreurs
-    /// [`crate::StoreError::Sqlite`] si la lecture échoue.
+    /// # Errors
+    /// [`crate::StoreError::Sqlite`] if the read fails.
     pub fn count(&self) -> Result<u64> {
         self.store.with_connection(|conn| {
             let total: i64 =
@@ -477,14 +475,14 @@ impl<'a> Journal<'a> {
     }
 }
 
-/// La liste de colonnes, partagée par toutes les lectures pour que
-/// [`depuis_ligne`] n'ait qu'une seule forme de ligne à connaître.
+/// The column list, shared by every read so that [`depuis_ligne`] has only
+/// one row shape to know.
 const SELECT_COLONNES: &str = "SELECT id, ts, command_id, actor_kind, actor_id, agent_session_id, \
      connection_id, command_kind, statement, intent, risk, policy_decision, \
      decision_reason, approved_by, duration_ms, rows_affected, error, error_class \
      FROM audit_journal";
 
-/// Reconstruit une [`JournalEntry`] à partir d'une ligne.
+/// Rebuilds a [`JournalEntry`] from a row.
 fn depuis_ligne(row: &Row<'_>) -> Result<JournalEntry> {
     let actor_kind: String = row.get("actor_kind")?;
     let intent: String = row.get("intent")?;
@@ -542,8 +540,8 @@ mod tests {
     }
 
     #[test]
-    fn le_journal_refuse_les_mises_a_jour() {
-        let store = Store::open_in_memory().expect("ouverture");
+    fn the_journal_refuses_updates() {
+        let store = Store::open_in_memory().expect("open");
         let commande = execution(ConnectionId::new(), "SELECT 1", StatementIntent::Read);
         let id = store
             .journal()
@@ -552,7 +550,7 @@ mod tests {
                 &commande,
                 &Decision::Allow,
             ))
-            .expect("ajout");
+            .expect("insert");
 
         let refus = store.with_connection(|conn| {
             Ok(conn.execute(
@@ -560,23 +558,23 @@ mod tests {
                 params![id],
             )?)
         });
-        let erreur = refus.expect_err("un UPDATE doit échouer");
+        let erreur = refus.expect_err("an UPDATE must fail");
         assert!(
             erreur.to_string().contains("append-only"),
-            "le déclencheur doit être la cause : {erreur}"
+            "the trigger must be the cause: {erreur}"
         );
 
-        let relu = store.journal().recent(1).expect("relecture");
+        let relu = store.journal().recent(1).expect("read back");
         assert_eq!(
             relu[0].record.statement.as_deref(),
             Some("SELECT 1"),
-            "la ligne ne doit pas avoir bougé"
+            "the row must not have moved"
         );
     }
 
     #[test]
-    fn le_journal_refuse_les_suppressions() {
-        let store = Store::open_in_memory().expect("ouverture");
+    fn the_journal_refuses_deletions() {
+        let store = Store::open_in_memory().expect("open");
         let commande = execution(
             ConnectionId::new(),
             "DROP TABLE clients",
@@ -587,30 +585,30 @@ mod tests {
             .append(&JournalRecord::new(
                 &Actor::Human,
                 &commande,
-                &Decision::deny("connexion en lecture seule"),
+                &Decision::deny("read-only connection"),
             ))
-            .expect("ajout");
+            .expect("insert");
 
         for sql in [
             "DELETE FROM audit_journal",
             "DELETE FROM audit_journal WHERE id = 1",
         ] {
             let refus = store.with_connection(|conn| Ok(conn.execute(sql, [])?));
-            let erreur = refus.expect_err("un DELETE doit échouer");
+            let erreur = refus.expect_err("a DELETE must fail");
             assert!(
                 erreur.to_string().contains("append-only"),
-                "{sql} : {erreur}"
+                "{sql}: {erreur}"
             );
         }
 
-        assert_eq!(store.journal().count().expect("comptage"), 1);
+        assert_eq!(store.journal().count().expect("count"), 1);
     }
 
     #[test]
-    fn une_commande_refusee_est_journalisee_avec_son_motif() {
-        // Un journal qui ne consigne que ce qui a marché ne dit rien de ce
-        // qu'un agent a tenté.
-        let store = Store::open_in_memory().expect("ouverture");
+    fn a_refused_command_is_logged_with_its_reason() {
+        // A journal that only records what worked says nothing of what an
+        // agent attempted.
+        let store = Store::open_in_memory().expect("open");
         let agent = Actor::agent(AgentId::new(), AgentSessionId::new());
         let commande = execution(
             ConnectionId::new(),
@@ -623,28 +621,25 @@ mod tests {
             .append(&JournalRecord::new(
                 &agent,
                 &commande,
-                &Decision::deny("un agent ne modifie pas les droits"),
+                &Decision::deny("an agent does not change privileges"),
             ))
-            .expect("ajout");
+            .expect("insert");
 
-        let entree = store.journal().recent(10).expect("relecture").remove(0);
+        let entree = store.journal().recent(10).expect("read back").remove(0);
         assert_eq!(entree.record.decision, PolicyOutcome::Denied);
         assert!(entree.record.actor_kind.is_agent());
         assert_eq!(
             entree.record.decision_reason.as_deref(),
-            Some("un agent ne modifie pas les droits")
+            Some("an agent does not change privileges")
         );
         assert_eq!(entree.record.intent, StatementIntent::Grant);
-        assert!(
-            entree.record.duration.is_none(),
-            "elle n'a pas été exécutée"
-        );
+        assert!(entree.record.duration.is_none(), "it was not executed");
     }
 
     #[test]
-    fn les_valeurs_liees_n_entrent_pas_dans_le_journal() {
-        // I-03 : le texte de la requête est de l'audit, ses valeurs liées non.
-        let store = Store::open_in_memory().expect("ouverture");
+    fn bound_values_do_not_enter_the_journal() {
+        // I-03: the query's text is audit material, its bound values are not.
+        let store = Store::open_in_memory().expect("open");
         let commande = execution(
             ConnectionId::new(),
             "SELECT * FROM comptes WHERE mot_de_passe = $1",
@@ -657,7 +652,7 @@ mod tests {
                 &commande,
                 &Decision::Allow,
             ))
-            .expect("ajout");
+            .expect("insert");
 
         let tout: String = store
             .with_connection(|conn| {
@@ -668,16 +663,13 @@ mod tests {
                     |row| row.get(0),
                 )?)
             })
-            .expect("lecture brute");
-        assert!(
-            !tout.contains("hunter2"),
-            "une valeur liée a fuité : {tout}"
-        );
+            .expect("raw read");
+        assert!(!tout.contains("hunter2"), "a bound value leaked: {tout}");
     }
 
     #[test]
-    fn aller_retour_complet_d_une_entree() {
-        let store = Store::open_in_memory().expect("ouverture");
+    fn an_entry_round_trips_completely() {
+        let store = Store::open_in_memory().expect("open");
         let connexion = ConnectionId::new();
         let agent_id = AgentId::new();
         let session = AgentSessionId::new();
@@ -689,7 +681,7 @@ mod tests {
             &acteur,
             &commande,
             &Decision::approval(
-                "écriture demandée par un agent",
+                "write requested by an agent",
                 Some(Preview::new("DELETE FROM commandes", "base client")),
             ),
         )
@@ -697,13 +689,13 @@ mod tests {
         .approved_by("nicolas")
         .completed(Duration::from_millis(1_234), Some(42));
 
-        let id = store.journal().append(&record).expect("ajout");
+        let id = store.journal().append(&record).expect("insert");
         assert!(id > 0);
 
         let relu = store
             .journal()
             .for_connection(connexion, 10)
-            .expect("relecture")
+            .expect("read back")
             .remove(0);
 
         assert_eq!(relu.id, id);
@@ -725,8 +717,8 @@ mod tests {
     }
 
     #[test]
-    fn le_risque_declare_est_conserve() {
-        let store = Store::open_in_memory().expect("ouverture");
+    fn the_declared_risk_is_preserved() {
+        let store = Store::open_in_memory().expect("open");
         let commande = Command::Execute {
             connection: ConnectionId::new(),
             session: SessionId::new(),
@@ -743,45 +735,45 @@ mod tests {
                 &commande,
                 &Decision::approval("TRUNCATE", None),
             ))
-            .expect("ajout");
+            .expect("insert");
 
-        let relu = store.journal().recent(1).expect("relecture").remove(0);
+        let relu = store.journal().recent(1).expect("read back").remove(0);
         assert_eq!(relu.record.risk, MutationRisk::Truncate);
     }
 
     #[test]
-    fn un_echec_est_journalise_sans_masquer_la_decision() {
-        let store = Store::open_in_memory().expect("ouverture");
+    fn a_failure_is_logged_without_hiding_the_decision() {
+        let store = Store::open_in_memory().expect("open");
         let commande = execution(ConnectionId::new(), "SELECT 1", StatementIntent::Read);
         let record = JournalRecord::new(&Actor::Human, &commande, &Decision::Allow)
             .completed(Duration::from_millis(5), None)
-            .failed(&OxynError::Query("relation absente".into()));
+            .failed(&OxynError::Query("missing relation".into()));
 
-        store.journal().append(&record).expect("ajout");
-        let relu = store.journal().recent(1).expect("relecture").remove(0);
+        store.journal().append(&record).expect("insert");
+        let relu = store.journal().recent(1).expect("read back").remove(0);
 
         assert_eq!(relu.record.decision, PolicyOutcome::Allowed);
         assert!(
             relu.record
                 .error
                 .as_deref()
-                .is_some_and(|e| e.contains("relation absente"))
+                .is_some_and(|e| e.contains("missing relation"))
         );
         assert_eq!(relu.record.error_class, Some(ErrorClass::Permanent));
     }
 
-    /// Une écriture d'agent dont l'effet est inconnu reste **dicible** dans la
-    /// piste d'audit.
+    /// An agent write whose effect is unknown stays **expressible** in the
+    /// audit trail.
     ///
-    /// C'est la question qu'on vient poser au journal après incident : cet
-    /// agent a-t-il modifié la base ? « Délai dépassé après 30 s » ne répond
-    /// pas ; `ambiguë` répond « on ne sait pas », et c'est la seule réponse
-    /// honnête. Le journal étant append-only, une famille non écrite à
-    /// l'instant de l'incident ne s'y ajoutera jamais
+    /// It is the question put to the journal after an incident: did this
+    /// agent modify the database? "Timed out after 30 s" does not answer;
+    /// `ambiguous` answers "we do not know", and it is the only honest
+    /// answer. The journal being append-only, a class not written at the
+    /// moment of the incident will never be added
     /// ([I-13](../../../CLAUDE.md#i-13)).
     #[test]
-    fn la_famille_d_une_erreur_survit_dans_la_piste_d_audit() {
-        let store = Store::open_in_memory().expect("ouverture");
+    fn an_error_class_survives_in_the_audit_trail() {
+        let store = Store::open_in_memory().expect("open");
         let commande = execution(
             ConnectionId::new(),
             "INSERT INTO commandes (client) VALUES (1)",
@@ -796,47 +788,48 @@ mod tests {
             after: Duration::from_secs(30),
         });
 
-        store.journal().append(&record).expect("ajout");
-        let relu = store.journal().recent(1).expect("relecture").remove(0);
+        store.journal().append(&record).expect("insert");
+        let relu = store.journal().recent(1).expect("read back").remove(0);
 
         assert_eq!(relu.record.error_class, Some(ErrorClass::Ambiguous));
         assert!(
-            !relu.record.error_class.expect("une famille").is_retryable(),
-            "un `INSERT` expiré ne se rejoue pas : le serveur a peut-être appliqué"
+            !relu.record.error_class.expect("a family").is_retryable(),
+            "an expired `INSERT` is not replayed: the server may have applied it"
         );
-        // La valeur liée n'a pas suivi, ici non plus (I-03).
+        // The bound value did not follow here either (I-03).
         assert!(!format!("{:?}", relu.record).contains("hunter2"));
     }
 
-    /// Une commande qui aboutit ne porte aucune famille : il n'y a pas d'erreur
-    /// à classer, et `completed` efface ce qu'un `failed` antérieur aurait posé.
+    /// A command that succeeds carries no class: there is no error to
+    /// classify, and `completed` erases what an earlier `failed` would have
+    /// set.
     #[test]
-    fn une_commande_reussie_ne_porte_aucune_famille() {
-        let store = Store::open_in_memory().expect("ouverture");
+    fn a_successful_command_carries_no_class() {
+        let store = Store::open_in_memory().expect("open");
         let commande = execution(ConnectionId::new(), "SELECT 1", StatementIntent::Read);
         let record = JournalRecord::new(&Actor::Human, &commande, &Decision::Allow)
-            .failed(&OxynError::Query("rejetée".into()))
+            .failed(&OxynError::Query("rejected".into()))
             .completed(Duration::from_millis(3), Some(1));
 
-        store.journal().append(&record).expect("ajout");
-        let relu = store.journal().recent(1).expect("relecture").remove(0);
+        store.journal().append(&record).expect("insert");
+        let relu = store.journal().recent(1).expect("read back").remove(0);
 
         assert_eq!(relu.record.error_class, None);
         assert_eq!(relu.record.error, None);
     }
 
     #[test]
-    fn le_journal_survit_a_la_suppression_de_la_connexion() {
-        // C'est la propriété qui rend la piste d'audit utile : effacer la
-        // connexion n'efface pas ce qu'on a fait avec.
-        let store = Store::open_in_memory().expect("ouverture");
+    fn the_journal_survives_the_connection_deletion() {
+        // That is the property that makes the audit trail useful: erasing the
+        // connection does not erase what was done with it.
+        let store = Store::open_in_memory().expect("open");
         let workspace = store.workspaces().create("atelier").expect("workspace");
         let config = ConnectionConfig::new("base client", DriverId::postgres())
             .with_environment(Environment::Production);
         store
             .connections()
             .save(workspace.id, &config)
-            .expect("écriture");
+            .expect("write");
 
         let commande = execution(config.id, "DELETE FROM clients", StatementIntent::Write);
         store
@@ -846,21 +839,16 @@ mod tests {
                 &commande,
                 &Decision::approval("production", None),
             ))
-            .expect("ajout");
+            .expect("insert");
 
-        assert!(store.connections().delete(config.id).expect("suppression"));
-        assert!(
-            store
-                .workspaces()
-                .delete(workspace.id)
-                .expect("suppression")
-        );
+        assert!(store.connections().delete(config.id).expect("deletion"));
+        assert!(store.workspaces().delete(workspace.id).expect("deletion"));
 
-        assert_eq!(store.journal().count().expect("comptage"), 1);
+        assert_eq!(store.journal().count().expect("count"), 1);
         let restant = store
             .journal()
             .for_connection(config.id, 10)
-            .expect("relecture");
+            .expect("read back");
         assert_eq!(restant.len(), 1);
         assert_eq!(
             restant[0].record.statement.as_deref(),
@@ -869,8 +857,8 @@ mod tests {
     }
 
     #[test]
-    fn une_decision_illisible_ne_compte_pas_comme_autorisee() {
-        let store = Store::open_in_memory().expect("ouverture");
+    fn an_unreadable_decision_does_not_count_as_allowed() {
+        let store = Store::open_in_memory().expect("open");
         let commande = execution(ConnectionId::new(), "SELECT 1", StatementIntent::Read);
         store
             .journal()
@@ -879,10 +867,10 @@ mod tests {
                 &commande,
                 &Decision::Allow,
             ))
-            .expect("ajout");
+            .expect("insert");
 
-        // Un UPDATE est impossible ; on simule donc une ligne écrite par une
-        // version future en insérant directement des étiquettes inconnues.
+        // An UPDATE is impossible; a row written by a future version is
+        // therefore simulated by directly inserting unknown tags.
         store
             .with_connection(|conn| {
                 Ok(conn.execute(
@@ -892,9 +880,9 @@ mod tests {
                     params![Utc::now()],
                 )?)
             })
-            .expect("insertion");
+            .expect("insert");
 
-        let relu = store.journal().recent(1).expect("relecture").remove(0);
+        let relu = store.journal().recent(1).expect("read back").remove(0);
         assert_eq!(relu.record.decision, PolicyOutcome::Denied);
         assert!(relu.record.actor_kind.is_agent());
         assert_eq!(relu.record.intent, StatementIntent::Unknown);
@@ -902,8 +890,8 @@ mod tests {
     }
 
     #[test]
-    fn les_entrees_sortent_dans_l_ordre_d_inscription_inverse() {
-        let store = Store::open_in_memory().expect("ouverture");
+    fn entries_come_out_in_reverse_recording_order() {
+        let store = Store::open_in_memory().expect("open");
         let connexion = ConnectionId::new();
         for n in 0..5 {
             let commande = execution(connexion, &format!("SELECT {n}"), StatementIntent::Read);
@@ -914,10 +902,10 @@ mod tests {
                     &commande,
                     &Decision::Allow,
                 ))
-                .expect("ajout");
+                .expect("insert");
         }
 
-        let recentes = store.journal().recent(3).expect("relecture");
+        let recentes = store.journal().recent(3).expect("read back");
         assert_eq!(recentes.len(), 3);
         assert_eq!(recentes[0].record.statement.as_deref(), Some("SELECT 4"));
         assert_eq!(recentes[2].record.statement.as_deref(), Some("SELECT 2"));

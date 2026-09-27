@@ -34,7 +34,7 @@ export type ExportState =
  *
  * A disabled trigger stays focusable so that its reason can be read, by
  * pointer and by keyboard: a `title` on a disabled button is never shown
- * (docs/UX-SPEC.md, « Ce qui est exporté est ce qui est affiché »). A format
+ * (docs/UX-SPEC.md, « What is exported is what is displayed »). A format
  * the product cannot write yet is listed unavailable, never hidden and never
  * offered.
  */
@@ -152,7 +152,7 @@ export function ExportMenuView({
 
 /**
  * The same export as a submenu of `Actions`, below 1200 px (docs/UX-SPEC.md,
- * « Largeur réduite »). The export itself outlives the menu: its state and
+ * « Reduced width »). The export itself outlives the menu: its state and
  * its cancellation belong to the caller, and the footer shows its progress.
  */
 export function ExportSubmenu({

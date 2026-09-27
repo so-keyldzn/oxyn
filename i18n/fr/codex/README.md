@@ -1,4 +1,4 @@
-<!-- oxyn-translation source=".codex/README.md" sha256="e3e59c80f59a" -->
+<!-- oxyn-translation source=".codex/README.md" sha256="eba6fcac28d1" -->
 
 > Traduction française de [.codex/README.md](../../../.codex/README.md). **La version anglaise fait foi.**
 
@@ -44,7 +44,7 @@ web désigne un index de recherche, pas le cache de prompts.
 ## Agents de spécialité
 
 Les onze fichiers [agents/](../../../.codex/agents) définissent les rôles locaux : architecte,
-rustacien, driveriste, interfacier, ia-workspace, documentaliste, performance,
+rustacien, driveriste, frontiste, ia-workspace, documentaliste, performance,
 relecteur-invariants, relecteur-frontiere, relecteur-securite et
 detecteur-divergence. Chaque profil renvoie au guide correspondant dans
 [.claude/agents/](../claude/agents) et applique les adaptations d'AGENTS.md.

@@ -4,12 +4,12 @@ use super::*;
 use crate::documents::Document;
 
 fn atelier() -> (Store, WorkspaceId) {
-    let store = Store::open_in_memory().expect("store en mémoire");
+    let store = Store::open_in_memory().expect("in-memory store");
     let workspace = store.workspaces().create("atelier").expect("workspace").id;
     (store, workspace)
 }
 
-/// Un document enregistré et ouvert, comme une console qu'on a tapée.
+/// A saved and open document, like a console that was typed in.
 fn console(store: &Store, workspace: WorkspaceId) -> DocumentId {
     let document = Document::new(workspace, "console", QueryLanguage::SQL);
     store.documents().save(&document).expect("document");
@@ -21,7 +21,7 @@ fn console(store: &Store, workspace: WorkspaceId) -> DocumentId {
             )?;
             Ok(())
         })
-        .expect("ouverture");
+        .expect("open");
     document.id
 }
 
@@ -42,21 +42,21 @@ fn layout(consoles: Vec<DocumentId>) -> WindowLayout {
     }
 }
 
-/// Termine un lancement, comme un `⌘Q` ordinaire.
+/// Ends a launch, like an ordinary `⌘Q`.
 fn quit(store: &Store, session: AppSessionId) {
-    store.sessions().close(session).expect("fermeture");
+    store.sessions().close(session).expect("close");
 }
 
 fn sql<T: rusqlite::types::FromSql>(store: &Store, query: &str) -> T {
     store
         .with_connection(|connection| Ok(connection.query_row(query, [], |row| row.get(0))?))
-        .expect("lecture")
+        .expect("read")
 }
 
 #[test]
-fn une_fenetre_ecrite_revient_au_lancement_suivant() {
+fn a_written_window_comes_back_at_the_next_launch() {
     let (store, workspace) = atelier();
-    let (first, _) = store.sessions().begin(workspace).expect("lancement");
+    let (first, _) = store.sessions().begin(workspace).expect("launch");
     let mut written = layout(vec![console(&store, workspace), console(&store, workspace)]);
     written.object_location = Some(ObjectLocation {
         connection: ConnectionId::new(),
@@ -66,30 +66,30 @@ fn une_fenetre_ecrite_revient_au_lancement_suivant() {
     store
         .windows()
         .save(workspace, first, &written)
-        .expect("écriture");
+        .expect("write");
     quit(&store, first);
 
-    let (second, _) = store.sessions().begin(workspace).expect("relance");
+    let (second, _) = store.sessions().begin(workspace).expect("relaunch");
     let adopted = store.windows().adopt(workspace, second).expect("adoption");
     assert_eq!(adopted, vec![written]);
 }
 
 #[test]
-fn une_reecriture_remplace_les_consoles_et_compte_la_revision() {
+fn a_rewrite_replaces_the_consoles_and_counts_the_revision() {
     let (store, workspace) = atelier();
-    let (session, _) = store.sessions().begin(workspace).expect("lancement");
+    let (session, _) = store.sessions().begin(workspace).expect("launch");
     let (a, b) = (console(&store, workspace), console(&store, workspace));
     let mut written = layout(vec![a, b]);
     store
         .windows()
         .save(workspace, session, &written)
-        .expect("écriture");
+        .expect("write");
     written.consoles = vec![b];
     written.active_document = Some(b);
     store
         .windows()
         .save(workspace, session, &written)
-        .expect("réécriture");
+        .expect("rewrite");
 
     assert_eq!(
         sql::<i64>(&store, "SELECT revision FROM workspace_windows"),
@@ -99,24 +99,24 @@ fn une_reecriture_remplace_les_consoles_et_compte_la_revision() {
     assert_eq!(adopted.first().map(|l| l.consoles.clone()), Some(vec![b]));
 }
 
-/// `UNIQUE (document_id)` : une console déplacée quitte la fenêtre d'origine
-/// au lieu de faire échouer l'écriture.
+/// `UNIQUE (document_id)`: a moved console leaves its original window instead
+/// of making the write fail.
 #[test]
-fn une_console_est_dans_une_seule_fenetre() {
+fn a_console_is_in_a_single_window() {
     let (store, workspace) = atelier();
-    let (session, _) = store.sessions().begin(workspace).expect("lancement");
+    let (session, _) = store.sessions().begin(workspace).expect("launch");
     let moved = console(&store, workspace);
     let left = layout(vec![moved]);
     store
         .windows()
         .save(workspace, session, &left)
-        .expect("gauche");
+        .expect("left");
     let mut right = layout(vec![moved]);
     right.ordinal = 1;
     store
         .windows()
         .save(workspace, session, &right)
-        .expect("droite");
+        .expect("right");
 
     let adopted = store.windows().adopt(workspace, session).expect("adoption");
     let consoles: Vec<_> = adopted.iter().map(|l| l.consoles.clone()).collect();
@@ -125,14 +125,14 @@ fn une_console_est_dans_une_seule_fenetre() {
 }
 
 #[test]
-fn une_console_jamais_enregistree_n_est_pas_ecrite() {
+fn a_never_saved_console_is_not_written() {
     let (store, workspace) = atelier();
-    let (session, _) = store.sessions().begin(workspace).expect("lancement");
+    let (session, _) = store.sessions().begin(workspace).expect("launch");
     let written = layout(vec![DocumentId::new()]);
     store
         .windows()
         .save(workspace, session, &written)
-        .expect("écriture");
+        .expect("write");
     assert_eq!(
         sql::<i64>(&store, "SELECT COUNT(*) FROM workspace_window_consoles"),
         0
@@ -140,19 +140,19 @@ fn une_console_jamais_enregistree_n_est_pas_ecrite() {
 }
 
 #[test]
-fn retirer_une_fenetre_laisse_ses_documents_dans_la_bibliotheque() {
+fn removing_a_window_leaves_its_documents_in_the_library() {
     let (store, workspace) = atelier();
-    let (session, _) = store.sessions().begin(workspace).expect("lancement");
+    let (session, _) = store.sessions().begin(workspace).expect("launch");
     let kept = console(&store, workspace);
     let written = layout(vec![kept]);
     store
         .windows()
         .save(workspace, session, &written)
-        .expect("écriture");
+        .expect("write");
     store
         .windows()
         .remove(workspace, written.window)
-        .expect("retrait");
+        .expect("removal");
 
     assert!(
         store
@@ -161,24 +161,21 @@ fn retirer_une_fenetre_laisse_ses_documents_dans_la_bibliotheque() {
             .expect("adoption")
             .is_empty()
     );
-    assert!(store.documents().get(kept).expect("lecture").is_some());
+    assert!(store.documents().get(kept).expect("read").is_some());
 }
 
-/// ADR-0021 prévoit deux instances sur le même fichier : l'une ne reprend pas
-/// les fenêtres de l'autre tant qu'elle bat.
+/// ADR-0021 provides for two instances on the same file: one does not take
+/// over the other's windows while it is still beating.
 #[test]
-fn les_fenetres_d_une_instance_vivante_restent_a_elle() {
+fn the_windows_of_a_live_instance_stay_its_own() {
     let (store, workspace) = atelier();
-    let (alive, _) = store
-        .sessions()
-        .begin(workspace)
-        .expect("première instance");
+    let (alive, _) = store.sessions().begin(workspace).expect("first instance");
     store
         .windows()
         .save(workspace, alive, &layout(Vec::new()))
-        .expect("écriture");
+        .expect("write");
 
-    let (other, _) = store.sessions().begin(workspace).expect("seconde instance");
+    let (other, _) = store.sessions().begin(workspace).expect("second instance");
     assert!(
         store
             .windows()
@@ -187,9 +184,7 @@ fn les_fenetres_d_une_instance_vivante_restent_a_elle() {
             .is_empty()
     );
 
-    store
-        .mark_session_stale_for_tests(alive)
-        .expect("vieillissement");
+    store.mark_session_stale_for_tests(alive).expect("ageing");
     assert_eq!(
         store
             .windows()
@@ -198,8 +193,8 @@ fn les_fenetres_d_une_instance_vivante_restent_a_elle() {
             .len(),
         1
     );
-    // Réécrite au nom de l'adoptante : la première, si elle revenait, ne la
-    // reprendrait plus.
+    // Rewritten in the adopter's name: the first instance, if it came back,
+    // would not take it again.
     assert_eq!(
         sql::<String>(&store, "SELECT app_session_id FROM workspace_windows"),
         other.to_string()
@@ -207,19 +202,19 @@ fn les_fenetres_d_une_instance_vivante_restent_a_elle() {
 }
 
 #[test]
-fn au_dela_de_seize_fenetres_le_surplus_est_oublie() {
+fn beyond_sixteen_windows_the_surplus_is_forgotten() {
     let (store, workspace) = atelier();
-    let (session, _) = store.sessions().begin(workspace).expect("lancement");
+    let (session, _) = store.sessions().begin(workspace).expect("launch");
     for ordinal in 0..20 {
         let mut written = layout(Vec::new());
         written.ordinal = ordinal;
         store
             .windows()
             .save(workspace, session, &written)
-            .expect("écriture");
+            .expect("write");
     }
     quit(&store, session);
-    let (next, _) = store.sessions().begin(workspace).expect("relance");
+    let (next, _) = store.sessions().begin(workspace).expect("relaunch");
     let adopted = store.windows().adopt(workspace, next).expect("adoption");
     assert_eq!(adopted.len(), WindowLayout::MAX_WINDOWS);
     assert_eq!(adopted.last().map(|l| l.ordinal), Some(15));
@@ -229,18 +224,18 @@ fn au_dela_de_seize_fenetres_le_surplus_est_oublie() {
     );
 }
 
-/// Le fichier s'édite à la main : ce qu'il porte d'aberrant ne franchit pas la
-/// lecture.
+/// The file can be edited by hand: whatever aberrant values it carries do not
+/// get past reading.
 #[test]
-fn une_ligne_hostile_est_ramenee_ou_ignoree() {
+fn a_hostile_row_is_clamped_or_ignored() {
     let (store, workspace) = atelier();
-    let (session, _) = store.sessions().begin(workspace).expect("lancement");
+    let (session, _) = store.sessions().begin(workspace).expect("launch");
     let active = console(&store, workspace);
     let written = layout(vec![active]);
     store
         .windows()
         .save(workspace, session, &written)
-        .expect("écriture");
+        .expect("write");
     store
         .with_connection(|connection| {
             connection.execute(
@@ -256,7 +251,7 @@ fn une_ligne_hostile_est_ramenee_ou_ignoree() {
             )?;
             Ok(())
         })
-        .expect("altération");
+        .expect("tampering");
 
     let adopted = store.windows().adopt(workspace, session).expect("adoption");
     let expected = WindowLayout {
@@ -279,28 +274,27 @@ fn une_ligne_hostile_est_ramenee_ou_ignoree() {
 }
 
 #[test]
-fn une_console_fermee_ne_revient_pas() {
+fn a_closed_console_does_not_come_back() {
     let (store, workspace) = atelier();
-    let (session, _) = store.sessions().begin(workspace).expect("lancement");
+    let (session, _) = store.sessions().begin(workspace).expect("launch");
     let closed = console(&store, workspace);
     store
         .windows()
         .save(workspace, session, &layout(vec![closed]))
-        .expect("écriture");
-    store.documents().delete(closed).expect("suppression");
+        .expect("write");
+    store.documents().delete(closed).expect("deletion");
 
     let adopted = store.windows().adopt(workspace, session).expect("adoption");
     assert_eq!(adopted.first().map(|l| l.consoles.len()), Some(0));
     assert_eq!(adopted.first().and_then(|l| l.active_document), None);
 }
 
-/// Un fichier retouché peut avoir perdu `STRICT` : une valeur mal typée ne
-/// coûte que sa ligne, oubliée sans revenir au lancement suivant, ou que sa
-/// colonne.
+/// A hand-edited file may have lost `STRICT`: a mistyped value only costs its
+/// row, forgotten without coming back at the next launch, or its column.
 #[test]
-fn une_colonne_mal_typee_ne_coute_que_sa_ligne() {
+fn a_mistyped_column_only_costs_its_row() {
     let (store, workspace) = atelier();
-    let (session, _) = store.sessions().begin(workspace).expect("lancement");
+    let (session, _) = store.sessions().begin(workspace).expect("launch");
     let kept = layout(Vec::new());
     store
         .with_connection(|connection| {
@@ -322,11 +316,11 @@ fn une_colonne_mal_typee_ne_coute_que_sa_ligne() {
             )?;
             Ok(())
         })
-        .expect("fichier retouché");
+        .expect("hand-edited file");
 
     let adopted = store.windows().adopt(workspace, session).expect("adoption");
-    // Un identifiant qui n'est pas du texte : illisible, oublié. Une largeur
-    // qui n'est pas un nombre : ramenée au minimum par le desktop.
+    // An identifier that is not text: unreadable, forgotten. A width that is
+    // not a number: clamped to the minimum by the desktop.
     assert_eq!(
         adopted
             .iter()

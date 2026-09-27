@@ -34,7 +34,7 @@ const theme = EditorView.theme({
     backgroundColor: "var(--background)",
     color: "var(--foreground)",
     // The reading preset, not a fixed size: Comfortable must move the SQL as
-    // it moves the grid (docs/UX-SPEC.md, « Lisibilité et hauteur de grille »).
+    // it moves the grid (docs/UX-SPEC.md, « Readability and grid height »).
     fontSize: "var(--reading-text)",
   },
   ".cm-content": {
@@ -211,7 +211,7 @@ export function SqlEditor({
         ? undefined
         : () => runModBinding(view, "/", "Slash"),
       // A name dropped from the catalog lands where the pointer is, and only
-      // lands: nothing runs (UX-SPEC « Souris et glisser »). A read-only
+      // lands: nothing runs (UX-SPEC « Mouse and drag »). A read-only
       // view takes no text.
       insertAt: readOnly
         ? undefined

@@ -1,22 +1,21 @@
-# Ce que `make licences-npm` accepte en plus de la liste `allow` de deny.toml,
-# pour les dépendances npm de production d'apps/desktop.
+# What `make licences-npm` accepts on top of the `allow` list of deny.toml,
+# for the production npm dependencies of apps/desktop.
 #
-# La liste de deny.toml reste la règle : une licence n'y entre que compatible
-# avec la GPLv3 (ADR-0044). Ce fichier ne porte que ce qui est propre à npm.
-# Le verdict de la FSF sur chaque licence est dans RESEARCH-NOTES § Licences.
+# The deny.toml list stays the rule: a license only enters it if compatible
+# with the GPLv3 (ADR-0044). This file only carries what is specific to npm.
+# The FSF verdict on each license is in RESEARCH-NOTES § Licenses.
 
-# Deux licences de code sans condition, que le graphe Rust ne contient pas.
-# FSF : `0BSD` (#Zero-BSD) et `Unlicense` (#Unlicense) sont compatibles.
+# Two unconditional code licenses that the Rust graph does not contain.
+# FSF: `0BSD` (#Zero-BSD) and `Unlicense` (#Unlicense) are compatible.
 allow = ["0BSD", "Unlicense"]
 
-# Une licence acceptée pour un paquet, et pour lui seul : elle ne convient
-# pas à du code.
+# A license accepted for one package, and for it alone: it does not suit code.
 
 [[exceptions]]
 name = "@fontsource-variable/geist"
 allow = ["OFL-1.1"]
-# Une police. FSF (#SILOFL) : licence libre pour polices, sa seule exigence
-# inhabituelle est « inoffensive ».
+# A font. FSF (#SILOFL): a free license for fonts, its only unusual
+# requirement is "harmless".
 
 [[exceptions]]
 name = "@fontsource-variable/geist-mono"
@@ -25,19 +24,19 @@ allow = ["OFL-1.1"]
 [[exceptions]]
 name = "caniuse-lite"
 allow = ["CC-BY-4.0"]
-# Des données de compatibilité des navigateurs. FSF (#ccby) : compatible avec
-# toutes les versions de la GPL.
+# Browser compatibility data. FSF (#ccby): compatible with all versions of the
+# GPL.
 
 [[exceptions]]
 name = "argparse"
 allow = ["Python-2.0"]
-# Un portage de l'argparse de Python. FSF (#Python) : compatible.
+# A port of Python's argparse. FSF (#Python): compatible.
 
-# Un paquet qui ne déclare pas sa licence. La valeur vient de son fichier de
-# licence, relu à cette version : une montée demande de le relire.
+# A package that does not declare its license. The value comes from its license
+# file, reread at this version: a bump requires rereading it.
 
 [[clarify]]
 name = "khroma"
 version = "2.1.0"
 license = "MIT"
-# `package.json` sans champ `license` ; le fichier `license` est le texte MIT.
+# `package.json` without a `license` field; the `license` file is the MIT text.

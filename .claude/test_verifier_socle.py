@@ -1,15 +1,16 @@
 #!/usr/bin/env python3
-"""Fige le calcul des ancres du vérificateur de socle, et la CI sélective.
+"""Pins the anchor computation of the foundation verifier, and selective CI.
 
-Un slug calculé autrement que GitHub donne deux pannes opposées : un fragment
-juste refusé, et le contrôle finit désactivé ; un fragment mort accepté, et le
-contrôle redevient décoratif. Chaque cas ci-dessous est un titre réel du dépôt
-ou la forme qui a déjà trompé un rédacteur.
+A slug computed differently from GitHub gives two opposite failures: a correct
+fragment refused, and the check ends up disabled; a dead fragment accepted, and
+the check becomes decorative again. Each case below is a real heading of the
+repository (French ones survive in i18n/fr/) or the shape that has already
+fooled a writer.
 
-La CI sélective (ADR-0045) tient à deux choses que rien d'autre ne vérifie :
-`script/zones-ci` range tout fichier inconnu, et tout événement autre qu'une
-PR, du côté « tout tourne » ; le job `qualite` agrège chaque job qui passe la
-porte.
+Selective CI (ADR-0045) rests on two things nothing else checks:
+`script/zones-ci` puts every unknown file, and every event other than a PR, on
+the "everything runs" side; the `qualite` job aggregates every job that passes
+the gate.
 
     python3 .claude/test_verifier_socle.py
 """
@@ -60,7 +61,7 @@ ZONES: list[tuple[str, set[str]]] = [
     ("script/zones-ci", TOUT),
     ("deny.toml", TOUT),
     (".cargo/config.toml", TOUT),
-    # Inconnu : tout, jamais rien.
+    # Unknown: everything, never nothing.
     ("NOTICE", TOUT),
     ("LICENSE", TOUT),
 ]
@@ -91,7 +92,7 @@ SLUGS: list[tuple[str, str]] = [
     ("Le type `Vec<u8>`", "le-type-vecu8"),
 ]
 
-# Le `#` final n'est une clôture de titre que précédé d'une espace.
+# The final `#` only closes a heading when preceded by a space.
 TITRES: list[tuple[str, str]] = [
     ("## Le langage F#", "le-langage-f"),
     ("## Clôturé ##", "clôturé"),
@@ -110,23 +111,23 @@ DOCUMENT = """\
 
 def echecs_ci() -> list[str]:
     echecs = [
-        f"zones_de({chemin!r}) = {sorted(obtenues)}, attendu {sorted(attendu)}"
+        f"zones_de({chemin!r}) = {sorted(obtenues)}, expected {sorted(attendu)}"
         for chemin, attendu in ZONES
         if (obtenues := zones_ci.zones_de(chemin)) != attendu
     ]
     if zones_ci.zones_touchees("pull_request", ["docs/README.md"]) != {"docs"}:
-        echecs.append("une PR de documentation seule touche d'autres zones")
+        echecs.append("a documentation-only PR touches other areas")
     for evenement in ("push", "workflow_dispatch"):
         if zones_ci.zones_touchees(evenement, ["docs/README.md"]) != TOUT:
-            echecs.append(f"`{evenement}` ne fait pas tout tourner")
+            echecs.append(f"`{evenement}` does not run everything")
     if erreurs_agregat(WORKFLOW_AGREGE):
-        echecs.append(f"agrégat complet refusé : {erreurs_agregat(WORKFLOW_AGREGE)}")
+        echecs.append(f"complete aggregate refused: {erreurs_agregat(WORKFLOW_AGREGE)}")
     oubli = WORKFLOW_AGREGE.replace("needs: [zones, rust]", "needs: [zones]")
     if not any("`rust`" in e for e in erreurs_agregat(oubli)):
-        echecs.append("un job `make` absent des needs de `qualite` n'est pas refusé")
+        echecs.append("a `make` job missing from the needs of `qualite` is not refused")
     sans_agregat = WORKFLOW_AGREGE.split("  qualite:")[0]
     if not erreurs_agregat(sans_agregat):
-        echecs.append("un workflow sans job `qualite` n'est pas refusé")
+        echecs.append("a workflow without a `qualite` job is not refused")
     return echecs
 
 
@@ -156,7 +157,7 @@ def echecs_traductions() -> list[str]:
 
 def principal() -> int:
     echecs = [
-        f"_slug({titre!r}) = {_slug(titre)!r}, attendu {attendu!r}"
+        f"_slug({titre!r}) = {_slug(titre)!r}, expected {attendu!r}"
         for titre, attendu in SLUGS
         if _slug(titre) != attendu
     ]
@@ -164,22 +165,22 @@ def principal() -> int:
         titre = MOTIF_TITRE.match(ligne)
         obtenu = _slug(titre.group(1)) if titre else None
         if obtenu != attendu:
-            echecs.append(f"titre {ligne!r} = {obtenu!r}, attendu {attendu!r}")
+            echecs.append(f"heading {ligne!r} = {obtenu!r}, expected {attendu!r}")
     with tempfile.TemporaryDirectory() as dossier:
         fichier = Path(dossier) / "a.md"
         fichier.write_text(DOCUMENT, encoding="utf-8")
         attendues = {"titre", "i-01", "doublon", "doublon-1"}
         obtenues = _ancres(fichier)
         if obtenues != attendues:
-            echecs.append(f"_ancres = {sorted(obtenues)}, attendu {sorted(attendues)}")
+            echecs.append(f"_ancres = {sorted(obtenues)}, expected {sorted(attendues)}")
 
     echecs += echecs_ci()
     echecs += echecs_traductions()
 
     for echec in echecs:
-        print(f"ÉCHEC  {echec}")
+        print(f"FAIL  {echec}")
     total = len(SLUGS) + len(TITRES) + 1 + len(ZONES) + 6 + 3
-    print(f"\n{total - len(echecs)}/{total} cas conformes")
+    print(f"\n{total - len(echecs)}/{total} cases pass")
     return 1 if echecs else 0
 
 

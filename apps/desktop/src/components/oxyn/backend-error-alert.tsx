@@ -12,12 +12,12 @@ export interface BackendFailure {
 }
 
 /**
- * An error as a professional reads it (docs/UX-SPEC.md « Les erreurs
- * s'adressent à un professionnel »): the server's own words, whether trying
- * again can help, and what to do next.
+ * An error as a professional reads it (docs/UX-SPEC.md « Errors are addressed
+ * to a professional »): the server's own words, whether trying again can help,
+ * and what to do next.
  *
  * `onRetry` is offered only for a transient error, and only as the user's
- * click: nothing is retried on its own (front.md « Pas de retry »).
+ * click: nothing is retried on its own (front.md « No retry »).
  */
 export function BackendErrorAlert({
   title,

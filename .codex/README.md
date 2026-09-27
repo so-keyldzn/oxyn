@@ -40,7 +40,7 @@ index, not the prompt cache.
 ## Specialty agents
 
 The eleven files of [agents/](agents/) define the local roles: architecte,
-rustacien, driveriste, interfacier, ia-workspace, documentaliste, performance,
+rustacien, driveriste, frontiste, ia-workspace, documentaliste, performance,
 relecteur-invariants, relecteur-frontiere, relecteur-securite and
 detecteur-divergence. Each profile points to the matching guide in
 [.claude/agents/](../.claude/agents/) and applies the adaptations of AGENTS.md.

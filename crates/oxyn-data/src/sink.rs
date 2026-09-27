@@ -1,26 +1,26 @@
-//! Le pont entre un curseur de driver et un [`ResultBuffer`], avec
-//! contre-pression et annulation.
+//! The bridge between a driver cursor and a [`ResultBuffer`], with
+//! back-pressure and cancellation.
 //!
-//! C'est le mécanisme qui empêche un `SELECT *` sur 500 Go de faire exploser la
-//! mémoire ([I-06](../../../CLAUDE.md#i-06)). Il tient en une phrase : **on ne
-//! demande le lot suivant au serveur que si le tampon a de la place**. La boucle
-//! naïve — tout lire, puis tout ranger — met le débit du réseau en concurrence
-//! directe avec la RAM disponible, et le réseau gagne.
+//! It is the mechanism that keeps a `SELECT *` over 500 GB from blowing up
+//! memory ([I-06](../../../CLAUDE.md#i-06)). It fits in one sentence: **the
+//! next batch is only requested from the server if the buffer has room**. The
+//! naive loop — read everything, then store everything — puts network
+//! throughput in direct competition with available RAM, and the network wins.
 //!
-//! # Ce que ce puits ne fait pas
+//! # What this sink does not do
 //!
-//! **Il n'applique pas de délai.** `ExecLimits::timeout` est appliqué par
-//! `oxyn-exec`, qui possède le runtime, le journal et le droit d'émettre
-//! l'annulation côté serveur ([ARCHITECTURE](../../../docs/ARCHITECTURE.md#9-execution-and-threading-model)).
-//! Un délai posé ici n'annulerait que le futur, laissant la requête tourner et
-//! le verrou posé côté base — exactement le défaut que le contrat de driver
-//! interdit.
+//! **It applies no timeout.** `ExecLimits::timeout` is applied by
+//! `oxyn-exec`, which owns the runtime, the log and the right to issue the
+//! server-side cancellation ([ARCHITECTURE](../../../docs/ARCHITECTURE.md#9-execution-and-threading-model)).
+//! A timeout set here would only cancel the future, leaving the query running
+//! and the lock held on the database side — exactly the defect the driver
+//! contract forbids.
 //!
-//! **Il ne reprend rien après une annulation.** Un futur `next_batch` abandonné
-//! peut l'avoir été **après** avoir consommé des octets du flux : le décodeur du
-//! driver est alors désynchronisé. Le puits le sait et refuse de reprendre — la
-//! source doit être détruite. Un point de reprise se conçoit, il ne s'improvise
-//! pas ([rust.md](../../../.claude/rules/rust.md)).
+//! **It resumes nothing after a cancellation.** An abandoned `next_batch`
+//! future may have been abandoned **after** consuming bytes from the stream:
+//! the driver's decoder is then out of sync. The sink knows it and refuses to
+//! resume — the source must be destroyed. A resumption point is designed, not
+//! improvised ([rust.md](../../../.claude/rules/rust.md)).
 
 use std::pin::pin;
 use std::sync::Arc;
@@ -34,13 +34,13 @@ use oxyn_core::{CancelToken, ExecStats, OxynError};
 use crate::buffer::{BatchIndex, Pressure, ResultBuffer};
 use crate::error::DataError;
 
-/// Ce qui produit des lots : un curseur de driver, un décodeur de fichier, un
-/// générateur de test.
+/// What produces batches: a driver cursor, a file decoder, a test generator.
 ///
-/// # Pour `oxyn-driver`
+/// # For `oxyn-driver`
 ///
-/// `Cursor` est écrit avec `#[async_trait]`, qui désucre `async fn next_batch`
-/// en exactement la signature ci-dessous. L'adaptation tient donc en :
+/// `Cursor` is written with `#[async_trait]`, which desugars
+/// `async fn next_batch` into exactly the signature below. The adaptation
+/// therefore fits in:
 ///
 /// ```ignore
 /// impl BatchSource for Box<dyn Cursor> {
@@ -52,87 +52,87 @@ use crate::error::DataError;
 /// }
 /// ```
 ///
-/// Ce trait vit ici plutôt que dans `oxyn-driver` parce que `oxyn-data` ne
-/// dépend pas de `oxyn-driver` — c'est l'inverse — et parce qu'un puits doit
-/// pouvoir se tester sans driver.
+/// This trait lives here rather than in `oxyn-driver` because `oxyn-data` does
+/// not depend on `oxyn-driver` — it is the other way round — and because a
+/// sink must be testable without a driver.
 ///
-/// # Annulation
+/// # Cancellation
 ///
-/// [`next_batch`](Self::next_batch) doit être abandonnable. Après abandon, la
-/// source est considérée comme inutilisable : voir la note de module.
+/// [`next_batch`](Self::next_batch) must be abandonable. After abandonment,
+/// the source is considered unusable: see the module note.
 pub trait BatchSource: Send {
-    /// Le schéma des lots. Connu avant le premier lot, c'est ce qui permet à la
-    /// grille de dessiner ses colonnes pendant que les lignes arrivent.
+    /// The schema of the batches. Known before the first batch, it is what lets
+    /// the grid draw its columns while the rows arrive.
     fn schema(&self) -> SchemaRef;
 
-    /// Le lot suivant, ou `None` quand le flux est épuisé.
+    /// The next batch, or `None` when the stream is exhausted.
     ///
-    /// Le type de retour est le désucrage d'`async fn` : il garde le trait
-    /// compatible avec `dyn`, ce qui est une contrainte dure du workspace
+    /// The return type is the desugaring of `async fn`: it keeps the trait
+    /// compatible with `dyn`, which is a hard constraint of the workspace
     /// ([ARCHITECTURE §4.1](../../../docs/ARCHITECTURE.md#41-the-traits)).
     fn next_batch(&mut self) -> BoxFuture<'_, Result<Option<RecordBatch>, OxynError>>;
 
-    /// Ce que la source sait de l'exécution : temps serveur, lignes, octets.
+    /// What the source knows about the execution: server time, rows, bytes.
     ///
-    /// Interrogée à la fin du flux, pour clore le tampon.
+    /// Queried at the end of the stream, to close the buffer.
     fn stats(&self) -> ExecStats {
         ExecStats::default()
     }
 }
 
-/// Pourquoi le puits s'est arrêté.
+/// Why the sink stopped.
 ///
-/// Seul [`Exhausted`](Self::Exhausted) décrit un résultat entier ; tous les
-/// autres cas produisent un résultat **tronqué**, marqué comme tel dans
-/// [`ExecStats`] et donc à l'écran.
+/// Only [`Exhausted`](Self::Exhausted) describes a whole result; every other
+/// case produces a **truncated** result, marked as such in [`ExecStats`] and
+/// therefore on screen.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum SinkOutcome {
-    /// La source est épuisée : le résultat est complet.
+    /// The source is exhausted: the result is complete.
     Exhausted,
-    /// [`BufferLimits::max_rows`](crate::BufferLimits) est atteint.
+    /// [`BufferLimits::max_rows`](crate::BufferLimits) is reached.
     RowLimit,
-    /// Le tampon est saturé : budget mémoire atteint, débordement interdit ou
-    /// plafonné.
+    /// The buffer is saturated: memory budget reached, spilling forbidden or
+    /// capped.
     Saturated,
-    /// Le [`CancelToken`] a été déclenché. **La source ne doit plus servir.**
+    /// The [`CancelToken`] was triggered. **The source must no longer be used.**
     Cancelled,
 }
 
 impl SinkOutcome {
-    /// Le résultat contient-il toutes les lignes de la requête ?
+    /// Does the result contain every row of the query?
     #[must_use]
     pub const fn is_complete(self) -> bool {
         matches!(self, Self::Exhausted)
     }
 
-    /// Des lignes manquent-elles ?
+    /// Are rows missing?
     #[must_use]
     pub const fn is_truncated(self) -> bool {
         !self.is_complete()
     }
 }
 
-/// Ce que le puits vient de ranger, pour l'appelant qui veut rendre la main à
-/// l'interface entre deux lots.
+/// What the sink just stored, for the caller that wants to hand control back
+/// to the interface between two batches.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct BatchProgress {
-    /// Position du lot dans le tampon.
+    /// Position of the batch in the buffer.
     pub index: BatchIndex,
-    /// Lignes de ce lot.
+    /// Rows of this batch.
     pub rows: usize,
-    /// Lignes disponibles au total après ce lot.
+    /// Total rows available after this batch.
     pub total_rows: usize,
 }
 
-/// Draine une [`BatchSource`] dans un [`ResultBuffer`].
+/// Drains a [`BatchSource`] into a [`ResultBuffer`].
 #[derive(Debug)]
 pub struct BatchSink {
     buffer: Arc<ResultBuffer>,
-    /// Un `next_batch` a-t-il été abandonné en vol ?
+    /// Was a `next_batch` abandoned in flight?
     ///
-    /// Reprendre après cela lirait un flux désynchronisé : le puits refuse.
+    /// Resuming after that would read an out-of-sync stream: the sink refuses.
     aborted: AtomicBool,
     confirm_end_at_limit: bool,
 }
@@ -158,19 +158,19 @@ impl BatchSink {
         self
     }
 
-    /// Le tampon alimenté. Partageable en lecture pendant le drainage.
+    /// The buffer being fed. Shareable for reading during draining.
     #[must_use]
     pub fn buffer(&self) -> &Arc<ResultBuffer> {
         &self.buffer
     }
 
-    /// Draine la source jusqu'à épuisement, saturation ou annulation.
+    /// Drains the source until exhaustion, saturation or cancellation.
     ///
-    /// # Erreurs
+    /// # Errors
     ///
-    /// Remonte l'erreur de la source, ou celle du tampon si l'écriture du
-    /// fichier de débordement échoue. Une saturation ou une annulation ne sont
-    /// **pas** des erreurs : ce sont des [`SinkOutcome`].
+    /// Propagates the source's error, or the buffer's if writing the spill file
+    /// fails. Saturation and cancellation are **not** errors: they are
+    /// [`SinkOutcome`]s.
     pub async fn drain(
         &self,
         source: &mut dyn BatchSource,
@@ -179,20 +179,20 @@ impl BatchSink {
         self.drain_with(source, ct, |_| {}).await
     }
 
-    /// Comme [`drain`](Self::drain), en appelant `on_batch` après chaque lot
-    /// rangé.
+    /// Like [`drain`](Self::drain), calling `on_batch` after each stored
+    /// batch.
     ///
-    /// C'est le crochet dont `oxyn-exec` a besoin pour émettre
-    /// [`Event::BatchReady`](oxyn_core::Event) sans attendre la fin du flux —
-    /// « la grille s'affiche dès le premier `RecordBatch` ».
+    /// It is the hook `oxyn-exec` needs to emit
+    /// [`Event::BatchReady`](oxyn_core::Event) without waiting for the end of
+    /// the stream — "the grid displays from the first `RecordBatch`".
     ///
-    /// `on_batch` s'exécute **dans** la boucle de drainage : ce qu'on y met
-    /// retarde le lot suivant. Y envoyer sur un canal, oui ; y dessiner, non.
+    /// `on_batch` runs **inside** the draining loop: what is put there delays
+    /// the next batch. Sending on a channel there, yes; drawing there, no.
     ///
-    /// # Erreurs
+    /// # Errors
     ///
-    /// Celles de [`drain`](Self::drain), plus [`OxynError::Internal`] si la
-    /// source a déjà été abandonnée en vol lors d'un appel précédent.
+    /// Those of [`drain`](Self::drain), plus [`OxynError::Internal`] if the
+    /// source was already abandoned in flight during a previous call.
     pub async fn drain_with<F>(
         &self,
         source: &mut dyn BatchSource,
@@ -214,8 +214,8 @@ impl BatchSink {
                 return Ok(SinkOutcome::Cancelled);
             }
 
-            // Contre-pression : la question au serveur n'est posée que si la
-            // réponse a où aller.
+            // Back-pressure: the question to the server is only asked if the
+            // answer has somewhere to go.
             let confirming_end = match self.buffer.pressure() {
                 Pressure::Ready => false,
                 Pressure::RowLimit
@@ -234,9 +234,9 @@ impl BatchSink {
                 Pressure::Complete => return Ok(SinkOutcome::Exhausted),
             };
 
-            // Le bloc borne l'emprunt mutable de `source` par le futur de
-            // lecture : sans lui, plus rien ne pourrait toucher à la source
-            // dans les branches ci-dessous.
+            // The block bounds the mutable borrow of `source` by the read
+            // future: without it, nothing could touch the source in the
+            // branches below.
             let recu = {
                 let lot = pin!(source.next_batch());
                 let annulation = pin!(ct.cancelled());
@@ -247,8 +247,8 @@ impl BatchSink {
             };
 
             let Some(recu) = recu else {
-                // Le futur de lecture vient d'être abandonné, peut-être après
-                // avoir consommé des octets du flux : la source est brûlée.
+                // The read future was just abandoned, perhaps after consuming
+                // bytes from the stream: the source is burnt.
                 self.aborted.store(true, Ordering::SeqCst);
                 self.seal(source, true);
                 return Ok(SinkOutcome::Cancelled);
@@ -265,8 +265,8 @@ impl BatchSink {
                     return Ok(SinkOutcome::Cancelled);
                 }
                 Err(erreur) => {
-                    // Les lignes déjà reçues restent lisibles ; le tampon est
-                    // clos pour que l'interface cesse d'attendre la suite.
+                    // Rows already received stay readable; the buffer is
+                    // closed so that the interface stops waiting for more.
                     self.seal(source, true);
                     return Err(erreur);
                 }
@@ -281,12 +281,12 @@ impl BatchSink {
             }
 
             match self.buffer.push(lot) {
-                // Lot vide : la source a le droit d'en produire, il n'y a rien
-                // à signaler.
+                // Empty batch: the source is allowed to produce one, there is
+                // nothing to report.
                 Ok(None) => {}
                 Ok(Some(index)) => {
-                    // Relu depuis le tampon, jamais depuis le lot poussé :
-                    // c'est le tampon qui décide combien de lignes il garde.
+                    // Read back from the buffer, never from the pushed batch:
+                    // the buffer decides how many rows it keeps.
                     let rows = self.buffer.batch_rows(index).unwrap_or(0);
                     let total_rows = self.buffer.row_count();
                     on_batch(BatchProgress {
@@ -311,7 +311,7 @@ impl BatchSink {
         }
     }
 
-    /// Clôt le tampon avec les mesures de la source.
+    /// Closes the buffer with the source's measurements.
     fn seal(&self, source: &dyn BatchSource, truncated: bool) {
         if truncated {
             self.buffer.mark_truncated();
@@ -340,12 +340,12 @@ mod tests {
             .map(|i| i32::try_from(i).unwrap_or(i32::MAX))
             .collect();
         RecordBatch::try_new(schema(), vec![Arc::new(Int32Array::from(valeurs))])
-            .expect("la colonne correspond au schéma construit juste au-dessus")
+            .expect("the column matches the schema built just above")
     }
 
-    /// Source scriptée qui compte combien de fois on lui a demandé un lot :
-    /// c'est **ce compteur** qui prouve la contre-pression, pas le contenu du
-    /// tampon.
+    /// Scripted source that counts how many times a batch was requested from
+    /// it: it is **this counter** that proves back-pressure, not the buffer's
+    /// content.
     #[derive(Debug)]
     struct SourceScriptee {
         restants: Vec<RecordBatch>,
@@ -396,13 +396,13 @@ mod tests {
     }
 
     #[test]
-    fn une_source_epuisee_clot_le_resultat() {
+    fn an_exhausted_source_closes_the_result() {
         let tampon = Arc::new(ResultBuffer::new(schema(), 1 << 20));
         let puits = BatchSink::new(Arc::clone(&tampon));
         let mut source = SourceScriptee::new(vec![lot(10), lot(10), lot(5)]);
         let ct = CancelToken::new();
 
-        let issue = block_on(puits.drain(&mut source, &ct)).expect("drainage sans erreur");
+        let issue = block_on(puits.drain(&mut source, &ct)).expect("draining without error");
 
         assert_eq!(issue, SinkOutcome::Exhausted);
         assert!(issue.is_complete());
@@ -449,7 +449,7 @@ mod tests {
     }
 
     #[test]
-    fn chaque_lot_est_signale_des_son_arrivee() {
+    fn every_batch_is_reported_as_soon_as_it_arrives() {
         let tampon = Arc::new(ResultBuffer::new(schema(), 1 << 20));
         let puits = BatchSink::new(Arc::clone(&tampon));
         let mut source = SourceScriptee::new(vec![lot(3), lot(4)]);
@@ -457,17 +457,17 @@ mod tests {
 
         let mut vus = Vec::new();
         block_on(puits.drain_with(&mut source, &ct, |progres| vus.push(progres)))
-            .expect("drainage sans erreur");
+            .expect("draining without error");
 
         assert_eq!(vus.len(), 2);
         assert_eq!(vus.first().map(|p| (p.rows, p.total_rows)), Some((3, 3)));
         assert_eq!(vus.get(1).map(|p| (p.rows, p.total_rows)), Some((4, 7)));
     }
 
-    /// Le test qui porte la promesse : quand le tampon refuse, **on ne demande
-    /// pas** le lot suivant au serveur.
+    /// The test that carries the promise: when the buffer refuses, the next
+    /// batch **is not requested** from the server.
     #[test]
-    fn un_tampon_sature_arrete_de_demander_des_lots() {
+    fn a_saturated_buffer_stops_requesting_batches() {
         let tampon = Arc::new(ResultBuffer::with_limits(
             schema(),
             BufferLimits::default()
@@ -478,20 +478,20 @@ mod tests {
         let mut source = SourceScriptee::new(vec![lot(10); 50]);
         let ct = CancelToken::new();
 
-        let issue = block_on(puits.drain(&mut source, &ct)).expect("drainage sans erreur");
+        let issue = block_on(puits.drain(&mut source, &ct)).expect("draining without error");
 
         assert_eq!(issue, SinkOutcome::Saturated);
         assert!(issue.is_truncated());
         assert_eq!(
             source.appels, 1,
-            "un seul lot demandé : le refus doit remonter avant la demande suivante"
+            "a single batch requested: the refusal must come up before the next request"
         );
         assert!(tampon.stats().truncated);
-        assert!(tampon.is_complete(), "l'interface doit cesser d'attendre");
+        assert!(tampon.is_complete(), "the interface must stop waiting");
     }
 
     #[test]
-    fn la_limite_de_lignes_arrete_le_drainage() {
+    fn the_row_limit_stops_draining() {
         let tampon = Arc::new(ResultBuffer::with_limits(
             schema(),
             BufferLimits::default().with_max_rows(15_usize),
@@ -500,26 +500,26 @@ mod tests {
         let mut source = SourceScriptee::new(vec![lot(10); 20]);
         let ct = CancelToken::new();
 
-        let issue = block_on(puits.drain(&mut source, &ct)).expect("drainage sans erreur");
+        let issue = block_on(puits.drain(&mut source, &ct)).expect("draining without error");
 
         assert_eq!(issue, SinkOutcome::RowLimit);
         assert_eq!(tampon.row_count(), 15);
         assert!(tampon.stats().truncated);
         assert_eq!(
             source.appels, 2,
-            "deux lots suffisent à atteindre 15 lignes ; le troisième ne doit pas être demandé"
+            "two batches are enough to reach 15 rows; the third must not be requested"
         );
     }
 
     #[test]
-    fn une_annulation_prealable_ne_demande_aucun_lot() {
+    fn a_prior_cancellation_requests_no_batch() {
         let tampon = Arc::new(ResultBuffer::new(schema(), 1 << 20));
         let puits = BatchSink::new(Arc::clone(&tampon));
         let mut source = SourceScriptee::new(vec![lot(10)]);
         let ct = CancelToken::new();
         ct.cancel();
 
-        let issue = block_on(puits.drain(&mut source, &ct)).expect("drainage sans erreur");
+        let issue = block_on(puits.drain(&mut source, &ct)).expect("draining without error");
 
         assert_eq!(issue, SinkOutcome::Cancelled);
         assert_eq!(source.appels, 0);
@@ -527,8 +527,8 @@ mod tests {
         assert!(tampon.stats().truncated);
     }
 
-    /// Source qui ne répond jamais, et qui annule au premier sondage : c'est le
-    /// serveur qui ne rend pas la main pendant que l'utilisateur tape `Échap`.
+    /// Source that never answers, and cancels at the first poll: it is the
+    /// server that does not hand back control while the user presses `Esc`.
     #[derive(Debug)]
     struct SourceMuette {
         ct: CancelToken,
@@ -549,33 +549,33 @@ mod tests {
     }
 
     #[test]
-    fn une_annulation_en_vol_brule_la_source() {
+    fn an_in_flight_cancellation_burns_the_source() {
         let tampon = Arc::new(ResultBuffer::new(schema(), 1 << 20));
         let puits = BatchSink::new(Arc::clone(&tampon));
         let ct = CancelToken::new();
         let mut source = SourceMuette { ct: ct.clone() };
 
-        let issue = block_on(puits.drain(&mut source, &ct)).expect("drainage sans erreur");
+        let issue = block_on(puits.drain(&mut source, &ct)).expect("draining without error");
         assert_eq!(issue, SinkOutcome::Cancelled);
 
-        // Reprendre lirait un flux dont le décodeur est peut-être désynchronisé.
+        // Resuming would read a stream whose decoder may be out of sync.
         let ct2 = CancelToken::new();
         let reprise = block_on(puits.drain(&mut source, &ct2));
-        assert!(reprise.is_err(), "la reprise doit être refusée");
+        assert!(reprise.is_err(), "resuming must be refused");
     }
 
     #[test]
-    fn une_erreur_de_source_remonte_mais_clot_le_tampon() {
+    fn a_source_error_propagates_but_closes_the_buffer() {
         let tampon = Arc::new(ResultBuffer::new(schema(), 1 << 20));
         let puits = BatchSink::new(Arc::clone(&tampon));
         let mut source = SourceScriptee::qui_echoue(OxynError::Query("boom".to_owned()));
         let ct = CancelToken::new();
 
-        let erreur = block_on(puits.drain(&mut source, &ct)).expect_err("l'erreur doit remonter");
+        let erreur = block_on(puits.drain(&mut source, &ct)).expect_err("the error must propagate");
         assert!(matches!(erreur, OxynError::Query(_)));
         assert!(
             tampon.is_complete(),
-            "sans clôture, l'interface attend un lot qui ne viendra pas"
+            "without closing, the interface waits for a batch that will not come"
         );
         assert!(tampon.stats().truncated);
     }

@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0025-proposition-de-changement-de-schema.md" sha256="378f7d4523c5" -->
+<!-- oxyn-translation source="docs/adr/0025-proposition-de-changement-de-schema.md" sha256="214b4d920e40" -->
 
 > Traduction française de [docs/adr/0025-proposition-de-changement-de-schema.md](../../../../docs/adr/0025-proposition-de-changement-de-schema.md). **La version anglaise fait foi.**
 
@@ -87,7 +87,7 @@ schéma écrit du SQL dans une console comme n'importe qui, et ce SQL est relu.
 
 Cette indisponibilité tient par **absence de chemin** — aucun outil du registre
 n'atteint le geste —, ce qui est plus fort qu'un refus. Mais rien ne la
-maintenait vraie : `le_changement_de_schema_n_est_pas_un_outil`
+maintenait vraie : `schema_change_is_not_a_tool`
 (`oxyn-ai/src/tools.rs`) s'en charge désormais, et échoue le jour où un outil de
 structure apparaît.
 

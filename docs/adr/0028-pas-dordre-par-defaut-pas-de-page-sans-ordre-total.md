@@ -23,7 +23,7 @@ documents that did not say the same thing:
 * [UX-SPEC](../UX-SPEC.md): "without a requested sort, the order of the rows is
   not guaranteed";
 * the code: both drivers compose **no** `ORDER BY` without a request, which the
-  test `un_apercu_sans_demande_ne_compose_ni_where_ni_order_by` anchors.
+  test `a_preview_without_request_composes_neither_where_nor_order_by` anchors.
 
 This contradiction was found on 2026-09-15. What made it costly is not the
 inconsistency itself: it is that ADR-0020 is the **only** document that
@@ -79,7 +79,7 @@ that it is now **written**, and that a reader of ADR-0020 is sent here before
 **Low, but not zero.** Going back to the imposed order would require: reading
 the primary key on every preview in both drivers, composing the default
 `ORDER BY`, and revising the tests that anchor the absence of order
-(`un_apercu_sans_demande_ne_compose_ni_where_ni_order_by` in each driver,
+(`a_preview_without_request_composes_neither_where_nor_order_by` in each driver,
 `a_page_is_offered_only_where_the_order_is_total` on the interface side).
 
 What would cost more is invisible: users would have got used to an

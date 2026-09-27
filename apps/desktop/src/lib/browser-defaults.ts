@@ -1,7 +1,7 @@
 /**
  * What the webview would do as a browser, cancelled: the page's context menu,
- * reload, page zoom, back and forward (ADR-0041 § 8; UX-SPEC, « Ce qu'Oxyn ne
- * fait pas, parce que ce n'est pas un navigateur »).
+ * reload, page zoom, back and forward (ADR-0041 § 8; UX-SPEC, « What Oxyn does
+ * not do, because it is not a browser »).
  *
  * Every listener only calls `preventDefault`, never `stopPropagation`: the
  * browser's default is what goes, and a component that binds the same keys —

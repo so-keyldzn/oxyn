@@ -4,7 +4,7 @@ import { createStore } from "@tanstack/react-store"
  * A connection the user was offered by dropping a database file: the driver
  * and the one form field the file fills. An offer, not a connection — the
  * connection screen opens on it, in `production` like any new connection,
- * and nothing is saved until the user submits (UX-SPEC « Souris et glisser »).
+ * and nothing is saved until the user submits (UX-SPEC « Mouse and drag »).
  */
 export interface ConnectionOffer {
   driver: string

@@ -1,12 +1,12 @@
-//! Échafaudage partagé par les tests de la crate.
+//! Scaffolding shared by the crate's tests.
 //!
-//! Compilé uniquement sous `cfg(test)`. Il vit dans son propre module parce que
-//! les tests du registre et ceux de l'hôte WebAssembly ont besoin du même
-//! répertoire jetable et des mêmes manifestes : deux copies divergeraient, et
-//! c'est alors la plus laxiste qui servirait de référence.
+//! Compiled only under `cfg(test)`. It lives in its own module because the
+//! registry tests and those of the WebAssembly host need the same throwaway
+//! directory and the same manifests: two copies would diverge, and the laxer
+//! one would then serve as the reference.
 //!
-//! `tempfile` n'est pas au contrat de dépendances de cette crate ; la
-//! bibliothèque standard suffit à ce que ces tests demandent.
+//! `tempfile` is not in this crate's dependency contract; the standard library
+//! is enough for what these tests ask.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -15,12 +15,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::manifest::MANIFEST_FILE;
 
-/// Un répertoire temporaire dont la durée de vie est celle du test.
+/// A temporary directory whose lifetime is the test's.
 #[derive(Debug)]
 pub struct TempDir(PathBuf);
 
 impl TempDir {
-    /// Crée un répertoire unique dans le répertoire temporaire du système.
+    /// Creates a unique directory in the system's temporary directory.
     pub fn new(etiquette: &str) -> Self {
         static COMPTEUR: AtomicU32 = AtomicU32::new(0);
         let rang = COMPTEUR.fetch_add(1, Ordering::Relaxed);
@@ -31,40 +31,40 @@ impl TempDir {
             "oxyn-plugin-{etiquette}-{}-{rang}-{nanos}",
             std::process::id()
         ));
-        fs::create_dir_all(&chemin).expect("création du répertoire temporaire de test");
+        fs::create_dir_all(&chemin).expect("creating the temporary test directory");
         Self(chemin)
     }
 
-    /// La racine du répertoire.
+    /// The root of the directory.
     pub fn path(&self) -> &Path {
         &self.0
     }
 
-    /// Dépose un plugin : un sous-répertoire et son `plugin.toml`.
+    /// Drops a plugin: a subdirectory and its `plugin.toml`.
     pub fn plugin(&self, slug: &str, manifeste: &str) {
         let dossier = self.0.join(slug);
-        fs::create_dir_all(&dossier).expect("création du répertoire de plugin");
-        fs::write(dossier.join(MANIFEST_FILE), manifeste).expect("écriture du manifeste");
+        fs::create_dir_all(&dossier).expect("creating the plugin directory");
+        fs::write(dossier.join(MANIFEST_FILE), manifeste).expect("writing the manifest");
     }
 
-    /// Dépose un fichier quelconque dans le répertoire d'un plugin.
+    /// Drops any file into a plugin's directory.
     pub fn file(&self, slug: &str, nom: &str, contenu: &[u8]) -> PathBuf {
         let dossier = self.0.join(slug);
-        fs::create_dir_all(&dossier).expect("création du répertoire de plugin");
+        fs::create_dir_all(&dossier).expect("creating the plugin directory");
         let chemin = dossier.join(nom);
-        fs::write(&chemin, contenu).expect("écriture du fichier");
+        fs::write(&chemin, contenu).expect("writing the file");
         chemin
     }
 }
 
 impl Drop for TempDir {
     fn drop(&mut self) {
-        // Un échec de nettoyage ne doit pas masquer l'échec du test lui-même.
+        // A cleanup failure must not hide the failure of the test itself.
         let _ = fs::remove_dir_all(&self.0);
     }
 }
 
-/// Un manifeste d'agent déclaratif, avec la liste d'outils donnée telle quelle.
+/// A declarative agent manifest, with the tool list given as is.
 pub fn agent_toml(slug: &str, outils: &str) -> String {
     format!(
         "id          = \"{slug}\"\n\
@@ -83,7 +83,7 @@ pub fn agent_toml(slug: &str, outils: &str) -> String {
     )
 }
 
-/// Un manifeste de format d'export, avec la liste d'hôtes donnée telle quelle.
+/// An export format manifest, with the host list given as is.
 pub fn export_toml(slug: &str, reseau: &str) -> String {
     format!(
         "id          = \"{slug}\"\n\
@@ -98,7 +98,7 @@ pub fn export_toml(slug: &str, reseau: &str) -> String {
     )
 }
 
-/// Un manifeste de driver, qui revendique le protocole `slug`.
+/// A driver manifest, which claims the `slug` protocol.
 pub fn driver_toml(slug: &str) -> String {
     format!(
         "id          = \"{slug}\"\n\

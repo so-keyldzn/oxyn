@@ -54,8 +54,7 @@ export function utf8Length(text: string) {
 /**
  * How result cells are drawn. Display only: the query, what the server
  * returns and what an export writes are unchanged, and the formatting itself
- * happens in Rust (docs/UX-SPEC.md « Ce qui est exporté est ce qui est
- * affiché »).
+ * happens in Rust (docs/UX-SPEC.md « What is exported is what is displayed »).
  *
  * The absent-value label is emitted as typed; the caller debounces the save.
  */

@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="8503f3ebe16e" -->
+<!-- oxyn-translation source="docs/ARCHITECTURE.md" sha256="9fc3cebbfe47" -->
 
 > Traduction française de [docs/ARCHITECTURE.md](../../../docs/ARCHITECTURE.md). **La version anglaise fait foi.**
 

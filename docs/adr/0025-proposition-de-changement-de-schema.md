@@ -83,7 +83,7 @@ writes SQL in a console like anyone, and that SQL is reviewed.
 
 This unavailability holds by **absence of a path** — no tool of the registry
 reaches the action —, which is stronger than a refusal. But nothing kept it
-true: `le_changement_de_schema_n_est_pas_un_outil`
+true: `schema_change_is_not_a_tool`
 (`oxyn-ai/src/tools.rs`) now takes care of it, and fails the day a structure
 tool appears.
 

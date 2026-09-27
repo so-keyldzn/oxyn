@@ -1,4 +1,4 @@
-//! La table `workspaces` : l'unité de persistance de l'état utilisateur.
+//! The `workspaces` table: the unit of persistence of user state.
 //!
 //! Deleting a workspace removes its connections, documents and preferences.
 //! The append-only audit remains independent and is never deleted with it.
@@ -11,21 +11,21 @@ use crate::encoding::parse_id;
 use crate::error::Result;
 use crate::store::Store;
 
-/// Un workspace, tel qu'il est persisté.
+/// A workspace, as persisted.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Workspace {
-    /// Identifiant interne, stable d'une ouverture à l'autre.
+    /// Internal identifier, stable from one opening to the next.
     pub id: WorkspaceId,
-    /// Nom donné par l'utilisateur. C'est lui qui est affiché.
+    /// Name given by the user. It is what is displayed.
     pub name: String,
-    /// Date de création.
+    /// Creation date.
     pub created_at: DateTime<Utc>,
-    /// Date de la dernière modification enregistrée.
+    /// Date of the last recorded modification.
     pub updated_at: DateTime<Utc>,
 }
 
 impl Workspace {
-    /// Construit un workspace neuf, non encore persisté.
+    /// Builds a new workspace, not yet persisted.
     #[must_use]
     pub fn new(name: impl Into<String>) -> Self {
         let maintenant = Utc::now();
@@ -38,35 +38,35 @@ impl Workspace {
     }
 }
 
-/// Accès typé à la table `workspaces`.
+/// Typed access to the `workspaces` table.
 #[derive(Debug)]
 pub struct Workspaces<'a> {
     store: &'a Store,
 }
 
 impl<'a> Workspaces<'a> {
-    /// Rattache l'accesseur à son `Store`.
+    /// Binds the accessor to its `Store`.
     pub(crate) fn new(store: &'a Store) -> Self {
         Self { store }
     }
 
-    /// Crée et persiste un workspace.
+    /// Creates and persists a workspace.
     ///
-    /// # Erreurs
-    /// [`crate::StoreError::Sqlite`] si l'écriture échoue.
+    /// # Errors
+    /// [`crate::StoreError::Sqlite`] if the write fails.
     pub fn create(&self, name: impl Into<String>) -> Result<Workspace> {
         let workspace = Workspace::new(name);
         self.save(&workspace)?;
         Ok(workspace)
     }
 
-    /// Insère ou met à jour un workspace.
+    /// Inserts or updates a workspace.
     ///
-    /// `created_at` n'est jamais écrasé par une mise à jour : la date de
-    /// création d'un workspace ne change pas parce qu'on l'a renommé.
+    /// `created_at` is never overwritten by an update: a workspace's creation
+    /// date does not change because it was renamed.
     ///
-    /// # Erreurs
-    /// [`crate::StoreError::Sqlite`] si l'écriture échoue.
+    /// # Errors
+    /// [`crate::StoreError::Sqlite`] if the write fails.
     pub fn save(&self, workspace: &Workspace) -> Result<()> {
         self.store.with_connection(|conn| {
             conn.execute(
@@ -86,10 +86,10 @@ impl<'a> Workspaces<'a> {
         })
     }
 
-    /// Relit un workspace par son identifiant.
+    /// Reads a workspace back by its identifier.
     ///
-    /// # Erreurs
-    /// [`crate::StoreError::Sqlite`] ou [`crate::StoreError::Corrupted`].
+    /// # Errors
+    /// [`crate::StoreError::Sqlite`] or [`crate::StoreError::Corrupted`].
     pub fn get(&self, id: WorkspaceId) -> Result<Option<Workspace>> {
         self.store.with_connection(|conn| {
             conn.query_row(
@@ -102,10 +102,10 @@ impl<'a> Workspaces<'a> {
         })
     }
 
-    /// Liste les workspaces, par nom.
+    /// Lists workspaces, by name.
     ///
-    /// # Erreurs
-    /// [`crate::StoreError::Sqlite`] ou [`crate::StoreError::Corrupted`].
+    /// # Errors
+    /// [`crate::StoreError::Sqlite`] or [`crate::StoreError::Corrupted`].
     pub fn list(&self) -> Result<Vec<Workspace>> {
         self.store.with_connection(|conn| {
             let mut requete = conn.prepare(
@@ -116,17 +116,17 @@ impl<'a> Workspaces<'a> {
         })
     }
 
-    /// Supprime un workspace et, en cascade, ses connexions, leurs caches de
-    /// catalogue et ses documents.
+    /// Deletes a workspace and, in cascade, its connections, their catalog
+    /// caches and its documents.
     ///
-    /// **Le journal d'audit n'est pas touché** : ses lignes ne portent aucune
-    /// clé étrangère vers un workspace. Supprimer un workspace n'efface pas ce
-    /// qu'un agent y a fait.
+    /// **The audit journal is not touched**: its rows carry no foreign key to
+    /// a workspace. Deleting a workspace does not erase what an agent did in
+    /// it.
     ///
-    /// Rend `true` si une ligne a été supprimée.
+    /// Returns `true` if a row was deleted.
     ///
-    /// # Erreurs
-    /// [`crate::StoreError::Sqlite`] si la suppression échoue.
+    /// # Errors
+    /// [`crate::StoreError::Sqlite`] if the deletion fails.
     pub fn delete(&self, id: WorkspaceId) -> Result<bool> {
         self.store.with_connection(|conn| {
             let touchees = conn.execute(
@@ -138,7 +138,7 @@ impl<'a> Workspaces<'a> {
     }
 }
 
-/// Reconstruit un [`Workspace`] à partir d'une ligne.
+/// Rebuilds a [`Workspace`] from a row.
 fn depuis_ligne(row: &Row<'_>) -> Result<Workspace> {
     let id: String = row.get("id")?;
     Ok(Workspace {
@@ -154,19 +154,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn aller_retour_d_un_workspace() {
-        let store = Store::open_in_memory().expect("ouverture");
-        let cree = store.workspaces().create("atelier").expect("création");
+    fn a_workspace_round_trips() {
+        let store = Store::open_in_memory().expect("open");
+        let cree = store.workspaces().create("atelier").expect("creation");
 
         let relu = store
             .workspaces()
             .get(cree.id)
-            .expect("lecture")
-            .expect("le workspace existe");
+            .expect("read")
+            .expect("the workspace exists");
         assert_eq!(relu.id, cree.id);
         assert_eq!(relu.name, "atelier");
-        // La sérialisation des horodatages passe par SQLite : la comparaison
-        // vaut à la milliseconde près, pas à la nanoseconde.
+        // Timestamps are serialized through SQLite: the comparison holds to
+        // the millisecond, not to the nanosecond.
         assert_eq!(
             relu.created_at.timestamp_millis(),
             cree.created_at.timestamp_millis()
@@ -174,21 +174,21 @@ mod tests {
     }
 
     #[test]
-    fn renommer_ne_change_pas_la_date_de_creation() {
-        let store = Store::open_in_memory().expect("ouverture");
-        let mut workspace = store.workspaces().create("avant").expect("création");
+    fn renaming_does_not_change_the_creation_date() {
+        let store = Store::open_in_memory().expect("open");
+        let mut workspace = store.workspaces().create("avant").expect("creation");
         let creation = workspace.created_at;
 
         workspace.name = "après".to_owned();
         workspace.updated_at = Utc::now();
-        workspace.created_at = Utc::now(); // même si l'appelant se trompe
-        store.workspaces().save(&workspace).expect("mise à jour");
+        workspace.created_at = Utc::now(); // even if the caller gets it wrong
+        store.workspaces().save(&workspace).expect("update");
 
         let relu = store
             .workspaces()
             .get(workspace.id)
-            .expect("lecture")
-            .expect("présent");
+            .expect("read")
+            .expect("present");
         assert_eq!(relu.name, "après");
         assert_eq!(
             relu.created_at.timestamp_millis(),
@@ -197,33 +197,33 @@ mod tests {
     }
 
     #[test]
-    fn un_workspace_absent_rend_none() {
-        let store = Store::open_in_memory().expect("ouverture");
+    fn a_missing_workspace_returns_none() {
+        let store = Store::open_in_memory().expect("open");
         assert!(
             store
                 .workspaces()
                 .get(WorkspaceId::new())
-                .expect("lecture")
+                .expect("read")
                 .is_none()
         );
         assert!(
             !store
                 .workspaces()
                 .delete(WorkspaceId::new())
-                .expect("suppression")
+                .expect("deletion")
         );
     }
 
     #[test]
-    fn la_liste_est_ordonnee_par_nom() {
-        let store = Store::open_in_memory().expect("ouverture");
+    fn the_list_is_ordered_by_name() {
+        let store = Store::open_in_memory().expect("open");
         for nom in ["gamma", "alpha", "beta"] {
-            store.workspaces().create(nom).expect("création");
+            store.workspaces().create(nom).expect("creation");
         }
         let noms: Vec<String> = store
             .workspaces()
             .list()
-            .expect("liste")
+            .expect("list")
             .into_iter()
             .map(|w| w.name)
             .collect();

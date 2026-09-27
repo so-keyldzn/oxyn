@@ -1,40 +1,39 @@
-//! Le fournisseur Anthropic.
+//! The Anthropic provider.
 //!
-//! # Pourquoi pas un adaptateur compatible OpenAI
+//! # Why not an OpenAI-compatible adapter
 //!
-//! Le protocole `/v1/messages` diffère sur quatre points qui ne se rattrapent
-//! pas par une couche de traduction mince :
+//! The `/v1/messages` protocol differs on four points that a thin translation
+//! layer cannot make up for:
 //!
-//! 1. la consigne système est un **champ de premier niveau**, pas un message ;
-//! 2. le contenu d'un message est une **liste de blocs** typés, pas une chaîne ;
-//! 3. un résultat d'outil est un bloc `tool_result` dans un message de rôle
-//!    `user`, pas un rôle `tool` ;
-//! 4. le flux SSE est **nommé** (`content_block_delta`, `message_delta`…) et
-//!    n'utilise pas de sentinelle de fin.
+//! 1. the system instruction is a **top-level field**, not a message;
+//! 2. the content of a message is a **list of typed blocks**, not a string;
+//! 3. a tool result is a `tool_result` block in a message of role `user`, not
+//!    a `tool` role;
+//! 4. the SSE stream is **named** (`content_block_delta`, `message_delta`…)
+//!    and uses no end sentinel.
 //!
-//! Un adaptateur qui prétendrait couvrir les deux protocoles serait faux sur les
-//! appels d'outils, c'est-à-dire précisément là où Oxyn en a besoin
+//! An adapter that claimed to cover both protocols would be wrong on tool
+//! calls, that is precisely where Oxyn needs them
 //! ([`ARCHITECTURE` §7.5](../../../docs/ARCHITECTURE.md)).
 //!
-//! # Tout fait externe d'ici est daté et sourcé
+//! # Every external fact here is dated and sourced
 //!
-//! Chemin, en-têtes, version d'API, noms d'événements, noms de champs, valeurs
-//! de raison d'arrêt, correspondance des statuts : vérifiés le **2026-09-16**
-//! dans la documentation officielle et consignés dans
-//! [`RESEARCH-NOTES`](../../../docs/RESEARCH-NOTES.md) § « Fournisseur
-//! Anthropic » (I-12).
+//! Path, headers, API version, event names, field names, stop reason values,
+//! status mapping: checked on **2026-09-16** in the official documentation and
+//! recorded in [`RESEARCH-NOTES`](../../../docs/RESEARCH-NOTES.md) §
+//! "Anthropic provider" (I-12).
 //!
-//! # Ce qui n'est pas fait, et pourquoi
+//! # What is not done, and why
 //!
-//! * **Aucune reprise.** Une erreur transitoire est signalée comme telle et
-//!   c'est l'appelant qui décide (I-13). La documentation décrit une reprise de
-//!   flux interrompu ; elle demande de renvoyer la réponse partielle au modèle,
-//!   ce qui est une décision de produit, pas de transport.
-//! * **Aucun délai global sur la requête.** Une génération longue est normale ;
-//!   un délai global la tuerait en plein milieu. Seule la *connexion* est
-//!   bornée.
-//! * **Aucun outil côté serveur.** Oxyn n'en propose aucun : ses outils sont
-//!   des `Command` du bus et rien d'autre (I-01).
+//! * **No retry.** A transient error is reported as such and the caller
+//!   decides (I-13). The documentation describes resuming an interrupted
+//!   stream; it asks to send the partial response back to the model, which is
+//!   a product decision, not a transport one.
+//! * **No global timeout on the request.** A long generation is normal; a
+//!   global timeout would kill it in the middle. Only the *connection* is
+//!   bounded.
+//! * **No server-side tool.** Oxyn offers none: its tools are bus `Command`s
+//!   and nothing else (I-01).
 
 mod decode;
 mod wire;
@@ -58,54 +57,54 @@ use crate::secret::ApiKey;
 use crate::stream::{describe_stream_error, events_stream};
 use crate::types::{ChatEvent, ChatRequest, ModelInfo};
 
-/// Point d'accès de l'API d'Anthropic.
+/// Endpoint of Anthropic's API.
 pub const ANTHROPIC_BASE_URL: &str = "https://api.anthropic.com";
 
-/// Chemin du point d'accès de conversation.
+/// Path of the conversation endpoint.
 pub const MESSAGES_PATH: &str = "v1/messages";
 
-/// Chemin du point d'accès de comptage de jetons.
+/// Path of the token counting endpoint.
 pub const COUNT_TOKENS_PATH: &str = "v1/messages/count_tokens";
 
-/// Chemin du point d'accès de liste des modèles.
+/// Path of the model list endpoint.
 pub const MODELS_PATH: &str = "v1/models";
 
-/// En-tête portant la clé. Ce protocole n'utilise pas `Authorization`.
+/// Header carrying the key. This protocol does not use `Authorization`.
 pub const API_KEY_HEADER: &str = "x-api-key";
 
-/// Valeur de l'en-tête `anthropic-version`.
+/// Value of the `anthropic-version` header.
 ///
-/// L'API refuse les versions qu'elle ne connaît pas. Cette valeur est celle que
-/// la documentation donne en exemple sur chacune de ses pages, y compris les
-/// plus récentes : c'est une version de **contrat**, pas une date de
-/// publication, et elle ne suit pas les sorties de modèles.
+/// The API refuses the versions it does not know. This value is the one the
+/// documentation gives as an example on each of its pages, the most recent
+/// included: it is a **contract** version, not a release date, and it does
+/// not follow model releases.
 pub const ANTHROPIC_VERSION: &str = "2023-06-01";
 
-/// Nombre maximal de modèles demandés par page.
+/// Maximum number of models requested per page.
 ///
-/// La documentation borne ce paramètre à 1000 et le fait défaut à 20. Vingt ne
-/// suffit pas — le catalogue en compte davantage —, et la valeur maximale évite
-/// une pagination qui n'apporterait rien ici.
+/// The documentation bounds this parameter to 1000 and defaults it to 20.
+/// Twenty is not enough — the catalog has more —, and the maximum value avoids
+/// a pagination that would bring nothing here.
 const MODELS_PAGE_SIZE: u32 = 1000;
 
-/// Nombre maximal de pages parcourues en listant les modèles.
+/// Maximum number of pages walked when listing models.
 ///
-/// Une borne dure plutôt qu'une confiance dans `has_more` : un serveur qui
-/// répondrait toujours « il y en a encore » ferait boucler l'appel sans fin.
+/// A hard bound rather than trust in `has_more`: a server that always
+/// answered "there are more" would make the call loop forever.
 const MAX_MODEL_PAGES: usize = 10;
 
-/// Plafond de jetons produits, quand l'appelant n'en fixe pas.
+/// Ceiling of produced tokens, when the caller sets none.
 ///
-/// Ce n'est pas une valeur externe mais un **choix d'Oxyn** : `/v1/messages`
-/// exige `max_tokens`, et il faut bien répondre quelque chose. La valeur est
-/// volontairement modeste — une réponse coupée se signale
-/// ([`StopReason::is_truncated`](crate::types::StopReason::is_truncated)),
-/// une facture ne se rattrape pas.
+/// It is not an external value but an **Oxyn choice**: `/v1/messages` requires
+/// `max_tokens`, and something has to be answered. The value is deliberately
+/// modest — a cut response reports itself
+/// ([`StopReason::is_truncated`](crate::types::StopReason::is_truncated)), an
+/// invoice cannot be taken back.
 pub const DEFAULT_MAX_TOKENS: u32 = 4096;
 
-/// Fournisseur Anthropic.
+/// Anthropic provider.
 ///
-/// `Debug` écrit à la main : la clé n'y figure pas (I-03).
+/// `Debug` written by hand: the key does not appear in it (I-03).
 pub struct AnthropicProvider {
     base_url: Url,
     api_key: ApiKey,
@@ -115,19 +114,18 @@ pub struct AnthropicProvider {
 }
 
 impl AnthropicProvider {
-    /// Construit le fournisseur sur le point d'accès public.
+    /// Builds the provider on the public endpoint.
     ///
-    /// # Erreurs
-    /// URL de base illisible, ou client HTTP impossible à construire.
+    /// # Errors
+    /// Unreadable base URL, or HTTP client impossible to build.
     pub fn new(api_key: impl Into<ApiKey>) -> Result<Self> {
         Self::with_base_url(api_key, ANTHROPIC_BASE_URL)
     }
 
-    /// Construit le fournisseur sur un point d'accès choisi (mandataire,
-    /// passerelle d'entreprise).
+    /// Builds the provider on a chosen endpoint (proxy, corporate gateway).
     ///
-    /// # Erreurs
-    /// URL de base illisible, ou client HTTP impossible à construire.
+    /// # Errors
+    /// Unreadable base URL, or HTTP client impossible to build.
     pub fn with_base_url(api_key: impl Into<ApiKey>, base_url: &str) -> Result<Self> {
         let id = ProviderId::anthropic();
         let analysee = Url::parse(base_url).map_err(|err| LlmError::Config {
@@ -144,24 +142,24 @@ impl AnthropicProvider {
         })
     }
 
-    /// Fixe la valeur de l'en-tête `anthropic-version`.
+    /// Sets the value of the `anthropic-version` header.
     #[must_use]
     pub fn with_version(mut self, version: impl Into<String>) -> Self {
         self.version = version.into();
         self
     }
 
-    /// Fixe le plafond de jetons utilisé quand la requête n'en porte pas.
+    /// Sets the token ceiling used when the request carries none.
     #[must_use]
     pub const fn with_default_max_tokens(mut self, max_tokens: u32) -> Self {
         self.default_max_tokens = max_tokens;
         self
     }
 
-    /// Les en-têtes que toute requête doit porter, **hors** la clé.
+    /// The headers every request must carry, **apart from** the key.
     ///
-    /// Rendus séparément : la clé n'est posée qu'au moment de l'envoi, et
-    /// jamais recopiée ailleurs.
+    /// Returned separately: the key is only set at sending time, and never
+    /// copied elsewhere.
     #[must_use]
     pub fn headers(&self) -> Vec<(&'static str, String)> {
         vec![
@@ -170,16 +168,17 @@ impl AnthropicProvider {
         ]
     }
 
-    /// Construit le corps de `POST /v1/messages`.
+    /// Builds the body of `POST /v1/messages`.
     ///
-    /// # Erreurs
-    /// Requête sans modèle, ou sans aucun message hors consigne système —
-    /// l'API les refuse, et échouer ici évite un aller-retour pour rien.
+    /// # Errors
+    /// Request without a model, or without any message apart from the system
+    /// instruction — the API refuses them, and failing here avoids a useless
+    /// round trip.
     pub fn wire_request(&self, request: &ChatRequest) -> Result<Value> {
         self.build_body(request, true)
     }
 
-    /// Construit un corps, diffusé ou non.
+    /// Builds a body, streamed or not.
     fn build_body(&self, request: &ChatRequest, stream: bool) -> Result<Value> {
         let invalide = |detail: &str| LlmError::Config {
             provider: ProviderId::anthropic(),
@@ -189,8 +188,8 @@ impl AnthropicProvider {
             return Err(invalide("no model requested").into());
         }
 
-        // Refuser plutôt qu'envoyer une conversation dont un bloc de
-        // raisonnement aurait disparu : la signature ne tiendrait plus.
+        // Refuse rather than send a conversation from which a reasoning block
+        // would have disappeared: the signature would no longer hold.
         let corps =
             wire::build_request(request, self.default_max_tokens, stream).map_err(|_| {
                 LlmError::Unsupported {
@@ -208,15 +207,15 @@ impl AnthropicProvider {
         Ok(corps)
     }
 
-    /// Prépare une requête HTTP : URL, en-têtes de protocole, puis la clé.
+    /// Prepares an HTTP request: URL, protocol headers, then the key.
     ///
-    /// La clé n'est posée qu'ici, et l'en-tête est marqué sensible : la pile
-    /// HTTP ne le rendra pas dans ses traces (I-03). Le message d'erreur ne
-    /// reprend jamais la valeur fautive.
+    /// The key is only set here, and the header is marked sensitive: the HTTP
+    /// stack will not render it in its traces (I-03). The error message never
+    /// copies the faulty value.
     ///
-    /// # Erreurs
-    /// Clé non représentable dans un en-tête HTTP — une clé collée depuis un
-    /// terminal emporte souvent un saut de ligne.
+    /// # Errors
+    /// Key not representable in an HTTP header — a key pasted from a terminal
+    /// often carries a line break.
     fn authorize(
         &self,
         mut builder: RequestBuilder,
@@ -239,15 +238,15 @@ impl AnthropicProvider {
         Ok(builder.header(HeaderName::from_static(API_KEY_HEADER), cle))
     }
 
-    /// Prépare le `POST /v1/messages` d'une génération.
+    /// Prepares the `POST /v1/messages` of a generation.
     ///
-    /// # Erreurs
-    /// URL inassemblable, ou clé inutilisable en en-tête.
+    /// # Errors
+    /// URL that cannot be assembled, or key unusable in a header.
     fn prepared_request(&self) -> Result<RequestBuilder> {
         Ok(self.authorize(self.client.post(self.messages_url()?))?)
     }
 
-    /// Assemble un chemin relatif sur l'URL de base.
+    /// Assembles a relative path onto the base URL.
     fn join(&self, chemin: &str) -> std::result::Result<Url, LlmError> {
         self.base_url.join(chemin).map_err(|err| LlmError::Config {
             provider: ProviderId::anthropic(),
@@ -260,17 +259,16 @@ impl AnthropicProvider {
         Ok(self.join(MESSAGES_PATH)?)
     }
 
-    /// Classe une erreur de transport, sans jamais recopier la clé.
+    /// Classifies a transport error, without ever copying the key.
     fn transport(&self, err: &reqwest::Error) -> LlmError {
-        // Aucun délai de réponse n'est configuré (voir `CONNECT_TIMEOUT`).
+        // No response timeout is configured (see `CONNECT_TIMEOUT`).
         LlmError::from_transport(ProviderId::anthropic(), err, None)
     }
 
-    /// Transforme une réponse d'échec en erreur, corps expurgé.
+    /// Turns a failure response into an error, body scrubbed.
     ///
-    /// Le statut décide de la reprise ; le corps ne sert qu'à l'affichage, et
-    /// il est tronqué et débarrassé de la clé par
-    /// [`LlmError::from_response`].
+    /// The status decides the retry; the body only serves display, and it is
+    /// truncated and rid of the key by [`LlmError::from_response`].
     async fn failure(&self, response: reqwest::Response, cancel: Option<&CancelToken>) -> LlmError {
         http::failure(
             &ProviderId::anthropic(),
@@ -281,18 +279,18 @@ impl AnthropicProvider {
         .await
     }
 
-    /// Envoie une requête et rend sa réponse, en cédant à l'annulation.
+    /// Sends a request and returns its response, yielding to cancellation.
     ///
-    /// L'envoi lui-même doit céder : un point d'accès qui ne répond pas
-    /// laisserait sinon l'utilisateur devant un bouton « Annuler » sans effet.
+    /// The sending itself must yield: an endpoint that does not answer would
+    /// otherwise leave the user in front of a "Cancel" button with no effect.
     async fn send(
         &self,
         builder: RequestBuilder,
         cancel: &CancelToken,
     ) -> Result<reqwest::Response> {
-        // `std::pin::pin!` et non `futures::pin_mut!` : l'épinglage de la
-        // bibliothèque standard n'introduit aucun bloc `unsafe` dans cette
-        // crate, où il est refusé.
+        // `std::pin::pin!` and not `futures::pin_mut!`: the standard library's
+        // pinning introduces no `unsafe` block in this crate, where it is
+        // refused.
         let envoi = pin!(builder.send());
         let attente = pin!(cancel.cancelled());
         let reponse = match select(attente, envoi).await {
@@ -300,17 +298,17 @@ impl AnthropicProvider {
             Either::Right((resultat, _)) => resultat.map_err(|err| self.transport(&err))?,
         };
         if !reponse.status().is_success() {
-            // Sous le même jeton que l'envoi : un corps d'erreur qui ne finit
-            // pas ne doit pas rendre « Annuler » inopérant.
+            // Under the same token as the sending: an error body that never
+            // ends must not make "Cancel" ineffective.
             return Err(self.failure(reponse, Some(cancel)).await.into());
         }
         Ok(reponse)
     }
 
-    /// Lit un corps JSON sous borne, en classant un défaut de décodage.
+    /// Reads a JSON body under a bound, classifying a decoding defect.
     ///
-    /// Sans jeton : les appels qui s'en servent ne reçoivent pas d'annulation
-    /// du trait. La taille et le délai restent bornés.
+    /// Without a token: the calls that use it receive no cancellation from the
+    /// trait. Size and timeout remain bounded.
     async fn read_json<T: serde::de::DeserializeOwned>(
         &self,
         reponse: reqwest::Response,
@@ -324,7 +322,7 @@ impl fmt::Debug for AnthropicProvider {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AnthropicProvider")
             .field("base_url", &reach::redacted(&self.base_url))
-            .field("api_key", &"<présente>")
+            .field("api_key", &"<present>")
             .field("version", &self.version)
             .field("default_max_tokens", &self.default_max_tokens)
             .finish()
@@ -354,8 +352,8 @@ impl LlmProvider for AnthropicProvider {
             }
 
             let requete = self.authorize(self.client.get(url))?;
-            // Pas d'annulation ici : lister les modèles est une requête courte,
-            // et le trait ne passe pas de jeton.
+            // No cancellation here: listing models is a short request, and the
+            // trait passes no token.
             let reponse = requete.send().await.map_err(|err| self.transport(&err))?;
             if !reponse.status().is_success() {
                 return Err(self.failure(reponse, None).await.into());
@@ -365,13 +363,13 @@ impl LlmProvider for AnthropicProvider {
             let encore = brut.has_more;
             let dernier = brut.last_id.clone();
             fiches.extend(wire::parse_models(brut));
-            // Borne cumulée : chaque page est bornée, pas leur somme.
+            // Cumulative bound: each page is bounded, not their sum.
             if fiches.len() > http::MAX_MODELS {
                 return Err(http::too_many_models(&ProviderId::anthropic()).into());
             }
 
-            // `last_id` absent alors qu'il y aurait une suite : on s'arrête
-            // plutôt que de redemander la même page indéfiniment.
+            // `last_id` missing while there would be more: stop rather than ask
+            // for the same page again forever.
             match (encore, dernier) {
                 (true, Some(curseur)) => apres = Some(curseur),
                 _ => break,
@@ -382,8 +380,8 @@ impl LlmProvider for AnthropicProvider {
     }
 
     async fn count_tokens(&self, request: &ChatRequest) -> Result<Option<u32>> {
-        // `stream` est refusé par ce point d'accès : le corps est donc bâti
-        // sans lui, et sans `max_tokens` qu'il n'attend pas non plus.
+        // `stream` is refused by this endpoint: the body is therefore built
+        // without it, and without `max_tokens` which it does not expect either.
         let corps = self.build_body(request, false)?;
         let url = self.join(COUNT_TOKENS_PATH)?;
         let requete = self.authorize(self.client.post(url))?.json(&corps);
@@ -404,9 +402,9 @@ impl LlmProvider for AnthropicProvider {
         if cancel.is_cancelled() {
             return Err(OxynError::Cancelled);
         }
-        // La requête est construite et validée **avant** tout appel réseau :
-        // une requête mal formée doit se signaler comme telle plutôt que de
-        // revenir en `400` quelques centaines de millisecondes plus tard.
+        // The request is built and validated **before** any network call: a
+        // malformed request must report itself as such rather than come back
+        // as a `400` a few hundred milliseconds later.
         let corps = self.wire_request(&request)?;
         let requete = self.prepared_request()?.json(&corps);
         let reponse = self.send(requete, cancel).await?;
@@ -437,15 +435,15 @@ mod tests {
     }
 
     fn corps(requete: &ChatRequest) -> Value {
-        fournisseur().wire_request(requete).expect("requête valide")
+        fournisseur().wire_request(requete).expect("valid request")
     }
 
-    // ── Consigne système, blocs, alternance ────────────────────────────────
+    // ── System instruction, blocks, alternation ────────────────────────────
 
     #[test]
-    fn la_consigne_systeme_sort_des_messages() {
-        // Le point qui distingue ce protocole : `system` est un champ, pas un
-        // message.
+    fn the_system_instruction_leaves_the_messages() {
+        // The point that distinguishes this protocol: `system` is a field, not
+        // a message.
         let requete = ChatRequest::new(
             "claude-modele",
             vec![
@@ -462,7 +460,7 @@ mod tests {
     }
 
     #[test]
-    fn plusieurs_consignes_systeme_sont_concatenees_et_non_perdues() {
+    fn several_system_instructions_are_concatenated_not_lost() {
         let requete = ChatRequest::new(
             "m",
             vec![
@@ -475,7 +473,7 @@ mod tests {
     }
 
     #[test]
-    fn le_contenu_est_une_liste_de_blocs() {
+    fn the_content_is_a_list_of_blocks() {
         let requete = ChatRequest::new("m", vec![ChatMessage::user("bonjour")]);
         let corps = corps(&requete);
         assert_eq!(corps["messages"][0]["content"][0]["type"], "text");
@@ -483,7 +481,7 @@ mod tests {
     }
 
     #[test]
-    fn un_appel_d_outil_devient_un_bloc_tool_use() {
+    fn a_tool_call_becomes_a_tool_use_block() {
         let appel = ToolCall::new("call_1", "execute", json!({"sql": "SELECT 1"}));
         let requete = ChatRequest::new(
             "m",
@@ -499,12 +497,12 @@ mod tests {
         assert_eq!(
             bloc["input"],
             json!({"sql": "SELECT 1"}),
-            "l'entrée est un objet, pas une chaîne : ce protocole diffère d'OpenAI"
+            "the input is an object, not a string: this protocol differs from OpenAI"
         );
     }
 
     #[test]
-    fn un_resultat_d_outil_devient_un_bloc_utilisateur() {
+    fn a_tool_result_becomes_a_user_block() {
         let requete = ChatRequest::new(
             "m",
             vec![
@@ -518,19 +516,16 @@ mod tests {
             ],
         );
         let dernier = corps(&requete)["messages"][2].clone();
-        assert_eq!(
-            dernier["role"], "user",
-            "ce protocole n'a pas de rôle `tool`"
-        );
+        assert_eq!(dernier["role"], "user", "this protocol has no `tool` role");
         assert_eq!(dernier["content"][0]["type"], "tool_result");
         assert_eq!(dernier["content"][0]["tool_use_id"], "call_1");
         assert_eq!(dernier["content"][0]["content"], "42");
     }
 
     #[test]
-    fn deux_messages_consecutifs_de_meme_role_sont_fusionnes() {
-        // L'API exige l'alternance ; deux résultats d'outils successifs sont le
-        // cas courant quand le modèle en a demandé plusieurs.
+    fn two_consecutive_messages_of_the_same_role_are_merged() {
+        // The API requires alternation; two successive tool results are the
+        // common case when the model asked for several.
         let requete = ChatRequest::new(
             "m",
             vec![
@@ -540,13 +535,13 @@ mod tests {
             ],
         );
         let corps = corps(&requete);
-        let messages = corps["messages"].as_array().expect("tableau");
+        let messages = corps["messages"].as_array().expect("array");
         assert_eq!(messages.len(), 1, "{messages:?}");
         assert_eq!(messages[0]["content"].as_array().map(Vec::len), Some(3));
     }
 
     #[test]
-    fn les_outils_utilisent_input_schema() {
+    fn tools_use_input_schema() {
         let requete =
             ChatRequest::new("m", vec![ChatMessage::user("a")]).with_tools(vec![ToolSpec::new(
                 "lister",
@@ -563,8 +558,8 @@ mod tests {
     }
 
     #[test]
-    fn le_plafond_de_jetons_est_toujours_present() {
-        // `max_tokens` est obligatoire dans ce protocole.
+    fn the_token_ceiling_is_always_present() {
+        // `max_tokens` is mandatory in this protocol.
         let sans = ChatRequest::new("m", vec![ChatMessage::user("a")]);
         assert_eq!(corps(&sans)["max_tokens"], json!(DEFAULT_MAX_TOKENS));
 
@@ -573,7 +568,7 @@ mod tests {
     }
 
     #[test]
-    fn une_requete_sans_modele_ou_sans_message_est_refusee() {
+    fn a_request_without_model_or_message_is_refused() {
         let f = fournisseur();
         assert!(
             f.wire_request(&ChatRequest::new("", vec![ChatMessage::user("a")]))
@@ -582,16 +577,16 @@ mod tests {
         assert!(
             f.wire_request(&ChatRequest::new("m", vec![ChatMessage::system("seule")]))
                 .is_err(),
-            "une consigne système seule ne fait pas une conversation"
+            "a system instruction alone does not make a conversation"
         );
     }
 
     // ── Raisonnement ───────────────────────────────────────────────────────
 
     #[test]
-    fn un_effort_passe_par_output_config_et_ne_touche_pas_au_mode_de_reflexion() {
-        // Envoyer un mode de réflexion non demandé ferait échouer la requête
-        // sur les modèles qui ne le connaissent pas.
+    fn effort_goes_through_output_config_and_leaves_the_thinking_mode_alone() {
+        // Sending a thinking mode that was not requested would make the request
+        // fail on models that do not know it.
         let requete = ChatRequest::new("m", vec![ChatMessage::user("a")])
             .with_reasoning_effort(ReasoningEffort::XHigh);
         let corps = corps(&requete);
@@ -600,7 +595,7 @@ mod tests {
     }
 
     #[test]
-    fn un_budget_de_reflexion_demande_le_mode_explicite() {
+    fn a_thinking_budget_requires_the_explicit_mode() {
         let requete =
             ChatRequest::new("m", vec![ChatMessage::user("a")]).with_reasoning_budget_tokens(8192);
         let corps = corps(&requete);
@@ -613,7 +608,7 @@ mod tests {
     }
 
     #[test]
-    fn les_deux_reglages_coexistent() {
+    fn both_settings_coexist() {
         let requete = ChatRequest::new("m", vec![ChatMessage::user("a")])
             .with_reasoning_effort(ReasoningEffort::Low)
             .with_reasoning_budget_tokens(1024);
@@ -623,16 +618,16 @@ mod tests {
     }
 
     #[test]
-    fn une_requete_sans_demande_de_raisonnement_n_en_porte_aucune_trace() {
+    fn a_request_without_reasoning_request_carries_no_trace_of_it() {
         let corps = corps(&ChatRequest::new("m", vec![ChatMessage::user("a")]));
         assert!(corps.get("thinking").is_none(), "{corps}");
         assert!(corps.get("output_config").is_none(), "{corps}");
     }
 
     #[test]
-    fn les_blocs_de_raisonnement_repartent_en_tete_et_intacts() {
-        // L'API vérifie leur signature : les réordonner, les éditer ou en
-        // perdre un fait refuser la requête.
+    fn reasoning_blocks_go_back_first_and_intact() {
+        // The API checks their signature: reordering them, editing them or
+        // losing one makes the request refused.
         let requete = ChatRequest::new(
             "m",
             vec![
@@ -646,19 +641,19 @@ mod tests {
             ],
         );
         let contenu = corps(&requete)["messages"][1]["content"].clone();
-        let blocs = contenu.as_array().expect("tableau");
+        let blocs = contenu.as_array().expect("array");
 
         assert_eq!(blocs[0]["type"], "thinking");
         assert_eq!(blocs[0]["thinking"], "je réfléchis");
         assert_eq!(blocs[0]["signature"], "SIG");
         assert_eq!(blocs[1]["type"], "redacted_thinking");
         assert_eq!(blocs[1]["data"], "CHIFFRE");
-        assert_eq!(blocs[2]["type"], "text", "le raisonnement vient d'abord");
+        assert_eq!(blocs[2]["type"], "text", "reasoning comes first");
         assert_eq!(blocs[3]["type"], "tool_use");
     }
 
     #[test]
-    fn un_bloc_de_raisonnement_sans_signature_ne_porte_pas_le_champ() {
+    fn a_reasoning_block_without_signature_does_not_carry_the_field() {
         let requete = ChatRequest::new(
             "m",
             vec![
@@ -677,7 +672,7 @@ mod tests {
     // ── Cache de prompt ────────────────────────────────────────────────────
 
     #[test]
-    fn un_message_marque_porte_le_marqueur_de_cache() {
+    fn a_marked_message_carries_the_cache_marker() {
         let requete = ChatRequest::new(
             "m",
             vec![
@@ -691,13 +686,13 @@ mod tests {
             corps["messages"][0]["content"][0]
                 .get("cache_control")
                 .is_none(),
-            "la question change à chaque tour : la marquer ne servirait à rien"
+            "the question changes at every turn: marking it would be useless"
         );
     }
 
     #[test]
-    fn le_marqueur_se_pose_sur_le_dernier_bloc_du_message() {
-        // Un marqueur ferme un préfixe ; le poser en tête ne cacherait rien.
+    fn the_marker_is_set_on_the_last_block_of_the_message() {
+        // A marker closes a prefix; setting it at the head would cache nothing.
         let requete = ChatRequest::new(
             "m",
             vec![
@@ -708,13 +703,13 @@ mod tests {
             ],
         );
         let contenu = corps(&requete)["messages"][0]["content"].clone();
-        let blocs = contenu.as_array().expect("tableau");
+        let blocs = contenu.as_array().expect("array");
         assert!(blocs[0].get("cache_control").is_none(), "{blocs:?}");
         assert_eq!(blocs[blocs.len() - 1]["cache_control"]["type"], "ephemeral");
     }
 
     #[test]
-    fn les_outils_marques_portent_le_marqueur_sur_le_dernier() {
+    fn marked_tools_carry_the_marker_on_the_last_one() {
         let requete = ChatRequest::new("m", vec![ChatMessage::user("a")])
             .with_tools(vec![
                 ToolSpec::new("un", "d1", json!({})),
@@ -727,9 +722,9 @@ mod tests {
     }
 
     #[test]
-    fn le_nombre_de_marqueurs_est_borne() {
-        // Au-delà de la borne, l'API refuse la requête entière : Oxyn s'arrête
-        // avant plutôt que de laisser un `400` arriver à l'utilisateur.
+    fn the_number_of_markers_is_bounded() {
+        // Beyond the bound, the API refuses the whole request: Oxyn stops
+        // before rather than let a `400` reach the user.
         let mut messages = vec![ChatMessage::system("contexte").cached()];
         for numero in 0..10 {
             messages.push(ChatMessage::user(format!("question {numero}")).cached());
@@ -742,11 +737,11 @@ mod tests {
         let marqueurs = compter_marqueurs(&corps(&requete));
         assert!(
             marqueurs <= wire::MAX_CACHE_BREAKPOINTS,
-            "{marqueurs} marqueurs posés"
+            "{marqueurs} markers set"
         );
     }
 
-    /// Compte les `cache_control` présents n'importe où dans le corps.
+    /// Counts the `cache_control`s present anywhere in the body.
     fn compter_marqueurs(valeur: &Value) -> usize {
         match valeur {
             Value::Object(objet) => {
@@ -761,50 +756,50 @@ mod tests {
     // ── Comptage de jetons ─────────────────────────────────────────────────
 
     #[test]
-    fn le_corps_de_comptage_ne_porte_ni_stream_ni_plafond() {
-        // Le point d'accès de comptage refuse `stream`.
+    fn the_counting_body_carries_neither_stream_nor_ceiling() {
+        // The counting endpoint refuses `stream`.
         let requete = ChatRequest::new("m", vec![ChatMessage::user("a")]);
         let corps = fournisseur()
             .build_body(&requete, false)
-            .expect("requête valide");
+            .expect("valid request");
         assert!(corps.get("stream").is_none(), "{corps}");
         assert!(corps.get("max_tokens").is_none(), "{corps}");
         assert_eq!(corps["model"], "m");
     }
 
-    // ── Confidentialité et en-têtes ────────────────────────────────────────
+    // ── Privacy and headers ────────────────────────────────────────────────
 
     #[test]
-    fn le_debug_ne_montre_pas_la_cle() {
+    fn debug_does_not_show_the_key() {
         let rendu = format!("{:?}", AnthropicProvider::new("sk-ant-CECI").expect("ok"));
         assert!(!rendu.contains("CECI"), "{rendu}");
-        assert!(rendu.contains("<présente>"), "{rendu}");
+        assert!(rendu.contains("<present>"), "{rendu}");
     }
 
     #[test]
-    fn une_cle_avec_un_saut_de_ligne_est_refusee_sans_etre_affichee() {
-        // Une clé collée depuis un terminal emporte souvent un `\n`.
+    fn a_key_with_a_line_break_is_refused_without_being_displayed() {
+        // A key pasted from a terminal often carries a `\n`.
         let f = AnthropicProvider::new("sk-ant-avec\nsaut").expect("construction");
-        let err = f.prepared_request().expect_err("en-tête invalide");
+        let err = f.prepared_request().expect_err("invalid header");
         assert!(!err.to_string().contains("sk-ant-avec"), "{err}");
     }
 
     #[test]
-    fn une_cle_blanche_est_refusee_localement() {
-        // Un `401` ferait croire à un problème de compte alors que la
-        // configuration est simplement incomplète.
+    fn a_blank_key_is_refused_locally() {
+        // A `401` would suggest an account problem whereas the configuration is
+        // simply incomplete.
         let f = AnthropicProvider::new("   ").expect("construction");
-        let err = f.prepared_request().expect_err("clé blanche");
+        let err = f.prepared_request().expect_err("blank key");
         assert!(matches!(err, OxynError::Authentication(_)), "{err}");
     }
 
     #[test]
-    fn une_requete_preparee_se_construit_avec_une_cle_valide() {
+    fn a_prepared_request_builds_with_a_valid_key() {
         assert!(fournisseur().prepared_request().is_ok());
     }
 
     #[test]
-    fn les_url_sont_assemblees() {
+    fn urls_are_assembled() {
         let f = fournisseur();
         assert_eq!(
             f.messages_url().expect("URL").as_str(),
@@ -821,9 +816,9 @@ mod tests {
     }
 
     #[test]
-    fn une_url_de_base_sans_slash_final_ne_perd_pas_son_chemin() {
-        // Le piège de `Url::join` : sans `/` final, le dernier segment est
-        // remplacé — une passerelle d'entreprise sert souvent sous un préfixe.
+    fn a_base_url_without_final_slash_keeps_its_path() {
+        // The `Url::join` trap: without a final `/`, the last segment is
+        // replaced — a corporate gateway often serves under a prefix.
         let f = AnthropicProvider::with_base_url("sk-ant-test", "https://passerelle.example/api")
             .expect("construction");
         assert_eq!(
@@ -833,7 +828,7 @@ mod tests {
     }
 
     #[test]
-    fn les_en_tetes_portent_la_version() {
+    fn the_headers_carry_the_version() {
         let f = fournisseur().with_version("2099-01-01");
         let entetes = f.headers();
         assert!(
@@ -844,40 +839,40 @@ mod tests {
         );
         assert!(
             entetes.iter().all(|(nom, _)| *nom != API_KEY_HEADER),
-            "la clé ne passe pas par là : {entetes:?}"
+            "the key does not go through there: {entetes:?}"
         );
     }
 
     #[test]
-    fn une_url_de_base_illisible_est_une_erreur_de_configuration() {
+    fn an_unreadable_base_url_is_a_configuration_error() {
         let err = AnthropicProvider::with_base_url("sk-ant-test", "pas une url")
-            .expect_err("URL invalide");
+            .expect_err("invalid URL");
         assert!(matches!(err, OxynError::Config(_)), "{err}");
     }
 
     // ── Annulation avant l'envoi ───────────────────────────────────────────
 
     #[test]
-    fn un_jeton_deja_annule_court_circuite_l_appel() {
+    fn an_already_cancelled_token_short_circuits_the_call() {
         let f = fournisseur();
         let jeton = CancelToken::new();
         jeton.cancel();
         let requete = ChatRequest::new("claude-modele", vec![ChatMessage::user("bonjour")]);
         let issue = futures::executor::block_on(f.stream(requete, &jeton));
         let err = match issue {
-            Ok(_) => panic!("annulé d'avance"),
+            Ok(_) => panic!("cancelled beforehand"),
             Err(err) => err,
         };
         assert!(err.is_cancelled(), "{err}");
     }
 
-    // ── Statuts d'échec ────────────────────────────────────────────────────
+    // ── Failure statuses ───────────────────────────────────────────────────
 
     #[test]
-    fn les_statuts_d_echec_portent_leur_classe() {
-        // La classe décide d'une reprise, et c'est l'appelant qui décide —
-        // jamais cette crate (I-13). Les valeurs viennent de la table d'erreurs
-        // vérifiée le 2026-09-16.
+    fn failure_statuses_carry_their_class() {
+        // The class decides a retry, and it is the caller that decides — never
+        // this crate (I-13). The values come from the error table checked on
+        // 2026-09-16.
         let cle = ApiKey::new("sk-ant-test");
         let cas = [
             (
@@ -913,8 +908,8 @@ mod tests {
     }
 
     #[test]
-    fn un_refus_d_authentification_ne_recopie_jamais_la_cle() {
-        // Ce fournisseur recopie parfois la clé reçue dans son message.
+    fn an_authentication_refusal_never_copies_the_key() {
+        // This provider sometimes copies the received key into its message.
         let cle = ApiKey::new("sk-ant-api03-TRES-SECRET");
         let err = LlmError::from_response(
             ProviderId::anthropic(),
@@ -931,13 +926,13 @@ mod tests {
         assert!(!projetee.to_string().contains("TRES-SECRET"));
     }
 
-    // ── Forme exacte de la requête ─────────────────────────────────────────
+    // ── Exact shape of the request ─────────────────────────────────────────
 
     #[test]
-    fn une_requete_complete_a_la_forme_attendue() {
-        // Instantané délibérément lisible plutôt qu'un fichier à côté : ce qui
-        // compte est qu'un changement de forme se voie **en revue**, et une
-        // comparaison de valeur JSON dit exactement ce qui a bougé.
+    fn a_complete_request_has_the_expected_shape() {
+        // A deliberately readable snapshot rather than a file on the side: what
+        // matters is that a change of shape shows **in review**, and a JSON
+        // value comparison says exactly what moved.
         let requete = ChatRequest::new(
             "claude-modele",
             vec![
@@ -984,12 +979,12 @@ mod tests {
     }
 
     #[test]
-    fn une_connexion_local_ne_peut_pas_atteindre_ce_fournisseur() {
-        // ADR-0006 : `Local` promet que rien ne quitte la machine. Ce
-        // fournisseur est distant par construction — il n'existe pas de
-        // déploiement d'Anthropic sur la boucle locale —, donc la combinaison
-        // est refusée. Le test ne résout aucun nom : il s'appuie sur le fait
-        // que le niveau, lui, ne dépend pas de la résolution.
+    fn a_local_connection_cannot_reach_this_provider() {
+        // ADR-0006: `Local` promises that nothing leaves the machine. This
+        // provider is remote by construction — there is no Anthropic
+        // deployment on the loopback —, so the combination is refused. The
+        // test resolves no name: it relies on the fact that the tier, itself,
+        // does not depend on resolution.
         assert!(
             !oxyn_core::PrivacyTier::Local.allows_remote_provider(),
             "un niveau qui laisserait passer un fournisseur distant ne promettrait plus rien"
@@ -1001,10 +996,10 @@ mod tests {
             assert!(niveau.allows_remote_provider(), "{niveau:?}");
         }
 
-        // Et le point d'accès par défaut n'est pas une adresse de bouclage
-        // littérale : rien ici ne peut se faire passer pour local.
+        // And the default endpoint is not a literal loopback address: nothing
+        // here can pass itself off as local.
         let f = fournisseur();
-        let point = f.endpoint().expect("ce fournisseur a une URL");
+        let point = f.endpoint().expect("this provider has a URL");
         assert_ne!(
             crate::reach::literal_reach(point),
             Some(crate::reach::Reach::Local),
@@ -1013,12 +1008,12 @@ mod tests {
     }
 
     #[test]
-    fn une_requete_invalide_se_signale_avant_tout_appel_reseau() {
+    fn an_invalid_request_reports_itself_before_any_network_call() {
         let f = fournisseur();
         let requete = ChatRequest::new("  ", vec![ChatMessage::user("bonjour")]);
         let issue = futures::executor::block_on(f.stream(requete, &CancelToken::new()));
         let err = match issue {
-            Ok(_) => panic!("modèle vide"),
+            Ok(_) => panic!("empty model"),
             Err(err) => err,
         };
         assert!(matches!(&err, OxynError::Config(_)), "{err}");

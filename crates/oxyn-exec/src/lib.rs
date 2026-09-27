@@ -1,53 +1,53 @@
-//! L'ordonnanceur d'Oxyn : le point de passage **obligé** de toute commande.
+//! Oxyn's executor: the **mandatory** passage point of every command.
 //!
-//! Si un chemin permet d'atteindre un driver sans traverser
-//! [`Executor::dispatch`], l'architecture de sûreté du produit est cassée. Ce
-//! n'est pas une formule : un second chemin d'exécution, une fois créé, n'est
-//! jamais audité comme le premier — et c'est celui-là que l'IA empruntera
+//! If a path reaches a driver without going through
+//! [`Executor::dispatch`], the product's safety architecture is broken. It is
+//! not a figure of speech: a second execution path, once created, is never
+//! audited like the first — and it is that one the AI will take
 //! ([I-01](../../../CLAUDE.md#i-01), [ADR-0004](../../../docs/adr/0004-command-bus.md)).
 //!
-//! # Ce qu'on y trouve
+//! # What is in it
 //!
-//! | Module | Sujet | Autorité |
+//! | Module | Subject | Authority |
 //! |---|---|---|
-//! | [`executor`] | la séquence complète : reclassifier, décider, journaliser, exécuter | ARCHITECTURE §8, §9 |
-//! | [`approval`] | les commandes en attente d'accord, et leur péremption | ADR-0004 |
-//! | [`cancel`] | les exécutions en cours, et l'annulation jusqu'au serveur | DRIVER-CONTRACT §2 |
-//! | [`sessions`] | les sessions ouvertes, et la résolution des identifiants | SECURITY |
-//! | [`events`] | ce qui remonte vers l'interface | UX-SPEC |
-//! | [`sink`] | la porte des agents — la même que celle de l'interface | ADR-0004 |
+//! | [`executor`] | the complete sequence: reclassify, decide, log, execute | ARCHITECTURE §8, §9 |
+//! | [`approval`] | commands awaiting approval, and their expiry | ADR-0004 |
+//! | [`cancel`] | executions in progress, and cancellation down to the server | DRIVER-CONTRACT §2 |
+//! | [`sessions`] | open sessions, and identifier resolution | SECURITY |
+//! | [`events`] | what goes up to the interface | UX-SPEC |
+//! | [`sink`] | the agents' door — the same as the interface's | ADR-0004 |
 //!
-//! # La séquence, dans cet ordre et sans raccourci
+//! # The sequence, in this order and without shortcut
 //!
-//! 1. **Reclassifier** le texte par `oxyn-query`. L'intention portée par la
-//!    commande vient de l'appelant, et un agent est un appelant : elle est
-//!    remplacée, jamais recoupée (ARCHITECTURE §8, I-07).
-//! 2. **Soumettre au `PolicyGate`**, avec l'environnement de la connexion visée.
-//! 3. **Sur `RequireApproval`, ne rien exécuter** et attendre un accord explicite
-//!    portant le [`CommandId`](oxyn_core::CommandId) de la commande.
-//! 4. **Journaliser avant et après** : la décision de politique avant toute
-//!    exécution, le résultat après. Une commande refusée y figure aussi.
-//! 5. **Exécuter en flux**, avec contre-pression et débordement disque (I-06).
-//! 6. **Émettre les événements** vers l'interface par un canal (I-05).
+//! 1. **Reclassify** the text with `oxyn-query`. The intent carried by the
+//!    command comes from the caller, and an agent is a caller: it is
+//!    replaced, never cross-checked (ARCHITECTURE §8, I-07).
+//! 2. **Submit to the `PolicyGate`**, with the environment of the target connection.
+//! 3. **On `RequireApproval`, execute nothing** and wait for an explicit approval
+//!    carrying the command's [`CommandId`](oxyn_core::CommandId).
+//! 4. **Log before and after**: the policy decision before any execution, the
+//!    result after. A denied command appears there too.
+//! 5. **Execute as a stream**, with back-pressure and spill to disk (I-06).
+//! 6. **Emit events** to the interface through a channel (I-05).
 //!
-//! # Les trois choix qui gouvernent cette crate
+//! # The three choices that govern this crate
 //!
-//! **Un refus n'est pas une panne.** [`Outcome::Denied`] et
-//! [`Outcome::NeedsApproval`] sont des issues normales ; une `Err` décrit un
-//! serveur injoignable ou un délai dépassé. Confondre les deux ferait passer
-//! « le produit fait son travail » pour un incident, et l'utilisateur
-//! finirait par cliquer sans lire.
+//! **A denial is not a failure.** [`Outcome::Denied`] and
+//! [`Outcome::NeedsApproval`] are normal outcomes; an `Err` describes an
+//! unreachable server or a timeout. Confusing the two would make "the product
+//! does its job" look like an incident, and the user would end up clicking
+//! without reading.
 //!
-//! **La piste d'audit prime sur l'exécution.** Une décision de politique qui ne
-//! s'écrit pas ne s'exécute pas. Après coup, c'est l'inverse : la commande a eu
-//! lieu, et échouer maintenant laisserait croire le contraire — l'échec de
-//! journalisation est crié, pas transformé en erreur.
+//! **The audit trail comes before execution.** A policy decision that cannot
+//! be written is not executed. Afterwards, it is the reverse: the command took
+//! place, and failing now would suggest otherwise — a logging failure is
+//! shouted, not turned into an error.
 //!
-//! **Les agents passent littéralement par le même `dispatch`.** [`ExecutorSink`]
-//! n'appelle rien d'autre que la méthode de l'interface. Il n'y a pas de
-//! seconde API « pour l'IA » à auditer séparément.
+//! **Agents literally go through the same `dispatch`.** [`ExecutorSink`]
+//! calls nothing but the interface's method. There is no second API "for the
+//! AI" to audit separately.
 //!
-//! # Exemple
+//! # Example
 //!
 //! ```
 //! use std::sync::Arc;
@@ -61,39 +61,39 @@
 //!
 //! # fn main() -> Result<(), Box<dyn std::error::Error>> {
 //! let store = Arc::new(Store::open_in_memory()?);
-//! let atelier = store.workspaces().create("atelier")?;
+//! let workshop = store.workspaces().create("workshop")?;
 //!
-//! let connexion = ConnectionConfig::new("base client", DriverId::postgres())
+//! let connection = ConnectionConfig::new("customer database", DriverId::postgres())
 //!     .with_environment(Environment::Production);
-//! store.connections().save(atelier.id, &connexion)?;
+//! store.connections().save(workshop.id, &connection)?;
 //!
-//! let politique = Arc::new(DefaultPolicy::new());
-//! politique.register(&connexion);
+//! let policy = Arc::new(DefaultPolicy::new());
+//! policy.register(&connection);
 //!
-//! let executeur = Executor::builder(Arc::clone(&store), politique)
-//!     .with_workspace(atelier.id)
+//! let executor = Executor::builder(Arc::clone(&store), policy)
+//!     .with_workspace(workshop.id)
 //!     .build();
-//! executeur.register_connection(&connexion);
+//! executor.register_connection(&connection);
 //!
-//! // L'agent s'auto-déclare en lecture seule. Le texte dit autre chose.
-//! let commande = Command::Execute {
-//!     connection: connexion.id,
+//! // The agent declares itself read-only. The text says otherwise.
+//! let command = Command::Execute {
+//!     connection: connection.id,
 //!     session: SessionId::new(),
 //!     request: Box::new(
-//!         ExecRequest::new(QueryLanguage::SQL, "DELETE FROM clients")
+//!         ExecRequest::new(QueryLanguage::SQL, "DELETE FROM customers")
 //!             .with_intent(StatementIntent::Read),
 //!     ),
 //! };
 //! let agent = Actor::agent(AgentId::new(), AgentSessionId::new());
 //!
-//! let issue = futures::executor::block_on(executeur.dispatch(
+//! let outcome = futures::executor::block_on(executor.dispatch(
 //!     agent,
-//!     commande,
+//!     command,
 //!     &CancelToken::new(),
 //! ))?;
 //!
-//! assert!(issue.is_denied(), "{issue:?}");
-//! // Et le refus laisse une trace : c'est la moitié de la promesse.
+//! assert!(outcome.is_denied(), "{outcome:?}");
+//! // And the denial leaves a trace: that is half of the promise.
 //! assert_eq!(store.journal().count()?, 1);
 //! # Ok(())
 //! # }
@@ -115,11 +115,11 @@ pub use executor::{Executor, ExecutorBuilder, Outcome};
 pub use sessions::{CredentialResolver, NoCredentials, SessionRegistry, SessionSlot};
 pub use sink::{DispatchReport, ExecutorSink};
 
-/// Ce qu'on importe d'un coup quand on câble l'ordonnanceur.
+/// What you import in one go when wiring the executor.
 ///
-/// Y compris le vocabulaire du domaine : câbler `oxyn-exec` demande
-/// [`Actor`](oxyn_core::Actor), [`Command`](oxyn_core::Command) et
-/// [`CancelToken`](oxyn_core::CancelToken) à chaque appel.
+/// Including the domain vocabulary: wiring `oxyn-exec` requires
+/// [`Actor`](oxyn_core::Actor), [`Command`](oxyn_core::Command) and
+/// [`CancelToken`](oxyn_core::CancelToken) at every call.
 ///
 /// ```
 /// use oxyn_exec::prelude::*;

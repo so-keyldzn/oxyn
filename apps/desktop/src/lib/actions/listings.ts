@@ -72,7 +72,7 @@ function compareRanks(left: Array<number>, right: Array<number>) {
  * The palette in `context`: every action of the registry offered here, by
  * menu, the greyed ones with their reason — on macOS the only place where the
  * reason of a greyed entry of the native bar can be read (ADR-0041,
- * « Conséquences »). An absent action has no entry, as in the menus.
+ * « Consequences »). An absent action has no entry, as in the menus.
  */
 export function paletteSections(
   source: Manifest,

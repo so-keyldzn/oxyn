@@ -1,68 +1,68 @@
-//! Le vocabulaire d'un tour de conversation qu'Oxyn **persiste**.
+//! The vocabulary of a conversation turn that Oxyn **persists**.
 //!
-//! # Pourquoi ces trois types vivent ici et non dans `oxyn-llm`
+//! # Why these three types live here and not in `oxyn-llm`
 //!
-//! [`ReasoningBlock`] et [`StopReason`] sont écrits en base par `oxyn-store`,
-//! **tels quels** : un bloc de raisonnement se renvoie au fournisseur à
-//! l'identique au tour suivant, et la raison d'arrêt garde le mot du
-//! fournisseur. Les recopier en aval en ferait deux définitions ; et parce
-//! qu'ils sont `#[non_exhaustive]`, la conversion devrait passer par un bras
-//! `_ =>` — c'est-à-dire perdre en silence la variante ajoutée plus tard, pour
-//! un échec qui ne sortirait que chez l'utilisateur, sous la forme « le
-//! fournisseur refuse mon tour ».
+//! [`ReasoningBlock`] and [`StopReason`] are written to the database by
+//! `oxyn-store`, **as they are**: a reasoning block is sent back to the provider
+//! identically on the next turn, and the stop reason keeps the provider's word.
+//! Copying them downstream would make two definitions; and because they are
+//! `#[non_exhaustive]`, the conversion would have to go through a `_ =>` arm —
+//! that is, silently lose the variant added later, for a failure that would
+//! only show up at the user's, as "the provider refuses my turn".
 //!
-//! Laisser `oxyn-store` dépendre d'`oxyn-llm` pour les lire faisait entrer un
-//! client HTTP dans l'arbre d'`oxyn-exec`, qui ne fait jamais de réseau
-//! lui-même : le sens des dépendances
-//! d'[ARCHITECTURE](../../../../docs/ARCHITECTURE.md) était cassé. C'est du
-//! **vocabulaire commun**, pas du protocole, et il a donc sa place ici — c'est le
-//! précédent exact de [`ProviderId`](super::ProviderId). `oxyn-llm` les
-//! ré-exporte : ils n'ont qu'une définition dans le dépôt.
+//! Letting `oxyn-store` depend on `oxyn-llm` to read them brought an HTTP
+//! client into the tree of `oxyn-exec`, which never does network itself: the
+//! direction of dependencies of
+//! [ARCHITECTURE](../../../../docs/ARCHITECTURE.md) was broken. It is **shared
+//! vocabulary**, not protocol, so it belongs here — it is the exact precedent
+//! of [`ProviderId`](super::ProviderId). `oxyn-llm` re-exports them: they have
+//! a single definition in the repository.
 //!
-//! [`Role`] suit pour une raison plus modeste, et elle est dite : il n'est pas
-//! persisté, mais `oxyn-store` le convertit vers son propre rôle ouvert. Le
-//! laisser en arrière aurait gardé la dépendance pour une seule conversion.
+//! [`Role`] follows for a more modest reason, and it is stated: it is not
+//! persisted, but `oxyn-store` converts it to its own open role. Leaving it
+//! behind would have kept the dependency for a single conversion.
 //!
-//! # Ce qui n'est **pas** ici
+//! # What is **not** here
 //!
-//! La traduction depuis une chaîne de protocole (`stop`, `end_turn`,
-//! `pause_turn`…). Elle appartient à chaque fournisseur, et elle reste dans
-//! `oxyn-llm` : le cœur ne connaît aucun protocole.
+//! The translation from a protocol string (`stop`, `end_turn`, `pause_turn`…).
+//! It belongs to each provider, and it stays in `oxyn-llm`: the core knows no
+//! protocol.
 //!
-//! # La forme sérialisée est un format de persistance
+//! # The serialized form is a persistence format
 //!
-//! `oxyn-store` fait `serde_json::to_string` directement sur ces types. Leurs
-//! attributs `serde` **sont** donc le format des conversations sur disque :
-//! renommer une variante, changer un `tag` ou un `rename_all` rend illisibles,
-//! sans erreur, les tours déjà écrits. Les tests de ce module figent la forme
-//! exacte ; un échec y est une migration à écrire, pas un test à ajuster.
+//! `oxyn-store` calls `serde_json::to_string` directly on these types. Their
+//! `serde` attributes **are** therefore the on-disk format of conversations:
+//! renaming a variant, changing a `tag` or a `rename_all` makes the turns
+//! already written unreadable, without an error. This module's tests freeze
+//! the exact shape; a failure there is a migration to write, not a test to
+//! adjust.
 
 use std::fmt;
 
 use serde::{Deserialize, Serialize};
 
-/// Qui parle dans un tour de conversation.
+/// Who speaks in a conversation turn.
 ///
-/// L'énumération est **fermée** : ces quatre rôles sont le vocabulaire commun
-/// des trois familles de protocoles supportées, et chaque traduction vers un
-/// protocole doit les couvrir toutes. Ajouter un rôle doit casser la
-/// compilation de chaque fournisseur, pas être silencieusement ignoré.
+/// The enumeration is **closed**: these four roles are the shared vocabulary
+/// of the three supported protocol families, and each translation to a
+/// protocol must cover them all. Adding a role must break the compilation of
+/// every provider, not be silently ignored.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Role {
-    /// Consigne de cadrage, posée par Oxyn et jamais par l'utilisateur.
+    /// Framing instruction, set by Oxyn and never by the user.
     System,
-    /// Tour de l'utilisateur — ou du contexte qu'Oxyn assemble pour lui.
+    /// The user's turn — or the context Oxyn assembles for them.
     User,
-    /// Tour du modèle.
+    /// The model's turn.
     Assistant,
-    /// Résultat de l'exécution d'un outil, renvoyé au modèle.
+    /// Result of a tool execution, sent back to the model.
     Tool,
 }
 
 impl Role {
-    /// Nom stable, celui qui part sur le fil pour les protocoles compatibles
-    /// OpenAI.
+    /// Stable name, the one that goes on the wire for OpenAI-compatible
+    /// protocols.
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
@@ -80,87 +80,86 @@ impl fmt::Display for Role {
     }
 }
 
-/// Raison pour laquelle un flux s'est arrêté.
+/// Why a stream stopped.
 ///
-/// **Représentation `serde` externe par défaut, sans renommage** : c'est le
-/// format de la colonne `stop_reason` des conversations persistées. Voir la
-/// note du module.
+/// **Default external `serde` representation, without renaming**: it is the
+/// format of the `stop_reason` column of persisted conversations. See the
+/// module note.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum StopReason {
-    /// Le modèle a terminé son tour.
+    /// The model finished its turn.
     EndTurn,
-    /// Le plafond de jetons a été atteint : la réponse est **tronquée**.
+    /// The token ceiling was reached: the reply is **truncated**.
     MaxTokens,
-    /// Le modèle demande l'exécution d'outils avant de continuer.
+    /// The model asks for tools to be run before continuing.
     ToolCalls,
-    /// Le fournisseur a interrompu pour cause de filtrage de contenu.
+    /// The provider interrupted because of content filtering.
     ContentFilter,
-    /// Une séquence d'arrêt demandée par l'appelant a été rencontrée.
+    /// A stop sequence requested by the caller was met.
     ///
-    /// Distincte de [`MaxTokens`](Self::MaxTokens) : la réponse s'arrête là où
-    /// l'appelant l'a voulu, elle n'est pas tronquée par accident.
+    /// Distinct from [`MaxTokens`](Self::MaxTokens): the reply stops where the
+    /// caller wanted it to, it is not truncated by accident.
     StopSequence,
-    /// Le modèle a refusé de répondre.
+    /// The model refused to answer.
     ///
-    /// Distincte de [`ContentFilter`](Self::ContentFilter), qui est une
-    /// intervention du fournisseur **sur** une réponse produite : ici il n'y a
-    /// pas de réponse. Ce que l'interface doit dire n'est donc pas le même.
+    /// Distinct from [`ContentFilter`](Self::ContentFilter), which is an
+    /// intervention of the provider **on** a produced reply: here there is no
+    /// reply. What the interface must say is therefore not the same.
     Refusal,
-    /// Le tour est en **pause** et attend d'être repris.
+    /// The turn is **paused** and waits to be resumed.
     ///
-    /// Le fournisseur a atteint une limite interne — un nombre de tours
-    /// d'outils côté serveur, typiquement — et rend la main sans que la réponse
-    /// soit finie. Rien n'a échoué, et rien n'est complet.
+    /// The provider reached an internal limit — a number of server-side tool
+    /// turns, typically — and yields without the reply being finished. Nothing
+    /// failed, and nothing is complete.
     Paused,
-    /// La réponse a rempli la fenêtre de contexte du modèle.
+    /// The reply filled the model's context window.
     ///
-    /// La réponse est tronquée, et augmenter le plafond de jetons n'y changera
-    /// rien : c'est l'entrée qu'il faut réduire.
+    /// The reply is truncated, and raising the token ceiling will not change
+    /// anything: it is the input that must be reduced.
     ContextWindowExceeded,
-    /// L'appelant a annulé via le `CancelToken`.
+    /// The caller cancelled through the `CancelToken`.
     Cancelled,
-    /// Le flux s'est arrêté **avant la fin du tour**, sans que le fournisseur
-    /// l'annonce : connexion coupée, tampon dépassé, trames illisibles en
-    /// série.
+    /// The stream stopped **before the end of the turn**, without the provider
+    /// announcing it: dropped connection, buffer exceeded, unreadable frames in
+    /// a row.
     ///
-    /// C'est le cas **ambigu** d'[I-13](../../../../CLAUDE.md#i-13), et le seul
-    /// de cette énumération : le serveur a peut-être terminé la génération — et
-    /// l'a donc facturée — alors que rien n'est arrivé jusqu'ici. Rejouer le
-    /// tour paie une deuxième fois une réponse déjà produite.
-    /// Voir [`is_ambiguous`](Self::is_ambiguous).
+    /// It is the **ambiguous** case of [I-13](../../../../CLAUDE.md#i-13), and
+    /// the only one in this enumeration: the server may have finished the
+    /// generation — and so billed it — while nothing arrived here. Replaying
+    /// the turn pays a second time for a reply already produced.
+    /// See [`is_ambiguous`](Self::is_ambiguous).
     Interrupted,
-    /// Le fournisseur a signalé une erreur **dans** le flux, après avoir
-    /// commencé à répondre.
+    /// The provider reported an error **within** the stream, after starting
+    /// to reply.
     ///
-    /// Distinct d'[`Interrupted`](Self::Interrupted) : ici le fournisseur a
-    /// annoncé son échec, il n'y a donc pas de doute sur ce qui s'est passé de
-    /// son côté. La réponse reste incomplète.
+    /// Distinct from [`Interrupted`](Self::Interrupted): here the provider
+    /// announced its failure, so there is no doubt about what happened on its
+    /// side. The reply stays incomplete.
     ProviderError,
-    /// Le flux s'est terminé sans que le fournisseur en donne la raison.
+    /// The stream ended without the provider giving the reason.
     Unspecified,
-    /// Raison propre au fournisseur, conservée telle quelle plutôt que
-    /// rabattue sur une variante voisine.
+    /// Provider-specific reason, kept as is rather than folded into a
+    /// neighboring variant.
     Other(String),
 }
 
 impl StopReason {
-    /// La réponse est-elle incomplète du fait de l'arrêt ?
+    /// Is the reply incomplete because of the stop?
     ///
-    /// À montrer dans l'interface : une réponse coupée au plafond de jetons qui
-    /// ne le dit pas ressemble à une réponse fausse.
+    /// To be shown in the interface: a reply cut at the token ceiling that does
+    /// not say so looks like a wrong reply.
     ///
-    /// [`StopSequence`](Self::StopSequence) répond `false` : la réponse
-    /// s'arrête là où l'appelant l'a demandé. [`Paused`](Self::Paused) répond
-    /// `true` — rien n'a échoué, mais il manque la suite.
+    /// [`StopSequence`](Self::StopSequence) answers `false`: the reply stops
+    /// where the caller asked. [`Paused`](Self::Paused) answers `true` —
+    /// nothing failed, but the rest is missing.
     ///
-    /// [`Other`](Self::Other) répond `false` **délibérément** : c'est une
-    /// raison que le fournisseur a nommée et que cette version ne connaît pas,
-    /// donc une fin de tour ordinaire jusqu'à preuve du contraire. Une coupure
-    /// n'y tombe pas : elle a sa variante,
-    /// [`Interrupted`](Self::Interrupted). Faire l'inverse — une coupure
-    /// rangée dans `Other` — présenterait une réponse tranchée en plein milieu
-    /// comme une réponse complète.
+    /// [`Other`](Self::Other) answers `false` **deliberately**: it is a reason
+    /// the provider named and that this version does not know, hence an
+    /// ordinary end of turn until proven otherwise. A cut does not fall into
+    /// it: it has its variant, [`Interrupted`](Self::Interrupted). Doing the
+    /// opposite — a cut filed under `Other` — would present a reply sliced in
+    /// the middle as a complete reply.
     #[must_use]
     pub const fn is_truncated(&self) -> bool {
         matches!(
@@ -176,63 +175,62 @@ impl StopReason {
         )
     }
 
-    /// Ignore-t-on ce que le fournisseur a réellement produit ?
+    /// Do we not know what the provider actually produced?
     ///
-    /// C'est la question d'[I-13](../../../../CLAUDE.md#i-13) posée à une
-    /// génération : un tour dont le flux a été coupé a peut-être été terminé —
-    /// et facturé — côté serveur. **Rejouer un tour ambigu paie deux fois.**
+    /// It is the question of [I-13](../../../../CLAUDE.md#i-13) asked of a
+    /// generation: a turn whose stream was cut may have been finished — and
+    /// billed — on the server side. **Replaying an ambiguous turn pays twice.**
     ///
-    /// Un seul cas répond `true`, et c'est voulu : partout ailleurs, ou bien le
-    /// fournisseur a annoncé la fin, ou bien c'est l'appelant qui a décidé
-    /// d'arrêter. Aucune crate du dépôt ne rejoue un tour d'elle-même ; cette
-    /// méthode existe pour que l'appelant qui y songerait ait la donnée, plutôt
-    /// que de la déduire d'une chaîne de caractères.
+    /// A single case answers `true`, and that is intended: everywhere else,
+    /// either the provider announced the end, or the caller decided to stop.
+    /// No crate of the repository replays a turn on its own; this method exists
+    /// so that a caller who would consider it has the data, rather than
+    /// deducing it from a character string.
     #[must_use]
     pub const fn is_ambiguous(&self) -> bool {
         matches!(self, Self::Interrupted)
     }
 }
 
-/// Un bloc de raisonnement produit par le modèle.
+/// A reasoning block produced by the model.
 ///
-/// **Ce type est un transport, pas un contenu à lire.** Il existe pour être
-/// remis au fournisseur au tour suivant, à l'identique : c'est ce que les
-/// protocoles exigent quand un tour de raisonnement précède un appel d'outil.
-/// Le reconstruire à partir de ses morceaux, le réordonner ou en supprimer un
-/// fait refuser la requête suivante.
+/// **This type is a transport, not content to read.** It exists to be handed
+/// back to the provider on the next turn, identically: that is what protocols
+/// require when a reasoning turn precedes a tool call. Rebuilding it from its
+/// pieces, reordering or removing one makes the next request be refused.
 ///
-/// Sa forme `serde` (`tag = "kind"`, `snake_case`) est le format de la colonne
-/// `reasoning` des conversations persistées. Voir la note du module.
+/// Its `serde` shape (`tag = "kind"`, `snake_case`) is the format of the
+/// `reasoning` column of persisted conversations. See the module note.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum ReasoningBlock {
-    /// Raisonnement rédigé, tel que le fournisseur accepte de le montrer.
+    /// Written-out reasoning, as the provider agrees to show it.
     ///
-    /// Le texte peut être **vide** : plusieurs protocoles renvoient le bloc sans
-    /// son texte quand l'appelant n'a pas demandé à le voir. Le bloc reste
-    /// nécessaire au tour suivant, et c'est pourquoi on le garde quand même.
+    /// The text can be **empty**: several protocols send the block back without
+    /// its text when the caller did not ask to see it. The block is still
+    /// needed for the next turn, which is why we keep it anyway.
     Summarized {
-        /// Ce que le modèle accepte de montrer. Vide est licite.
+        /// What the model agrees to show. Empty is legal.
         text: String,
-        /// Charge opaque qui authentifie le bloc auprès du fournisseur.
+        /// Opaque payload that authenticates the block to the provider.
         ///
-        /// Ne s'interprète pas, ne se compare pas, ne s'affiche pas : elle
-        /// n'a de sens que pour l'émetteur.
+        /// Not interpreted, not compared, not displayed: it only makes sense
+        /// to the issuer.
         signature: Option<String>,
     },
-    /// Raisonnement chiffré par le fournisseur.
+    /// Reasoning encrypted by the provider.
     ///
-    /// Il n'a **pas** de texte, et il ne s'affiche jamais. Il se renvoie tel
-    /// quel, sans quoi le tour suivant perd le fil du raisonnement.
+    /// It has **no** text, and it is never displayed. It is sent back as is,
+    /// otherwise the next turn loses the thread of the reasoning.
     Redacted {
-        /// Charge opaque. Voir la note de variante : elle ne s'affiche pas.
+        /// Opaque payload. See the variant note: it is not displayed.
         data: String,
     },
 }
 
 impl ReasoningBlock {
-    /// Construit un bloc rédigé.
+    /// Builds a written-out block.
     #[must_use]
     pub fn summarized(text: impl Into<String>, signature: Option<String>) -> Self {
         Self::Summarized {
@@ -241,17 +239,17 @@ impl ReasoningBlock {
         }
     }
 
-    /// Construit un bloc chiffré.
+    /// Builds an encrypted block.
     #[must_use]
     pub fn redacted(data: impl Into<String>) -> Self {
         Self::Redacted { data: data.into() }
     }
 
-    /// Le texte à montrer, s'il y en a un.
+    /// The text to show, if there is one.
     ///
-    /// Rend `None` pour un bloc chiffré **et** pour un bloc rédigé dont le
-    /// texte est vide : dans les deux cas il n'y a rien à afficher, et une
-    /// interface qui rendrait une chaîne vide dessinerait un cadre vide.
+    /// Returns `None` for an encrypted block **and** for a written-out block
+    /// whose text is empty: in both cases there is nothing to display, and an
+    /// interface that rendered an empty string would draw an empty frame.
     #[must_use]
     pub fn display_text(&self) -> Option<&str> {
         match self {
@@ -260,7 +258,7 @@ impl ReasoningBlock {
         }
     }
 
-    /// Le bloc est-il chiffré ?
+    /// Is the block encrypted?
     #[must_use]
     pub const fn is_redacted(&self) -> bool {
         matches!(self, Self::Redacted { .. })
@@ -268,11 +266,11 @@ impl ReasoningBlock {
 }
 
 impl fmt::Debug for ReasoningBlock {
-    /// Montre le texte, jamais la charge opaque.
+    /// Shows the text, never the opaque payload.
     ///
-    /// Une signature pèse des centaines d'octets et n'aide personne à
-    /// diagnostiquer un flux ; la recopier dans un journal ne ferait que le
-    /// rendre illisible. Le texte, lui, est la sortie du modèle.
+    /// A signature weighs hundreds of bytes and helps nobody diagnose a stream;
+    /// copying it into a log would only make the log unreadable. The text, on
+    /// the other hand, is the model's output.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Self::Summarized { text, signature } => f
@@ -288,12 +286,12 @@ impl fmt::Debug for ReasoningBlock {
     }
 }
 
-/// Marqueur de charge opaque, rendu `<opaque, N octets>`.
+/// Opaque payload marker, rendered `<opaque, N bytes>`.
 struct Opaque(usize);
 
 impl fmt::Debug for Opaque {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "<opaque, {} octets>", self.0)
+        write!(f, "<opaque, {} bytes>", self.0)
     }
 }
 
@@ -303,14 +301,14 @@ mod tests {
 
     use super::*;
 
-    // ── Format de persistance, figé ────────────────────────────────────────
+    // ── Persistence format, frozen ─────────────────────────────────────────
     //
-    // Ces tests ne vérifient pas un comportement : ils figent un format sur
-    // disque. Un échec ici n'est pas un test à ajuster, c'est une migration des
-    // conversations persistées à écrire.
+    // These tests do not check a behavior: they freeze an on-disk format. A
+    // failure here is not a test to adjust, it is a migration of persisted
+    // conversations to write.
 
     #[test]
-    fn la_forme_persistee_d_une_raison_d_arret_est_figee() {
+    fn the_persisted_shape_of_a_stop_reason_is_frozen() {
         for (raison, attendu) in [
             (StopReason::EndTurn, json!("EndTurn")),
             (StopReason::MaxTokens, json!("MaxTokens")),
@@ -333,17 +331,17 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                serde_json::to_value(&raison).expect("sérialisation"),
+                serde_json::to_value(&raison).expect("serialization"),
                 attendu,
                 "{raison:?}"
             );
-            let relue: StopReason = serde_json::from_value(attendu).expect("désérialisation");
+            let relue: StopReason = serde_json::from_value(attendu).expect("deserialization");
             assert_eq!(relue, raison);
         }
     }
 
     #[test]
-    fn la_forme_persistee_d_un_bloc_de_raisonnement_est_figee() {
+    fn the_persisted_shape_of_a_reasoning_block_is_frozen() {
         for (bloc, attendu) in [
             (
                 ReasoningBlock::summarized("je compte", Some("SIG".to_owned())),
@@ -359,17 +357,17 @@ mod tests {
             ),
         ] {
             assert_eq!(
-                serde_json::to_value(&bloc).expect("sérialisation"),
+                serde_json::to_value(&bloc).expect("serialization"),
                 attendu,
                 "{bloc:?}"
             );
-            let relu: ReasoningBlock = serde_json::from_value(attendu).expect("désérialisation");
+            let relu: ReasoningBlock = serde_json::from_value(attendu).expect("deserialization");
             assert_eq!(relu, bloc);
         }
     }
 
     #[test]
-    fn la_forme_serialisee_d_un_role_est_figee() {
+    fn the_serialized_shape_of_a_role_is_frozen() {
         for (role, attendu) in [
             (Role::System, "system"),
             (Role::User, "user"),
@@ -377,21 +375,21 @@ mod tests {
             (Role::Tool, "tool"),
         ] {
             assert_eq!(
-                serde_json::to_value(role).expect("sérialisation"),
+                serde_json::to_value(role).expect("serialization"),
                 json!(attendu)
             );
             assert_eq!(
                 role.as_str(),
                 attendu,
-                "le nom de fil et la forme serde coïncident"
+                "the wire name and the serde shape coincide"
             );
         }
     }
 
-    // ── Raisons d'arrêt ────────────────────────────────────────────────────
+    // ── Stop reasons ───────────────────────────────────────────────────────
 
     #[test]
-    fn une_reponse_coupee_se_signale() {
+    fn a_cut_reply_is_reported() {
         assert!(StopReason::MaxTokens.is_truncated());
         assert!(StopReason::Cancelled.is_truncated());
         assert!(!StopReason::EndTurn.is_truncated());
@@ -399,20 +397,20 @@ mod tests {
     }
 
     #[test]
-    fn une_reponse_refusee_ou_en_pause_se_signale_comme_incomplete() {
+    fn a_refused_or_paused_reply_is_reported_as_incomplete() {
         assert!(StopReason::Refusal.is_truncated());
         assert!(StopReason::Paused.is_truncated());
         assert!(StopReason::ContextWindowExceeded.is_truncated());
         assert!(
             !StopReason::StopSequence.is_truncated(),
-            "l'arrêt demandé par l'appelant n'est pas une troncature"
+            "a stop requested by the caller is not a truncation"
         );
     }
 
     #[test]
-    fn une_coupure_de_flux_est_la_seule_raison_ambigue() {
-        // I-13 : rejouer un tour dont on ignore le sort côté serveur paie deux
-        // fois une réponse peut-être déjà produite.
+    fn a_stream_cut_is_the_only_ambiguous_reason() {
+        // I-13: replaying a turn whose fate on the server side is unknown pays
+        // twice for a reply that may already have been produced.
         assert!(StopReason::Interrupted.is_ambiguous());
         assert!(StopReason::Interrupted.is_truncated());
 
@@ -431,51 +429,51 @@ mod tests {
         ] {
             assert!(
                 !certaine.is_ambiguous(),
-                "{certaine:?} : le sort du tour est connu, ou c'est l'appelant qui a décidé"
+                "{certaine:?}: the turn's fate is known, or the caller decided"
             );
         }
     }
 
     #[test]
-    fn une_erreur_annoncee_par_le_fournisseur_tronque_sans_etre_ambigue() {
+    fn an_error_announced_by_the_provider_truncates_without_being_ambiguous() {
         assert!(StopReason::ProviderError.is_truncated());
         assert!(
             !StopReason::ProviderError.is_ambiguous(),
-            "le fournisseur a annoncé son échec : il n'y a pas de doute sur ce qu'il a fait"
+            "the provider announced its failure: there is no doubt about what it did"
         );
     }
 
     #[test]
-    fn une_raison_inconnue_du_fournisseur_reste_une_fin_ordinaire() {
-        // `Other` porte une raison **nommée** par le fournisseur : la traiter
-        // comme une troncature ferait passer chaque évolution de protocole pour
-        // une réponse coupée.
+    fn a_reason_unknown_to_the_provider_stays_an_ordinary_end() {
+        // `Other` carries a reason **named** by the provider: treating it as a
+        // truncation would make every protocol evolution look like a cut
+        // reply.
         let future = StopReason::Other("guardrail_intervened".to_owned());
         assert!(!future.is_truncated());
         assert!(!future.is_ambiguous());
     }
 
-    // ── Blocs de raisonnement ──────────────────────────────────────────────
+    // ── Reasoning blocks ───────────────────────────────────────────────────
 
     #[test]
-    fn un_bloc_chiffre_n_a_rien_a_montrer() {
+    fn an_encrypted_block_has_nothing_to_show() {
         let bloc = ReasoningBlock::redacted("EncRypTeD");
         assert!(bloc.is_redacted());
         assert_eq!(bloc.display_text(), None);
     }
 
     #[test]
-    fn un_bloc_rendu_vide_reste_transportable_mais_ne_s_affiche_pas() {
-        // Le cas courant quand l'appelant n'a pas demandé à voir le
-        // raisonnement : le bloc arrive sans texte et doit quand même être
-        // renvoyé au tour suivant.
+    fn a_block_rendered_empty_stays_transportable_but_is_not_displayed() {
+        // The common case when the caller did not ask to see the reasoning:
+        // the block arrives without text and must still be sent back on the
+        // next turn.
         let bloc = ReasoningBlock::summarized("", Some("sig".to_owned()));
         assert_eq!(bloc.display_text(), None);
         assert!(!bloc.is_redacted());
     }
 
     #[test]
-    fn le_debug_ne_recopie_pas_la_charge_opaque() {
+    fn the_debug_does_not_copy_the_opaque_payload() {
         let rendu = format!(
             "{:?}",
             ReasoningBlock::summarized("j'additionne", Some("SIGNATURE_TRES_LONGUE".to_owned()))

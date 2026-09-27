@@ -13,8 +13,8 @@ import type { ExportFormatChoice } from "@/lib/ipc/results"
  *
  * Offered on a **whole** result only: a truncated or cancelled buffer looks
  * finished and is not. The save dialog is opened by the backend, which writes
- * where the user chose: no path ever crosses the webview (SECURITY, « Surface
- * d'entrée »).
+ * where the user chose: no path ever crosses the webview (SECURITY, « Input
+ * surface »).
  */
 export function ExportMenu({
   connection,
@@ -38,7 +38,7 @@ export function ExportMenu({
   defaultName?: string
   /**
    * Told when an export starts and ends, so that the view holding it refuses
-   * to close meanwhile (UX-SPEC § Résultats conservés).
+   * to close meanwhile (UX-SPEC § Retained results).
    */
   onExportingChange?: (exporting: boolean) => void
 }) {

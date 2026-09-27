@@ -1,77 +1,76 @@
-// I-12, exécuté par une machine.
+// I-12, run by a machine.
 //
-// « Aucune version, aucune limite externe recopiée de mémoire. Vérifiée au
-// registre, datée. » Renovate ne fait rien d'autre : il lit le registre, ouvre
-// une PR par montée, et la date est celle du commit. C'est `/versions` sans le
-// risque qu'une valeur plausible et fausse passe — elle ne se voit ni à la
-// compilation, ni aux tests, ni en revue.
+// "No version, no external limit copied from memory. Checked against the
+// registry, dated." Renovate does nothing else: it reads the registry, opens
+// one PR per bump, and the date is the commit's. It is `/versions` without the
+// risk that a plausible and wrong value gets through — it shows up neither at
+// compile time, nor in tests, nor in review.
 //
-// Ce qu'il ne fait PAS, et qui reste à la charge de l'humain : reporter la
-// valeur et sa source dans docs/RESEARCH-NOTES.md, dans le même commit. C'est
-// pour ça qu'aucune PR n'est fusionnée automatiquement.
+// What it does NOT do, and what stays with the human: record the value and its
+// source in docs/RESEARCH-NOTES.md, in the same commit. That is why no PR is
+// merged automatically.
 //
-// Format JSON5 et non JSON : ce fichier a besoin de dire pourquoi, et JSON ne
-// sait pas porter un commentaire. Renovate lit `renovate.json5` nativement.
+// JSON5 and not JSON: this file needs to say why, and JSON cannot carry a
+// comment. Renovate reads `renovate.json5` natively.
 {
   $schema: "https://docs.renovatebot.com/renovate-schema.json",
 
   extends: [
     "config:recommended",
-    // Regroupe les mises à jour de sécurité et les remonte en priorité.
+    // Groups security updates and raises them first.
     ":enableVulnerabilityAlertsWithLabel(sécurité)",
   ],
 
-  // Le format est imposé par .claude/hooks/message_commit.py : un type parmi
-  // une liste fermée, une portée entre parenthèses, un sujet en minuscules sans
-  // point final. `chore(deps): update rust crate serde to v1.0.230` le respecte.
+  // The format is enforced by .claude/hooks/message_commit.py: a type from a
+  // closed list, a scope in parentheses, a lowercase subject without a final
+  // period. `chore(deps): update rust crate serde to v1.0.230` complies.
   semanticCommits: "enabled",
   semanticCommitType: "chore",
   semanticCommitScope: "deps",
 
-  // La version ÉCRITE dans le manifeste doit être celle qui a été vérifiée.
-  // Avec la stratégie par défaut, une montée compatible ne toucherait que le
-  // Cargo.lock : le numéro lisible dans Cargo.toml resterait celui d'avant, et
-  // RESEARCH-NOTES daterait une valeur qui n'est plus la bonne.
+  // The version WRITTEN in the manifest must be the one that was checked. With
+  // the default strategy, a compatible bump would only touch Cargo.lock: the
+  // number readable in Cargo.toml would stay the previous one, and
+  // RESEARCH-NOTES would date a value that is no longer right.
   rangeStrategy: "bump",
 
-  // Personne ne relit vingt PR de dépendances. Une fenêtre hebdomadaire et une
-  // limite basse font que celles qui existent sont effectivement regardées.
+  // Nobody reviews twenty dependency PRs. A weekly window and a low limit make
+  // sure the ones that exist actually get looked at.
   schedule: ["before 9am on monday"],
   prConcurrentLimit: 5,
   prHourlyLimit: 2,
   dependencyDashboard: true,
 
-  // Rien ne fusionne seul : la PR n'est complète qu'une fois RESEARCH-NOTES à
-  // jour, et ça, Renovate ne sait pas le faire.
+  // Nothing merges on its own: the PR is only complete once RESEARCH-NOTES is
+  // up to date, and Renovate cannot do that.
   automerge: false,
 
   prBodyNotes: [
-    "**Avant de fusionner (I-12)** : reporter la version et sa source dans `docs/RESEARCH-NOTES.md`, avec la date du jour, **dans le même commit**. Une montée non datée fait mentir le document qui fait autorité sur les versions.",
-    "Vérifier aussi `make qualite` : plusieurs épinglages de ce dépôt existent pour des raisons qui ne se voient pas dans le graphe (voir les commentaires de `Cargo.toml`).",
+    "**Before merging (I-12)**: record the version and its source in `docs/RESEARCH-NOTES.md`, with today's date, **in the same commit**. An undated bump makes the document that is authoritative on versions lie.",
+    "Also check `make qualite`: several pins in this repository exist for reasons that do not show in the graph (see the comments in `Cargo.toml`).",
   ],
 
   ignoreDeps: [
-    // rusqlite est épinglé en 0.37 à dessein : sqlx tire `sqlx-sqlite` dans le
-    // graphe et les deux déclarent `links = "sqlite3"`, donc une seule version
-    // de libsqlite3-sys peut exister (ADR-0010). Une montée automatique casse
-    // la résolution, et le message d'erreur ne nomme jamais la cause. À relever
-    // à la main quand sqlx suivra.
+    // rusqlite is pinned to 0.37 on purpose: sqlx pulls `sqlx-sqlite` into the
+    // graph and both declare `links = "sqlite3"`, so only one version of
+    // libsqlite3-sys can exist (ADR-0010). An automatic bump breaks resolution,
+    // and the error message never names the cause. Raise it by hand when sqlx
+    // follows.
     "rusqlite",
   ],
 
   packageRules: [
-    // Les crates qui parlent à un serveur ou à un fournisseur IA changent le
-    // comportement sur une frontière externe. Elles se relisent, elles ne se
-    // survolent pas.
+    // Crates that talk to a server or an AI provider change behavior on an
+    // external boundary. They are reviewed, not skimmed. The label names are
+    // the repository's existing GitHub labels.
     {
       matchPackageNames: ["sqlx", "reqwest", "arrow", "wasmtime", "keyring", "secrecy"],
       addLabels: ["frontière"],
     },
   ],
 
-  // À noter, et c'est voulu : Renovate n'a pas de gestionnaire pour
-  // `rust-toolchain.toml`. La chaîne d'outils reste donc hors de son champ, ce
-  // qui correspond à ADR-0008 — une montée de toolchain est un commit
-  // délibéré, qui met RESEARCH-NOTES à jour en même temps, pas une
-  // notification du lundi.
+  // Worth noting, and intended: Renovate has no manager for
+  // `rust-toolchain.toml`. The toolchain therefore stays out of its scope,
+  // which matches ADR-0008 — a toolchain bump is a deliberate commit that
+  // updates RESEARCH-NOTES at the same time, not a Monday notification.
 }

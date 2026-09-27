@@ -44,7 +44,7 @@ import type { DensityChoice } from "@/lib/ipc/settings"
 
 /**
  * The five states of a view that depends on a remote operation
- * (docs/UX-SPEC.md, « États d'une vue »). The empty one is distinct from the
+ * (docs/UX-SPEC.md, « States of a view »). The empty one is distinct from the
  * error, and « running » always carries a way to cancel.
  */
 export type ResultState =
@@ -108,7 +108,7 @@ interface ResultPanelProps {
   /**
    * Below 1200 px: the footer draws one `Actions` menu holding `Columns` and
    * these items, and no `Columns` button of its own (docs/UX-SPEC.md,
-   * « Largeur réduite »). `footerActions` is still drawn: at this width it
+   * « Reduced width »). `footerActions` is still drawn: at this width it
    * carries only what cannot wait in a menu, such as an export's progress.
    */
   compactActions?: React.ReactNode
@@ -196,8 +196,8 @@ export const ResultPanel = React.memo(function ResultPanel({
   }>({ result: resultKey, columns: new Set() })
   const hiddenColumns =
     hidden.result === resultKey ? hidden.columns : NO_HIDDEN_COLUMNS
-  // `Hide column` is the same choice as `Columns` (docs/UX-SPEC.md, « Menus
-  // contextuels »).
+  // `Hide column` is the same choice as `Columns` (docs/UX-SPEC.md, « Context
+  // menus »).
   const menu = React.useMemo(
     () =>
       gridMenu && {

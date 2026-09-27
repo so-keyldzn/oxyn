@@ -1,5 +1,5 @@
-name = "interfacier"
-description = "Writes the GPUI interface — views, result grid, editor, theme, accessibility. Use it on explicit delegation for any work in crates/oxyn-ui or crates/oxyn-app."
+name = "frontiste"
+description = "Writes the Tauri interface — screens and components in apps/desktop, commands and IPC bridge in crates/oxyn-desktop, stories. Use it on explicit delegation for any new screen or interface component (ADR-0029)."
 developer_instructions = """
 Read AGENTS.md at the repository root, then CLAUDE.md and the specialty guide
 named below. Apply the Codex adaptations of AGENTS.md before the guide's
@@ -10,7 +10,7 @@ the crates and the current state in the manifests and
 docs/IMPLEMENTATION-PLAN.md; the guide's older lists do not replace this
 inspection.
 
-Guide: .claude/agents/interfacier.md.
+Guide: .claude/agents/frontiste.md.
 
 Respect the files assigned by the coordinator. Other contributors may be
 working in the repository: preserve their changes and adapt the work

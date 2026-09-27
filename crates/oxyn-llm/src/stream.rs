@@ -1,34 +1,33 @@
-//! Du flux d'octets HTTP au flux d'événements, pour **tous** les protocoles.
+//! From the HTTP byte stream to the event stream, for **every** protocol.
 //!
-//! Ce module ne parle ni de fournisseur, ni d'authentification, ni de format de
-//! trame : il assemble le décodeur SSE ([`crate::sse`]) et un décodeur de
-//! protocole ([`EventDecoder`]) en un [`Stream`] annulable.
+//! This module speaks neither of provider, nor of authentication, nor of frame
+//! format: it assembles the SSE decoder ([`crate::sse`]) and a protocol decoder
+//! ([`EventDecoder`]) into a cancellable [`Stream`].
 //!
-//! # Pourquoi un seul pilote pour deux protocoles
+//! # Why a single driver for two protocols
 //!
-//! Les garanties ci-dessous sont exactement ce qui se rate à la deuxième
-//! écriture : un `Done` émis deux fois, un `Done` jamais émis sur une rupture,
-//! une annulation qui n'interrompt rien. Les tenir à un seul endroit est ce qui
-//! rend l'invariant relisible ; deux pilotes en parallèle divergeraient en un
-//! ajout de variante.
+//! The guarantees below are exactly what gets missed on the second writing: a
+//! `Done` emitted twice, a `Done` never emitted on a break, a cancellation that
+//! interrupts nothing. Holding them in a single place is what makes the
+//! invariant reviewable; two drivers side by side would diverge within one
+//! added variant.
 //!
-//! # Ce que le flux garantit
+//! # What the stream guarantees
 //!
-//! * **`Done` est émis exactement une fois, en dernier.** Fermeture propre,
-//!   fermeture brutale, rupture de transport, annulation, tampon dépassé : les
-//!   cinq sorties passent par la même émission.
-//! * **L'annulation interrompt la lecture.** Le jeton est interrogé avant
-//!   chaque attente *et* concurremment de celle-ci : un fournisseur qui ne
-//!   répond plus ne laisse pas l'utilisateur devant un bouton sans effet.
-//! * **Aucun message d'erreur ne sort sans expurgation.** Un fournisseur peut
-//!   recopier la clé reçue dans une erreur diffusée **après** un statut `200`
-//!   — une passerelle qui la cite dans son diagnostic, par exemple. Ce message
-//!   devient ensuite une erreur affichée : il passe ici par la même garde
-//!   qu'un corps d'erreur HTTP (I-03), parce que c'est le seul endroit par
-//!   lequel passent les événements de tous les décodeurs.
-//! * **Rien n'est repris après une interruption.** Un décodeur SSE dont on a
-//!   perdu des octets est désynchronisé ; une génération se relance, elle ne se
-//!   reprend pas.
+//! * **`Done` is emitted exactly once, last.** Clean close, abrupt close,
+//!   transport break, cancellation, buffer overrun: the five exits go through
+//!   the same emission.
+//! * **Cancellation interrupts the reading.** The token is checked before
+//!   each wait *and* concurrently with it: a provider that stops answering
+//!   does not leave the user in front of a button with no effect.
+//! * **No error message goes out without scrubbing.** A provider can copy the
+//!   received key into an error streamed **after** a `200` status — a gateway
+//!   that quotes it in its diagnostic, for example. That message then becomes
+//!   a displayed error: it goes here through the same guard as an HTTP error
+//!   body (I-03), because this is the only place through which the events of
+//!   every decoder pass.
+//! * **Nothing is resumed after an interruption.** An SSE decoder that lost
+//!   bytes is out of sync; a generation is restarted, it is not resumed.
 
 use std::collections::VecDeque;
 use std::pin::{Pin, pin};
@@ -43,10 +42,10 @@ use crate::secret::ApiKey;
 use crate::sse::{SseDecoder, SseFrame};
 use crate::types::ChatEvent;
 
-/// Décrit une rupture de flux **sans** reprendre le message brut.
+/// Describes a stream break **without** copying the raw message.
 ///
-/// Le message d'une erreur de transport peut contenir l'URL, donc les
-/// identifiants qu'elle porterait. On classe plutôt que de recopier.
+/// The message of a transport error can contain the URL, hence the
+/// credentials it may carry. We classify rather than copy.
 pub(crate) fn describe_stream_error(err: &reqwest::Error) -> String {
     if err.is_timeout() {
         "timed out while receiving the stream".to_owned()
@@ -57,69 +56,69 @@ pub(crate) fn describe_stream_error(err: &reqwest::Error) -> String {
     }
 }
 
-/// Flux d'octets déjà classé, tel que le décodeur le consomme.
+/// Byte stream already classified, as the decoder consumes it.
 pub(crate) type ByteStream = Pin<Box<dyn Stream<Item = std::result::Result<Bytes, String>> + Send>>;
 
-/// Ce qu'un décodeur de protocole doit savoir faire pour être piloté ici.
+/// What a protocol decoder must be able to do to be driven here.
 ///
-/// Les méthodes de terminaison sont distinctes parce que les décisions le sont.
+/// The termination methods are distinct because the decisions are.
 ///
-/// **Le pilote ne sait pas ce qu'est une fin annoncée** : c'est une trame du
-/// protocole (`message_stop`, `finish_reason`, `[DONE]`), et seul le décodeur
-/// la reconnaît. Le pilote ne rapporte que ce qu'il constate — le serveur a
-/// fermé, le transport a rompu, l'appelant a annulé. Un décodeur qui a vu son
-/// annonce de fin se déclare terminé par [`is_done`](Self::is_done), et le
-/// pilote ne l'appelle plus.
+/// **The driver does not know what an announced end is**: it is a protocol
+/// frame (`message_stop`, `finish_reason`, `[DONE]`), and only the decoder
+/// recognizes it. The driver only reports what it observes — the server
+/// closed, the transport broke, the caller cancelled. A decoder that saw its
+/// end announcement declares itself finished through [`is_done`](Self::is_done),
+/// and the driver no longer calls it.
 pub(crate) trait EventDecoder: Send {
-    /// Consomme une trame SSE complète.
+    /// Consumes a complete SSE frame.
     fn on_frame(&mut self, frame: &SseFrame, out: &mut Vec<ChatEvent>);
 
-    /// Le décodeur a-t-il déjà émis sa fin ? Plus rien ne doit lui être donné.
+    /// Has the decoder already emitted its end? Nothing more must be given to it.
     fn is_done(&self) -> bool;
 
-    /// Le serveur a fermé le flux **sans** que le décodeur se soit déclaré
-    /// terminé.
+    /// The server closed the stream **without** the decoder having declared
+    /// itself finished.
     ///
-    /// Une fermeture propre n'est pas une fin annoncée : un mandataire qui
-    /// coupe à sa limite de durée ferme proprement. Sauf si le protocole a
-    /// annoncé la fin de la génération, le décodeur répond
-    /// [`StopReason::Interrupted`](crate::types::StopReason::Interrupted) et
-    /// jette ce qu'il n'a pas vu se clore.
+    /// A clean close is not an announced end: a proxy that cuts at its
+    /// duration limit closes cleanly. Unless the protocol announced the end of
+    /// the generation, the decoder answers
+    /// [`StopReason::Interrupted`](crate::types::StopReason::Interrupted) and
+    /// throws away what it did not see close.
     fn finish(&mut self, out: &mut Vec<ChatEvent>);
 
-    /// L'appelant a annulé.
+    /// The caller cancelled.
     fn cancel(&mut self, out: &mut Vec<ChatEvent>);
 
     /// Le transport a rompu en cours de flux.
     fn transport_error(&mut self, detail: String, out: &mut Vec<ChatEvent>);
 }
 
-/// État porté d'un pas de décodage à l'autre.
+/// State carried from one decoding step to the next.
 struct StreamState<D> {
     bytes: ByteStream,
     sse: SseDecoder,
     decoder: D,
     pending: VecDeque<ChatEvent>,
     cancel: CancelToken,
-    /// La clé envoyée à ce fournisseur, seulement pour l'effacer des erreurs.
+    /// The key sent to this provider, only to erase it from errors.
     key: Option<ApiKey>,
     finished: bool,
 }
 
-/// Issue d'une attente : un morceau, une fin, ou une annulation.
+/// Outcome of a wait: a chunk, an end, or a cancellation.
 enum Step {
     Cancelled,
     Chunk(Option<std::result::Result<Bytes, String>>),
 }
 
-/// Transforme un flux d'octets SSE en flux d'événements du domaine.
+/// Turns an SSE byte stream into a stream of domain events.
 ///
-/// Le flux rendu est `'static` et `Send` : il se transmet à une tâche. Il émet
-/// exactement un [`ChatEvent::Done`], en dernier, y compris en cas
-/// d'annulation, d'erreur de transport ou de fermeture brutale.
+/// The returned stream is `'static` and `Send`: it can be handed to a task. It
+/// emits exactly one [`ChatEvent::Done`], last, including on cancellation,
+/// transport error or abrupt close.
 ///
-/// `key` est la clé présentée au fournisseur : tout [`ChatEvent::Error`] en est
-/// expurgé, et tronqué comme un corps d'erreur HTTP, avant de sortir.
+/// `key` is the key presented to the provider: every [`ChatEvent::Error`] is
+/// scrubbed of it, and truncated like an HTTP error body, before going out.
 pub(crate) fn events_stream<D: EventDecoder + 'static>(
     bytes: ByteStream,
     decoder: D,
@@ -147,8 +146,8 @@ pub(crate) fn events_stream<D: EventDecoder + 'static>(
 
             let mut sorties = Vec::new();
 
-            // Vérification avant l'attente : un jeton déjà annulé ne doit pas
-            // faire lire un morceau de plus.
+            // Check before the wait: an already cancelled token must not make
+            // one more chunk be read.
             if etat.cancel.is_cancelled() {
                 etat.decoder.cancel(&mut sorties);
                 etat.finished = true;
@@ -169,10 +168,10 @@ pub(crate) fn events_stream<D: EventDecoder + 'static>(
 
             match pas {
                 Step::Cancelled => {
-                    // Le futur de lecture est abandonné ici. Aucune reprise
-                    // n'est tentée : un décodeur SSE dont on a perdu des octets
-                    // est désynchronisé, et une génération se relance, elle ne
-                    // se reprend pas.
+                    // The read future is dropped here. No resumption is
+                    // attempted: an SSE decoder that lost bytes is out of
+                    // sync, and a generation is restarted, it is not
+                    // resumed.
                     etat.decoder.cancel(&mut sorties);
                     etat.finished = true;
                 }
@@ -187,9 +186,9 @@ pub(crate) fn events_stream<D: EventDecoder + 'static>(
                     etat.finished = true;
                 }
                 Step::Chunk(Some(Ok(morceau))) => {
-                    // L'accumulation est sortie du `match` : un emprunt pris
-                    // dans l'expression jugée y resterait vivant pendant les
-                    // bras, qui réempruntent l'état.
+                    // The accumulation is taken out of the `match`: a borrow
+                    // taken in the judged expression would stay alive during
+                    // the arms, which borrow the state again.
                     let accumulation = etat.sse.push(&morceau);
                     match accumulation {
                         Ok(()) => {
@@ -215,10 +214,10 @@ pub(crate) fn events_stream<D: EventDecoder + 'static>(
     .boxed()
 }
 
-/// Passe un message d'erreur par la garde des corps d'erreur HTTP.
+/// Passes an error message through the guard of HTTP error bodies.
 ///
-/// Seul [`ChatEvent::Error`] devient un message affiché : le texte du modèle
-/// est un contenu, pas un diagnostic, et il n'a pas à être réécrit.
+/// Only [`ChatEvent::Error`] becomes a displayed message: the model's text is
+/// content, not a diagnostic, and it does not have to be rewritten.
 fn redact(evenement: ChatEvent, cle: Option<&ApiKey>) -> ChatEvent {
     match evenement {
         ChatEvent::Error(message) => ChatEvent::Error(sanitize(&message, cle)),
@@ -226,12 +225,12 @@ fn redact(evenement: ChatEvent, cle: Option<&ApiKey>) -> ChatEvent {
     }
 }
 
-/// Vide le décodeur SSE dans le décodeur de protocole.
+/// Drains the SSE decoder into the protocol decoder.
 fn drain<D: EventDecoder>(etat: &mut StreamState<D>, sorties: &mut Vec<ChatEvent>) {
     loop {
-        // `let … else` plutôt que `while let` : l'emprunt du décodeur SSE se
-        // termine à la fin de l'instruction, avant que le décodeur de protocole
-        // ne soit emprunté à son tour.
+        // `let … else` rather than `while let`: the borrow of the SSE decoder
+        // ends at the end of the statement, before the protocol decoder is
+        // borrowed in turn.
         let Some(trame) = etat.sse.next_frame() else {
             return;
         };
@@ -247,10 +246,10 @@ mod tests {
     use super::*;
     use crate::types::StopReason;
 
-    /// Décodeur d'essai : chaque trame `data:` devient un fragment de texte.
+    /// Test decoder: each `data:` frame becomes a text fragment.
     ///
-    /// Il ne connaît aucun protocole réel — c'est le pilote qu'on éprouve ici,
-    /// et les décodeurs réels sont éprouvés dans leur propre module.
+    /// It knows no real protocol — it is the driver that is tested here, and
+    /// the real decoders are tested in their own module.
     #[derive(Default)]
     struct Echo {
         done: bool,
@@ -322,7 +321,7 @@ mod tests {
     }
 
     #[test]
-    fn un_flux_complet_devient_des_evenements() {
+    fn a_complete_stream_becomes_events() {
         let evenements = jouer(
             &["data: a\n\n", "data: b\n\n", "data: fin\n\n"],
             CancelToken::new(),
@@ -339,10 +338,10 @@ mod tests {
         );
     }
 
-    /// Le pilote garantit la présence de `Done` ; la raison est l'affaire du
-    /// décodeur, éprouvée dans chaque module de protocole.
+    /// The driver guarantees the presence of `Done`; the reason is the
+    /// decoder's business, tested in each protocol module.
     #[test]
-    fn un_flux_ferme_sans_marqueur_de_fin_se_termine_quand_meme() {
+    fn a_stream_closed_without_end_marker_still_ends() {
         let evenements = jouer(&["data: a\n\n"], CancelToken::new());
         assert_eq!(
             evenements.last(),
@@ -353,21 +352,21 @@ mod tests {
     }
 
     #[test]
-    fn un_flux_vide_produit_tout_de_meme_une_fin() {
+    fn an_empty_stream_still_produces_an_end() {
         let evenements = jouer(&[], CancelToken::new());
         assert_eq!(evenements.len(), 1, "{evenements:?}");
         assert!(evenements[0].is_terminal());
     }
 
     #[test]
-    fn done_n_est_emis_qu_une_fois_meme_avec_des_trames_apres() {
+    fn done_is_emitted_only_once_even_with_frames_after() {
         let evenements = jouer(&["data: fin\n\n", "data: fantome\n\n"], CancelToken::new());
         assert_eq!(evenements.len(), 1, "{evenements:?}");
         assert!(evenements[0].is_terminal());
     }
 
     #[test]
-    fn un_jeton_deja_annule_ne_lit_aucun_morceau() {
+    fn an_already_cancelled_token_reads_no_chunk() {
         let jeton = CancelToken::new();
         jeton.cancel();
         assert_eq!(
@@ -379,7 +378,7 @@ mod tests {
     }
 
     #[test]
-    fn une_annulation_en_cours_de_flux_arrete_la_lecture() {
+    fn a_cancellation_mid_stream_stops_the_reading() {
         let jeton = CancelToken::new();
         let declencheur = jeton.clone();
         let octets = futures::stream::iter(vec!["data: a\n\n", "data: b\n\n"]).map(
@@ -403,12 +402,12 @@ mod tests {
                     stop_reason: StopReason::Cancelled
                 },
             ],
-            "le second morceau ne doit jamais être lu"
+            "the second chunk must never be read"
         );
     }
 
     #[test]
-    fn une_rupture_de_transport_termine_proprement() {
+    fn a_transport_break_ends_cleanly() {
         let octets = futures::stream::iter(vec![
             Ok(Bytes::from_static(b"data: a\n\n")),
             Err("lost the connection while receiving the stream".to_owned()),
@@ -430,10 +429,10 @@ mod tests {
     }
 
     #[test]
-    fn un_flux_sans_fin_de_ligne_est_borne_et_se_termine() {
-        // Un serveur défaillant qui n'envoie jamais de fin de ligne ne doit pas
-        // faire gonfler la mémoire sans limite : le décodeur borne, et le flux
-        // se termine sur une erreur suivie de `Done`.
+    fn a_stream_without_line_ending_is_bounded_and_ends() {
+        // A faulty server that never sends a line ending must not make memory
+        // swell without limit: the decoder bounds it, and the stream ends on
+        // an error followed by `Done`.
         let deluge: Vec<std::result::Result<Bytes, String>> = vec![Ok(Bytes::from(vec![
             b'x';
             crate::sse::DEFAULT_BUFFER_LIMIT

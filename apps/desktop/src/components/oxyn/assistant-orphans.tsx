@@ -29,9 +29,10 @@ function when(ms: number) {
  * The conversations of connections deleted since, read-only.
  *
  * Deleting a connection keeps its conversations in the workspace, under the
- * connection's name (docs/UX-SPEC.md, « Une conversation reste dans le
- * workspace »). Without this list they would be kept where nobody can see
- * them. Rows are text, not buttons: nothing here opens, renames or deletes
+ * connection's name (docs/UX-SPEC.md, « A conversation stays in the
+ * workspace, not what was shown to it »). Without this list they would be kept
+ * where nobody can see them. Rows are text, not buttons: nothing here opens,
+ * renames or deletes
  * one, and nothing here can send one to a model.
  *
  * Draws nothing while there are none: a folded « 0 » is noise in every

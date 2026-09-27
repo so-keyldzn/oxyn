@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0027-porte-unique-pour-les-deux-destinations.md" sha256="66d1507e60cb" -->
+<!-- oxyn-translation source="docs/adr/0027-porte-unique-pour-les-deux-destinations.md" sha256="fc62b6c58052" -->
 
 > Traduction française de [docs/adr/0027-porte-unique-pour-les-deux-destinations.md](../../../../docs/adr/0027-porte-unique-pour-les-deux-destinations.md). **La version anglaise fait foi.**
 
@@ -72,7 +72,7 @@ d'aucun. Contre **C** : le changement était encore mécanique — un seul appel
 `run_turn` **garde sa propre vérification de niveau**. Ce n'est pas une
 redondance à nettoyer : la porte protège l'assemblage, la vérification protège le
 lancement, et aucune des deux ne doit s'en remettre à l'autre. Le test
-`le_niveau_local_refuse_avant_meme_de_lancer_le_processus` compose désormais son
+`the_local_tier_refuses_before_even_launching_the_process` compose désormais son
 invite sous un niveau permissif pour éprouver cette seconde ligne seule.
 
 Ce qui suit reste la trace des trois options telles qu'elles ont été pesées.

@@ -24,8 +24,8 @@ pg_ctl -D "$SP/pg/data" stop -m fast -w   # in every case
 of a socket path. `oxyn_test` role in `trust`, no password.
 
 **Red tests that are not regressions** (as of 2026-09-16):
-`la_lecture_seule_est_imposee_par_le_serveur` and
-`un_contexte_declare_ne_desarme_pas_la_lecture_seule` look for "lecture seule"
+`read_only_is_enforced_by_the_server` and
+`a_declared_context_does_not_disarm_read_only` look for "lecture seule"
 while the message has switched to English. Formerly also
 `previews_handle_system_types_and_preserve_native_columns` (literal
 `'=r/postgres'::aclitem`, missing role); it passes on a fresh cluster.

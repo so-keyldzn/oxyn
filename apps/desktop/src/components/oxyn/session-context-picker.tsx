@@ -5,7 +5,7 @@ import type { SessionPlace } from "@/lib/ipc/consoles"
 
 const SERVER_DEFAULT = "Server default"
 
-/** The five states of the selector (docs/UX-SPEC.md, « États d'une vue »). */
+/** The five states of the selector (docs/UX-SPEC.md, « States of a view »). */
 export type SessionContextState =
   /** Nothing declared: Oxyn does not claim to know the schema. */
   | { status: "serverDefault" }

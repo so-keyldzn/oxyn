@@ -1,37 +1,37 @@
-//! L'URL de connexion : la construire, la relire, et ne jamais la journaliser.
+//! The connection URL: build it, parse it, and never log it.
 //!
-//! Une chaîne de connexion est le seul endroit du produit où un secret et une
-//! adresse voyagent ensemble. C'est donc l'endroit exact où I-03 se perd :
-//! `tracing::info!("connexion à {dsn}")` suffit à écrire un mot de passe de
-//! production dans un fichier de journal.
+//! A connection string is the only place in the product where a secret and an
+//! address travel together. It is therefore the exact place where I-03 gets
+//! lost: `tracing::info!("connecting to {dsn}")` is enough to write a
+//! production password into a log file.
 //!
-//! # Les quatre règles que ce module tient par les types
+//! # The four rules this module holds through types
 //!
-//! **Le mot de passe n'entre dans l'URL qu'au dernier moment.** [`Dsn`] range
-//! une [`Url`] **sans** mot de passe et une [`SecretString`] à côté. La chaîne
-//! complète n'existe que le temps de l'appel à [`Dsn::expose`], qui rend une
-//! [`SecretString`] — un type sans `Display`, au `Debug` masqué, et effacé à sa
-//! destruction.
+//! **The password enters the URL only at the last moment.** [`Dsn`] stores a
+//! [`Url`] **without** a password and a [`SecretString`] beside it. The full
+//! string exists only for the duration of the call to [`Dsn::expose`], which
+//! returns a [`SecretString`] — a type without `Display`, with a masked
+//! `Debug`, and zeroed when dropped.
 //!
-//! **`Display` et `Debug` de [`Dsn`] rendent une URL caviardée.** Ils ne peuvent
-//! pas faire autrement : la valeur n'est pas là. C'est ce qui distingue ce
-//! masquage d'une politesse — il n'y a rien à oublier de masquer.
+//! **`Display` and `Debug` of [`Dsn`] return a redacted URL.** They cannot do
+//! otherwise: the value is not there. That is what sets this masking apart
+//! from courtesy — there is nothing one could forget to mask.
 //!
-//! **Aucun message d'erreur ne cite l'URL.** Les variantes de [`DsnError`] ne
-//! portent que des `&'static str` et des clés assainies : une URL malformée
-//! peut contenir le mot de passe, et une erreur finit dans un journal.
+//! **No error message cites the URL.** The variants of [`DsnError`] carry only
+//! `&'static str`s and sanitized keys: a malformed URL may contain the
+//! password, and an error ends up in a log.
 //!
-//! **Un secret rangé dans les paramètres est refusé, pas transporté.**
-//! [`DsnBuilder::from_config`] rejette une clé qui ressemble à un secret plutôt
-//! que d'en faire un paramètre d'URL
-//! ([`crate::metadata::looks_like_secret`]) : un paramètre
-//! de requête finit dans les journaux d'accès du serveur.
+//! **A secret stored in the parameters is refused, not carried.**
+//! [`DsnBuilder::from_config`] rejects a key that looks like a secret rather
+//! than turning it into a URL parameter
+//! ([`crate::metadata::looks_like_secret`]): a query parameter ends up in the
+//! server's access logs.
 //!
-//! # Ce que ce module ne fait pas
+//! # What this module does not do
 //!
-//! Il ne connaît aucun dialecte de chaîne de connexion propriétaire : pas de
-//! `Server=…;Database=…;` de SQL Server, pas de `key=value` de `libpq`. Ces
-//! formes appartiennent aux drivers qui les parlent. Ici, une URL.
+//! It knows no proprietary connection-string dialect: no SQL Server
+//! `Server=…;Database=…;`, no `libpq` `key=value`. Those forms belong to the
+//! drivers that speak them. Here, a URL.
 
 use std::fmt;
 
@@ -43,81 +43,81 @@ use url::Url;
 use crate::credentials::Credentials;
 use crate::metadata::{DriverMetadata, looks_like_secret, sanitize_key};
 
-/// Hôte de travail, remplacé avant que l'URL ne sorte de [`DsnBuilder::build`].
+/// Working host, replaced before the URL leaves [`DsnBuilder::build`].
 ///
-/// Le TLD `.invalid` est réservé par la RFC 2606 : même si une URL
-/// intermédiaire fuyait, elle ne désignerait aucune machine joignable.
+/// The `.invalid` TLD is reserved by RFC 2606: even if an intermediate URL
+/// leaked, it would designate no reachable machine.
 const PLACEHOLDER_HOST: &str = "oxyn.invalid";
 
-/// Ce qui remplace le mot de passe dans une URL caviardée.
+/// What replaces the password in a redacted URL.
 ///
-/// Aucun de ces caractères n'est encodé par le jeu `USERINFO` du crate `url` :
-/// le rendu reste lisible.
+/// None of these characters is encoded by the `USERINFO` set of the `url`
+/// crate: the rendering stays readable.
 const REDACTED: &str = "***";
 
-/// Ce qui peut mal tourner en construisant ou en relisant une URL de connexion.
+/// What can go wrong when building or parsing a connection URL.
 ///
-/// **Aucune variante ne porte de valeur venue de l'URL.** Les détails sont des
-/// `&'static str`, dans lesquels aucune donnée d'exécution ne peut entrer ; les
-/// clés de paramètres sont assainies avant d'y figurer. C'est ce qui permet de
-/// journaliser une de ces erreurs sans relire ce module.
+/// **No variant carries a value coming from the URL.** Details are
+/// `&'static str`s, into which no runtime data can enter; parameter keys are
+/// sanitized before appearing there. That is what makes it possible to log one
+/// of these errors without re-reading this module.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum DsnError {
-    /// Le schéma d'URL n'est pas utilisable.
+    /// The URL scheme is not usable.
     #[error("invalid URL scheme: {detail}")]
     InvalidScheme {
-        /// Ce qui n'allait pas, sans reprendre la valeur.
+        /// What was wrong, without repeating the value.
         detail: &'static str,
     },
 
-    /// L'hôte n'est pas utilisable tel quel.
+    /// The host is not usable as is.
     #[error("invalid host: {detail}")]
     InvalidHost {
-        /// Ce qui n'allait pas, sans reprendre la valeur.
+        /// What was wrong, without repeating the value.
         detail: &'static str,
     },
 
-    /// Le port n'est pas un entier sur 16 bits.
+    /// The port is not a 16-bit integer.
     #[error("invalid port: {detail}")]
     InvalidPort {
-        /// Ce qui n'allait pas, sans reprendre la valeur.
+        /// What was wrong, without repeating the value.
         detail: &'static str,
     },
 
-    /// L'URL n'a pas pu être analysée.
+    /// The URL could not be parsed.
     ///
-    /// Le texte fautif n'est **jamais** repris : une URL de connexion malformée
-    /// reste une URL de connexion, et elle peut porter un mot de passe.
+    /// The faulty text is **never** repeated: a malformed connection URL is
+    /// still a connection URL, and it may carry a password.
     #[error("the connection URL cannot be parsed: {detail}")]
     Malformed {
-        /// Ce qui n'allait pas, sans reprendre la valeur.
+        /// What was wrong, without repeating the value.
         detail: &'static str,
     },
 
-    /// Un paramètre persisté porte un secret.
+    /// A persisted parameter carries a secret.
     #[error(
         "parameter `{key}` carries a secret: a secret lives in the system keychain \
          and is not persisted with the connection (I-03)"
     )]
     SecretInParams {
-        /// La clé fautive, assainie. Jamais la valeur.
+        /// The faulty key, sanitized. Never the value.
         key: String,
     },
 
-    /// L'URL n'a pas d'autorité : ni utilisateur, ni mot de passe, ni port ne
-    /// peuvent y figurer. C'est le cas des sources sur fichier (SQLite).
+    /// The URL has no authority: neither user, nor password, nor port can
+    /// appear in it. That is the case of file-based sources (SQLite).
     #[error("this source has no host: it accepts neither user, nor password, nor port")]
     NoAuthority,
 
-    /// Le chemin d'une source sur fichier n'est pas absolu.
+    /// The path of a file-based source is not absolute.
     #[error(
         "the path must be absolute: a driver does not resolve a relative path, \
          it does not know the application's current directory"
     )]
     RelativePath,
 
-    /// Le chemin et le nom de base sont tous les deux renseignés.
+    /// The path and the database name are both filled.
     #[error("`path` and `database` both name the URL path: give only one of them")]
     ConflictingPath,
 }
@@ -128,65 +128,65 @@ impl From<DsnError> for OxynError {
     }
 }
 
-/// Une URL de connexion prête à être remise à un client de base de données.
+/// A connection URL ready to be handed to a database client.
 ///
-/// Ne porte **pas** le mot de passe dans son URL : il est rangé à côté et
-/// injecté par [`Dsn::expose`]. Conséquence directe, et c'est tout l'intérêt :
-/// `Display` et `Debug` n'ont aucun secret à masquer.
+/// Does **not** carry the password in its URL: it is stored beside it and
+/// injected by [`Dsn::expose`]. Direct consequence, and that is the whole
+/// point: `Display` and `Debug` have no secret to mask.
 ///
-/// N'est pas `Clone` : [`SecretString`] ne l'est pas non plus, parce qu'une
-/// copie de secret est une copie à effacer de plus.
+/// Not `Clone`: [`SecretString`] is not either, because a copy of a secret is
+/// one more copy to zero.
 pub struct Dsn {
-    /// L'URL, sans mot de passe.
+    /// The URL, without password.
     url: Url,
-    /// Le mot de passe, injecté uniquement par [`Dsn::expose`].
+    /// The password, injected only by [`Dsn::expose`].
     password: Option<SecretString>,
 }
 
 impl Dsn {
-    /// L'URL sans mot de passe. Sûre à afficher, à journaliser et à comparer.
+    /// The URL without password. Safe to display, log and compare.
     #[must_use]
     pub fn url(&self) -> &Url {
         &self.url
     }
 
-    /// Le schéma de l'URL.
+    /// The URL scheme.
     #[must_use]
     pub fn scheme(&self) -> &str {
         self.url.scheme()
     }
 
-    /// Un mot de passe sera-t-il injecté par [`Dsn::expose`] ?
+    /// Will a password be injected by [`Dsn::expose`]?
     #[must_use]
     pub fn has_password(&self) -> bool {
         self.password.is_some()
     }
 
-    /// L'URL caviardée, telle que la rendent `Display` et `Debug`.
+    /// The redacted URL, as `Display` and `Debug` render it.
     ///
-    /// Le mot de passe est remplacé par `***` **quand il y en a un** : une URL
-    /// sans mot de passe et une URL dont le mot de passe est masqué ne doivent
-    /// pas se confondre à la lecture d'un journal.
+    /// The password is replaced by `***` **when there is one**: a URL without
+    /// password and a URL whose password is masked must not be confused when
+    /// reading a log.
     #[must_use]
     pub fn redacted(&self) -> String {
         if self.password.is_none() {
             return self.url.as_str().to_owned();
         }
-        let mut caviardee = self.url.clone();
-        if caviardee.set_password(Some(REDACTED)).is_err() {
-            // Sans autorité, il n'y a pas de place pour un mot de passe — et
-            // `build` a déjà refusé cette combinaison.
+        let mut redacted = self.url.clone();
+        if redacted.set_password(Some(REDACTED)).is_err() {
+            // Without authority, there is no room for a password — and
+            // `build` already refused that combination.
             return self.url.as_str().to_owned();
         }
-        String::from(caviardee)
+        String::from(redacted)
     }
 
-    /// L'URL complète, mot de passe compris.
+    /// The full URL, password included.
     ///
-    /// Le nom est désagréable à dessein : chaque appel est un endroit à
-    /// relire. Le résultat n'a ni `Display` ni `Serialize`, son `Debug` est
-    /// masqué, et il s'efface à sa destruction — le passer à un client de base
-    /// de données est son seul usage légitime.
+    /// The name is unpleasant on purpose: every call is a place to review. The
+    /// result has neither `Display` nor `Serialize`, its `Debug` is masked,
+    /// and it is zeroed when dropped — handing it to a database client is its
+    /// only legitimate use.
     ///
     /// ```ignore
     /// let dsn = builder.build()?;
@@ -194,16 +194,16 @@ impl Dsn {
     /// let pool = PgPool::connect(url.expose_secret()).await?;
     /// ```
     ///
-    /// # Effacement, et ses limites
+    /// # Zeroing, and its limits
     ///
-    /// La chaîne construite ici est **déplacée** dans la [`SecretString`], sans
-    /// copie. Le tampon intermédiaire du crate `url` est en revanche libéré
-    /// sans être écrasé : l'effacement est un *meilleur effort*, et la
-    /// protection qui compte reste l'absence de tout chemin d'affichage.
+    /// The string built here is **moved** into the [`SecretString`], without a
+    /// copy. The intermediate buffer of the `url` crate, however, is freed
+    /// without being overwritten: zeroing is *best effort*, and the protection
+    /// that counts remains the absence of any display path.
     ///
-    /// # Erreurs
-    /// [`DsnError::NoAuthority`] si un mot de passe accompagne une URL sans
-    /// hôte — combinaison que [`DsnBuilder::build`] refuse déjà.
+    /// # Errors
+    /// [`DsnError::NoAuthority`] if a password comes with a URL without host —
+    /// a combination [`DsnBuilder::build`] already refuses.
     pub fn expose(&self) -> Result<SecretString, DsnError> {
         let Some(password) = self.password.as_ref() else {
             return Ok(SecretString::from(self.url.as_str()));
@@ -223,20 +223,20 @@ impl fmt::Display for Dsn {
 }
 
 impl fmt::Debug for Dsn {
-    /// Écrit à la main, comme [`Display`](fmt::Display) : ce type porte un
+    /// Written by hand, like [`Display`](fmt::Display): this type carries a
     /// secret (I-03).
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "Dsn({})", self.redacted())
     }
 }
 
-/// Construit une [`Dsn`] pièce par pièce.
+/// Builds a [`Dsn`] piece by piece.
 ///
-/// Chaque composant est posé par un accesseur du crate `url`, qui l'encode
-/// selon le jeu de caractères qui lui correspond. **Rien n'est concaténé** : un
-/// nom de base contenant `/`, un utilisateur contenant `@` ou un mot de passe
-/// contenant `#` sont encodés, pas interprétés. C'est la règle du SQL composé
-/// par Oxyn (I-10), appliquée aux URL.
+/// Each component is set through an accessor of the `url` crate, which encodes
+/// it according to the character set that matches it. **Nothing is
+/// concatenated**: a database name containing `/`, a user containing `@` or a
+/// password containing `#` are encoded, not interpreted. It is the rule of SQL
+/// composed by Oxyn (I-10), applied to URLs.
 pub struct DsnBuilder {
     scheme: String,
     host: Option<String>,
@@ -250,21 +250,21 @@ pub struct DsnBuilder {
 }
 
 impl DsnBuilder {
-    /// Clé de paramètre de l'hôte.
+    /// Parameter key of the host.
     pub const HOST: &'static str = "host";
-    /// Clé de paramètre du port.
+    /// Parameter key of the port.
     pub const PORT: &'static str = "port";
-    /// Clé de paramètre de l'utilisateur.
+    /// Parameter key of the user.
     pub const USER: &'static str = "user";
-    /// Clé de paramètre du nom de base.
+    /// Parameter key of the database name.
     pub const DATABASE: &'static str = "database";
-    /// Clé de paramètre du chemin de fichier, pour une source embarquée.
+    /// Parameter key of the file path, for an embedded source.
     pub const PATH: &'static str = "path";
 
-    /// Un constructeur vide pour ce schéma d'URL.
+    /// An empty builder for this URL scheme.
     ///
-    /// Le schéma n'est validé qu'à [`build`](Self::build), pour que le chaînage
-    /// reste lisible.
+    /// The scheme is only validated at [`build`](Self::build), so that the
+    /// chaining stays readable.
     #[must_use]
     pub fn new(scheme: impl Into<String>) -> Self {
         Self {
@@ -280,33 +280,32 @@ impl DsnBuilder {
         }
     }
 
-    /// Reprend les paramètres d'une configuration de connexion.
+    /// Takes the parameters of a connection configuration.
     ///
-    /// Le schéma est l'identifiant du driver. Les clés reconnues — et leurs
-    /// alias usuels — deviennent l'hôte, le port, l'utilisateur, la base ou le
-    /// chemin ; **tout le reste devient une option d'URL**, dans l'ordre de
-    /// saisie.
+    /// The scheme is the driver identifier. The recognized keys — and their
+    /// usual aliases — become the host, the port, the user, the database or
+    /// the path; **everything else becomes a URL option**, in input order.
     ///
-    /// # Erreurs
+    /// # Errors
     ///
-    /// * [`DsnError::SecretInParams`] si une clé ressemble à un secret. En
-    ///   faire un paramètre d'URL le ferait entrer dans les journaux d'accès du
-    ///   serveur : le refus est la seule réponse juste (I-03) ;
-    /// * [`DsnError::InvalidPort`] si `port` n'est pas un entier sur 16 bits ;
-    /// * [`DsnError::ConflictingPath`] si un chemin et un nom de base sont
-    ///   donnés tous les deux.
+    /// * [`DsnError::SecretInParams`] if a key looks like a secret. Turning it
+    ///   into a URL parameter would put it in the server's access logs: refusal
+    ///   is the only right answer (I-03);
+    /// * [`DsnError::InvalidPort`] if `port` is not a 16-bit integer;
+    /// * [`DsnError::ConflictingPath`] if a path and a database name are both
+    ///   given.
     pub fn from_config(config: &ConnectionConfig) -> Result<Self, DsnError> {
         let mut builder = Self::new(config.driver.as_str());
-        for (cle, valeur) in &config.params {
-            if looks_like_secret(cle) {
+        for (key, value) in &config.params {
+            if looks_like_secret(key) {
                 return Err(DsnError::SecretInParams {
-                    key: sanitize_key(cle),
+                    key: sanitize_key(key),
                 });
             }
-            match cle.trim().to_ascii_lowercase().as_str() {
-                "host" | "hostname" | "server" => builder.host = Some(valeur.clone()),
+            match key.trim().to_ascii_lowercase().as_str() {
+                "host" | "hostname" | "server" => builder.host = Some(value.clone()),
                 "port" => {
-                    let port = valeur
+                    let port = value
                         .trim()
                         .parse::<u16>()
                         .map_err(|_| DsnError::InvalidPort {
@@ -314,11 +313,11 @@ impl DsnBuilder {
                         })?;
                     builder.port = Some(port);
                 }
-                "user" | "username" => builder.user = Some(valeur.clone()),
-                "database" | "dbname" | "db" => builder.database = Some(valeur.clone()),
-                "path" | "file" | "filename" => builder.path = Some(valeur.clone()),
+                "user" | "username" => builder.user = Some(value.clone()),
+                "database" | "dbname" | "db" => builder.database = Some(value.clone()),
+                "path" | "file" | "filename" => builder.path = Some(value.clone()),
                 _ => {
-                    builder.options.insert(cle.clone(), valeur.clone());
+                    builder.options.insert(key.clone(), value.clone());
                 }
             }
         }
@@ -328,11 +327,11 @@ impl DsnBuilder {
         Ok(builder)
     }
 
-    /// Comme [`from_config`](Self::from_config), en reprenant en plus le port
-    /// par défaut déclaré par le driver.
+    /// Like [`from_config`](Self::from_config), also taking the default port
+    /// declared by the driver.
     ///
-    /// # Erreurs
-    /// Celles de [`from_config`](Self::from_config).
+    /// # Errors
+    /// Those of [`from_config`](Self::from_config).
     pub fn for_driver(
         metadata: &DriverMetadata,
         config: &ConnectionConfig,
@@ -342,11 +341,11 @@ impl DsnBuilder {
         Ok(builder)
     }
 
-    /// Remplace le schéma d'URL.
+    /// Replaces the URL scheme.
     ///
-    /// Utile quand l'identifiant du driver n'est pas un schéma valide — un `_`
-    /// est admis dans un [`DriverId`] et interdit dans un schéma d'URL — ou
-    /// quand le client attend un schéma différent (`postgresql` plutôt que
+    /// Useful when the driver identifier is not a valid scheme — a `_` is
+    /// allowed in a [`DriverId`] and forbidden in a URL scheme — or when the
+    /// client expects a different scheme (`postgresql` rather than
     /// `postgres`).
     #[must_use]
     pub fn with_scheme(mut self, scheme: impl Into<String>) -> Self {
@@ -354,48 +353,48 @@ impl DsnBuilder {
         self
     }
 
-    /// Fixe l'hôte. Une adresse IPv6 s'écrit entre crochets : `[::1]`.
+    /// Sets the host. An IPv6 address is written between brackets: `[::1]`.
     #[must_use]
     pub fn with_host(mut self, host: impl Into<String>) -> Self {
         self.host = Some(host.into());
         self
     }
 
-    /// Fixe le port.
+    /// Sets the port.
     #[must_use]
     pub fn with_port(mut self, port: u16) -> Self {
         self.port = Some(port);
         self
     }
 
-    /// Fixe le port à employer quand la configuration n'en donne pas.
+    /// Sets the port to use when the configuration gives none.
     #[must_use]
     pub fn with_default_port(mut self, port: u16) -> Self {
         self.default_port = Some(port);
         self
     }
 
-    /// Fixe l'utilisateur.
+    /// Sets the user.
     #[must_use]
     pub fn with_user(mut self, user: impl Into<String>) -> Self {
         self.user = Some(user.into());
         self
     }
 
-    /// Fixe le mot de passe.
+    /// Sets the password.
     ///
-    /// Il n'entrera dans l'URL qu'à [`Dsn::expose`].
+    /// It will enter the URL only at [`Dsn::expose`].
     #[must_use]
     pub fn with_password(mut self, password: impl Into<SecretString>) -> Self {
         self.password = Some(password.into());
         self
     }
 
-    /// Reprend le mot de passe porté par des identifiants résolus.
+    /// Takes the password carried by resolved credentials.
     ///
-    /// Recopie le secret dans une seconde [`SecretString`] : le type ne se
-    /// clone pas, et exposer puis remballer est le seul chemin. Les deux copies
-    /// s'effacent à leur destruction.
+    /// Copies the secret into a second [`SecretString`]: the type is not
+    /// `Clone`, and exposing then re-wrapping is the only path. Both copies are
+    /// zeroed when dropped.
     #[must_use]
     pub fn with_credentials(mut self, credentials: &Credentials) -> Self {
         if let Some(password) = credentials.password() {
@@ -404,53 +403,52 @@ impl DsnBuilder {
         self
     }
 
-    /// Fixe le nom de base, qui devient l'unique segment du chemin.
+    /// Sets the database name, which becomes the path's only segment.
     ///
-    /// Un nom contenant `/` est encodé, jamais découpé.
+    /// A name containing `/` is encoded, never split.
     #[must_use]
     pub fn with_database(mut self, database: impl Into<String>) -> Self {
         self.database = Some(database.into());
         self
     }
 
-    /// Fixe le chemin complet d'une source sur fichier.
+    /// Sets the full path of a file-based source.
     ///
-    /// Le chemin doit être **absolu** : un driver ne connaît pas le répertoire
-    /// courant de l'application et n'a pas à le deviner. Les segments `.` et
-    /// `..` sont retirés par le crate `url` — un chemin qui en dépend doit être
-    /// canonisé par l'appelant avant d'arriver ici.
+    /// The path must be **absolute**: a driver does not know the application's
+    /// current directory and has no business guessing it. The `.` and `..`
+    /// segments are removed by the `url` crate — a path that depends on them
+    /// must be canonicalized by the caller before arriving here.
     ///
-    /// Les formes qui ne sont pas des chemins — le `:memory:` de SQLite — ne
-    /// passent pas par une URL : le driver les reconnaît avant de construire
-    /// une [`Dsn`].
+    /// Forms that are not paths — SQLite's `:memory:` — do not go through a
+    /// URL: the driver recognizes them before building a [`Dsn`].
     #[must_use]
     pub fn with_path(mut self, path: impl Into<String>) -> Self {
         self.path = Some(path.into());
         self
     }
 
-    /// Ajoute une option, qui devient un paramètre de requête de l'URL.
+    /// Adds an option, which becomes a query parameter of the URL.
     #[must_use]
     pub fn with_option(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.options.insert(key.into(), value.into());
         self
     }
 
-    /// Assemble l'URL.
+    /// Assembles the URL.
     ///
-    /// # Erreurs
+    /// # Errors
     ///
-    /// * [`DsnError::InvalidScheme`] si le schéma n'est pas un schéma d'URL ;
-    /// * [`DsnError::InvalidHost`] si l'hôte porte un `:` — un port glissé dans
-    ///   l'hôte serait **silencieusement ignoré** par le crate `url`, et la
-    ///   connexion partirait vers le port par défaut, c'est-à-dire vers une
-    ///   autre base que celle qu'on croit ;
-    /// * [`DsnError::NoAuthority`] si un utilisateur, un mot de passe ou un port
-    ///   accompagne une source sans hôte ;
-    /// * [`DsnError::RelativePath`] si le chemin d'une source sur fichier n'est
-    ///   pas absolu ;
-    /// * [`DsnError::ConflictingPath`] si un chemin et un nom de base sont
-    ///   donnés tous les deux.
+    /// * [`DsnError::InvalidScheme`] if the scheme is not a URL scheme;
+    /// * [`DsnError::InvalidHost`] if the host carries a `:` — a port slipped
+    ///   into the host would be **silently ignored** by the `url` crate, and
+    ///   the connection would go to the default port, that is to another
+    ///   database than the one intended;
+    /// * [`DsnError::NoAuthority`] if a user, a password or a port comes with a
+    ///   source without host;
+    /// * [`DsnError::RelativePath`] if the path of a file-based source is not
+    ///   absolute;
+    /// * [`DsnError::ConflictingPath`] if a path and a database name are both
+    ///   given.
     pub fn build(self) -> Result<Dsn, DsnError> {
         validate_scheme(&self.scheme)?;
         if self.path.is_some() && self.database.is_some() {
@@ -458,15 +456,15 @@ impl DsnBuilder {
         }
 
         let port = self.port.or(self.default_port);
-        let hote = self.host.as_deref().filter(|h| !h.is_empty());
-        if hote.is_none() && (port.is_some() || self.user.is_some() || self.password.is_some()) {
+        let host = self.host.as_deref().filter(|h| !h.is_empty());
+        if host.is_none() && (port.is_some() || self.user.is_some() || self.password.is_some()) {
             return Err(DsnError::NoAuthority);
         }
 
         let segments = self.path_segments()?;
 
-        // On part d'un hôte de travail : les accesseurs du crate `url` exigent
-        // une autorité, et c'est par eux que passe tout l'encodage.
+        // Start from a working host: the `url` crate's accessors require an
+        // authority, and all the encoding goes through them.
         let mut url =
             Url::parse(&format!("{}://{PLACEHOLDER_HOST}", self.scheme)).map_err(|_| {
                 DsnError::InvalidScheme {
@@ -475,25 +473,25 @@ impl DsnBuilder {
             })?;
 
         if !segments.is_empty() {
-            // Le bloc borne l'emprunt : `PathSegmentsMut` a un `Drop` qui
-            // recompose l'URL, donc il doit finir avant tout autre accès.
-            let mut chemin = url.path_segments_mut().map_err(|()| DsnError::Malformed {
+            // The block bounds the borrow: `PathSegmentsMut` has a `Drop` that
+            // recomposes the URL, so it must end before any other access.
+            let mut path = url.path_segments_mut().map_err(|()| DsnError::Malformed {
                 detail: "this URL form does not accept a path",
             })?;
-            chemin.extend(segments.iter());
+            path.extend(segments.iter());
         }
 
         if !self.options.is_empty() {
-            let mut requete = url.query_pairs_mut();
-            for (cle, valeur) in &self.options {
-                requete.append_pair(cle, valeur);
+            let mut query = url.query_pairs_mut();
+            for (key, value) in &self.options {
+                query.append_pair(key, value);
             }
         }
 
-        match hote {
-            Some(hote) => {
-                check_host(hote)?;
-                url.set_host(Some(hote))
+        match host {
+            Some(host) => {
+                check_host(host)?;
+                url.set_host(Some(host))
                     .map_err(|_| DsnError::InvalidHost {
                         detail: "forbidden character in a host name",
                     })?;
@@ -510,7 +508,7 @@ impl DsnBuilder {
                 }
             }
             None => {
-                // Autorité vide : la forme `sqlite:` + `///` + chemin absolu.
+                // Empty authority: the `sqlite:` + `///` + absolute path form.
                 url.set_host(Some("")).map_err(|_| DsnError::InvalidHost {
                     detail: "this URL form does not accept an empty authority",
                 })?;
@@ -523,7 +521,7 @@ impl DsnBuilder {
         })
     }
 
-    /// Les segments de chemin, chacun destiné à être encodé séparément.
+    /// The path segments, each meant to be encoded separately.
     fn path_segments(&self) -> Result<Vec<String>, DsnError> {
         if let Some(path) = self.path.as_deref() {
             if !path.starts_with('/') {
@@ -543,7 +541,7 @@ impl DsnBuilder {
 }
 
 impl fmt::Debug for DsnBuilder {
-    /// Écrit à la main : ce type porte un mot de passe (I-03).
+    /// Written by hand: this type carries a password (I-03).
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DsnBuilder")
             .field("scheme", &self.scheme)
@@ -558,46 +556,46 @@ impl fmt::Debug for DsnBuilder {
     }
 }
 
-/// Les composants d'une URL de connexion relue, **sans le mot de passe**.
+/// The components of a parsed connection URL, **without the password**.
 ///
-/// Tout y est déjà décodé : `user%40domaine` se lit `user@domaine`. Le chemin
-/// est gardé **en segments** et non en une chaîne : sans cela, un nom de base
-/// contenant un `/` encodé deviendrait indiscernable d'un chemin à deux
-/// niveaux, et l'aller-retour ne serait plus fidèle.
+/// Everything is already decoded: `user%40domain` reads `user@domain`. The
+/// path is kept **as segments** and not as one string: otherwise, a database
+/// name containing an encoded `/` would become indistinguishable from a
+/// two-level path, and the round trip would no longer be faithful.
 #[derive(Clone, PartialEq, Eq, Default)]
 pub struct DsnParts {
-    /// Schéma de l'URL, tel quel.
+    /// URL scheme, as is.
     pub scheme: String,
-    /// Hôte, absent pour une source sur fichier.
+    /// Host, absent for a file-based source.
     pub host: Option<String>,
-    /// Port explicite. `None` signifie « celui du driver ».
+    /// Explicit port. `None` means "the driver's".
     pub port: Option<u16>,
-    /// Utilisateur, décodé.
+    /// User, decoded.
     pub user: Option<String>,
-    /// Segments du chemin, décodés, sans les `/`.
+    /// Path segments, decoded, without the `/`.
     pub segments: Vec<String>,
-    /// Les autres paramètres de requête, décodés, dans l'ordre de l'URL.
-    /// **Aucun d'eux ne porte un secret** : voir [`ParsedDsn::parse`].
+    /// The other query parameters, decoded, in URL order.
+    /// **None of them carries a secret**: see [`ParsedDsn::parse`].
     pub options: IndexMap<String, String>,
 }
 
 impl DsnParts {
-    /// Le nom de base, quand le chemin tient en un segment.
+    /// The database name, when the path fits in one segment.
     ///
-    /// Rend `None` pour un chemin vide et pour un chemin à plusieurs segments,
-    /// qui désigne alors un fichier.
+    /// Returns `None` for an empty path and for a path with several segments,
+    /// which then designates a file.
     #[must_use]
     pub fn database(&self) -> Option<&str> {
         match self.segments.as_slice() {
-            [unique] if !unique.is_empty() => Some(unique),
+            [single] if !single.is_empty() => Some(single),
             _ => None,
         }
     }
 
-    /// Le chemin absolu, reconstitué à partir des segments.
+    /// The absolute path, rebuilt from the segments.
     ///
-    /// C'est ce qu'attend une source sur fichier. Rend `None` quand le chemin
-    /// est vide.
+    /// It is what a file-based source expects. Returns `None` when the path is
+    /// empty.
     #[must_use]
     pub fn file_path(&self) -> Option<String> {
         if self.segments.is_empty() {
@@ -607,15 +605,15 @@ impl DsnParts {
         }
     }
 
-    /// Une configuration de connexion équivalente, **sans aucun secret**.
+    /// An equivalent connection configuration, **without any secret**.
     ///
-    /// C'est le trajet « l'utilisateur colle une URL » : ce qui en ressort est
-    /// persistable tel quel, et le mot de passe qui l'accompagnait part au
-    /// trousseau par un autre chemin (voir [`ParsedDsn::into_parts`]).
+    /// It is the "the user pastes a URL" path: what comes out of it can be
+    /// persisted as is, and the password that came with it goes to the
+    /// keychain by another path (see [`ParsedDsn::into_parts`]).
     ///
-    /// L'environnement de la connexion créée vaut
-    /// [`Production`](oxyn_core::Environment::Production) : c'est le défaut de
-    /// [`ConnectionConfig`], et une URL ne dit rien de l'environnement.
+    /// The environment of the created connection is
+    /// [`Production`](oxyn_core::Environment::Production): it is the default of
+    /// [`ConnectionConfig`], and a URL says nothing about the environment.
     #[must_use]
     pub fn to_config(&self, name: impl Into<String>, driver: DriverId) -> ConnectionConfig {
         let mut config = ConnectionConfig::new(name, driver);
@@ -629,19 +627,19 @@ impl DsnParts {
             config = config.with_param(DsnBuilder::USER, user);
         }
         match (self.host.is_some(), self.database(), self.file_path()) {
-            (true, Some(base), _) => {
-                config = config.with_param(DsnBuilder::DATABASE, base);
+            (true, Some(database), _) => {
+                config = config.with_param(DsnBuilder::DATABASE, database);
             }
-            (_, _, Some(chemin)) => {
-                config = config.with_param(DsnBuilder::PATH, chemin);
+            (_, _, Some(path)) => {
+                config = config.with_param(DsnBuilder::PATH, path);
             }
             (_, _, None) => {}
         }
-        for (cle, valeur) in &self.options {
-            // `options` ne peut pas contenir de secret : `parse` les en a
-            // retirés. La garde reste, parce que c'est elle l'invariant.
-            if !looks_like_secret(cle) {
-                config = config.with_param(cle, valeur);
+        for (key, value) in &self.options {
+            // `options` cannot contain a secret: `parse` removed them. The
+            // guard stays, because it is the invariant.
+            if !looks_like_secret(key) {
+                config = config.with_param(key, value);
             }
         }
         config
@@ -649,14 +647,13 @@ impl DsnParts {
 }
 
 impl fmt::Debug for DsnParts {
-    /// Écrit à la main, comme celui de
-    /// [`oxyn_core::ConnectionConfig`] : les **valeurs** des
-    /// options ne sont pas imprimées.
+    /// Written by hand, like that of [`oxyn_core::ConnectionConfig`]: the
+    /// **values** of the options are not printed.
     ///
-    /// Ce type ne porte pas de mot de passe — [`ParsedDsn::parse`] l'en retire —
-    /// mais ses options viennent d'une URL, c'est-à-dire d'une entrée non
-    /// fiable. Savoir qu'une option `sslmode` existe aide au diagnostic ; savoir
-    /// laquelle n'aide pas dans un journal.
+    /// This type carries no password — [`ParsedDsn::parse`] removes it — but
+    /// its options come from a URL, that is from untrusted input. Knowing that
+    /// an `sslmode` option exists helps diagnosis; knowing which one does not
+    /// help in a log.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DsnParts")
             .field("scheme", &self.scheme)
@@ -669,11 +666,11 @@ impl fmt::Debug for DsnParts {
     }
 }
 
-/// Le résultat de la relecture d'une URL de connexion.
+/// The result of parsing a connection URL.
 ///
-/// Sépare ce qui est persistable ([`DsnParts`]) de ce qui ne l'est pas
-/// ([`Credentials`]). C'est la forme même de la règle : un secret ne rejoint
-/// jamais une configuration de connexion.
+/// Separates what can be persisted ([`DsnParts`]) from what cannot
+/// ([`Credentials`]). It is the very shape of the rule: a secret never joins a
+/// connection configuration.
 pub struct ParsedDsn {
     parts: DsnParts,
     credentials: Credentials,
@@ -681,20 +678,19 @@ pub struct ParsedDsn {
 }
 
 impl ParsedDsn {
-    /// Relit une URL de connexion.
+    /// Parses a connection URL.
     ///
-    /// Le mot de passe de l'URL — et, à défaut, le premier paramètre de requête
-    /// qui ressemble à un secret — est mis de côté dans [`Credentials`]. Les
-    /// autres paramètres qui ressemblent à un secret ne sont **pas** conservés :
-    /// leurs clés sont rendues par
-    /// [`dropped_secret_keys`](Self::dropped_secret_keys), pour que l'interface
-    /// puisse les redemander plutôt que de les persister en clair ou de les
-    /// perdre en silence.
+    /// The URL's password — and, failing that, the first query parameter that
+    /// looks like a secret — is set aside in [`Credentials`]. The other
+    /// parameters that look like a secret are **not** kept: their keys are
+    /// returned by [`dropped_secret_keys`](Self::dropped_secret_keys), so that
+    /// the interface can ask for them again rather than persist them in clear
+    /// text or silently lose them.
     ///
-    /// # Erreurs
-    /// [`DsnError::Malformed`] si l'URL n'est pas analysable, ou si un encodage
-    /// `%` de l'utilisateur, du mot de passe ou du chemin est invalide. Le
-    /// texte fautif n'est jamais repris dans l'erreur.
+    /// # Errors
+    /// [`DsnError::Malformed`] if the URL cannot be parsed, or if a `%`
+    /// encoding of the user, the password or the path is invalid. The faulty
+    /// text is never repeated in the error.
     pub fn parse(text: &str) -> Result<Self, DsnError> {
         let url = Url::parse(text.trim()).map_err(|_| DsnError::Malformed {
             detail: "expected: a scheme, an optional authority, a path",
@@ -702,34 +698,34 @@ impl ParsedDsn {
 
         let user = match url.username() {
             "" => None,
-            brut => Some(decode(brut, "the user carries an invalid `%` encoding")?),
+            raw => Some(decode(raw, "the user carries an invalid `%` encoding")?),
         };
 
         let mut credentials = Credentials::new();
         match url.password() {
             None | Some("") => {}
-            Some(brut) => {
-                let clair = decode(brut, "the password carries an invalid `%` encoding")?;
-                credentials = credentials.with_password(clair);
+            Some(raw) => {
+                let clear = decode(raw, "the password carries an invalid `%` encoding")?;
+                credentials = credentials.with_password(clear);
             }
         }
 
         let mut segments = Vec::new();
-        for brut in url.path().split('/').filter(|s| !s.is_empty()) {
-            segments.push(decode(brut, "the path carries an invalid `%` encoding")?);
+        for raw in url.path().split('/').filter(|s| !s.is_empty()) {
+            segments.push(decode(raw, "the path carries an invalid `%` encoding")?);
         }
 
         let mut options = IndexMap::new();
         let mut dropped_secrets = Vec::new();
-        for (cle, valeur) in url.query_pairs() {
-            if !looks_like_secret(&cle) {
-                options.insert(cle.into_owned(), valeur.into_owned());
+        for (key, value) in url.query_pairs() {
+            if !looks_like_secret(&key) {
+                options.insert(key.into_owned(), value.into_owned());
                 continue;
             }
             if credentials.password().is_none() {
-                credentials = credentials.with_password(valeur.into_owned());
+                credentials = credentials.with_password(value.into_owned());
             } else {
-                dropped_secrets.push(sanitize_key(&cle));
+                dropped_secrets.push(sanitize_key(&key));
             }
         }
 
@@ -747,28 +743,28 @@ impl ParsedDsn {
         })
     }
 
-    /// Les composants persistables.
+    /// The components that can be persisted.
     #[must_use]
     pub fn parts(&self) -> &DsnParts {
         &self.parts
     }
 
-    /// Les identifiants extraits de l'URL.
+    /// The credentials extracted from the URL.
     #[must_use]
     pub fn credentials(&self) -> &Credentials {
         &self.credentials
     }
 
-    /// Les clés des secrets que l'URL portait en plus du mot de passe, et qui
-    /// n'ont **pas** été conservés.
+    /// The keys of the secrets the URL carried in addition to the password,
+    /// and which were **not** kept.
     ///
-    /// Les clés sont assainies : une URL est une entrée non fiable.
+    /// The keys are sanitized: a URL is untrusted input.
     #[must_use]
     pub fn dropped_secret_keys(&self) -> &[String] {
         &self.dropped_secrets
     }
 
-    /// Sépare définitivement le persistable du secret.
+    /// Separates for good what can be persisted from the secret.
     #[must_use]
     pub fn into_parts(self) -> (DsnParts, Credentials) {
         (self.parts, self.credentials)
@@ -776,7 +772,7 @@ impl ParsedDsn {
 }
 
 impl fmt::Debug for ParsedDsn {
-    /// Écrit à la main : ce type porte des identifiants (I-03).
+    /// Written by hand: this type carries credentials (I-03).
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ParsedDsn")
             .field("parts", &self.parts)
@@ -786,23 +782,23 @@ impl fmt::Debug for ParsedDsn {
     }
 }
 
-/// Vérifie qu'une chaîne est un schéma d'URL.
+/// Checks that a string is a URL scheme.
 ///
-/// Grammaire de la RFC 3986 : une lettre, puis lettres, chiffres, `+`, `-`,
-/// `.`. Le `_`, admis dans un [`DriverId`], n'en fait pas partie.
+/// RFC 3986 grammar: a letter, then letters, digits, `+`, `-`, `.`. The `_`,
+/// allowed in a [`DriverId`], is not part of it.
 fn validate_scheme(scheme: &str) -> Result<(), DsnError> {
-    let mut caracteres = scheme.chars();
-    let Some(premier) = caracteres.next() else {
+    let mut chars = scheme.chars();
+    let Some(first) = chars.next() else {
         return Err(DsnError::InvalidScheme {
             detail: "the scheme is empty",
         });
     };
-    if !premier.is_ascii_alphabetic() {
+    if !first.is_ascii_alphabetic() {
         return Err(DsnError::InvalidScheme {
             detail: "the scheme must start with an ASCII letter",
         });
     }
-    if !caracteres.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')) {
+    if !chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.')) {
         return Err(DsnError::InvalidScheme {
             detail: "allowed characters: letters, digits, `+`, `-`, `.` — not `_`",
         });
@@ -810,11 +806,11 @@ fn validate_scheme(scheme: &str) -> Result<(), DsnError> {
     Ok(())
 }
 
-/// Refuse un hôte que le crate `url` accepterait en le tronquant.
+/// Refuses a host that the `url` crate would accept by truncating it.
 ///
-/// `set_host` sur `machine.example:5433` conserve `machine.example` et **jette
-/// le port** sans rien dire. La connexion partirait alors vers le port par
-/// défaut, c'est-à-dire potentiellement vers une autre base que celle visée.
+/// `set_host` on `machine.example:5433` keeps `machine.example` and **throws
+/// the port away** without a word. The connection would then go to the default
+/// port, that is potentially to another database than the one targeted.
 fn check_host(host: &str) -> Result<(), DsnError> {
     if host.starts_with('[') {
         return if host.ends_with(']') {
@@ -833,45 +829,45 @@ fn check_host(host: &str) -> Result<(), DsnError> {
     Ok(())
 }
 
-/// Décode les séquences `%XX` d'un composant d'URL.
+/// Decodes the `%XX` sequences of a URL component.
 ///
-/// # Erreurs
-/// [`DsnError::Malformed`] portant `detail` si la séquence est tronquée, si un
-/// chiffre n'est pas hexadécimal, ou si le résultat n'est pas de l'UTF-8.
+/// # Errors
+/// [`DsnError::Malformed`] carrying `detail` if the sequence is truncated, if a
+/// digit is not hexadecimal, or if the result is not UTF-8.
 fn decode(input: &str, detail: &'static str) -> Result<String, DsnError> {
     percent_decode(input).ok_or(DsnError::Malformed { detail })
 }
 
-/// Décode les séquences `%XX`, ou rend `None` si l'entrée est invalide.
+/// Decodes the `%XX` sequences, or returns `None` if the input is invalid.
 ///
-/// Écrit ici parce que le crate `url` n'expose pas de décodeur, et que
-/// `form_urlencoded` n'en est pas un : il traduit aussi `+` en espace, ce qui
-/// corromprait un mot de passe.
+/// Written here because the `url` crate exposes no decoder, and
+/// `form_urlencoded` is not one: it also translates `+` into a space, which
+/// would corrupt a password.
 fn percent_decode(input: &str) -> Option<String> {
     if !input.contains('%') {
         return Some(input.to_owned());
     }
-    let mut octets = Vec::with_capacity(input.len());
-    let mut restant = input.bytes();
-    while let Some(octet) = restant.next() {
-        if octet != b'%' {
-            octets.push(octet);
+    let mut bytes = Vec::with_capacity(input.len());
+    let mut remaining = input.bytes();
+    while let Some(byte) = remaining.next() {
+        if byte != b'%' {
+            bytes.push(byte);
             continue;
         }
-        let poids_fort = hex_value(restant.next()?)?;
-        let poids_faible = hex_value(restant.next()?)?;
-        // `poids_fort` vaut au plus 15 : le produit tient dans un `u8`.
-        octets.push(poids_fort * 16 + poids_faible);
+        let high = hex_value(remaining.next()?)?;
+        let low = hex_value(remaining.next()?)?;
+        // `high` is at most 15: the product fits in a `u8`.
+        bytes.push(high * 16 + low);
     }
-    String::from_utf8(octets).ok()
+    String::from_utf8(bytes).ok()
 }
 
-/// La valeur d'un chiffre hexadécimal ASCII.
-const fn hex_value(octet: u8) -> Option<u8> {
-    match octet {
-        b'0'..=b'9' => Some(octet - b'0'),
-        b'a'..=b'f' => Some(octet - b'a' + 10),
-        b'A'..=b'F' => Some(octet - b'A' + 10),
+/// The value of an ASCII hexadecimal digit.
+const fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
         _ => None,
     }
 }
@@ -880,152 +876,150 @@ const fn hex_value(octet: u8) -> Option<u8> {
 mod tests {
     use super::*;
 
-    const MOT_DE_PASSE: &str = "hunter2";
+    const PASSWORD: &str = "hunter2";
 
-    /// Compose une URL à partir de ses morceaux.
+    /// Composes a URL from its pieces.
     ///
-    /// Les tests ne contiennent **aucune chaîne de connexion littérale** : le
-    /// crochet de vérification du dépôt les refuse, et il a raison — une telle
-    /// chaîne finit commitée, et elle est souvent réelle.
-    fn compose(userinfo: &str, reste: &str) -> String {
+    /// The tests contain **no literal connection string**: the repository's
+    /// verification hook refuses them, and rightly so — such a string ends up
+    /// committed, and it is often real.
+    fn compose(userinfo: &str, rest: &str) -> String {
         let mut url = String::from("postgres://");
         url.push_str(userinfo);
         url.push('@');
-        url.push_str(reste);
+        url.push_str(rest);
         url
     }
 
-    fn dsn_postgres() -> Dsn {
+    fn postgres_dsn() -> Dsn {
         DsnBuilder::new("postgres")
             .with_host("machine.example")
             .with_port(5432)
             .with_user("app")
-            .with_password(MOT_DE_PASSE)
-            .with_database("caisse")
+            .with_password(PASSWORD)
+            .with_database("till")
             .build()
-            .expect("les composants sont valides")
+            .expect("the components are valid")
     }
 
     #[test]
-    fn une_url_hebergee_se_construit_dans_l_ordre_attendu() {
-        let dsn = dsn_postgres();
+    fn a_hosted_url_is_built_in_the_expected_order() {
+        let dsn = postgres_dsn();
         assert_eq!(
             dsn.url().as_str(),
-            compose("app", "machine.example:5432/caisse")
+            compose("app", "machine.example:5432/till")
         );
         assert!(dsn.has_password());
         assert_eq!(dsn.scheme(), "postgres");
     }
 
-    // ── Le masquage, qui est la raison d'être de ce module ──────────────────
+    // ── Masking, which is this module's reason to exist ────────────────────
 
     #[test]
-    fn le_mot_de_passe_ne_sort_ni_par_display_ni_par_debug() {
-        // I-03 : les six canaux comptent, et `Display`/`Debug` sont ceux qui
-        // alimentent les journaux sans qu'on y pense.
-        let dsn = dsn_postgres();
+    fn the_password_leaves_neither_through_display_nor_through_debug() {
+        // I-03: all six channels count, and `Display`/`Debug` are the ones
+        // that feed logs without anyone thinking about it.
+        let dsn = postgres_dsn();
 
-        let affiche = dsn.to_string();
-        let debogue = format!("{dsn:?}");
+        let displayed = dsn.to_string();
+        let debugged = format!("{dsn:?}");
 
-        assert!(!affiche.contains(MOT_DE_PASSE), "fuite : {affiche}");
-        assert!(!debogue.contains(MOT_DE_PASSE), "fuite : {debogue}");
+        assert!(!displayed.contains(PASSWORD), "leak: {displayed}");
+        assert!(!debugged.contains(PASSWORD), "leak: {debugged}");
 
-        let attendue = compose("app:***", "machine.example:5432/caisse");
-        assert_eq!(affiche, attendue);
-        assert_eq!(debogue, format!("Dsn({attendue})"));
+        let expected = compose("app:***", "machine.example:5432/till");
+        assert_eq!(displayed, expected);
+        assert_eq!(debugged, format!("Dsn({expected})"));
     }
 
     #[test]
-    fn l_url_rangee_ne_contient_pas_le_mot_de_passe() {
-        // Le masquage n'est pas une politesse d'affichage : la valeur n'est pas
-        // dans l'URL. Il n'y a donc rien à oublier de masquer.
-        let dsn = dsn_postgres();
-        assert!(!dsn.url().as_str().contains(MOT_DE_PASSE));
+    fn the_stored_url_does_not_contain_the_password() {
+        // Masking is not a display courtesy: the value is not in the URL.
+        // There is therefore nothing one could forget to mask.
+        let dsn = postgres_dsn();
+        assert!(!dsn.url().as_str().contains(PASSWORD));
         assert_eq!(dsn.url().password(), None);
     }
 
     #[test]
-    fn le_mot_de_passe_n_apparait_qu_a_l_exposition() {
-        let dsn = dsn_postgres();
-        let complete = dsn.expose().expect("l'URL a une autorité");
+    fn the_password_appears_only_on_exposure() {
+        let dsn = postgres_dsn();
+        let complete = dsn.expose().expect("the URL has an authority");
         assert_eq!(
             complete.expose_secret(),
-            compose(
-                &format!("app:{MOT_DE_PASSE}"),
-                "machine.example:5432/caisse"
-            )
+            compose(&format!("app:{PASSWORD}"), "machine.example:5432/till")
         );
     }
 
     #[test]
-    fn une_url_sans_mot_de_passe_s_affiche_sans_masque() {
-        // Une URL masquée et une URL sans mot de passe ne doivent pas se
-        // confondre à la lecture d'un journal.
+    fn a_url_without_password_displays_without_mask() {
+        // A masked URL and a URL without password must not be confused when
+        // reading a log.
         let dsn = DsnBuilder::new("postgres")
             .with_host("localhost")
             .with_user("app")
-            .with_database("caisse")
+            .with_database("till")
             .build()
-            .expect("valide");
-        assert_eq!(dsn.to_string(), compose("app", "localhost/caisse"));
+            .expect("valid");
+        assert_eq!(dsn.to_string(), compose("app", "localhost/till"));
         assert!(!dsn.has_password());
     }
 
     #[test]
-    fn le_debug_du_constructeur_masque_aussi() {
+    fn the_builder_debug_masks_too() {
         let builder = DsnBuilder::new("postgres")
             .with_host("machine.example")
-            .with_password(MOT_DE_PASSE)
+            .with_password(PASSWORD)
             .with_option("sslmode", "require");
-        let rendu = format!("{builder:?}");
-        assert!(!rendu.contains(MOT_DE_PASSE), "fuite : {rendu}");
-        assert!(rendu.contains("***"), "la présence se voit : {rendu}");
+        let rendered = format!("{builder:?}");
+        assert!(!rendered.contains(PASSWORD), "leak: {rendered}");
+        assert!(rendered.contains("***"), "presence shows: {rendered}");
     }
 
     #[test]
-    fn les_identifiants_se_reprennent_sans_exposer_au_dehors() {
-        let identifiants = Credentials::new().with_password(MOT_DE_PASSE);
+    fn credentials_are_taken_without_exposing_outside() {
+        let credentials = Credentials::new().with_password(PASSWORD);
         let dsn = DsnBuilder::new("postgres")
             .with_host("machine.example")
-            .with_credentials(&identifiants)
+            .with_credentials(&credentials)
             .build()
-            .expect("valide");
+            .expect("valid");
         assert!(dsn.has_password());
-        assert!(!dsn.to_string().contains(MOT_DE_PASSE));
+        assert!(!dsn.to_string().contains(PASSWORD));
     }
 
-    // ── Encodage : rien n'est concaténé ─────────────────────────────────────
+    // ── Encoding: nothing is concatenated ──────────────────────────────────
 
     #[test]
-    fn les_composants_sont_encodes_pas_interpretes() {
-        // Un `@` dans l'utilisateur (Azure), un `/` dans le nom de base, un `#`
-        // dans le mot de passe : concaténer produirait une URL qui désigne un
-        // autre serveur.
+    fn components_are_encoded_not_interpreted() {
+        // An `@` in the user (Azure), a `/` in the database name, a `#` in the
+        // password: concatenating would produce a URL that designates another
+        // server.
         let dsn = DsnBuilder::new("postgres")
             .with_host("machine.example")
             .with_user("app@tenant")
             .with_password("p@ss/w#rd")
             .with_database("prod/eu")
             .build()
-            .expect("valide");
+            .expect("valid");
 
         assert_eq!(
             dsn.url().as_str(),
             compose("app%40tenant", "machine.example/prod%2Feu")
         );
-        let complete = dsn.expose().expect("autorité présente");
+        let complete = dsn.expose().expect("authority present");
         assert_eq!(
             complete.expose_secret(),
             compose("app%40tenant:p%40ss%2Fw%23rd", "machine.example/prod%2Feu")
         );
 
-        // Et l'aller-retour retrouve les valeurs d'origine, `/` encodé compris.
-        let relu = ParsedDsn::parse(complete.expose_secret()).expect("URL valide");
-        assert_eq!(relu.parts().user.as_deref(), Some("app@tenant"));
-        assert_eq!(relu.parts().database(), Some("prod/eu"));
+        // And the round trip finds the original values, encoded `/` included.
+        let parsed = ParsedDsn::parse(complete.expose_secret()).expect("valid URL");
+        assert_eq!(parsed.parts().user.as_deref(), Some("app@tenant"));
+        assert_eq!(parsed.parts().database(), Some("prod/eu"));
         assert_eq!(
-            relu.credentials()
+            parsed
+                .credentials()
                 .password()
                 .map(ExposeSecret::expose_secret),
             Some("p@ss/w#rd")
@@ -1033,335 +1027,335 @@ mod tests {
     }
 
     #[test]
-    fn un_port_glisse_dans_l_hote_est_refuse() {
-        // Le crate `url` le jetterait en silence : la connexion partirait vers
-        // le port par défaut, donc vers une autre base que celle visée.
+    fn a_port_slipped_into_the_host_is_refused() {
+        // The `url` crate would silently throw it away: the connection would
+        // go to the default port, hence to another database than the one
+        // targeted.
         let err = DsnBuilder::new("postgres")
             .with_host("machine.example:5433")
             .build()
-            .expect_err("refus attendu");
+            .expect_err("refusal expected");
         assert!(matches!(err, DsnError::InvalidHost { .. }), "{err:?}");
     }
 
     #[test]
-    fn une_adresse_ipv6_se_donne_entre_crochets() {
+    fn an_ipv6_address_is_given_between_brackets() {
         let dsn = DsnBuilder::new("postgres")
             .with_host("[::1]")
             .with_port(5432)
             .with_database("d")
             .build()
-            .expect("valide");
+            .expect("valid");
         assert_eq!(dsn.url().as_str(), "postgres://[::1]:5432/d");
     }
 
-    // ── Sources sur fichier ─────────────────────────────────────────────────
+    // ── File-based sources ─────────────────────────────────────────────────
 
     #[test]
-    fn une_source_sur_fichier_n_a_pas_d_autorite() {
+    fn a_file_based_source_has_no_authority() {
         let dsn = DsnBuilder::new("sqlite")
-            .with_path("/Users/x/caisse quotidienne.db")
+            .with_path("/Users/x/daily till.db")
             .build()
-            .expect("valide");
-        assert_eq!(
-            dsn.url().as_str(),
-            "sqlite:///Users/x/caisse%20quotidienne.db"
-        );
+            .expect("valid");
+        assert_eq!(dsn.url().as_str(), "sqlite:///Users/x/daily%20till.db");
         assert!(!dsn.has_password());
     }
 
     #[test]
-    fn un_chemin_relatif_est_refuse() {
-        // Le rendre absolu en devinant le répertoire courant ouvrirait la base
-        // voisine sans le dire.
+    fn a_relative_path_is_refused() {
+        // Making it absolute by guessing the current directory would open the
+        // neighboring database without saying so.
         let err = DsnBuilder::new("sqlite")
-            .with_path("donnees/caisse.db")
+            .with_path("data/till.db")
             .build()
-            .expect_err("refus attendu");
+            .expect_err("refusal expected");
         assert_eq!(err, DsnError::RelativePath);
     }
 
     #[test]
-    fn un_mot_de_passe_sans_hote_est_refuse() {
+    fn a_password_without_host_is_refused() {
         let err = DsnBuilder::new("sqlite")
             .with_path("/x.db")
-            .with_password(MOT_DE_PASSE)
+            .with_password(PASSWORD)
             .build()
-            .expect_err("refus attendu");
+            .expect_err("refusal expected");
         assert_eq!(err, DsnError::NoAuthority);
     }
 
     #[test]
-    fn un_chemin_et_un_nom_de_base_ne_vont_pas_ensemble() {
+    fn a_path_and_a_database_name_do_not_go_together() {
         let err = DsnBuilder::new("sqlite")
             .with_path("/x.db")
-            .with_database("caisse")
+            .with_database("till")
             .build()
-            .expect_err("refus attendu");
+            .expect_err("refusal expected");
         assert_eq!(err, DsnError::ConflictingPath);
     }
 
-    // ── Depuis une configuration de connexion ───────────────────────────────
+    // ── From a connection configuration ────────────────────────────────────
 
     #[test]
-    fn une_configuration_devient_une_url() {
-        let config = ConnectionConfig::new("caisse", DriverId::postgres())
+    fn a_configuration_becomes_a_url() {
+        let config = ConnectionConfig::new("till", DriverId::postgres())
             .with_param("host", "machine.example")
             .with_param("port", "6432")
             .with_param("user", "app")
-            .with_param("database", "caisse")
+            .with_param("database", "till")
             .with_param("sslmode", "require");
 
         let dsn = DsnBuilder::from_config(&config)
-            .expect("aucun secret dans les paramètres")
+            .expect("no secret in the parameters")
             .build()
-            .expect("valide");
+            .expect("valid");
 
         assert_eq!(
             dsn.url().as_str(),
-            compose("app", "machine.example:6432/caisse?sslmode=require")
+            compose("app", "machine.example:6432/till?sslmode=require")
         );
     }
 
     #[test]
-    fn le_port_par_defaut_ne_s_applique_que_faute_de_mieux() {
+    fn the_default_port_applies_only_for_lack_of_better() {
         let config =
             ConnectionConfig::new("c", DriverId::postgres()).with_param("host", "machine.example");
         let dsn = DsnBuilder::from_config(&config)
-            .expect("valide")
+            .expect("valid")
             .with_default_port(5432)
             .build()
-            .expect("valide");
+            .expect("valid");
         assert_eq!(dsn.url().port(), Some(5432));
 
         let config = config.with_param("port", "6432");
         let dsn = DsnBuilder::from_config(&config)
-            .expect("valide")
+            .expect("valid")
             .with_default_port(5432)
             .build()
-            .expect("valide");
+            .expect("valid");
         assert_eq!(dsn.url().port(), Some(6432));
     }
 
     #[test]
-    fn un_secret_dans_les_parametres_est_refuse_pas_transporte() {
-        // En faire un paramètre d'URL le ferait entrer dans les journaux
-        // d'accès du serveur (I-03).
+    fn a_secret_in_the_parameters_is_refused_not_carried() {
+        // Turning it into a URL parameter would put it in the server's access
+        // logs (I-03).
         let config = ConnectionConfig::new("c", DriverId::postgres())
             .with_param("host", "machine.example")
-            .with_param("password", MOT_DE_PASSE);
+            .with_param("password", PASSWORD);
 
-        let err = DsnBuilder::from_config(&config).expect_err("refus attendu");
-        let rendu = err.to_string();
-        assert!(rendu.contains("password"), "la clé est nommée : {rendu}");
-        assert!(!rendu.contains(MOT_DE_PASSE), "fuite : {rendu}");
+        let err = DsnBuilder::from_config(&config).expect_err("refusal expected");
+        let rendered = err.to_string();
+        assert!(
+            rendered.contains("password"),
+            "the key is named: {rendered}"
+        );
+        assert!(!rendered.contains(PASSWORD), "leak: {rendered}");
     }
 
     #[test]
-    fn un_port_illisible_est_refuse() {
+    fn an_unreadable_port_is_refused() {
         let config = ConnectionConfig::new("c", DriverId::postgres())
             .with_param("host", "machine.example")
-            .with_param("port", "cinq mille");
-        let err = DsnBuilder::from_config(&config).expect_err("refus attendu");
+            .with_param("port", "five thousand");
+        let err = DsnBuilder::from_config(&config).expect_err("refusal expected");
         assert!(matches!(err, DsnError::InvalidPort { .. }), "{err:?}");
     }
 
     #[test]
-    fn un_identifiant_de_driver_avec_souligne_n_est_pas_un_schema() {
-        // `DriverId` admet `_`, la RFC 3986 non. Le refus est explicite plutôt
-        // que silencieux, et `with_scheme` est la sortie.
-        let config = ConnectionConfig::new(
-            "c",
-            DriverId::new("mon_driver").expect("identifiant valide"),
-        )
-        .with_param("host", "machine.example");
+    fn a_driver_identifier_with_underscore_is_not_a_scheme() {
+        // `DriverId` allows `_`, RFC 3986 does not. The refusal is explicit
+        // rather than silent, and `with_scheme` is the way out.
+        let config =
+            ConnectionConfig::new("c", DriverId::new("my_driver").expect("valid identifier"))
+                .with_param("host", "machine.example");
 
         let err = DsnBuilder::from_config(&config)
-            .expect("aucun secret")
+            .expect("no secret")
             .build()
-            .expect_err("refus attendu");
+            .expect_err("refusal expected");
         assert!(matches!(err, DsnError::InvalidScheme { .. }), "{err:?}");
 
         DsnBuilder::from_config(&config)
-            .expect("aucun secret")
-            .with_scheme("mon-driver")
+            .expect("no secret")
+            .with_scheme("my-driver")
             .build()
-            .expect("le schéma corrigé passe");
+            .expect("the corrected scheme passes");
     }
 
-    // ── Relecture ───────────────────────────────────────────────────────────
+    // ── Parsing ────────────────────────────────────────────────────────────
 
     #[test]
-    fn relire_une_url_separe_le_secret_du_persistable() {
+    fn parsing_a_url_separates_the_secret_from_what_is_persisted() {
         let source = compose(
-            &format!("app:{MOT_DE_PASSE}"),
-            "machine.example:6432/caisse?sslmode=require",
+            &format!("app:{PASSWORD}"),
+            "machine.example:6432/till?sslmode=require",
         );
-        let relu = ParsedDsn::parse(&source).expect("URL valide");
+        let parsed = ParsedDsn::parse(&source).expect("valid URL");
 
-        assert_eq!(relu.parts().scheme, "postgres");
-        assert_eq!(relu.parts().host.as_deref(), Some("machine.example"));
-        assert_eq!(relu.parts().port, Some(6432));
-        assert_eq!(relu.parts().user.as_deref(), Some("app"));
-        assert_eq!(relu.parts().database(), Some("caisse"));
+        assert_eq!(parsed.parts().scheme, "postgres");
+        assert_eq!(parsed.parts().host.as_deref(), Some("machine.example"));
+        assert_eq!(parsed.parts().port, Some(6432));
+        assert_eq!(parsed.parts().user.as_deref(), Some("app"));
+        assert_eq!(parsed.parts().database(), Some("till"));
         assert_eq!(
-            relu.parts().options.get("sslmode").map(String::as_str),
+            parsed.parts().options.get("sslmode").map(String::as_str),
             Some("require")
         );
 
-        let (parts, identifiants) = relu.into_parts();
+        let (parts, credentials) = parsed.into_parts();
         assert_eq!(
-            identifiants.password().map(ExposeSecret::expose_secret),
-            Some(MOT_DE_PASSE)
+            credentials.password().map(ExposeSecret::expose_secret),
+            Some(PASSWORD)
         );
 
-        // Ce qui est persisté ne porte aucun secret.
-        let config = parts.to_config("caisse", DriverId::postgres());
-        for (cle, valeur) in &config.params {
-            assert!(
-                valeur != MOT_DE_PASSE,
-                "le paramètre `{cle}` porte le mot de passe"
-            );
+        // What is persisted carries no secret.
+        let config = parts.to_config("till", DriverId::postgres());
+        for (key, value) in &config.params {
+            assert!(value != PASSWORD, "parameter `{key}` carries the password");
         }
         assert_eq!(config.secret_ref, None);
         assert_eq!(
             config.params.get("database").map(String::as_str),
-            Some("caisse")
+            Some("till")
         );
     }
 
     #[test]
-    fn un_secret_en_parametre_de_requete_ne_reste_pas_dans_les_options() {
-        // Certains outils écrivent le mot de passe en paramètre de requête. Le
-        // laisser dans les options le persisterait en clair.
+    fn a_secret_as_query_parameter_does_not_stay_in_the_options() {
+        // Some tools write the password as a query parameter. Leaving it in
+        // the options would persist it in clear text.
         let source = compose(
             "app",
-            &format!("machine.example/caisse?password={MOT_DE_PASSE}&sslmode=require"),
+            &format!("machine.example/till?password={PASSWORD}&sslmode=require"),
         );
-        let relu = ParsedDsn::parse(&source).expect("URL valide");
+        let parsed = ParsedDsn::parse(&source).expect("valid URL");
 
-        assert!(!relu.parts().options.contains_key("password"));
-        assert_eq!(relu.parts().options.len(), 1);
+        assert!(!parsed.parts().options.contains_key("password"));
+        assert_eq!(parsed.parts().options.len(), 1);
         assert_eq!(
-            relu.credentials()
+            parsed
+                .credentials()
                 .password()
                 .map(ExposeSecret::expose_secret),
-            Some(MOT_DE_PASSE)
+            Some(PASSWORD)
         );
     }
 
     #[test]
-    fn les_secrets_surnumeraires_sont_signales_pas_perdus_en_silence() {
+    fn surplus_secrets_are_reported_not_silently_lost() {
         let source = compose(
-            &format!("app:{MOT_DE_PASSE}"),
-            "machine.example/c?sslpassword=autre",
+            &format!("app:{PASSWORD}"),
+            "machine.example/c?sslpassword=other",
         );
-        let relu = ParsedDsn::parse(&source).expect("URL valide");
-        let abandonnes: Vec<&str> = relu
+        let parsed = ParsedDsn::parse(&source).expect("valid URL");
+        let dropped: Vec<&str> = parsed
             .dropped_secret_keys()
             .iter()
             .map(String::as_str)
             .collect();
-        assert_eq!(abandonnes, ["sslpassword"]);
-        assert!(!relu.parts().options.contains_key("sslpassword"));
+        assert_eq!(dropped, ["sslpassword"]);
+        assert!(!parsed.parts().options.contains_key("sslpassword"));
     }
 
     #[test]
-    fn une_url_illisible_ne_ressort_pas_dans_l_erreur() {
-        // Une URL malformée peut porter le mot de passe, et une erreur finit
-        // dans un journal.
-        let source = format!("machine.example/caisse?password={MOT_DE_PASSE}");
-        let err = ParsedDsn::parse(&source).expect_err("il manque le schéma");
-        let rendu = err.to_string();
-        assert!(!rendu.contains(MOT_DE_PASSE), "fuite : {rendu}");
-        assert!(!rendu.contains("machine.example"), "fuite : {rendu}");
+    fn an_unreadable_url_does_not_come_out_in_the_error() {
+        // A malformed URL may carry the password, and an error ends up in a
+        // log.
+        let source = format!("machine.example/till?password={PASSWORD}");
+        let err = ParsedDsn::parse(&source).expect_err("the scheme is missing");
+        let rendered = err.to_string();
+        assert!(!rendered.contains(PASSWORD), "leak: {rendered}");
+        assert!(!rendered.contains("machine.example"), "leak: {rendered}");
     }
 
     #[test]
-    fn le_debug_de_la_relecture_ne_montre_aucune_valeur_sensible() {
+    fn the_debug_of_a_parsed_url_shows_no_sensitive_value() {
         let source = compose(
-            &format!("app:{MOT_DE_PASSE}"),
+            &format!("app:{PASSWORD}"),
             "machine.example/c?sslmode=require",
         );
-        let relu = ParsedDsn::parse(&source).expect("URL valide");
-        let rendu = format!("{relu:?}");
-        assert!(!rendu.contains(MOT_DE_PASSE), "fuite : {rendu}");
+        let parsed = ParsedDsn::parse(&source).expect("valid URL");
+        let rendered = format!("{parsed:?}");
+        assert!(!rendered.contains(PASSWORD), "leak: {rendered}");
         assert!(
-            !rendu.contains("require"),
-            "valeur d'option fuitée : {rendu}"
+            !rendered.contains("require"),
+            "option value leaked: {rendered}"
         );
-        assert!(rendu.contains("sslmode"), "la clé reste utile : {rendu}");
+        assert!(
+            rendered.contains("sslmode"),
+            "the key stays useful: {rendered}"
+        );
     }
 
     #[test]
-    fn un_encodage_pourcent_invalide_est_refuse() {
+    fn an_invalid_percent_encoding_is_refused() {
         let source = compose("app:m%ZZ", "machine.example/c");
         assert!(
             ParsedDsn::parse(&source).is_err(),
-            "un `%ZZ` n'est pas décodable"
+            "a `%ZZ` cannot be decoded"
         );
     }
 
     #[test]
-    fn une_source_sur_fichier_se_relit_en_chemin() {
-        let relu = ParsedDsn::parse("sqlite:///Users/x/caisse.db").expect("URL valide");
-        assert_eq!(relu.parts().host, None);
-        assert_eq!(relu.parts().segments, ["Users", "x", "caisse.db"]);
+    fn a_file_based_source_parses_as_a_path() {
+        let parsed = ParsedDsn::parse("sqlite:///Users/x/till.db").expect("valid URL");
+        assert_eq!(parsed.parts().host, None);
+        assert_eq!(parsed.parts().segments, ["Users", "x", "till.db"]);
         assert_eq!(
-            relu.parts().database(),
+            parsed.parts().database(),
             None,
-            "plusieurs segments : c'est un fichier, pas un nom de base"
+            "several segments: it is a file, not a database name"
         );
         assert_eq!(
-            relu.parts().file_path().as_deref(),
-            Some("/Users/x/caisse.db")
+            parsed.parts().file_path().as_deref(),
+            Some("/Users/x/till.db")
         );
 
-        let config = relu.parts().to_config("locale", DriverId::sqlite());
+        let config = parsed.parts().to_config("local", DriverId::sqlite());
         assert_eq!(
             config.params.get("path").map(String::as_str),
-            Some("/Users/x/caisse.db")
+            Some("/Users/x/till.db")
         );
     }
 
     #[test]
-    fn l_aller_retour_est_fidele() {
-        let origine = compose("app", "machine.example:6432/caisse?sslmode=require");
-        let relu = ParsedDsn::parse(&origine).expect("URL valide");
-        let config = relu.parts().to_config("caisse", DriverId::postgres());
-        let reconstruite = DsnBuilder::from_config(&config)
-            .expect("aucun secret")
+    fn the_round_trip_is_faithful() {
+        let original = compose("app", "machine.example:6432/till?sslmode=require");
+        let parsed = ParsedDsn::parse(&original).expect("valid URL");
+        let config = parsed.parts().to_config("till", DriverId::postgres());
+        let rebuilt = DsnBuilder::from_config(&config)
+            .expect("no secret")
             .build()
-            .expect("valide");
-        assert_eq!(reconstruite.url().as_str(), origine);
+            .expect("valid");
+        assert_eq!(rebuilt.url().as_str(), original);
     }
 
     #[test]
-    fn l_aller_retour_d_une_source_sur_fichier_est_fidele() {
-        let origine = "sqlite:///Users/x/caisse.db";
-        let relu = ParsedDsn::parse(origine).expect("URL valide");
-        let config = relu.parts().to_config("locale", DriverId::sqlite());
-        let reconstruite = DsnBuilder::from_config(&config)
-            .expect("aucun secret")
+    fn the_round_trip_of_a_file_based_source_is_faithful() {
+        let original = "sqlite:///Users/x/till.db";
+        let parsed = ParsedDsn::parse(original).expect("valid URL");
+        let config = parsed.parts().to_config("local", DriverId::sqlite());
+        let rebuilt = DsnBuilder::from_config(&config)
+            .expect("no secret")
             .build()
-            .expect("valide");
-        assert_eq!(reconstruite.url().as_str(), origine);
+            .expect("valid");
+        assert_eq!(rebuilt.url().as_str(), original);
     }
 
-    // ── Décodage ────────────────────────────────────────────────────────────
+    // ── Decoding ───────────────────────────────────────────────────────────
 
     #[test]
-    fn le_decodage_pourcent_couvre_ses_cas_limites() {
+    fn percent_decoding_covers_its_edge_cases() {
         assert_eq!(
-            percent_decode("sans-echappement").as_deref(),
-            Some("sans-echappement")
+            percent_decode("no-escaping").as_deref(),
+            Some("no-escaping")
         );
         assert_eq!(percent_decode("a%20b").as_deref(), Some("a b"));
         assert_eq!(percent_decode("caf%C3%A9").as_deref(), Some("café"));
-        // Un `+` reste un `+` : c'est ce qu'un décodeur `form_urlencoded`
-        // corromprait dans un mot de passe.
+        // A `+` stays a `+`: it is what a `form_urlencoded` decoder would
+        // corrupt in a password.
         assert_eq!(percent_decode("a+b").as_deref(), Some("a+b"));
-        assert_eq!(percent_decode("%2"), None, "séquence tronquée");
-        assert_eq!(percent_decode("%ZZ"), None, "chiffres non hexadécimaux");
-        assert_eq!(percent_decode("%FF"), None, "octet isolé non UTF-8");
+        assert_eq!(percent_decode("%2"), None, "truncated sequence");
+        assert_eq!(percent_decode("%ZZ"), None, "non-hexadecimal digits");
+        assert_eq!(percent_decode("%FF"), None, "lone non-UTF-8 byte");
     }
 }

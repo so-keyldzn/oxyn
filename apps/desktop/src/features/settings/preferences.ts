@@ -139,8 +139,8 @@ export type SaveOutcome =
 /**
  * Applies a change now, then saves it.
  *
- * Local first — a display setting is local (UX-SPEC « Ce qui n'est jamais
- * optimiste ») — and the save state says whether it reached the workspace.
+ * Local first — a display setting is local (UX-SPEC « What is never optimistic
+ * ») — and the save state says whether it reached the workspace.
  */
 export async function changePreferences(
   change: PreferencesChange

@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="531f38033f8d" -->
+<!-- oxyn-translation source="docs/IMPLEMENTATION-PLAN.md" sha256="9368822d2302" -->
 
 > Traduction française de [docs/IMPLEMENTATION-PLAN.md](../../../docs/IMPLEMENTATION-PLAN.md). **La version anglaise fait foi.**
 
@@ -1521,7 +1521,7 @@ cas, et le troisième est celui qui compte :
 * aucune colonne datée → **rien**. Écrire « UTC » par défaut affirmerait quelque
   chose du contenu, et un `timestamp without time zone` ne porte aucun fuseau :
   annoncer le sien inventerait une information que le serveur n'a pas envoyée.
-  C'est ce que tient `un_horodatage_sans_fuseau_nen_fait_pas_annoncer_un`.
+  C'est ce que tient `a_timestamp_without_time_zone_does_not_announce_one`.
 
 Le fuseau voyage dans la variante `ExecutionStatus::Completed`, pas à côté d'elle :
 rangé dans la barre, il survivrait au résultat suivant et décrirait des lignes
@@ -1712,7 +1712,7 @@ Ce que le code garantit, chaque point tenu par un test :
 
 * **les lots débordés ne sont jamais lus.** `find_rows` ne regarde que le
   résident ([I-05](../CLAUDE.md#i-05)), et
-  `un_lot_deborde_est_compte_et_jamais_lu_depuis_le_disque` vérifie qu'aucune
+  `a_spilled_batch_is_counted_and_never_read_from_disk` vérifie qu'aucune
   ligne d'un lot débordé n'apparaît dans les correspondances ;
 * **ce qui n'a pas été parcouru est dit.** Le nombre de lots sautés s'affiche en
   couleur d'avertissement. Sans lui, « No match » voudrait dire « aucune
@@ -1854,11 +1854,11 @@ l'interface.**
 | Couche | État | Ce qui la tient |
 |---|---|---|
 | Déclaration | fait | `oxyn_core::ExternalAgentConfig` — **aucun champ de secret**, `Debug` manuel qui ne rend que le nombre de variables d'environnement |
-| Persistance | fait | migration 9, table `external_agents`. `la_table_na_aucune_colonne_de_secret` lit le **schéma**, pas la documentation |
-| Bus | fait | trois commandes, **refusées à un `Actor::Agent`** — `un_agent_ne_declare_pas_dagent_externe` |
-| Confidentialité | fait | `Local` fermé, et refusé **avant le lancement** — `le_niveau_local_refuse_avant_meme_de_lancer_le_processus` |
+| Persistance | fait | migration 9, table `external_agents`. `the_table_has_no_secret_column` lit le **schéma**, pas la documentation |
+| Bus | fait | trois commandes, **refusées à un `Actor::Agent`** — `an_agent_does_not_declare_an_external_agent` |
+| Confidentialité | fait | `Local` fermé, et refusé **avant le lancement** — `the_local_tier_refuses_before_even_launching_the_process` |
 | Autorisations | fait | refus par défaut de tout ce qui touche la machine ; `option_for` n'autorise jamais « toujours » |
-| Lancement | fait | commande et arguments **jamais recollés** en chaîne — `la_commande_et_ses_arguments_ne_sont_jamais_recolles` |
+| Lancement | fait | commande et arguments **jamais recollés** en chaîne — `the_command_and_its_arguments_are_never_glued_back` |
 | Tour de conversation | fait | `run_turn`, fragments remontés par l'`AgentObserver` existant |
 | Ligne d'écran | fait | `provider_settings::row::row_display` — le calcul sort, la vue dessine ; 5 tests **sans fenêtre** |
 | Liste et retrait | fait | les deux sortes dans **une** liste, un curseur, une confirmation ; `le_rang_dun_retrait_designe_la_bonne_liste` |
@@ -1937,8 +1937,8 @@ droite se rejoue avec `cargo test -p <crate> <motif>`.
 | Phase | État | Ce qui l'établit, nominativement |
 |---|---|---|
 | **0 — état et découpage** | tenu | Documents d'autorité relus, planches Figma confrontées par le serveur MCP, propriété des fichiers répartie sans chevauchement entre sous-agents |
-| **1 — aperçu trié, filtré, paginé** | tenu | `PreviewShape { sort, predicate, offset }` dans `oxyn-core/src/preview.rs`, porté par le bus et implémenté dans les **deux** drivers. 16 tests, dont `un_ordre_total_est_exige_par_le_tri_autant_que_par_la_page`, `le_texte_de_l_utilisateur_n_est_pas_reecrit`, `preview_reclassifies_driver_sql_and_refuses_writes_for_both_actors`, `preview_sqlite_is_bounded_preserves_hostile_table_and_correlates_events_and_audit`, `preview_enforces_read_only_and_row_limit_even_for_an_incorrect_driver`, `two_consecutive_pages_do_not_overlap` |
-| **2 — sécurité et IA** | tenu | `PrivacyTier` gouverne `oxyn-ai/src/context.rs` au titre d'[I-04](../CLAUDE.md#i-04) ; `un_appel_d_outil_devient_une_commande_portant_actor_agent` tient [I-07](../CLAUDE.md#i-07) ; `declarer_un_fournisseur_n_atteint_aucune_base_et_reste_refuse_a_un_agent` et `une_reference_de_secret_vide_est_refusee` tiennent la configuration des fournisseurs ; `un_point_d_acces_non_resolu_est_traite_comme_distant` retient le parti prudent ; `sous_sampled_le_message_du_serveur_arrive_entier` couvre la sortie serveur brute |
+| **1 — aperçu trié, filtré, paginé** | tenu | `PreviewShape { sort, predicate, offset }` dans `oxyn-core/src/preview.rs`, porté par le bus et implémenté dans les **deux** drivers. 16 tests, dont `a_total_order_is_required_by_sorting_as_much_as_by_paging`, `the_user_text_is_not_rewritten`, `preview_reclassifies_driver_sql_and_refuses_writes_for_both_actors`, `preview_sqlite_is_bounded_preserves_hostile_table_and_correlates_events_and_audit`, `preview_enforces_read_only_and_row_limit_even_for_an_incorrect_driver`, `two_consecutive_pages_do_not_overlap` |
+| **2 — sécurité et IA** | tenu | `PrivacyTier` gouverne `oxyn-ai/src/context.rs` au titre d'[I-04](../CLAUDE.md#i-04) ; `a_tool_call_becomes_a_command_carrying_actor_agent` tient [I-07](../CLAUDE.md#i-07) ; `declaring_a_provider_reaches_no_database_and_stays_refused_to_an_agent` et `an_empty_secret_reference_is_refused` tiennent la configuration des fournisseurs ; `an_unresolved_endpoint_is_treated_as_remote` retient le parti prudent ; `under_sampled_the_server_message_arrives_whole` couvre la sortie serveur brute |
 | **3 — reprise et bibliothèque** | tenu le 2026-09-14, **dans l'interface GPUI** : les tests cités ici vivaient dans `oxyn-app` et ont disparu avec `6ecb8ce` ; l'état dans `apps/desktop` est à la [porte de la migration](#migration-vers-linterface-tauri) | `recovery_opens_only_after_an_abnormal_shutdown` et `l_ecran_de_reprise_annonce_l_arret_anormal_et_seulement_alors` tiennent le marqueur d'arrêt ([ADR-0021](adr/0021-marqueur-d-arret.md)) ; `returning_to_a_connection_restores_all_of_its_console_entities` la restauration ; `a_deleted_connection_stays_choosable_in_the_history_filter`, `merging_history_connections_appends_and_marks_without_moving_ranks` et `history_and_recent_results_read_the_same_execution_without_replaying_it` les filtres inter-workspaces |
 | **4 — fidélité Figma et accessibilité** | tenu, **sauf une surface** | `la_marque_et_les_actions_de_l_accueil_ne_se_superposent_pas` éprouve l'accueil **aux quatre largeurs × deux thèmes** ; `chaque_theme_garde_son_texte_lisible` tient le contraste WCAG ; `un_controle_focalise_nest_pas_active_par_le_clavier` et `production_focus_stays_inside_review_and_enter_never_approves` tiennent [I-02](../CLAUDE.md#i-02) au clavier. Reste `Messages` — voir ci-dessous |
 | **5 — validation finale** | tenu | `make qualite` verte à chaque lot, sortie réelle citée ; budgets mesurés et datés dans [PERFORMANCE](PERFORMANCE.md), « non mesuré » assumé là où ils ne le sont pas |
@@ -1972,7 +1972,7 @@ tableau dont toutes les lignes sont vertes n'apprend rien.
 | Exigence | État | Ce qui l'établit |
 |---|---|---|
 | **Code** | tenu | `make qualite` : format, Clippy `-D warnings`, tests, doc, socle, TODO datés |
-| **Bus** | tenu | Aucune seconde API d'exécution. Les déclarations de fournisseur **et d'agent** sont refusées à un `Actor::Agent` — `un_agent_ne_declare_pas_dagent_externe`, dont la déclaration hostile est `/bin/sh -c "curl … \| sh"`. Un test d'`oxyn-ui` interdit à tout composant de construire une `Command`, et un second vérifie que **toutes** les sources sont couvertes par ce garde-fou |
+| **Bus** | tenu | Aucune seconde API d'exécution. Les déclarations de fournisseur **et d'agent** sont refusées à un `Actor::Agent` — `an_agent_does_not_declare_an_external_agent`, dont la déclaration hostile est `/bin/sh -c "curl … \| sh"`. Un test d'`oxyn-ui` interdit à tout composant de construire une `Command`, et un second vérifie que **toutes** les sources sont couvertes par ce garde-fou |
 | **Drivers** | tenu, avec sa réserve | 136 tests passent sans serveur ; **34 restent ignorés** faute de PostgreSQL. Ils passaient deux fois de suite lors de la campagne du 2026-09-11 avec un cluster jetable ; ils ne sont pas rejoués à chaque porte |
 | **UI native** | **non tenu** | La recette native est **interdite** : l'utilisateur a demandé le 2026-09-10 qu'on cesse de manipuler ses fenêtres, et la consigne n'a pas été levée. C'est la seule preuve pixel possible ; tout le reste de l'interface est éprouvé sans écran, ce qui ne la remplace pas |
 | **Figma** | tenu, **sauf `Messages`** | Planches confrontées par le serveur MCP ; `Propose change…`, `Find in loaded results…`, le fuseau d'affichage et la réserve de colonnes masquées implémentés depuis. `Messages` est bloqué **en amont** : `sqlx-postgres 0.9.0` jette les notices dans un événement `tracing` sans identité de connexion, `mod message` étant privé |
@@ -2214,13 +2214,13 @@ couvrir.
 
 | Exigence | Ce qui la tient |
 |---|---|
-| Refus d'écriture production à un agent | `oxyn-core/src/policy.rs` : `actor.is_agent() && mutating && env.is_production()` rend `Decision::deny` — un refus, pas une confirmation ([I-02](../CLAUDE.md#i-02)). Test : `un_agent_n_est_jamais_moins_restreint_qu_un_humain` |
+| Refus d'écriture production à un agent | `oxyn-core/src/policy.rs` : `actor.is_agent() && mutating && env.is_production()` rend `Decision::deny` — un refus, pas une confirmation ([I-02](../CLAUDE.md#i-02)). Test : `an_agent_is_never_less_restricted_than_a_human` |
 | Point de passage unique du contexte | `ContextBuilder::build` (`oxyn-ai/src/context.rs`), seule fabrique d'`AgentContext` |
 | Aucune sortie serveur brute | `FailureReport` filtre **à la construction**, sous le niveau de la connexion |
 | Aucune sortie IA exécutée | `open_proposal` ouvre une console et n'exécute rien ; refuse même d'écrire sans provenance |
 | Provenance persistante | colonne `documents.provenance`, `coalesce` à l'écriture, visible sur l'onglet **et** dans la bibliothèque |
-| Test de sentinelle | `aucune_sentinelle_natteint_le_fichier_de_workspace` — balaie **toutes** les tables et colonnes via `sqlite_master`, sans en nommer aucune |
-| Porte d'I-04 typée pour **les deux** destinations | **tenu depuis le 2026-09-15.** `run_turn` prend un `AgentPrompt`, dont le seul constructeur exige le niveau ([ADR-0027](adr/0027-porte-unique-pour-les-deux-destinations.md), option B). `run_turn` garde sa propre vérification : la porte protège l'assemblage, la vérification protège le lancement. Tests : `sous_local_aucune_invite_ne_se_compose`, plus deux `compile_fail` qui interdisent tout constructeur naïf |
+| Test de sentinelle | `no_sentinel_reaches_the_workspace_file` — balaie **toutes** les tables et colonnes via `sqlite_master`, sans en nommer aucune |
+| Porte d'I-04 typée pour **les deux** destinations | **tenu depuis le 2026-09-15.** `run_turn` prend un `AgentPrompt`, dont le seul constructeur exige le niveau ([ADR-0027](adr/0027-porte-unique-pour-les-deux-destinations.md), option B). `run_turn` garde sa propre vérification : la porte protège l'assemblage, la vérification protège le lancement. Tests : `under_local_no_prompt_is_composed`, plus deux `compile_fail` qui interdisent tout constructeur naïf |
 | I-03 — canal journal | Test **préventif** : rien ne formate un secret sur ce chemin aujourd'hui, donc retirer une garde ailleurs ne le fait pas rougir tout seul ; vérifié à la main en ajoutant un `tracing::debug!` qui formate une clé de fournisseur dans `save_ai_provider`, en confirmant le rouge, puis en revenant en arrière. `no_sentinel_reaches_the_journal` (`crates/oxyn-desktop/src/sentinel_tests.rs`) — toute la sortie tracing du binaire à `OXYN_LOG=trace`, à travers les deux filtres réels de `logging::layer`, pendant une connexion refusée et une édition de fournisseur |
 | I-03 — canal erreur affichée | Éprouve le retrait d'une garde existante — `redact_key` (`oxyn-llm`). `no_sentinel_reaches_an_error_shown_to_the_front` (`crates/oxyn-desktop/src/sentinel_tests.rs`) — `IpcError` sérialisée et tous les messages du `Channel<AiUpdate>`, avec un fournisseur hostile qui recopie la clé reçue et une URL de fournisseur qui porte un secret |
 | I-03 — canal invite IA | Test **préventif** : `ContextBuilder::build` ne prend ni la connexion ni le fournisseur en argument, donc rien n'y formate le secret aujourd'hui ; vérifié à la main en faisant porter la clé du fournisseur dans la question assemblée par `converse` (`backend/ai/conversation.rs`), en confirmant le rouge, puis en revenant en arrière. `no_sentinel_reaches_the_prompt_sent_to_a_provider` (`crates/oxyn-desktop/src/sentinel_tests.rs`) — le corps exact de la requête `chat/completions` envoyée au fournisseur, prompt assemblé par `ContextBuilder` compris |
@@ -2237,7 +2237,7 @@ dit ce qui manque.
 | Exigence | Ce qui la tient |
 |---|---|
 | Marqueur d'arrêt propre/anormal | `PreviousShutdown { Never, Clean, Abnormal }` ([ADR-0021](adr/0021-marqueur-d-arret.md)) |
-| Tests de crash/restart | `une_premiere_ouverture_ne_signale_aucun_arret_anormal`, `une_fermeture_ordinaire_ne_declenche_pas_la_reprise`, `une_session_laissee_ouverte_et_muette_est_un_arret_anormal`, `une_instance_qui_bat_encore_n_est_pas_un_plantage`, `un_battement_ne_ressuscite_pas_une_session_fermee` (`oxyn-store/src/sessions.rs`) |
+| Tests de crash/restart | `a_first_opening_reports_no_abnormal_shutdown`, `an_ordinary_close_does_not_trigger_recovery`, `a_session_left_open_and_silent_is_an_abnormal_shutdown`, `an_instance_still_beating_is_not_a_crash`, `a_heartbeat_does_not_revive_a_closed_session` (`oxyn-store/src/sessions.rs`) |
 | Emplacement d'objet et sous-onglet restaurés sans lecture | **fait le 2026-09-25.** Le champ unique `object_location` d'[ADR-0013](adr/0013-preferences-workspace.md), lu et écrit par `read_object_location` / `write_object_location`. Côté Rust, `a_restored_location_and_its_sub_tab_come_back_without_reading_anything` (`crates/oxyn-desktop/src/backend/settings/location_tests.rs`) prouve que relire l'emplacement n'émet que des commandes de préférences, sans session. Côté front, `a restored object tab` (`apps/desktop/src/features/workspace/object-view.test.tsx`) prouve que l'onglet rouvert ne rend l'aperçu visible ni ne charge de métadonnée avant « Read it now », et ne déplace pas l'emplacement enregistré ; l'écran de reprise le propose (story `Oxyn/RecoveryList`, `WithAnObjectTab`) |
 | Restauration sans écraser les données | **fait le 2026-09-25.** `a_restored_object_that_vanished_is_explained_and_never_erased` (même fichier Rust) prouve que ni une lecture ni une autre écriture ne l'efface, et que seule la fermeture de l'onglet l'oublie. L'explication (story `Oxyn/RestoredObjectNotice`, `Vanished`) paraît quand la relecture des colonnes ne trouve plus la relation — sur Structure, Indexes et Relations sortantes ; ailleurs, c'est l'erreur du serveur qui le dit |
 | Connexions supprimées ou hors workspace dans les filtres | **non tenu côté interface** — `a_deleted_connection_stays_choosable_in_the_history_filter` et `merging_history_connections_appends_and_marks_without_moving_ranks` supprimés |
@@ -2337,7 +2337,7 @@ tri demandé, le driver ordonne par la clé primaire seule, et compte parmi ses
 conséquences « un tri imposé par défaut sur la clé primaire ».
 
 **Le code fait l'inverse.** Les deux drivers ne composent aucun `ORDER BY` en
-l'absence de demande — le test `un_apercu_sans_demande_ne_compose_ni_where_ni_order_by`
+l'absence de demande — le test `a_preview_without_request_composes_neither_where_nor_order_by`
 le tient explicitement dans `oxyn-driver-sqlite` comme dans `oxyn-driver-postgres`.
 [UX-SPEC](UX-SPEC.md) confirme le code : « sans tri demandé, l'ordre des lignes
 n'est pas garanti ».
@@ -2386,11 +2386,11 @@ porte `remplacé` ([ADR-0029](adr/0029-interface-tauri-shadcn.md)).
 
 | ADR | Statut | Test qui la tient, ou raison du maintien |
 |---|---|---|
-| [0021](adr/0021-marqueur-d-arret.md) | accepté | `une_session_laissee_ouverte_et_muette_est_un_arret_anormal` (`oxyn-store/src/sessions.rs`), `an_abandoned_session_is_reported_as_abnormal` (`oxyn-desktop/src/backend/recovery.rs`) |
-| [0023](adr/0023-fournisseurs-declares-et-provenance.md) | accepté | `aucune_url_porteuse_d_identifiants_n_atteint_le_disque` (`oxyn-store/src/providers.rs`), `un_point_d_acces_non_resolu_ne_beneficie_pas_du_doute` (`oxyn-llm/src/reach.rs`) |
-| [0026](adr/0026-agents-externes-acp.md) | accepté | `un_agent_externe_ne_sert_jamais_une_connexion_locale` (`oxyn-ai/src/privacy.rs`), `la_table_na_aucune_colonne_de_secret` (`oxyn-store/src/agents/tests.rs`) |
-| [0027](adr/0027-porte-unique-pour-les-deux-destinations.md) | accepté | `sous_local_aucune_invite_ne_se_compose` (`oxyn-ai/src/external/prompt/tests.rs`), `le_niveau_local_refuse_avant_meme_de_lancer_le_processus` (`oxyn-ai/src/external/tests.rs`) |
-| [0028](adr/0028-pas-dordre-par-defaut-pas-de-page-sans-ordre-total.md) | accepté | `un_apercu_sans_demande_ne_compose_ni_where_ni_order_by` (les deux drivers), `no_page_is_offered_without_a_total_order` (`oxyn-desktop/src/ipc/metadata.rs`) |
+| [0021](adr/0021-marqueur-d-arret.md) | accepté | `a_session_left_open_and_silent_is_an_abnormal_shutdown` (`oxyn-store/src/sessions.rs`), `an_abandoned_session_is_reported_as_abnormal` (`oxyn-desktop/src/backend/recovery.rs`) |
+| [0023](adr/0023-fournisseurs-declares-et-provenance.md) | accepté | `no_url_carrying_credentials_reaches_the_disk` (`oxyn-store/src/providers.rs`), `an_unresolved_endpoint_gets_no_benefit_of_the_doubt` (`oxyn-llm/src/reach.rs`) |
+| [0026](adr/0026-agents-externes-acp.md) | accepté | `an_external_agent_never_serves_a_local_connection` (`oxyn-ai/src/privacy.rs`), `the_table_has_no_secret_column` (`oxyn-store/src/agents/tests.rs`) |
+| [0027](adr/0027-porte-unique-pour-les-deux-destinations.md) | accepté | `under_local_no_prompt_is_composed` (`oxyn-ai/src/external/prompt/tests.rs`), `the_local_tier_refuses_before_even_launching_the_process` (`oxyn-ai/src/external/tests.rs`) |
+| [0028](adr/0028-pas-dordre-par-defaut-pas-de-page-sans-ordre-total.md) | accepté | `a_preview_without_request_composes_neither_where_nor_order_by` (les deux drivers), `no_page_is_offered_without_a_total_order` (`oxyn-desktop/src/ipc/metadata.rs`) |
 | [0029](adr/0029-interface-tauri-shadcn.md) | accepté | `controler_graphe_dependances` de `.claude/verifier_socle.py` (par `make socle`), `a_window_crosses_batches_and_stays_bounded` (`oxyn-desktop/src/backend/results.rs`). La campagne de mesure est sa condition de **reconsidération**, pas un préalable |
 | [0031](adr/0031-validation-des-reponses-ipc.md) | accepté | « rejects what the grid could not draw, rather than letting it through » (`apps/desktop/src/lib/ipc/types.test.ts`), « degrades an unknown ending instead of refusing the event » (`ai.test.ts`) |
 | [0032](adr/0032-agent-externe-confine-au-lancement.md) | accepté | `claude_agent_keeps_no_tool_of_its_own` (`oxyn-ai/src/external/confine.rs`), `a_confined_agent_is_put_in_its_mode_first_and_cut_off_as_soon_as_it_leaves` (`external/session/tests.rs`) |

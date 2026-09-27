@@ -1,48 +1,47 @@
-//! Le driver SQLite d'Oxyn : embarqué, synchrone, sans réseau.
+//! Oxyn's SQLite driver: embedded, synchronous, without network.
 //!
-//! C'est le cas simple de la couche driver, et c'est pourquoi il doit être
-//! irréprochable : le driver PostgreSQL sera relu à son aune. Le contrat de fond
-//! fait autorité dans [DRIVER-CONTRACT](../../../docs/DRIVER-CONTRACT.md) ; il
-//! n'est pas recopié ici.
+//! It is the simple case of the driver layer, and that is why it must be
+//! beyond reproach: the PostgreSQL driver will be reviewed against it. The
+//! underlying contract is authoritative in
+//! [DRIVER-CONTRACT](../../../docs/DRIVER-CONTRACT.md); it is not copied here.
 //!
-//! | Module | Sujet |
+//! | Module | Subject |
 //! |---|---|
-//! | [`driver`] | [`SqliteDriver`] : identité, formulaire de connexion, capacités |
-//! | [`session`] | [`SqliteSession`] : exécution, transactions, fermeture |
-//! | [`cursor`] | [`SqliteCursor`] : les lots Arrow, et l'annulation qui coupe |
-//! | [`catalog`] | [`SqliteCatalog`] : `sqlite_master` et les `PRAGMA` |
-//! | [`convert`] | le typage dynamique de SQLite ramené à des colonnes Arrow |
-//! | [`params`] | `ScalarValue` vers les cinq classes de stockage |
-//! | [`error`] | la classification transitoire / permanente / ambiguë |
-//! | [`options`] | [`BatchLimits`] : un lot borné en lignes **et** en octets |
+//! | [`driver`] | [`SqliteDriver`]: identity, connection form, capabilities |
+//! | [`session`] | [`SqliteSession`]: execution, transactions, closing |
+//! | [`cursor`] | [`SqliteCursor`]: Arrow batches, and the cancellation that cuts |
+//! | [`catalog`] | [`SqliteCatalog`]: `sqlite_master` and the `PRAGMA`s |
+//! | [`convert`] | SQLite's dynamic typing brought down to Arrow columns |
+//! | [`params`] | `ScalarValue` to the five storage classes |
+//! | [`error`] | the transient / permanent / ambiguous classification |
+//! | [`options`] | [`BatchLimits`]: a batch bounded in rows **and** in bytes |
 //!
-//! # Les quatre décisions qui gouvernent cette crate
+//! # The four decisions that govern this crate
 //!
-//! **La connexion vit sur un thread à elle.** `rusqlite::Connection` n'est pas
-//! `Sync`, et un `Statement` emprunte la connexion : diffuser un résultat lot par
-//! lot demande de garder cet emprunt vivant entre deux `await`, ce qu'aucun
-//! futur ne sait faire sans `unsafe`. La connexion reste donc sur un thread
-//! dédié, et ce qui traverse le canal est du `RecordBatch` déjà converti. Le
-//! raisonnement complet est dans [`crate::worker`].
+//! **The connection lives on a thread of its own.** `rusqlite::Connection` is
+//! not `Sync`, and a `Statement` borrows the connection: streaming a result batch
+//! by batch requires keeping this borrow alive between two `await`s, which no
+//! future can do without `unsafe`. The connection therefore stays on a dedicated
+//! thread, and what crosses the channel is already converted `RecordBatch`. The
+//! full reasoning is in [`crate::worker`].
 //!
-//! **L'annulation est locale, et elle est dite comme telle.** SQLite n'a pas de
-//! serveur : `sqlite3_interrupt` arrête une instruction dans **notre** processus.
-//! La session ne déclare donc jamais `SERVER_SIDE_CANCEL`, et
-//! `SqliteSession::cancel` refuse — mais l'interruption existe bel et bien,
-//! par le [`CancelToken`](oxyn_core::CancelToken) remis à `execute`, consulté
-//! entre deux lots et surveillé pendant l'attente d'un lot.
+//! **Cancellation is local, and it is stated as such.** SQLite has no server:
+//! `sqlite3_interrupt` stops a statement in **our** process. The session
+//! therefore never declares `SERVER_SIDE_CANCEL`, and `SqliteSession::cancel`
+//! refuses — but interruption does exist, through the
+//! [`CancelToken`](oxyn_core::CancelToken) handed to `execute`, checked between
+//! two batches and watched while waiting for a batch.
 //!
-//! **Le type d'une colonne est décidé une fois, à partir des données.** En
-//! SQLite le type appartient à la valeur, pas à la colonne ; Arrow exige
-//! l'inverse. Le premier lot est mis de côté en valeurs brutes le temps de
-//! trancher, et une colonne qui mêle les classes de stockage tombe sur du texte
-//! — ou sur des octets — **en le déclarant** dans les métadonnées de son champ.
-//! Voir [`convert`].
+//! **A column's type is decided once, from the data.** In SQLite the type
+//! belongs to the value, not to the column; Arrow requires the opposite. The
+//! first batch is set aside as raw values while deciding, and a column mixing
+//! storage classes falls back to text — or to bytes — **declaring it** in the
+//! metadata of its field. See [`convert`].
 //!
-//! **Un lot se mesure en octets autant qu'en lignes.** Mille lignes portant
-//! chacune un BLOB d'un mégaoctet font un gigaoctet ([`BatchLimits`]).
+//! **A batch is measured in bytes as much as in rows.** A thousand rows each
+//! carrying a one-megabyte BLOB make a gigabyte ([`BatchLimits`]).
 //!
-//! # Exemple
+//! # Example
 //!
 //! ```no_run
 //! use oxyn_core::{CancelToken, ConnectionConfig, DriverId, Environment, ExecRequest,
@@ -50,21 +49,21 @@
 //! use oxyn_driver::{Credentials, Cursor, Driver, Session};
 //! use oxyn_driver_sqlite::SqliteDriver;
 //!
-//! # async fn exemple() -> oxyn_core::Result<()> {
+//! # async fn example() -> oxyn_core::Result<()> {
 //! let driver = SqliteDriver::new();
-//! let connexion = ConnectionConfig::new("atelier", DriverId::sqlite())
+//! let connection = ConnectionConfig::new("workshop", DriverId::sqlite())
 //!     .with_environment(Environment::Local)
 //!     .with_param(SqliteDriver::PATH, SqliteDriver::MEMORY);
 //!
-//! let jeton = CancelToken::new();
-//! let session = driver.connect(&connexion, &Credentials::new(), &jeton).await?;
+//! let token = CancelToken::new();
+//! let session = driver.connect(&connection, &Credentials::new(), &token).await?;
 //!
-//! // Les limites par défaut sont prudentes : bornées et en lecture seule.
-//! let mut curseur = session
-//!     .execute(ExecRequest::new(QueryLanguage::SQL, "SELECT 1 AS n"), &jeton)
+//! // The default limits are cautious: bounded and read-only.
+//! let mut cursor = session
+//!     .execute(ExecRequest::new(QueryLanguage::SQL, "SELECT 1 AS n"), &token)
 //!     .await?;
-//! while let Some(lot) = curseur.next_batch().await? {
-//!     println!("{} ligne(s)", lot.num_rows());
+//! while let Some(batch) = cursor.next_batch().await? {
+//!     println!("{} row(s)", batch.num_rows());
 //! }
 //! # Ok(())
 //! # }
@@ -154,7 +153,7 @@ mod tests {
         session.close().await.expect("close fixture");
     }
 
-    /// Une session sur une base en mémoire, privée au test.
+    /// A session on an in-memory database, private to the test.
     async fn session(limits: BatchLimits) -> Box<dyn Session> {
         let driver = SqliteDriver::new().with_batch_limits(limits);
         let connexion = ConnectionConfig::new("atelier", DriverId::sqlite())
@@ -163,19 +162,19 @@ mod tests {
         driver
             .connect(&connexion, &Credentials::new(), &CancelToken::new())
             .await
-            .expect("une base en mémoire s'ouvre toujours")
+            .expect("an in-memory database always opens")
     }
 
     async fn atelier() -> Box<dyn Session> {
         session(BatchLimits::default()).await
     }
 
-    /// L'erreur d'une exécution qui devait être refusée.
+    /// The error of an execution that had to be refused.
     ///
-    /// `Result::expect_err` exige `Debug` sur la variante `Ok`, donc ici sur
-    /// `dyn Cursor`. Le curseur tient la session, qui tient les identifiants de
-    /// connexion : lui donner `Debug` mettrait un secret à un `{:?}` de
-    /// distance ([I-03]). Ce passage par `match` n'exige rien de `T`.
+    /// `Result::expect_err` requires `Debug` on the `Ok` variant, hence here on
+    /// `dyn Cursor`. The cursor holds the session, which holds the connection
+    /// credentials: giving it `Debug` would put a secret one `{:?}` away
+    /// ([I-03]). Going through `match` requires nothing of `T`.
     ///
     /// [I-03]: ../../../CLAUDE.md#i-03
     fn refus<T>(issue: Result<T, OxynError>, attendu: &str) -> OxynError {
@@ -185,36 +184,36 @@ mod tests {
         }
     }
 
-    /// Une demande d'écriture : les limites par défaut sont en lecture seule.
+    /// A write request: the default limits are read-only.
     fn ecriture(sql: &str) -> ExecRequest {
         ExecRequest::new(QueryLanguage::SQL, sql).with_limits(ExecLimits::unbounded())
     }
 
-    /// Une demande de lecture, avec les limites prudentes par défaut.
+    /// A read request, with the cautious default limits.
     fn lecture(sql: &str) -> ExecRequest {
         ExecRequest::new(QueryLanguage::SQL, sql)
     }
 
-    /// Exécute une écriture et rend le nombre de lignes affectées.
+    /// Executes a write and returns the number of affected rows.
     async fn executer(session: &dyn Session, sql: &str) -> u64 {
         let jeton = CancelToken::new();
         let curseur = session
             .execute(ecriture(sql), &jeton)
             .await
-            .unwrap_or_else(|err| panic!("exécution de `{sql}` : {err}"));
+            .unwrap_or_else(|err| panic!("execution of `{sql}`: {err}"));
         curseur.stats().rows
     }
 
-    /// Vide un curseur et rend ses lots.
+    /// Drains a cursor and returns its batches.
     async fn vider(curseur: &mut Box<dyn Cursor>) -> Vec<RecordBatch> {
         let mut lots = Vec::new();
-        while let Some(lot) = curseur.next_batch().await.expect("lot suivant") {
+        while let Some(lot) = curseur.next_batch().await.expect("next batch") {
             lots.push(lot);
         }
         lots
     }
 
-    /// Le premier lot d'une lecture.
+    /// The first batch of a read.
     async fn premier_lot(session: &dyn Session, sql: &str) -> RecordBatch {
         let jeton = CancelToken::new();
         let mut curseur = session
@@ -224,12 +223,12 @@ mod tests {
         curseur
             .next_batch()
             .await
-            .expect("premier lot")
-            .expect("au moins une ligne")
+            .expect("first batch")
+            .expect("at least one row")
     }
 
     #[tokio::test]
-    async fn le_trajet_complet_creer_inserer_lire() {
+    async fn the_full_journey_create_insert_read() {
         let session = atelier().await;
         executer(
             session.as_ref(),
@@ -241,7 +240,7 @@ mod tests {
             "INSERT INTO clients(id, nom) VALUES (1, 'Ada'), (2, 'Grace')",
         )
         .await;
-        assert_eq!(affectees, 2, "le compte de lignes affectées doit remonter");
+        assert_eq!(affectees, 2, "the affected row count must come back");
 
         let lot = premier_lot(session.as_ref(), "SELECT id, nom FROM clients ORDER BY id").await;
         assert_eq!(lot.num_rows(), 2);
@@ -251,20 +250,20 @@ mod tests {
             .column(0)
             .as_any()
             .downcast_ref::<Int64Array>()
-            .expect("colonne Int64");
+            .expect("Int64 column");
         assert_eq!(ids.value(0), 1);
         let noms = lot
             .column(1)
             .as_any()
             .downcast_ref::<StringArray>()
-            .expect("colonne Utf8");
+            .expect("Utf8 column");
         assert_eq!(noms.value(1), "Grace");
 
-        session.close().await.expect("fermeture");
+        session.close().await.expect("close");
     }
 
     #[tokio::test]
-    async fn les_cinq_classes_de_stockage_deviennent_des_colonnes_arrow() {
+    async fn the_five_storage_classes_become_arrow_columns() {
         let session = atelier().await;
         executer(
             session.as_ref(),
@@ -311,9 +310,9 @@ mod tests {
                 .expect("Binary")
                 .value(0),
             b"\x00\xff",
-            "un BLOB reste opaque, il ne devient pas du texte « au mieux »"
+            "a BLOB stays opaque, it does not become text \"at best\""
         );
-        // La colonne entièrement nulle retombe sur son type déclaré.
+        // The entirely null column falls back on its declared type.
         assert!(lot.column(4).is_null(0));
         let schema = lot.schema();
         assert_eq!(
@@ -323,9 +322,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn une_colonne_qui_melange_les_types_tombe_sur_le_texte_et_le_declare() {
-        // SQLite accepte ceci : le type appartient à la valeur, pas à la
-        // colonne. L'interface doit pouvoir dire que le rendu est un repli.
+    async fn a_column_mixing_types_falls_back_to_text_and_declares_it() {
+        // SQLite accepts this: the type belongs to the value, not to the column.
+        // The interface must be able to say that the rendering is a fallback.
         let session = atelier().await;
         executer(session.as_ref(), "CREATE TABLE m(v INTEGER)").await;
         executer(
@@ -340,13 +339,13 @@ mod tests {
         assert_eq!(
             champ.metadata().get(METADATA_INFERRED).map(String::as_str),
             Some("true"),
-            "le type ne vient pas de la déclaration : il doit se dire déduit"
+            "the type does not come from the declaration: it must say it is inferred"
         );
         let classes = champ
             .metadata()
             .get(METADATA_STORAGE_CLASSES)
             .map(String::as_str)
-            .expect("les classes mêlées doivent être déclarées");
+            .expect("mixed classes must be declared");
         assert!(
             classes.contains("integer") && classes.contains("text"),
             "{classes}"
@@ -363,9 +362,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn une_ecriture_est_refusee_quand_la_demande_se_declare_en_lecture_seule() {
-        // Le défaut d'`ExecLimits` est prudent : lecture seule. La question est
-        // posée au moteur (`sqlite3_stmt_readonly`), pas au texte.
+    async fn a_write_is_refused_when_the_request_declares_itself_read_only() {
+        // The `ExecLimits` default is cautious: read-only. The question is asked
+        // of the engine (`sqlite3_stmt_readonly`), not of the text.
         let session = atelier().await;
         executer(session.as_ref(), "CREATE TABLE t(v INTEGER)").await;
 
@@ -378,7 +377,7 @@ mod tests {
         );
         assert!(matches!(err, OxynError::PolicyDenied { .. }), "{err:?}");
 
-        // Et rien n'a été écrit.
+        // And nothing was written.
         let lot = premier_lot(session.as_ref(), "SELECT count(*) FROM t").await;
         assert_eq!(
             lot.column(0)
@@ -391,8 +390,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn une_valeur_liee_reste_une_valeur() {
-        // I-10 : les valeurs se lient, elles ne se concatènent pas.
+    async fn a_bound_value_stays_a_value() {
+        // I-10: values are bound, not concatenated.
         let session = atelier().await;
         executer(session.as_ref(), "CREATE TABLE audit(note TEXT)").await;
 
@@ -400,8 +399,8 @@ mod tests {
         let demande = lecture("SELECT ?1 AS v").with_params(vec![ScalarValue::Text(
             "'); DROP TABLE audit; --".to_owned(),
         )]);
-        let mut curseur = session.execute(demande, &jeton).await.expect("exécution");
-        let lot = curseur.next_batch().await.expect("lot").expect("une ligne");
+        let mut curseur = session.execute(demande, &jeton).await.expect("execution");
+        let lot = curseur.next_batch().await.expect("batch").expect("one row");
         assert_eq!(
             lot.column(0)
                 .as_any()
@@ -425,97 +424,97 @@ mod tests {
                 .expect("Int64")
                 .value(0),
             1,
-            "la table d'audit a été supprimée"
+            "the audit table was dropped"
         );
     }
 
-    /// Une valeur improbable, pour qu'un test qui la cherche ne la trouve que
-    /// si elle a réellement traversé.
+    /// An unlikely value, so that a test looking for it finds it only if it
+    /// really went through.
     const SENTINELLE: &str = "S3NT1NELLE-42";
 
-    /// Une table dont le déclencheur recopie la valeur insérée dans son
-    /// message : c'est la fuite que la correction ferme.
+    /// A table whose trigger copies the inserted value into its message: it is
+    /// the leak the fix closes.
     async fn atelier_bavard() -> Box<dyn Session> {
         let session = atelier().await;
         executer(session.as_ref(), "CREATE TABLE comptes(note TEXT)").await;
         executer(
             session.as_ref(),
             "CREATE TRIGGER refuser BEFORE INSERT ON comptes \
-             BEGIN SELECT RAISE(ABORT, 'solde : ' || NEW.note); END",
+             BEGIN SELECT RAISE(ABORT, 'balance: ' || NEW.note); END",
         )
         .await;
         session
     }
 
     #[tokio::test]
-    async fn une_valeur_liee_ne_ressort_ni_a_l_ecran_ni_dans_l_historique() {
-        // I-03 : le message du moteur est affiché par la console, persisté par
-        // `HistoryRecord::failed` et `JournalRecord::failed` — qui appellent
-        // tous deux `error.to_string()` —, et un `tracing::debug!` le rendrait
-        // par `Debug`. Les trois rendus comptent.
+    async fn a_bound_value_comes_out_neither_on_screen_nor_in_history() {
+        // I-03: the engine message is displayed by the console, persisted by
+        // `HistoryRecord::failed` and `JournalRecord::failed` — which both call
+        // `error.to_string()` —, and a `tracing::debug!` would render it through
+        // `Debug`. All three renderings count.
         let session = atelier_bavard().await;
         let demande = ecriture("INSERT INTO comptes(note) VALUES (?1)")
             .with_params(vec![ScalarValue::Text(SENTINELLE.to_owned())]);
         let err = refus(
             session.execute(demande, &CancelToken::new()).await,
-            "le déclencheur doit refuser l'insertion",
+            "the trigger must refuse the insertion",
         );
 
         let affiche = format!("{err}");
         let persiste = err.to_string();
         let debogue = format!("{err:?}");
         for rendu in [&affiche, &persiste, &debogue] {
-            assert!(!rendu.contains(SENTINELLE), "valeur liée rendue : {rendu}");
+            assert!(!rendu.contains(SENTINELLE), "bound value rendered: {rendu}");
             assert!(
-                !rendu.contains("solde"),
-                "message du moteur rendu : {rendu}"
+                !rendu.contains("balance"),
+                "engine message rendered: {rendu}"
             );
         }
         assert!(
             affiche.contains("withheld"),
-            "le retrait doit se dire, sinon l'utilisateur cherche un bug : {affiche}"
+            "the withdrawal must be stated, otherwise the user hunts for a bug: {affiche}"
         );
-        // Le code de résultat étendu reste lisible : `SQLITE_CONSTRAINT_TRIGGER`.
+        // The extended result code stays readable: `SQLITE_CONSTRAINT_TRIGGER`.
         assert!(affiche.contains("1811"), "{affiche}");
         assert_eq!(err.class(), ErrorClass::Permanent, "{err:?}");
     }
 
     #[tokio::test]
-    async fn sans_valeur_liee_le_message_du_moteur_arrive_entier() {
-        // La protection ne doit pas s'appliquer à tort : le public d'Oxyn lit
-        // les messages de son moteur.
+    async fn without_bound_value_the_engine_message_arrives_whole() {
+        // The protection must not apply wrongly: Oxyn's audience reads its
+        // engine's messages.
         let session = atelier_bavard().await;
         let demande = ecriture(&format!(
             "INSERT INTO comptes(note) VALUES ('{SENTINELLE}')"
         ));
         let err = refus(
             session.execute(demande, &CancelToken::new()).await,
-            "le déclencheur doit refuser l'insertion",
+            "the trigger must refuse the insertion",
         );
         assert!(
-            err.to_string().contains(&format!("solde : {SENTINELLE}")),
-            "le message du moteur doit passer inchangé : {err}"
+            err.to_string().contains(&format!("balance: {SENTINELLE}")),
+            "the engine message must pass unchanged: {err}"
         );
     }
 
     #[tokio::test]
-    async fn une_lecture_qui_echoue_sur_une_valeur_liee_retient_aussi_son_message() {
-        // Le chemin de lecture échoue dans `sqlite3_step`, loin de la demande :
-        // c'est là que l'information « il y avait des valeurs liées » doit être
-        // passée, pas devinée.
+    async fn a_read_failing_on_a_bound_value_also_withholds_its_message() {
+        // The read path fails in `sqlite3_step`, far from the request: that is
+        // where the information "there were bound values" must be passed, not
+        // guessed.
         let session = atelier().await;
         let demande = lecture("SELECT abs(?1)").with_params(vec![ScalarValue::Int64(i64::MIN)]);
         let err = refus(
             session.execute(demande, &CancelToken::new()).await,
-            "`abs` déborde sur le plus petit entier",
+            "`abs` overflows on the smallest integer",
         );
         assert!(
             !err.to_string().contains("integer overflow"),
-            "message du moteur rendu : {err}"
+            "engine message rendered: {err}"
         );
         assert!(err.to_string().contains("withheld"), "{err}");
 
-        // Le même débordement écrit en clair garde son message.
+        // The same overflow written in clear keeps its message.
         let sans_liaison = refus(
             session
                 .execute(
@@ -523,7 +522,7 @@ mod tests {
                     &CancelToken::new(),
                 )
                 .await,
-            "`abs` déborde sur le plus petit entier",
+            "`abs` overflows on the smallest integer",
         );
         assert!(
             sans_liaison.to_string().contains("integer overflow"),
@@ -532,8 +531,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn l_annulation_coupe_aussi_une_lecture_a_valeurs_liees() {
-        // Retenir un message ne doit pas transformer une annulation en panne.
+    async fn cancellation_also_cuts_a_read_with_bound_values() {
+        // Withholding a message must not turn a cancellation into a failure.
         let session = session(BatchLimits::new().with_max_rows(10)).await;
         let jeton = CancelToken::new();
         let demande = ExecRequest::new(
@@ -544,27 +543,27 @@ mod tests {
         .with_limits(ExecLimits::unbounded())
         .with_params(vec![ScalarValue::Int64(50_000)]);
 
-        let mut curseur = session.execute(demande, &jeton).await.expect("exécution");
+        let mut curseur = session.execute(demande, &jeton).await.expect("execution");
         assert!(
             curseur
                 .next_batch()
                 .await
-                .expect("premier lot")
+                .expect("first batch")
                 .is_some_and(|lot| lot.num_rows() == 10)
         );
 
         jeton.cancel();
-        let err = refus(curseur.next_batch().await, "l'annulation doit couper");
+        let err = refus(curseur.next_batch().await, "cancellation must cut");
         assert!(err.is_cancelled(), "{err:?}");
         assert!(curseur.stats().truncated);
 
         drop(curseur);
-        session.ping().await.expect("la session reste utilisable");
+        session.ping().await.expect("the session stays usable");
     }
 
     #[tokio::test]
-    async fn un_resultat_arrive_en_plusieurs_lots_bornes() {
-        // Le flux : aucun résultat n'est matérialisé en entier (I-06).
+    async fn a_result_arrives_in_several_bounded_batches() {
+        // The stream: no result is materialized in full (I-06).
         let session = session(BatchLimits::new().with_max_rows(100)).await;
         executer(session.as_ref(), "CREATE TABLE grand(n INTEGER)").await;
         executer(
@@ -582,27 +581,24 @@ mod tests {
                 &jeton,
             )
             .await
-            .expect("exécution");
+            .expect("execution");
         let lots = vider(&mut curseur).await;
 
         let lignes: usize = lots.iter().map(RecordBatch::num_rows).sum();
         assert_eq!(lignes, 5_000);
-        assert!(lots.len() >= 50, "{} lot(s) pour 5 000 lignes", lots.len());
+        assert!(lots.len() >= 50, "{} batch(es) for 5,000 rows", lots.len());
         assert!(
             lots.iter().all(|lot| lot.num_rows() <= 100),
-            "un lot dépasse la borne de lignes"
+            "a batch exceeds the row bound"
         );
         let stats = curseur.stats();
         assert_eq!(stats.rows, 5_000);
-        assert!(!stats.truncated, "le résultat est complet");
-        assert!(
-            stats.server_time.is_none(),
-            "SQLite n'a pas d'horloge serveur"
-        );
+        assert!(!stats.truncated, "the result is complete");
+        assert!(stats.server_time.is_none(), "SQLite has no server clock");
     }
 
     #[tokio::test]
-    async fn un_resultat_tronque_par_la_borne_de_lignes_le_dit() {
+    async fn a_result_truncated_by_the_row_bound_says_so() {
         let session = atelier().await;
         executer(session.as_ref(), "CREATE TABLE t(n INTEGER)").await;
         executer(
@@ -619,19 +615,19 @@ mod tests {
                 &jeton,
             )
             .await
-            .expect("exécution");
+            .expect("execution");
         let lots = vider(&mut curseur).await;
 
         let lignes: usize = lots.iter().map(RecordBatch::num_rows).sum();
         assert_eq!(lignes, 2);
         assert!(
             curseur.stats().truncated,
-            "un résultat tronqué qui a l'air complet conduit à des conclusions fausses"
+            "a truncated result that looks complete leads to wrong conclusions"
         );
     }
 
     #[tokio::test]
-    async fn l_annulation_coupe_la_lecture_entre_deux_lots() {
+    async fn cancellation_cuts_the_read_between_two_batches() {
         let session = session(BatchLimits::new().with_max_rows(10)).await;
         executer(session.as_ref(), "CREATE TABLE grand(n INTEGER)").await;
         executer(
@@ -649,9 +645,9 @@ mod tests {
                 &jeton,
             )
             .await
-            .expect("exécution");
+            .expect("execution");
 
-        let premier = curseur.next_batch().await.expect("premier lot");
+        let premier = curseur.next_batch().await.expect("first batch");
         assert!(premier.is_some_and(|lot| lot.num_rows() == 10));
 
         jeton.cancel();
@@ -659,25 +655,25 @@ mod tests {
         let err = curseur
             .next_batch()
             .await
-            .expect_err("l'annulation doit couper");
+            .expect_err("cancellation must cut");
         assert!(err.is_cancelled(), "{err:?}");
         assert!(
             curseur.stats().truncated,
-            "un résultat annulé est incomplet, et doit le dire"
+            "a cancelled result is incomplete, and must say so"
         );
 
-        // La session reste utilisable : l'annulation a libéré le thread porteur.
+        // The session stays usable: the cancellation freed the worker thread.
         drop(curseur);
         session
             .ping()
             .await
-            .expect("la session survit à l'annulation");
+            .expect("the session survives the cancellation");
     }
 
     #[tokio::test]
-    async fn l_annulation_cote_serveur_est_refusee_pas_simulee() {
-        // SQLite n'a pas de serveur. Laisser croire qu'un « Annuler » coupe une
-        // requête côté serveur serait affirmer ce qui n'existe pas.
+    async fn server_side_cancel_is_refused_not_simulated() {
+        // SQLite has no server. Suggesting that a "Cancel" cuts a query on the
+        // server side would assert what does not exist.
         let session = atelier().await;
         assert!(
             !session
@@ -691,20 +687,20 @@ mod tests {
             .await
             .expect_err("refus attendu");
         assert!(matches!(err, OxynError::NotSupported { .. }), "{err:?}");
-        assert!(err.is_user_error(), "ce n'est pas un incident");
+        assert!(err.is_user_error(), "it is not an incident");
     }
 
     #[tokio::test]
-    async fn une_transaction_annulee_ne_laisse_rien() {
-        // Le pire cas serait de réussir sans rien ouvrir : l'utilisateur
-        // croirait qu'un ROLLBACK a annulé son écriture.
+    async fn a_rolled_back_transaction_leaves_nothing() {
+        // The worst case would be to succeed without opening anything: the user
+        // would believe a ROLLBACK undid their write.
         let session = atelier().await;
         let jeton = CancelToken::new();
         executer(session.as_ref(), "CREATE TABLE t(v INTEGER)").await;
 
-        session.begin(&jeton).await.expect("ouverture");
+        session.begin(&jeton).await.expect("open");
         executer(session.as_ref(), "INSERT INTO t(v) VALUES (1)").await;
-        session.rollback(&jeton).await.expect("annulation");
+        session.rollback(&jeton).await.expect("cancellation");
 
         let lot = premier_lot(session.as_ref(), "SELECT count(*) FROM t").await;
         assert_eq!(
@@ -714,11 +710,11 @@ mod tests {
                 .expect("Int64")
                 .value(0),
             0,
-            "le ROLLBACK doit avoir annulé pour de bon"
+            "the ROLLBACK must have undone for good"
         );
 
-        // Et une transaction validée, elle, reste.
-        session.begin(&jeton).await.expect("ouverture");
+        // And a committed transaction does stay.
+        session.begin(&jeton).await.expect("open");
         executer(session.as_ref(), "INSERT INTO t(v) VALUES (2)").await;
         session.commit(&jeton).await.expect("validation");
         let lot = premier_lot(session.as_ref(), "SELECT count(*) FROM t").await;
@@ -733,7 +729,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn un_lot_de_plusieurs_instructions_execute_tout_et_rend_le_dernier_resultat() {
+    async fn a_multi_statement_batch_runs_everything_and_returns_the_last_result() {
         let session = atelier().await;
         let jeton = CancelToken::new();
         let mut curseur = session
@@ -746,12 +742,12 @@ mod tests {
                 &jeton,
             )
             .await
-            .expect("exécution du lot");
+            .expect("batch execution");
         let lots = vider(&mut curseur).await;
         let lignes: usize = lots.iter().map(RecordBatch::num_rows).sum();
-        assert_eq!(lignes, 2, "le curseur porte le résultat de la dernière");
+        assert_eq!(lignes, 2, "the cursor carries the result of the last one");
 
-        // Une instruction qui suit le producteur de lignes s'exécute quand même.
+        // A statement following the row producer runs all the same.
         let affectees = executer(
             session.as_ref(),
             "SELECT x FROM m; INSERT INTO m(x) VALUES (3)",
@@ -770,19 +766,19 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn des_parametres_lies_avec_un_lot_de_plusieurs_instructions_sont_refuses() {
+    async fn bound_parameters_with_a_multi_statement_batch_are_refused() {
         let session = atelier().await;
         let jeton = CancelToken::new();
         let demande = ecriture("SELECT ?1; SELECT 2").with_params(vec![ScalarValue::Int64(1)]);
         let err = refus(
             session.execute(demande, &jeton).await,
-            "rien ne dit à quelle instruction ils se rapportent",
+            "nothing says which statement they relate to",
         );
         assert!(!err.is_retryable(), "{err:?}");
     }
 
     #[tokio::test]
-    async fn un_langage_non_declare_est_refuse_pas_traduit() {
+    async fn an_undeclared_language_is_refused_not_translated() {
         let session = atelier().await;
         let jeton = CancelToken::new();
         let err = refus(
@@ -798,7 +794,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn une_erreur_de_syntaxe_est_permanente_et_montrable() {
+    async fn a_syntax_error_is_permanent_and_showable() {
         let session = atelier().await;
         let jeton = CancelToken::new();
         let err = refus(
@@ -807,13 +803,13 @@ mod tests {
         );
         assert!(
             !err.is_retryable(),
-            "une erreur de syntaxe ne se retente jamais : {err:?}"
+            "a syntax error is never retried: {err:?}"
         );
         assert!(err.to_string().contains("sqlite"), "{err}");
     }
 
     #[tokio::test]
-    async fn l_introspection_decrit_ce_que_la_base_contient() {
+    async fn introspection_describes_what_the_database_contains() {
         let session = atelier().await;
         executer(
             session.as_ref(),
@@ -844,26 +840,26 @@ mod tests {
         let jeton = CancelToken::new();
         let catalogue = session.catalog();
 
-        let info = catalogue.server_info(&jeton).await.expect("identité");
+        let info = catalogue.server_info(&jeton).await.expect("identity");
         assert_eq!(info.product, "SQLite");
         assert!(!info.version.is_empty());
 
-        // SQLite n'a pas de palier catalogue ; ses bases occupent le palier
-        // espace de noms.
+        // SQLite has no catalog tier; its databases occupy the namespace
+        // tier.
         assert!(
             catalogue
                 .list_catalogs(&jeton)
                 .await
-                .expect("vide")
+                .expect("empty")
                 .is_empty()
         );
         let espaces = catalogue
             .list_namespaces(None, &jeton)
             .await
-            .expect("espaces de noms");
+            .expect("namespaces");
         assert!(
             espaces.iter().any(|espace| espace.name() == MAIN),
-            "`main` doit toujours être là"
+            "`main` must always be there"
         );
 
         let relations = catalogue
@@ -877,10 +873,10 @@ mod tests {
             relations
                 .iter()
                 .any(|r| r.name() == "v_clients" && r.kind == RelationKind::View),
-            "une vue n'est pas une table"
+            "a view is not a table"
         );
 
-        let chemin = CatalogPath::for_relation(None, Some(MAIN), "clients").expect("chemin");
+        let chemin = CatalogPath::for_relation(None, Some(MAIN), "clients").expect("path");
         let decrite = catalogue
             .describe_relation(&chemin, &jeton)
             .await
@@ -894,11 +890,11 @@ mod tests {
                 .map(|champ| champ.name.as_str()),
             Some("id")
         );
-        let nom = decrite.field("nom").expect("colonne `nom`");
-        assert!(!nom.nullable, "NOT NULL doit remonter tel quel");
+        let nom = decrite.field("nom").expect("column `nom`");
+        assert!(!nom.nullable, "NOT NULL must come back as is");
         assert_eq!(nom.logical_type, LogicalType::Text);
-        assert_eq!(nom.raw_type, "TEXT", "le type du serveur est conservé");
-        let solde = decrite.field("solde").expect("colonne `solde`");
+        assert_eq!(nom.raw_type, "TEXT", "the server type is kept");
+        let solde = decrite.field("solde").expect("column `solde`");
         assert_eq!(
             solde.logical_type,
             LogicalType::Decimal {
@@ -909,7 +905,7 @@ mod tests {
         assert_eq!(solde.default.as_deref(), Some("'0.00'"));
         assert_eq!(
             decrite.estimated_rows, None,
-            "SQLite ne sait pas estimer sans compter, et `None` n'est pas zéro"
+            "SQLite cannot estimate without counting, and `None` is not zero"
         );
 
         let index = catalogue
@@ -919,32 +915,29 @@ mod tests {
         let idx = index
             .iter()
             .find(|index| index.name == "idx_nom")
-            .expect("l'index déclaré");
+            .expect("the declared index");
         assert!(idx.unique);
         assert_eq!(idx.fields, ["nom"]);
         assert!(!idx.is_partial());
 
-        let commandes = CatalogPath::for_relation(None, Some(MAIN), "commandes").expect("chemin");
+        let commandes = CatalogPath::for_relation(None, Some(MAIN), "commandes").expect("path");
         let cles = catalogue
             .list_foreign_keys(&commandes, &jeton)
             .await
-            .expect("clés étrangères");
-        let cle = cles.first().expect("une clé");
-        assert!(
-            cle.is_well_formed(),
-            "les deux côtés doivent s'apparier : {cle:?}"
-        );
+            .expect("foreign keys");
+        let cle = cles.first().expect("one key");
+        assert!(cle.is_well_formed(), "both sides must pair: {cle:?}");
         assert_eq!(cle.fields, ["client_id"]);
         assert_eq!(cle.references.fields, ["id"]);
         assert_eq!(cle.references.relation.relation(), Some("clients"));
         assert!(
             cle.on_delete.propagates_delete(),
-            "un ON DELETE CASCADE doit se voir"
+            "an ON DELETE CASCADE must be visible"
         );
     }
 
     #[tokio::test]
-    async fn un_index_partiel_porte_son_predicat() {
+    async fn a_partial_index_carries_its_predicate() {
         let session = atelier().await;
         executer(session.as_ref(), "CREATE TABLE t(a INTEGER, b INTEGER)").await;
         executer(
@@ -954,7 +947,7 @@ mod tests {
         .await;
 
         let jeton = CancelToken::new();
-        let chemin = CatalogPath::for_relation(None, Some(MAIN), "t").expect("chemin");
+        let chemin = CatalogPath::for_relation(None, Some(MAIN), "t").expect("path");
         let index = session
             .catalog()
             .list_indexes(&chemin, &jeton)
@@ -963,34 +956,34 @@ mod tests {
         let partiel = index
             .iter()
             .find(|index| index.name == "idx_actifs")
-            .expect("l'index déclaré");
+            .expect("the declared index");
         assert!(partiel.is_partial());
         assert_eq!(partiel.predicate.as_deref(), Some("b > 0"));
     }
 
     #[tokio::test]
-    async fn une_relation_absente_est_signalee() {
+    async fn a_missing_relation_is_reported() {
         let session = atelier().await;
         let jeton = CancelToken::new();
-        let chemin = CatalogPath::for_relation(None, Some(MAIN), "fantome").expect("chemin");
+        let chemin = CatalogPath::for_relation(None, Some(MAIN), "fantome").expect("path");
         let err = session
             .catalog()
             .describe_relation(&chemin, &jeton)
             .await
-            .expect_err("la relation n'existe pas");
+            .expect_err("the relation does not exist");
         assert!(!err.is_retryable(), "{err:?}");
     }
 
     #[tokio::test]
-    async fn le_ping_repond_et_la_fermeture_libere() {
+    async fn ping_answers_and_close_releases() {
         let session = atelier().await;
-        session.ping().await.expect("la session est vivante");
-        session.close().await.expect("fermeture");
+        session.ping().await.expect("the session is alive");
+        session.close().await.expect("close");
     }
 
     #[tokio::test]
-    async fn un_nom_de_table_hostile_ne_s_execute_pas() {
-        // I-10 : `"users"; DROP TABLE audit; --` est un nom de table légal.
+    async fn a_hostile_table_name_does_not_execute() {
+        // I-10: `"users"; DROP TABLE audit; --` is a legal table name.
         let session = atelier().await;
         executer(session.as_ref(), "CREATE TABLE audit(note TEXT)").await;
         executer(
@@ -1008,10 +1001,10 @@ mod tests {
         let hostile = relations
             .iter()
             .find(|relation| relation.name().contains("DROP TABLE"))
-            .expect("la table hostile existe bel et bien");
+            .expect("the hostile table does exist");
 
-        // L'introspection de cette table passe par des identifiants cités et des
-        // valeurs liées : rien ne s'exécute.
+        // The introspection of this table goes through quoted identifiers and
+        // bound values: nothing executes.
         let decrite = session
             .catalog()
             .describe_relation(&hostile.path(), &jeton)
@@ -1032,7 +1025,7 @@ mod tests {
                 .expect("Int64")
                 .value(0),
             1,
-            "la table d'audit a été supprimée par un aperçu"
+            "the audit table was dropped by a preview"
         );
     }
     #[tokio::test]
@@ -1124,16 +1117,16 @@ mod tests {
         );
     }
 
-    // ── Aperçus triés, filtrés, parcourus (ADR-0020) ─────────────────────────
+    // ── Sorted, filtered, paged previews (ADR-0020) ─────────────────────────────
 
-    /// Le nombre de lignes de la table d'aperçu, assez pour dépasser trois
-    /// pages : une pagination qui saute une ligne ne se voit pas sur dix.
+    /// The number of rows of the preview table, enough to exceed three pages: a
+    /// pagination skipping a row does not show on ten.
     const LIGNES_APERCU: i64 = 500;
 
-    /// Une table d'aperçu, ses ex æquo, et une table témoin qui doit survivre.
+    /// A preview table, its ties, and a witness table that must survive.
     ///
-    /// `seau` vaut `id % 7` : trier dessus laisse soixante-et-onze ex æquo par
-    /// valeur, donc un ordre non total si la clé primaire ne le complète pas.
+    /// `seau` is `id % 7`: sorting on it leaves seventy-one ties per value, hence
+    /// a non-total order if the primary key does not complete it.
     async fn atelier_apercu() -> Box<dyn Session> {
         let session = atelier().await;
         executer(
@@ -1156,7 +1149,7 @@ mod tests {
         session
     }
 
-    /// Compose puis exécute un aperçu, et rend ses lots.
+    /// Composes then executes a preview, and returns its batches.
     async fn apercu(
         session: &dyn Session,
         relation: &str,
@@ -1164,33 +1157,33 @@ mod tests {
         shape: &PreviewShape,
     ) -> Vec<RecordBatch> {
         let jeton = CancelToken::new();
-        let chemin = CatalogPath::for_relation(None, Some(MAIN), relation).expect("chemin valide");
+        let chemin = CatalogPath::for_relation(None, Some(MAIN), relation).expect("valid path");
         let demande = session
             .preview_request(&chemin, limit, shape, &jeton)
             .await
-            .unwrap_or_else(|err| panic!("composition de l'aperçu de `{relation}` : {err}"));
+            .unwrap_or_else(|err| panic!("composing the preview of `{relation}`: {err}"));
         let mut curseur = session
             .execute(demande, &jeton)
             .await
-            .unwrap_or_else(|err| panic!("exécution de l'aperçu de `{relation}` : {err}"));
+            .unwrap_or_else(|err| panic!("executing the preview of `{relation}`: {err}"));
         vider(&mut curseur).await
     }
 
-    /// Les entiers d'une colonne, dans l'ordre où les lots les rendent.
+    /// The integers of a column, in the order the batches return them.
     fn entiers(lots: &[RecordBatch], colonne: usize) -> Vec<i64> {
         lots.iter()
             .flat_map(|lot| {
                 lot.column(colonne)
                     .as_any()
                     .downcast_ref::<Int64Array>()
-                    .expect("colonne entière")
+                    .expect("integer column")
                     .values()
                     .to_vec()
             })
             .collect()
     }
 
-    /// Les textes d'une colonne, dans l'ordre où les lots les rendent.
+    /// The texts of a column, in the order the batches return them.
     fn textes(lots: &[RecordBatch], colonne: usize) -> Vec<String> {
         lots.iter()
             .flat_map(|lot| {
@@ -1198,7 +1191,7 @@ mod tests {
                     .column(colonne)
                     .as_any()
                     .downcast_ref::<StringArray>()
-                    .expect("colonne textuelle");
+                    .expect("text column");
                 (0..valeurs.len())
                     .map(|rang| valeurs.value(rang).to_owned())
                     .collect::<Vec<_>>()
@@ -1207,7 +1200,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn un_apercu_trie_rend_les_lignes_dans_l_ordre_demande() {
+    async fn a_sorted_preview_returns_rows_in_the_requested_order() {
         let session = atelier_apercu().await;
 
         let croissant = PreviewShape {
@@ -1229,8 +1222,8 @@ mod tests {
                 .collect::<Vec<_>>()
         );
 
-        // Un tri sur une colonne pleine d'ex æquo : la clé primaire complète
-        // l'ordre, donc le résultat est prévisible ligne à ligne.
+        // A sort on a column full of ties: the primary key completes the order,
+        // so the result is predictable row by row.
         let par_seau = PreviewShape {
             sort: vec![PreviewSort::descending("seau")],
             ..PreviewShape::default()
@@ -1242,11 +1235,11 @@ mod tests {
             tous.into_iter().take(10).collect()
         };
         assert_eq!(entiers(&lots, 0), attendu);
-        session.close().await.expect("fermeture");
+        session.close().await.expect("close");
     }
 
     #[tokio::test]
-    async fn des_pages_consecutives_ne_se_recouvrent_ni_n_omettent_une_ligne() {
+    async fn consecutive_pages_neither_overlap_nor_skip_a_row() {
         let session = atelier_apercu().await;
         let taille = 200_u32;
         let mut vues: Vec<i64> = Vec::new();
@@ -1254,9 +1247,9 @@ mod tests {
 
         for page in 0..3_u64 {
             let shape = PreviewShape {
-                // Trier sur les ex æquo est le pire cas : sans la clé primaire
-                // ajoutée par le driver, deux pages montreraient deux fois la
-                // même ligne et en cacheraient une autre.
+                // Sorting on the ties is the worst case: without the primary key
+                // added by the driver, two pages would show the same row twice and
+                // hide another.
                 sort: vec![PreviewSort::ascending("seau")],
                 offset: page * u64::from(taille),
                 ..PreviewShape::default()
@@ -1267,25 +1260,21 @@ mod tests {
             vues.extend(ids);
         }
 
-        assert_eq!(tailles, vec![200, 200, 100], "trois pages, 500 lignes");
+        assert_eq!(tailles, vec![200, 200, 100], "three pages, 500 rows");
         let mut triees = vues.clone();
         triees.sort_unstable();
         triees.dedup();
-        assert_eq!(
-            triees.len(),
-            vues.len(),
-            "aucune ligne ne doit apparaître sur deux pages"
-        );
+        assert_eq!(triees.len(), vues.len(), "no row must appear on two pages");
         assert_eq!(
             triees,
             (1..=LIGNES_APERCU).collect::<Vec<_>>(),
-            "l'union des pages est exactement la table"
+            "the union of the pages is exactly the table"
         );
-        session.close().await.expect("fermeture");
+        session.close().await.expect("close");
     }
 
     #[tokio::test]
-    async fn une_page_au_dela_de_la_derniere_est_vide_sans_etre_une_erreur() {
+    async fn a_page_beyond_the_last_is_empty_without_being_an_error() {
         let session = atelier_apercu().await;
         let shape = PreviewShape {
             offset: 1_000,
@@ -1293,20 +1282,20 @@ mod tests {
         };
         let lots = apercu(&*session, "apercu", 200, &shape).await;
         assert!(entiers(&lots, 0).is_empty());
-        session.close().await.expect("fermeture");
+        session.close().await.expect("close");
     }
 
     #[tokio::test]
-    async fn le_predicat_de_l_utilisateur_part_tel_quel() {
+    async fn the_user_predicate_goes_as_is() {
         let session = atelier_apercu().await;
         executer(
             session.as_ref(),
-            "INSERT INTO apercu(id, seau, nom) VALUES (1001, 0, '100%'), (1002, 0, '100 pour cent')",
+            "INSERT INTO apercu(id, seau, nom) VALUES (1001, 0, '100%'), (1002, 0, '100 percent')",
         )
         .await;
 
-        // Le `%` n'est pas un métacaractère ici : le driver ne compose aucun
-        // motif, il transmet le texte de l'utilisateur.
+        // The `%` is not a metacharacter here: the driver composes no pattern, it
+        // passes on the user's text.
         let egalite = PreviewShape {
             predicate: Some("nom = '100%'".into()),
             ..PreviewShape::default()
@@ -1314,31 +1303,31 @@ mod tests {
         assert_eq!(
             textes(&apercu(&*session, "apercu", 200, &egalite).await, 2),
             vec!["100%".to_owned()],
-            "une égalité ne doit ramener que la ligne littérale"
+            "an equality must bring back only the literal row"
         );
 
-        // Et quand l'utilisateur écrit un motif, c'est bien un motif : son SQL
-        // n'est ni échappé ni réinterprété.
+        // And when the user writes a pattern, it is a pattern indeed: their SQL
+        // is neither escaped nor reinterpreted.
         let motif = PreviewShape {
             predicate: Some("nom LIKE '100%'".into()),
             ..PreviewShape::default()
         };
         let mut trouves = textes(&apercu(&*session, "apercu", 200, &motif).await, 2);
         trouves.sort();
-        assert_eq!(trouves, vec!["100 pour cent".to_owned(), "100%".to_owned()]);
-        session.close().await.expect("fermeture");
+        assert_eq!(trouves, vec!["100 percent".to_owned(), "100%".to_owned()]);
+        session.close().await.expect("close");
     }
 
     #[tokio::test]
-    async fn les_deux_gardes_autour_du_predicat_tiennent_sur_le_moteur() {
+    async fn both_guards_around_the_predicate_hold_on_the_engine() {
         let session = atelier_apercu().await;
         let jeton = CancelToken::new();
-        let chemin = CatalogPath::for_relation(None, Some(MAIN), "apercu").expect("chemin");
+        let chemin = CatalogPath::for_relation(None, Some(MAIN), "apercu").expect("path");
 
-        // 1. Le commentaire de bloc non fermé. Aucun saut de ligne ne le termine :
-        // sans les parenthèses, SQLite lisait jusqu'à la fin du texte, perdait la
-        // LIMIT et rendait toute la table sans que rien ne le signale. La
-        // parenthèse ouvrante rend l'instruction incomplète, donc refusée.
+        // 1. The unclosed block comment. No line break ends it: without the
+        // parentheses, SQLite read until the end of the text, lost the LIMIT
+        // and returned the whole table without anything reporting it. The
+        // opening parenthesis makes the statement incomplete, hence refused.
         let bloc = PreviewShape {
             predicate: Some("id > 0 /*".into()),
             ..PreviewShape::default()
@@ -1346,12 +1335,12 @@ mod tests {
         let demande = session
             .preview_request(&chemin, 3, &bloc, &jeton)
             .await
-            .expect("la composition ne juge pas le prédicat");
+            .expect("composition does not judge the predicate");
         refus(
             session.execute(demande, &jeton).await,
-            "un commentaire de bloc non fermé doit être refusé, pas exécuté sans borne",
+            "an unclosed block comment must be refused, not executed unbounded",
         );
-        // La session survit à ce refus : la relation reste lisible.
+        // The session survives this refusal: the relation stays readable.
         assert_eq!(
             entiers(
                 &apercu(&*session, "apercu", 3, &PreviewShape::unordered()).await,
@@ -1361,10 +1350,10 @@ mod tests {
             3
         );
 
-        // 2. Le commentaire de fin de ligne continue de fonctionner, et la LIMIT
-        // s'applique : c'est le saut de ligne qui le permet, et il reste utile.
+        // 2. The end-of-line comment keeps working, and the LIMIT applies: the
+        // line break is what allows it, and it stays useful.
         let ligne = PreviewShape {
-            predicate: Some("id > 0 -- ceci est un commentaire".into()),
+            predicate: Some("id > 0 -- this is a comment".into()),
             sort: vec![PreviewSort::ascending("id")],
             ..PreviewShape::default()
         };
@@ -1373,8 +1362,8 @@ mod tests {
             vec![1, 2, 3]
         );
 
-        // 3. Un prédicat qui porte déjà ses parenthèses rend exactement ce que
-        // rendrait le même texte sans l'enveloppe.
+        // 3. A predicate already carrying its parentheses returns exactly what
+        // the same text without the wrapper would return.
         let parenthese = PreviewShape {
             predicate: Some("(id > 0 AND seau < 2) OR nom IS NULL".into()),
             sort: vec![PreviewSort::ascending("id")],
@@ -1391,25 +1380,25 @@ mod tests {
                 &jeton,
             )
             .await
-            .expect("le même texte, sans enveloppe");
+            .expect("the same text, without wrapper");
         assert_eq!(enveloppe, entiers(&vider(&mut curseur).await, 0));
         assert_eq!(enveloppe, vec![1, 7, 8, 14, 15]);
-        session.close().await.expect("fermeture");
+        session.close().await.expect("close");
     }
 
     #[tokio::test]
-    async fn un_predicat_hostile_ne_detruit_rien_et_ne_deborde_pas_de_sa_clause() {
+    async fn a_hostile_predicate_destroys_nothing_and_does_not_overflow_its_clause() {
         let session = atelier_apercu().await;
         let jeton = CancelToken::new();
-        let chemin = CatalogPath::for_relation(None, Some(MAIN), "apercu").expect("chemin");
+        let chemin = CatalogPath::for_relation(None, Some(MAIN), "apercu").expect("path");
 
         for hostile in [
-            // Une seconde instruction : elle ne doit jamais s'exécuter.
+            // A second statement: it must never execute.
             "nom = 'ligne-1'; DROP TABLE temoin",
             "nom = 'ligne-1'; DELETE FROM temoin",
-            // Une apostrophe déséquilibrée : erreur de syntaxe, rien de plus.
+            // An unbalanced quote: a syntax error, nothing more.
             "nom = 'ligne-1",
-            // Un commentaire de fin de ligne : il ne doit pas avaler la LIMIT.
+            // An end-of-line comment: it must not swallow the LIMIT.
             "nom LIKE 'ligne-%' -- ; DROP TABLE temoin",
         ] {
             let shape = PreviewShape {
@@ -1419,38 +1408,38 @@ mod tests {
             let demande = session
                 .preview_request(&chemin, 3, &shape, &jeton)
                 .await
-                .expect("la composition ne juge pas le prédicat");
+                .expect("composition does not judge the predicate");
             assert!(
                 demande.text.contains(hostile),
-                "le prédicat part tel quel : {}",
+                "the predicate goes as is: {}",
                 demande.text
             );
             match session.execute(demande, &jeton).await {
-                // Soit le moteur refuse — syntaxe, ou seconde instruction qui
-                // écrit sous des limites en lecture seule…
+                // Either the engine refuses — syntax, or a second statement that
+                // writes under read-only limits…
                 Err(_) => {}
-                // … soit c'est une lecture ordinaire, et elle reste bornée.
+                // … or it is an ordinary read, and it stays bounded.
                 Ok(mut curseur) => {
                     let lignes: usize = vider(&mut curseur)
                         .await
                         .iter()
                         .map(RecordBatch::num_rows)
                         .sum();
-                    assert!(lignes <= 3, "{hostile} : {lignes} lignes malgré LIMIT 3");
+                    assert!(lignes <= 3, "{hostile}: {lignes} rows despite LIMIT 3");
                 }
             }
             let temoin = premier_lot(&*session, "SELECT garde FROM temoin").await;
             assert_eq!(
                 temoin.num_rows(),
                 1,
-                "la table témoin doit survivre à `{hostile}`"
+                "the witness table must survive `{hostile}`"
             );
         }
-        session.close().await.expect("fermeture");
+        session.close().await.expect("close");
     }
 
     #[tokio::test]
-    async fn une_projection_ne_rend_que_les_colonnes_nommees() {
+    async fn a_projection_returns_only_the_named_columns() {
         let session = atelier_apercu().await;
         let forme = PreviewShape {
             columns: Some(vec!["nom".into(), "id".into()]),
@@ -1458,20 +1447,20 @@ mod tests {
             ..PreviewShape::default()
         };
         let lots = apercu(&*session, "apercu", 3, &forme).await;
-        let schema = lots.first().expect("au moins un lot").schema();
+        let schema = lots.first().expect("at least one batch").schema();
         let noms: Vec<&str> = schema
             .fields()
             .iter()
             .map(|champ| champ.name().as_str())
             .collect();
-        // `seau`, non demandée, n'est pas lue du moteur ; l'ordre est celui
-        // de la projection, pas celui de la table.
+        // `seau`, not requested, is not read from the engine; the order is the
+        // projection's, not the table's.
         assert_eq!(noms, ["nom", "id"]);
         assert_eq!(textes(&lots, 0), ["ligne-1", "ligne-2", "ligne-3"]);
         assert_eq!(entiers(&lots, 1), [1, 2, 3]);
 
         let jeton = CancelToken::new();
-        let chemin = CatalogPath::for_relation(None, Some(MAIN), "apercu").expect("chemin");
+        let chemin = CatalogPath::for_relation(None, Some(MAIN), "apercu").expect("path");
         let inconnue = PreviewShape {
             columns: Some(vec!["colonne_absente".into()]),
             ..PreviewShape::default()
@@ -1480,7 +1469,7 @@ mod tests {
             session
                 .preview_request(&chemin, 10, &inconnue, &jeton)
                 .await,
-            "une colonne inconnue ne se projette pas",
+            "an unknown column is not projected",
         );
         assert!(
             matches!(&err, OxynError::Query(message)
@@ -1488,19 +1477,19 @@ mod tests {
             "{err}"
         );
         assert!(!err.is_retryable(), "{err}");
-        session.close().await.expect("fermeture");
+        session.close().await.expect("close");
     }
 
     #[tokio::test]
-    async fn une_forme_que_la_relation_ne_permet_pas_est_refusee_en_le_disant() {
+    async fn a_shape_the_relation_does_not_allow_is_refused_saying_so() {
         let session = atelier_apercu().await;
         executer(session.as_ref(), "CREATE TABLE sans_cle (x TEXT)").await;
         executer(session.as_ref(), "INSERT INTO sans_cle VALUES ('a'), ('b')").await;
         let jeton = CancelToken::new();
 
-        // Une colonne de tri que la relation ne déclare pas : refusée ici, pas
-        // envoyée au moteur en espérant qu'il la rejette.
-        let chemin = CatalogPath::for_relation(None, Some(MAIN), "apercu").expect("chemin");
+        // A sort column the relation does not declare: refused here, not sent to
+        // the engine hoping it rejects it.
+        let chemin = CatalogPath::for_relation(None, Some(MAIN), "apercu").expect("path");
         let inconnue = PreviewShape {
             sort: vec![PreviewSort::ascending("colonne_absente")],
             ..PreviewShape::default()
@@ -1509,7 +1498,7 @@ mod tests {
             session
                 .preview_request(&chemin, 10, &inconnue, &jeton)
                 .await,
-            "une colonne inconnue ne se trie pas",
+            "an unknown column is not sorted",
         );
         assert!(
             matches!(&err, OxynError::Query(message)
@@ -1518,16 +1507,16 @@ mod tests {
         );
         assert!(!err.is_retryable(), "{err}");
 
-        // Une page sur une relation sans clé unique : refusée, parce qu'un
-        // OFFSET sans ordre total rend des lignes en double et en omet.
-        let chemin = CatalogPath::for_relation(None, Some(MAIN), "sans_cle").expect("chemin");
+        // A page on a relation without unique key: refused, because an OFFSET
+        // without total order returns duplicate rows and skips others.
+        let chemin = CatalogPath::for_relation(None, Some(MAIN), "sans_cle").expect("path");
         let page = PreviewShape {
             offset: 1,
             ..PreviewShape::default()
         };
         let err = refus(
             session.preview_request(&chemin, 10, &page, &jeton).await,
-            "une page sans clé unique n'a pas de sens",
+            "a page without unique key makes no sense",
         );
         assert!(
             matches!(&err, OxynError::NotSupported { capability }
@@ -1535,10 +1524,10 @@ mod tests {
             "{err}"
         );
 
-        // La première page de la même relation reste lisible : c'est l'aperçu
-        // d'aujourd'hui, et il n'a rien perdu.
+        // The first page of the same relation stays readable: it is today's
+        // preview, and it has lost nothing.
         let lots = apercu(&*session, "sans_cle", 10, &PreviewShape::unordered()).await;
         assert_eq!(textes(&lots, 0).len(), 2);
-        session.close().await.expect("fermeture");
+        session.close().await.expect("close");
     }
 }

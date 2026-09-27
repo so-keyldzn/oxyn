@@ -1,23 +1,21 @@
-//! Le jeu d'identifiants d'une connexion.
+//! A connection's set of credentials.
 //!
-//! Un trousseau de système d'exploitation ne stocke qu'**une** valeur par
-//! entrée. Or une connexion peut demander un mot de passe *et* un certificat
-//! client *et* la phrase de passe d'une clé SSH de tunnel. [`CredentialBundle`]
-//! rassemble ces valeurs et les encode en JSON avant stockage : une entrée de
-//! trousseau, un secret logique.
+//! An operating system keychain stores only **one** value per entry. Yet a
+//! connection may require a password *and* a client certificate *and* the
+//! passphrase of a tunnel SSH key. [`CredentialBundle`] gathers these values and
+//! encodes them as JSON before storage: one keychain entry, one logical secret.
 //!
-//! Trois propriétés sont tenues par le type, pas par la discipline de
-//! l'appelant :
+//! Three properties are held by the type, not by the caller's discipline:
 //!
-//! 1. **Aucun `Debug` dérivé.** Le `Debug` est écrit à la main et rend
-//!    `<redacted>`. C'est le corollaire vérifiable de I-03 : c'est le
-//!    `tracing::debug!("{bundle:?}")` ajouté six mois plus tard qui fuit.
-//! 2. **Effacement à la destruction.** [`Zeroize`] est implémenté champ par
-//!    champ, et [`Drop`] l'appelle. Un mot de passe libéré sans effacement reste
-//!    lisible dans le tas jusqu'à réutilisation de la page.
-//! 3. **Pas de `Clone`.** Copier un jeu d'identifiants multiplie les tampons à
-//!    effacer sans qu'aucun appelant en ait besoin. Ce qui doit voyager, c'est
-//!    la [`SecretRef`](crate::SecretRef).
+//! 1. **No derived `Debug`.** `Debug` is written by hand and renders
+//!    `<redacted>`. It is the checkable corollary of I-03: it is the
+//!    `tracing::debug!("{bundle:?}")` added six months later that leaks.
+//! 2. **Erasure on destruction.** [`Zeroize`] is implemented field by field, and
+//!    [`Drop`] calls it. A password freed without erasure stays readable in the
+//!    heap until the page is reused.
+//! 3. **No `Clone`.** Copying a set of credentials multiplies the buffers to
+//!    erase without any caller needing it. What must travel is the
+//!    [`SecretRef`](crate::SecretRef).
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -28,167 +26,166 @@ use zeroize::{Zeroize, ZeroizeOnDrop};
 
 use crate::error::{Result, SecretError};
 
-/// Ce qu'il faut fournir à un serveur pour ouvrir une session.
+/// What must be given to a server to open a session.
 ///
-/// Tous les champs sont facultatifs : une connexion SQLite sur fichier n'en
-/// renseigne aucun, une connexion PostgreSQL par mot de passe un seul, une
-/// connexion mutuellement authentifiée trois.
+/// Every field is optional: an SQLite connection on a file fills none, a
+/// PostgreSQL connection by password a single one, a mutually authenticated
+/// connection three.
 ///
-/// # Sérialisation
+/// # Serialization
 ///
-/// Le JSON produit n'écrit que les champs renseignés, et la relecture tolère
-/// les champs inconnus : un workspace écrit par une version ultérieure d'Oxyn
-/// reste lisible, quitte à ignorer ce qu'il apporte.
+/// The JSON produced writes only the filled fields, and reading back tolerates
+/// unknown fields: a workspace written by a later version of Oxyn stays
+/// readable, at the cost of ignoring what it brings.
 #[derive(Default, Serialize, Deserialize)]
 pub struct CredentialBundle {
-    /// Mot de passe du compte de base de données.
+    /// Password of the database account.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     password: Option<String>,
 
-    /// Jeton d'authentification : jeton d'API d'un fournisseur de modèles,
-    /// jeton porteur, jeton de session d'un fournisseur cloud.
+    /// Authentication token: API token of a model provider, bearer token, session
+    /// token of a cloud provider.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     token: Option<String>,
 
-    /// Certificat client TLS, au format PEM.
+    /// TLS client certificate, in PEM format.
     ///
-    /// Le certificat n'est pas secret en lui-même, mais il ne sert à rien sans
-    /// sa clé et il voyage avec elle : le séparer ne ferait qu'ajouter une
-    /// entrée de trousseau à gérer.
+    /// The certificate is not secret in itself, but it is useless without its key
+    /// and travels with it: separating them would only add a keychain entry to
+    /// manage.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     tls_client_cert: Option<String>,
 
-    /// Clé privée du certificat client TLS, au format PEM.
+    /// Private key of the TLS client certificate, in PEM format.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     tls_client_key: Option<String>,
 
-    /// Clé privée SSH d'un tunnel, au format PEM ou OpenSSH.
+    /// SSH private key of a tunnel, in PEM or OpenSSH format.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     ssh_private_key: Option<String>,
 
-    /// Phrase de passe protégeant la clé SSH.
+    /// Passphrase protecting the SSH key.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     ssh_passphrase: Option<String>,
 
-    /// Secrets propres à un driver, que le modèle commun ne prévoit pas :
-    /// jeton de session AWS, compte de service BigQuery, clé privée Snowflake.
+    /// Driver-specific secrets that the common model does not provide for: AWS
+    /// session token, BigQuery service account, Snowflake private key.
     ///
-    /// La clé est un nom court choisi par le driver et documenté par lui ; elle
-    /// n'est pas un secret. La valeur en est un, et elle est effacée comme les
-    /// autres.
+    /// The key is a short name chosen and documented by the driver; it is not a
+    /// secret. The value is one, and it is erased like the others.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     extra: BTreeMap<String, String>,
 }
 
 impl CredentialBundle {
-    /// Un jeu vide.
+    /// An empty set.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Renseigne le mot de passe.
+    /// Sets the password.
     #[must_use]
     pub fn with_password(mut self, password: impl Into<String>) -> Self {
         self.password = Some(password.into());
         self
     }
 
-    /// Renseigne le jeton d'authentification.
+    /// Sets the authentication token.
     #[must_use]
     pub fn with_token(mut self, token: impl Into<String>) -> Self {
         self.token = Some(token.into());
         self
     }
 
-    /// Renseigne le certificat client TLS (PEM).
+    /// Sets the TLS client certificate (PEM).
     #[must_use]
     pub fn with_tls_client_cert(mut self, pem: impl Into<String>) -> Self {
         self.tls_client_cert = Some(pem.into());
         self
     }
 
-    /// Renseigne la clé privée du certificat client TLS (PEM).
+    /// Sets the private key of the TLS client certificate (PEM).
     #[must_use]
     pub fn with_tls_client_key(mut self, pem: impl Into<String>) -> Self {
         self.tls_client_key = Some(pem.into());
         self
     }
 
-    /// Renseigne la clé privée SSH du tunnel.
+    /// Sets the SSH private key of the tunnel.
     #[must_use]
     pub fn with_ssh_private_key(mut self, pem: impl Into<String>) -> Self {
         self.ssh_private_key = Some(pem.into());
         self
     }
 
-    /// Renseigne la phrase de passe de la clé SSH.
+    /// Sets the passphrase of the SSH key.
     #[must_use]
     pub fn with_ssh_passphrase(mut self, passphrase: impl Into<String>) -> Self {
         self.ssh_passphrase = Some(passphrase.into());
         self
     }
 
-    /// Ajoute un secret propre à un driver.
+    /// Adds a driver-specific secret.
     #[must_use]
     pub fn with_extra(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.extra.insert(key.into(), value.into());
         self
     }
 
-    /// Expose le mot de passe.
+    /// Exposes the password.
     ///
-    /// Comme tous les accesseurs de ce type, la valeur rendue est le secret en
-    /// clair : elle se transmet au driver et s'oublie. Elle ne se journalise
-    /// pas, ne se met pas en cache, ne rejoint pas une invite IA (I-03, I-04).
+    /// Like every accessor of this type, the returned value is the secret in clear
+    /// text: it is handed to the driver and forgotten. It is not logged, not
+    /// cached, and does not reach an AI prompt (I-03, I-04).
     #[must_use]
     pub fn password(&self) -> Option<&str> {
         self.password.as_deref()
     }
 
-    /// Expose le jeton d'authentification. Mêmes précautions que
+    /// Exposes the authentication token. Same precautions as
     /// [`password`](Self::password).
     #[must_use]
     pub fn token(&self) -> Option<&str> {
         self.token.as_deref()
     }
 
-    /// Expose le certificat client TLS. Mêmes précautions que
+    /// Exposes the TLS client certificate. Same precautions as
     /// [`password`](Self::password).
     #[must_use]
     pub fn tls_client_cert(&self) -> Option<&str> {
         self.tls_client_cert.as_deref()
     }
 
-    /// Expose la clé privée TLS. Mêmes précautions que
+    /// Exposes the TLS private key. Same precautions as
     /// [`password`](Self::password).
     #[must_use]
     pub fn tls_client_key(&self) -> Option<&str> {
         self.tls_client_key.as_deref()
     }
 
-    /// Expose la clé privée SSH. Mêmes précautions que
+    /// Exposes the SSH private key. Same precautions as
     /// [`password`](Self::password).
     #[must_use]
     pub fn ssh_private_key(&self) -> Option<&str> {
         self.ssh_private_key.as_deref()
     }
 
-    /// Expose la phrase de passe SSH. Mêmes précautions que
+    /// Exposes the SSH passphrase. Same precautions as
     /// [`password`](Self::password).
     #[must_use]
     pub fn ssh_passphrase(&self) -> Option<&str> {
         self.ssh_passphrase.as_deref()
     }
 
-    /// Expose un secret propre à un driver. Mêmes précautions que
+    /// Exposes a driver-specific secret. Same precautions as
     /// [`password`](Self::password).
     #[must_use]
     pub fn extra(&self, key: &str) -> Option<&str> {
         self.extra.get(key).map(String::as_str)
     }
 
-    /// Le jeu ne contient-il aucun secret ?
+    /// Does the set contain no secret?
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.password.is_none()
@@ -200,13 +197,12 @@ impl CredentialBundle {
             && self.extra.is_empty()
     }
 
-    /// Noms des champs renseignés, pour le diagnostic.
+    /// Names of the filled fields, for diagnostics.
     ///
-    /// C'est l'échappatoire explicite au `Debug` masqué : savoir *qu'un* mot de
-    /// passe est présent aide à comprendre un échec d'authentification, et ne
-    /// dit rien de sa valeur. Les clés de [`extra`](Self::with_extra) sont
-    /// rendues telles quelles — ce sont des noms choisis par un driver, pas des
-    /// secrets.
+    /// It is the explicit escape hatch from the masked `Debug`: knowing *that* a
+    /// password is present helps understand an authentication failure, and says
+    /// nothing of its value. The keys of [`extra`](Self::with_extra) are returned
+    /// as they are — they are names chosen by a driver, not secrets.
     #[must_use]
     pub fn filled_fields(&self) -> Vec<&str> {
         let mut noms = Vec::new();
@@ -226,47 +222,45 @@ impl CredentialBundle {
         noms
     }
 
-    /// Encode le jeu en JSON, enveloppé dans un [`SecretString`].
+    /// Encodes the set as JSON, wrapped in a [`SecretString`].
     ///
-    /// # Erreurs
-    /// [`SecretError::Malformed`] si l'encodage échoue — ce qui, sur une
-    /// structure de chaînes, signalerait un bug de `serde_json` plutôt qu'une
-    /// donnée fautive.
+    /// # Errors
+    /// [`SecretError::Malformed`] if encoding fails — which, on a structure of
+    /// strings, would signal a `serde_json` bug rather than faulty data.
     pub fn to_secret_json(&self) -> Result<SecretString> {
         let mut json = serde_json::to_string(self).map_err(|_| SecretError::Malformed {
             detail: SecretError::NOT_ENCODABLE,
         })?;
 
-        // `SecretString::from(&str)` alloue exactement la longueur nécessaire,
-        // donc la conversion en `Box<str>` qu'il fait ensuite ne réalloue pas
-        // et ne laisse pas de copie derrière elle. Le tampon de `serde_json`,
-        // lui, a une capacité quelconque : on l'efface explicitement, sinon le
-        // JSON en clair survivrait dans le tas après libération.
+        // `SecretString::from(&str)` allocates exactly the needed length, so the
+        // conversion to `Box<str>` it then does does not reallocate and leaves no
+        // copy behind. The `serde_json` buffer, however, has an arbitrary capacity:
+        // it is erased explicitly, otherwise the clear-text JSON would survive in
+        // the heap after being freed.
         let secret = SecretString::from(json.as_str());
         json.zeroize();
         Ok(secret)
     }
 
-    /// Décode un jeu depuis le JSON relu dans le trousseau.
+    /// Decodes a set from the JSON read back from the keychain.
     ///
-    /// # Erreurs
-    /// [`SecretError::Malformed`] si le contenu n'est pas un bundle. L'erreur
-    /// de `serde_json` est **abandonnée**, sans être ni rendue ni journalisée :
-    /// son message cite volontiers un fragment de son entrée, qui est ici le
-    /// secret lui-même.
+    /// # Errors
+    /// [`SecretError::Malformed`] if the content is not a bundle. The `serde_json`
+    /// error is **dropped**, neither returned nor logged: its message readily
+    /// quotes a fragment of its input, which here is the secret itself.
     pub fn from_secret_json(secret: &SecretString) -> Result<Self> {
         let brut = secret.expose_secret();
 
-        // Un bundle est un **objet**, et rien d'autre. Sans ce garde-fou, `[]`
-        // est accepté : serde sait construire une structure depuis une séquence,
-        // et comme tous les champs portent `#[serde(default)]`, une séquence
-        // vide donne un jeu vide parfaitement valide. Une entrée de trousseau
-        // corrompue passerait alors pour « aucun secret renseigné », et l'échec
-        // de connexion qui suit ne désignerait pas le trousseau.
+        // A bundle is an **object**, and nothing else. Without this guard, `[]`
+        // is accepted: serde can build a structure from a sequence, and since
+        // every field carries `#[serde(default)]`, an empty sequence gives a
+        // perfectly valid empty set. A corrupted keychain entry would then pass
+        // for "no secret set", and the connection failure that follows would not
+        // point at the keychain.
         //
-        // Le contrôle porte sur le premier caractère significatif plutôt que sur
-        // un décodage intermédiaire : passer par `serde_json::Value` recopierait
-        // le secret dans une structure de plus, qu'il faudrait ensuite effacer.
+        // The check is on the first significant character rather than on an
+        // intermediate decoding: going through `serde_json::Value` would copy the
+        // secret into one more structure, which would then have to be erased.
         if !brut.trim_start().starts_with('{') {
             return Err(SecretError::Malformed {
                 detail: SecretError::NOT_A_BUNDLE,
@@ -280,13 +274,12 @@ impl CredentialBundle {
 }
 
 impl fmt::Debug for CredentialBundle {
-    /// Rendu total : `CredentialBundle(<redacted>)`.
+    /// Total rendering: `CredentialBundle(<redacted>)`.
     ///
-    /// Pas même la liste des champs renseignés — un `Debug` est appelé par des
-    /// chemins qu'on ne relit pas (un `#[derive(Debug)]` d'une structure
-    /// englobante, une macro `tracing`), et sa sortie atterrit dans des canaux
-    /// qu'on ne choisit pas. Ce qu'on veut montrer volontairement passe par
-    /// [`filled_fields`](Self::filled_fields).
+    /// Not even the list of filled fields — a `Debug` is called by paths nobody
+    /// rereads (a `#[derive(Debug)]` of an enclosing structure, a `tracing`
+    /// macro), and its output lands in channels nobody chooses. What we want to
+    /// show on purpose goes through [`filled_fields`](Self::filled_fields).
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.write_str("CredentialBundle(<redacted>)")
     }
@@ -300,9 +293,9 @@ impl Zeroize for CredentialBundle {
         self.tls_client_key.zeroize();
         self.ssh_private_key.zeroize();
         self.ssh_passphrase.zeroize();
-        // `BTreeMap` n'a pas d'implémentation de `Zeroize` : on efface chaque
-        // valeur sur place avant de vider la structure, sinon `clear()` se
-        // contenterait de libérer des tampons encore lisibles.
+        // `BTreeMap` has no `Zeroize` implementation: each value is erased in
+        // place before the structure is emptied, otherwise `clear()` would merely
+        // free buffers that are still readable.
         for valeur in self.extra.values_mut() {
             valeur.zeroize();
         }
@@ -323,7 +316,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn le_debug_ne_montre_rien() {
+    fn debug_shows_nothing() {
         let bundle = CredentialBundle::new()
             .with_password("hunter2")
             .with_token("sk-ant-secret")
@@ -332,14 +325,14 @@ mod tests {
         let rendu = format!("{bundle:?}");
         assert_eq!(rendu, "CredentialBundle(<redacted>)");
         for secret in ["hunter2", "sk-ant-secret", "phrase de passe"] {
-            assert!(!rendu.contains(secret), "secret fuité : {rendu}");
+            assert!(!rendu.contains(secret), "secret leaked: {rendu}");
         }
     }
 
     #[test]
-    fn le_debug_d_une_structure_englobante_ne_montre_rien_non_plus() {
-        // C'est le vrai chemin de fuite : personne n'écrit `{bundle:?}` ; on
-        // dérive `Debug` sur une structure qui en contient un.
+    fn the_debug_of_an_enclosing_structure_shows_nothing_either() {
+        // This is the real leak path: nobody writes `{bundle:?}`; `Debug` is
+        // derived on a structure that contains one.
         #[derive(Debug)]
         struct Englobante {
             #[allow(dead_code)]
@@ -353,12 +346,12 @@ mod tests {
             identifiants: CredentialBundle::new().with_password("hunter2"),
         };
         let rendu = format!("{englobante:?}");
-        assert!(!rendu.contains("hunter2"), "secret fuité : {rendu}");
+        assert!(!rendu.contains("hunter2"), "secret leaked: {rendu}");
         assert!(rendu.contains("prod-eu"));
     }
 
     #[test]
-    fn les_champs_renseignes_se_nomment_sans_se_montrer() {
+    fn filled_fields_are_named_without_being_shown() {
         let bundle = CredentialBundle::new()
             .with_password("hunter2")
             .with_extra("aws_session_token", "AQoDYXdz");
@@ -368,7 +361,7 @@ mod tests {
     }
 
     #[test]
-    fn l_aller_retour_json_est_fidele() {
+    fn the_json_round_trip_is_faithful() {
         let bundle = CredentialBundle::new()
             .with_password("hunter2")
             .with_token("sk-ant-secret")
@@ -378,8 +371,8 @@ mod tests {
             .with_ssh_passphrase("phrase")
             .with_extra("aws_session_token", "AQoDYXdz");
 
-        let json = bundle.to_secret_json().expect("encodage");
-        let relu = CredentialBundle::from_secret_json(&json).expect("décodage");
+        let json = bundle.to_secret_json().expect("encoding");
+        let relu = CredentialBundle::from_secret_json(&json).expect("decoding");
 
         assert_eq!(relu.password(), Some("hunter2"));
         assert_eq!(relu.token(), Some("sk-ant-secret"));
@@ -395,56 +388,55 @@ mod tests {
     }
 
     #[test]
-    fn seuls_les_champs_renseignes_sont_ecrits() {
+    fn only_filled_fields_are_written() {
         let bundle = CredentialBundle::new().with_password("hunter2");
-        let json = bundle.to_secret_json().expect("encodage");
+        let json = bundle.to_secret_json().expect("encoding");
         assert_eq!(json.expose_secret(), r#"{"password":"hunter2"}"#);
 
-        let vide = CredentialBundle::new().to_secret_json().expect("encodage");
+        let vide = CredentialBundle::new().to_secret_json().expect("encoding");
         assert_eq!(vide.expose_secret(), "{}");
     }
 
     #[test]
-    fn un_bundle_ecrit_par_une_version_ulterieure_reste_lisible() {
-        // I-11 : ce qu'Oxyn écrit reste lisible, et l'inverse aussi — un champ
-        // qu'on ne connaît pas encore ne doit pas rendre le trousseau
-        // inexploitable.
+    fn a_bundle_written_by_a_later_version_stays_readable() {
+        // I-11: what Oxyn writes stays readable, and the reverse too — a field not
+        // known yet must not make the keychain unusable.
         let json = SecretString::from(r#"{"password":"hunter2","kerberos_keytab":"…"}"#);
-        let bundle = CredentialBundle::from_secret_json(&json).expect("champ inconnu toléré");
+        let bundle = CredentialBundle::from_secret_json(&json).expect("unknown field tolerated");
         assert_eq!(bundle.password(), Some("hunter2"));
     }
 
     #[test]
-    fn ce_qui_n_est_pas_un_bundle_est_refuse_sans_etre_recopie() {
+    fn what_is_not_a_bundle_is_refused_without_being_copied() {
         for contenu in ["hunter2", "[]", "{\"password\": 42}", ""] {
             let secret = SecretString::from(contenu);
             let err = CredentialBundle::from_secret_json(&secret)
-                .expect_err("ce n'est pas un bundle valide");
+                .expect_err("this is not a valid bundle");
             assert!(matches!(err, SecretError::Malformed { .. }));
             assert!(
                 !err.to_string().contains("hunter2"),
-                "contenu fuité : {err}"
+                "content leaked: {err}"
             );
         }
     }
 
     #[test]
-    fn l_effacement_vide_tous_les_champs() {
-        // On ne peut pas observer le tas depuis un test portable ; ce qui est
-        // vérifiable, c'est que `zeroize` remet la structure à l'état vide —
-        // donc qu'aucun champ n'a été oublié dans l'implémentation manuelle.
+    fn erasure_empties_every_field() {
+        // The heap cannot be observed from a portable test; what can be checked is
+        // that `zeroize` resets the structure to the empty state — so that no field
+        // was forgotten in the manual implementation.
         let mut bundle = CredentialBundle::new()
             .with_password("hunter2")
             .with_token("sk-ant-secret")
             .with_tls_client_cert("cert")
-            .with_tls_client_key("clé")
-            .with_ssh_private_key("clé ssh")
+            .with_tls_client_key("key")
+            .with_ssh_private_key("ssh key")
             .with_ssh_passphrase("phrase")
             .with_extra("aws_session_token", "AQoDYXdz");
 
         bundle.zeroize();
 
-        assert!(bundle.is_empty(), "un champ a échappé à l'effacement");
+        assert!(bundle.is_empty(), "a field escaped erasure");
         assert!(bundle.filled_fields().is_empty());
     }
 }

@@ -1,29 +1,29 @@
-//! Le flux de lots, et l'annulation qui atteint vraiment le serveur.
+//! The batch stream, and the cancellation that really reaches the server.
 //!
-//! # Pourquoi une tâche et un canal
+//! # Why a task and a channel
 //!
-//! `sqlx` rend un flux de lignes qui **emprunte** la connexion et l'instruction
-//! préparée. Un curseur qui posséderait les trois serait auto-référentiel, ce
-//! qui en Rust demande soit `unsafe` — interdit par le workspace — soit une
-//! dépendance de plus. La tâche possède les trois et pousse ses lots dans un
-//! canal borné ; le curseur n'en tient que la réception.
+//! `sqlx` returns a row stream that **borrows** the connection and the
+//! prepared statement. A cursor owning all three would be self-referential,
+//! which in Rust requires either `unsafe` — forbidden by the workspace — or one
+//! more dependency. The task owns all three and pushes its batches into a
+//! bounded channel; the cursor holds only the receiving end.
 //!
-//! Le canal a **une place**. Ce n'est pas de la frilosité : c'est la
-//! contre-pression. La tâche ne décode le lot suivant que si le précédent a été
-//! pris, donc un `SELECT *` sur 500 Go ne fait jamais grossir la mémoire au-delà
-//! de deux lots ([I-06](../../../CLAUDE.md#i-06)).
+//! The channel has **one slot**. That is not timidity: it is back-pressure. The
+//! task decodes the next batch only once the previous one has been taken, so a
+//! `SELECT *` over 500 GB never grows memory beyond two batches
+//! ([I-06](../../../CLAUDE.md#i-06)).
 //!
-//! # L'abandon d'un curseur coupe la requête
+//! # Abandoning a cursor cuts the query
 //!
-//! Fermer un onglet détruit le curseur. Son `Drop` **annule son jeton**, ce qui
-//! réveille la tâche, lui fait émettre `pg_cancel_backend` depuis une seconde
-//! connexion, puis fermer la sienne. Sans cela, l'agrégation de quatre minutes
-//! continuerait sur le serveur, la connexion prise et le verrou posé — et au
-//! dixième onglet fermé la base refuserait les connexions
+//! Closing a tab drops the cursor. Its `Drop` **cancels its token**, which wakes
+//! the task, makes it issue `pg_cancel_backend` from a second connection, then
+//! close its own. Without that, the four-minute aggregation would continue on
+//! the server, the connection taken and the lock held — and at the tenth closed
+//! tab the database would refuse connections
 //! ([DRIVER-CONTRACT §2](../../../docs/DRIVER-CONTRACT.md)).
 //!
-//! C'est aussi pourquoi `Drop` **n'avorte pas** la tâche : une tâche avortée ne
-//! peut plus rien annuler. On lui demande de s'arrêter, on ne la tue pas.
+//! That is also why `Drop` **does not abort** the task: an aborted task can no
+//! longer cancel anything. It is asked to stop, it is not killed.
 
 use std::time::Instant;
 
@@ -48,90 +48,89 @@ use crate::lease::Lease;
 use crate::session::{SQL_RESET_AFTER_WRITE, SQL_RESET_SEARCH_PATH, SQL_ROLLBACK};
 use crate::types::PgDecoding;
 
-/// Octets accumulés au-delà desquels un lot est clos et émis.
+/// Accumulated bytes beyond which a batch is closed and emitted.
 ///
-/// **En octets, pas en lignes.** Mille lignes portant chacune un BLOB d'un
-/// mégaoctet font un gigaoctet ; un seuil compté en lignes marche sur les tables
-/// de démonstration et déclenche l'OOM sur les vraies.
+/// **In bytes, not in rows.** A thousand rows each carrying a one-megabyte BLOB
+/// make a gigabyte; a threshold counted in rows works on demo tables and
+/// triggers the OOM on real ones.
 pub const BATCH_BYTE_BUDGET: usize = 1 << 20;
 
-/// Lignes au-delà desquelles un lot est clos, quelle que soit sa taille.
+/// Rows beyond which a batch is closed, whatever its size.
 ///
-/// Complète le seuil en octets par le bas : sans lui, un million de booléens ne
-/// remplirait jamais un mégaoctet et le premier lot n'arriverait jamais. Le
-/// budget de premier affichage est de 100 ms
-/// ([PERFORMANCE](../../../docs/PERFORMANCE.md)).
+/// Complements the byte threshold from below: without it, a million booleans
+/// would never fill a megabyte and the first batch would never arrive. The
+/// first-display budget is 100 ms ([PERFORMANCE](../../../docs/PERFORMANCE.md)).
 pub const BATCH_ROW_CEILING: usize = 8_192;
 
-/// Ce que la tâche de flux pousse vers le curseur.
+/// What the stream task pushes to the cursor.
 #[derive(Debug)]
 enum CursorEvent {
-    /// Un lot prêt à afficher.
+    /// A batch ready to display.
     Batch(RecordBatch),
-    /// Le flux est épuisé, ou borné.
+    /// The stream is exhausted, or bounded.
     Finished {
-        /// Lignes affectées, pour une instruction qui ne rend pas de colonnes.
+        /// Affected rows, for a statement that returns no columns.
         affected_rows: u64,
-        /// Le résultat a-t-il été coupé par les bornes d'exécution ?
+        /// Was the result cut by the execution bounds?
         truncated: bool,
     },
-    /// Le flux s'est interrompu sur une erreur déjà classée.
+    /// The stream stopped on an already classified error.
     Failed(Box<OxynError>),
 }
 
-/// Pourquoi la boucle de flux s'est arrêtée.
+/// Why the stream loop stopped.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Halt {
-    /// Le serveur n'a plus rien à envoyer.
+    /// The server has nothing more to send.
     Exhausted,
-    /// [`ExecLimits::max_rows`] est atteint.
+    /// [`ExecLimits::max_rows`] is reached.
     RowLimit,
-    /// Le jeton d'annulation s'est déclenché.
+    /// The cancellation token fired.
     Cancelled,
-    /// [`ExecLimits::timeout`] est écoulé.
+    /// [`ExecLimits::timeout`] has elapsed.
     TimedOut,
-    /// Le curseur a été détruit : plus personne n'attend les lots.
+    /// The cursor was dropped: nobody waits for the batches any more.
     Abandoned,
-    /// Une erreur a été rencontrée et déjà émise.
+    /// An error was encountered and already emitted.
     Failed,
 }
 
 impl Halt {
-    /// Faut-il demander au serveur d'arrêter la requête ?
+    /// Must the server be asked to stop the query?
     ///
-    /// Tout ce qui n'est pas un épuisement laisse une requête en cours côté
-    /// serveur. Abandonner le flux côté client ne libère ni la connexion ni le
-    /// verrou.
+    /// Anything that is not exhaustion leaves a query running on the server.
+    /// Abandoning the stream on the client side releases neither the connection
+    /// nor the lock.
     const fn needs_server_cancel(self) -> bool {
         !matches!(self, Self::Exhausted | Self::Failed)
     }
 }
 
-/// Un flux de `RecordBatch` alimenté par une exécution PostgreSQL.
+/// A `RecordBatch` stream fed by a PostgreSQL execution.
 ///
-/// `Debug` est écrit à la main : le canal et la poignée de tâche n'apprennent
-/// rien à personne, et le schéma est ce qu'on veut voir en diagnostic.
+/// `Debug` is written by hand: the channel and the task handle teach nobody
+/// anything, and the schema is what one wants to see in diagnostics.
 pub struct PostgresCursor {
     handle: StatementHandle,
     schema: SchemaRef,
     events: mpsc::Receiver<CursorEvent>,
-    /// Le jeton **propre** à cette exécution. Annulé par `Drop`, il est ce qui
-    /// transforme la fermeture d'un onglet en `pg_cancel_backend`.
+    /// This execution's **own** token. Cancelled by `Drop`, it is what turns
+    /// closing a tab into `pg_cancel_backend`.
     cancel: CancelToken,
     task: JoinHandle<()>,
     stats: ExecStats,
     started: Instant,
     finished: bool,
-    /// L'instruction rend-elle des colonnes ? Sinon, `rows` compte les lignes
-    /// **affectées**, ce qui n'est pas la même mesure.
+    /// Does the statement return columns? Otherwise, `rows` counts the
+    /// **affected** rows, which is not the same measure.
     projects_columns: bool,
 }
 
 impl PostgresCursor {
-    /// La tâche de flux est-elle terminée ?
+    /// Is the stream task finished?
     ///
-    /// Sert au diagnostic et aux tests : après une annulation, la tâche doit
-    /// s'arrêter d'elle-même, sans avoir été avortée.
+    /// Used for diagnostics and tests: after a cancellation, the task must stop
+    /// on its own, without having been aborted.
     #[must_use]
     pub fn task_finished(&self) -> bool {
         self.task.is_finished()
@@ -150,11 +149,11 @@ impl std::fmt::Debug for PostgresCursor {
 }
 
 impl Drop for PostgresCursor {
-    /// Demande l'arrêt ; ne l'impose pas.
+    /// Requests the stop; does not impose it.
     ///
-    /// Avorter la tâche la priverait du droit d'émettre `pg_cancel_backend` et
-    /// de rendre sa connexion — c'est-à-dire exactement de ce qui rend
-    /// l'annulation réelle.
+    /// Aborting the task would deprive it of the right to issue
+    /// `pg_cancel_backend` and to return its connection — that is, of exactly
+    /// what makes the cancellation real.
     fn drop(&mut self) {
         if !self.finished {
             self.cancel.cancel();
@@ -198,8 +197,8 @@ impl Cursor for PostgresCursor {
                 self.seal(true);
                 Err(*erreur)
             }
-            // Le canal ne se ferme sans `Finished` que si la tâche a disparu
-            // sans conclure : c'est un bug du driver, pas une donnée fautive.
+            // The channel closes without `Finished` only if the task disappeared
+            // without concluding: it is a driver bug, not faulty data.
             None => {
                 self.seal(true);
                 Err(OxynError::Internal(
@@ -215,7 +214,7 @@ impl Cursor for PostgresCursor {
 }
 
 impl PostgresCursor {
-    /// Clôt le curseur : plus rien ne viendra.
+    /// Closes the cursor: nothing more will come.
     fn seal(&mut self, truncated: bool) {
         self.finished = true;
         self.stats.total_time = self.started.elapsed();
@@ -225,70 +224,72 @@ impl PostgresCursor {
     }
 }
 
-/// Ce qu'il faut à la tâche de flux pour vivre sa vie.
+/// What the stream task needs to live its life.
 ///
-/// Un type plutôt qu'onze paramètres : la fonction qui les prenait tous
-/// dépassait la limite de `clippy::too_many_arguments` et, surtout, personne ne
-/// pouvait relire l'ordre des arguments.
+/// A type rather than eleven parameters: the function that took them all
+/// exceeded the `clippy::too_many_arguments` limit and, above all, nobody could
+/// review the order of the arguments.
 pub(crate) struct StreamRequest {
-    /// Le driver, pour classer les erreurs.
+    /// The driver, to classify errors.
     pub(crate) driver: DriverId,
-    /// La connexion qui portera l'exécution, empruntée au bassin et déjà
-    /// marquée sale : elle n'y retourne que si la tâche la remet au défaut.
+    /// The connection that will carry the execution, borrowed from the pool and
+    /// already marked dirty: it goes back only if the task resets it to the
+    /// default.
     pub(crate) connection: Lease,
-    /// L'instruction préparée : c'est elle qui a donné le schéma.
+    /// The prepared statement: it is what gave the schema.
     pub(crate) statement: PgStatement,
-    /// Les paramètres liés, déjà encodés.
+    /// The bound parameters, already encoded.
     pub(crate) arguments: PgArguments,
-    /// Y avait-il des valeurs de l'appelant parmi eux ?
+    /// Were there caller values among them?
     ///
-    /// Relevé par la session avant que `arguments` ne soit déplacé dans
-    /// `query_with` : le message du serveur peut citer une valeur liée, et
-    /// `PgArguments` ne dit plus, ici, d'où viennent ses octets
+    /// Recorded by the session before `arguments` is moved into `query_with`:
+    /// the server's message can quote a bound value, and `PgArguments` no
+    /// longer says, here, where its bytes come from
     /// ([I-03](../../../CLAUDE.md#i-03)).
     pub(crate) bound: Bound,
-    /// Le schéma des lots, connu avant la première ligne.
+    /// The batches' schema, known before the first row.
     pub(crate) schema: SchemaRef,
-    /// Le plan de décodage, aligné sur le schéma.
+    /// The decoding plan, aligned with the schema.
     pub(crate) decodings: Vec<PgDecoding>,
-    /// Un `search_path` a-t-il été posé pour cette exécution ?
+    /// Was a `search_path` set for this execution?
     ///
-    /// Il faut alors le défaire avant que la connexion reparte au bassin. Sinon
-    /// elle emporte le contexte d'une console vers tout ce qui l'empruntera
-    /// ensuite — et l'introspection en dépend : `pg_get_indexdef`,
-    /// `pg_get_constraintdef`, `pg_get_expr` et `format_type` qualifient leur
-    /// texte **relativement au `search_path`**. Un même objet se verrait alors
-    /// décrit différemment d'une lecture à l'autre, selon la connexion tirée
-    /// ([ADR-0019](../../../docs/adr/0019-contexte-de-session.md)).
+    /// It must then be undone before the connection goes back to the pool.
+    /// Otherwise it carries a console's context to everything that borrows it
+    /// next — and introspection depends on it: `pg_get_indexdef`,
+    /// `pg_get_constraintdef`, `pg_get_expr` and `format_type` qualify their
+    /// text **relative to the `search_path`**. The same object would then be
+    /// described differently from one read to the next, depending on the
+    /// connection drawn ([ADR-0019](../../../docs/adr/0019-contexte-de-session.md)).
     pub(crate) restore_context: bool,
-    /// Le texte de l'utilisateur ouvre-t-il une transaction (`BEGIN`,
-    /// `START TRANSACTION`) ? La connexion est alors fermée au lieu d'être
-    /// rendue.
+    /// Does the user's text open a transaction (`BEGIN`, `START TRANSACTION`)?
+    /// The connection is then closed instead of being returned.
     pub(crate) opens_transaction: bool,
-    /// Les bornes de l'exécution.
+    /// The execution's bounds.
     pub(crate) limits: ExecLimits,
-    /// L'intention, qui décide de la classe des erreurs de transport.
+    /// The intent, which decides the class of transport errors.
     pub(crate) intent: StatementIntent,
-    /// Le pid du serveur qui exécute, pour l'annulation.
+    /// The pid of the server process that executes, for cancellation.
     pub(crate) backend_pid: i32,
-    /// De quoi ouvrir la seconde connexion qui annulera.
+    /// What opens the second connection that will cancel.
     pub(crate) canceller: std::sync::Arc<BackendCanceller>,
-    /// Le registre des exécutions en cours, dont la tâche s'efface en partant.
+    /// The registry of running executions, from which the task removes itself
+    /// on leaving.
     pub(crate) statements: std::sync::Arc<StatementRegistry>,
-    /// Par où rendre à `Session::cancel` ce que la tâche a fait de l'annulation.
+    /// Where to return to `Session::cancel` what the task did with the
+    /// cancellation.
     pub(crate) verdict: VerdictSender,
-    /// La poignée que [`Cursor::handle`] expose.
+    /// The handle [`Cursor::handle`] exposes.
     pub(crate) handle: StatementHandle,
 }
 
-/// Lance le flux et rend le curseur qui le draine.
+/// Starts the stream and returns the cursor that drains it.
 ///
-/// L'appel rend la main immédiatement : le schéma est déjà connu — il vient de
-/// l'instruction préparée — donc la grille dessine ses colonnes pendant que la
-/// première ligne voyage encore.
+/// The call returns immediately: the schema is already known — it comes from
+/// the prepared statement — so the grid draws its columns while the first row
+/// is still travelling.
 ///
-/// `cancel` est le jeton **propre** à l'exécution, déjà inscrit au registre :
-/// détruire ce curseur le déclenche, `Session::cancel` aussi.
+/// `cancel` is the execution's **own** token, already recorded in the registry:
+/// dropping this cursor fires it, and so does `Session::cancel`.
 pub(crate) fn spawn(request: StreamRequest, cancel: CancelToken) -> PostgresCursor {
     let (envoi, reception) = mpsc::channel(1);
 
@@ -314,7 +315,7 @@ pub(crate) fn spawn(request: StreamRequest, cancel: CancelToken) -> PostgresCurs
     }
 }
 
-/// Le corps de la tâche de flux.
+/// The body of the stream task.
 #[allow(clippy::too_many_lines)]
 async fn run(request: StreamRequest, cancel: CancelToken, events: mpsc::Sender<CursorEvent>) {
     let StreamRequest {
@@ -344,31 +345,29 @@ async fn run(request: StreamRequest, cancel: CancelToken, events: mpsc::Sender<C
         .map(|duree| tokio::time::Instant::now() + duree);
 
     let arret = {
-        // `Statement::query_with` plutôt que `sqlx::query_statement_with` : le type
-        // de base y est celui de l'instruction, sans inférence à faire remonter.
+        // `Statement::query_with` rather than `sqlx::query_statement_with`: the
+        // database type there is the statement's, with no inference to bubble
+        // up.
         let requete = statement.query_with(arguments);
-        // `fetch_many` est déprécié parce que le multi-instruction n'a jamais
-        // marché qu'en SQLite. Ce n'est pas ce qu'on en fait : c'est le seul
-        // flux qui rende aussi le `QueryResult` final, donc le seul qui donne
-        // `rows_affected()` — le bras `Either::Left` plus bas. Le `raw_sql()`
-        // que la dépréciation propose abandonnerait l'instruction préparée,
-        // donc les valeurs liées, donc I-10 : c'est un recul de sûreté, pas un
-        // remplacement.
+        // `fetch_many` is deprecated because multi-statement only ever worked
+        // in SQLite. That is not what it is used for here: it is the only stream
+        // that also returns the final `QueryResult`, hence the only one that
+        // gives `rows_affected()` — the `Either::Left` arm below. The
+        // `raw_sql()` the deprecation suggests would give up the prepared
+        // statement, hence the bound values, hence I-10: it is a safety
+        // regression, not a replacement.
         //
-        // TODO(2026-12-01, oxyn-driver-postgres) : revenir à une API non
-        // dépréciée quand sqlx exposera le compte de lignes affectées sur
-        // `fetch()`. Suivi : https://github.com/launchbadge/sqlx/issues/3108
-        #[expect(
-            deprecated,
-            reason = "seul flux exposant rows_affected() ; voir ci-dessus"
-        )]
+        // TODO(2026-12-01, oxyn-driver-postgres): go back to a non-deprecated
+        // API when sqlx exposes the affected row count on `fetch()`. Tracking:
+        // https://github.com/launchbadge/sqlx/issues/3108
+        #[expect(deprecated, reason = "only stream exposing rows_affected(); see above")]
         let mut flux = requete.fetch_many(&mut *connection);
 
         loop {
             let etape = tokio::select! {
-                // `biased` : une annulation déjà demandée gagne toujours contre
-                // un lot prêt. Sans cela, un flux rapide peut faire attendre
-                // l'annulation indéfiniment.
+                // `biased`: an already requested cancellation always wins over
+                // a ready batch. Without it, a fast stream can make the
+                // cancellation wait indefinitely.
                 biased;
                 () = cancel.cancelled() => Etape::Interrompu(Halt::Cancelled),
                 () = attendre(echeance) => Etape::Interrompu(Halt::TimedOut),
@@ -394,8 +393,8 @@ async fn run(request: StreamRequest, cancel: CancelToken, events: mpsc::Sender<C
             };
 
             let ligne = match element {
-                // Fin d'une instruction : le compte de lignes affectées est ce
-                // qu'une écriture a de plus utile à dire.
+                // End of a statement: the affected row count is the most useful
+                // thing a write has to say.
                 Either::Left(resume) => {
                     affectees = affectees.saturating_add(resume.rows_affected());
                     continue;
@@ -415,9 +414,9 @@ async fn run(request: StreamRequest, cancel: CancelToken, events: mpsc::Sender<C
                 assembleur.bytes() >= BATCH_BYTE_BUDGET || assembleur.rows() >= BATCH_ROW_CEILING;
 
             if lot_plein || borne_atteinte {
-                // Le jeton est surveillé **aussi** pendant la contre-pression :
-                // une grille qui ne lit plus laisserait sinon `Session::cancel`
-                // attendre sans fin, la requête toujours en cours sur le serveur.
+                // The token is watched **also** during back-pressure: a grid
+                // that no longer reads would otherwise let `Session::cancel`
+                // wait forever, the query still running on the server.
                 let emission = tokio::select! {
                     biased;
                     () = cancel.cancelled() => Emission::Annulee,
@@ -436,23 +435,24 @@ async fn run(request: StreamRequest, cancel: CancelToken, events: mpsc::Sender<C
         }
     };
 
-    // L'arrêt est décidé : un jeton déclenché après ce point ne change plus
-    // rien. La tâche s'efface du registre, et c'est elle — pas `Session::cancel`
-    // — qui envoie l'annulation s'il en faut une (voir le module `cancel`).
+    // The stop is decided: a token fired after this point changes nothing any
+    // more. The task removes itself from the registry, and it — not
+    // `Session::cancel` — sends the cancellation if one is needed (see the
+    // `cancel` module).
     statements.forget(handle);
 
-    // Le flux est détruit : l'emprunt sur la connexion est levé.
+    // The stream is dropped: the borrow on the connection is lifted.
     if arret.needs_server_cancel() {
-        // Une connexion dont le flux a été abandonné a pu garder des octets non
-        // lus : la rendre au bassin désynchroniserait le prochain emprunteur.
-        // Elle est tenue **jusqu'après** l'envoi de l'annulation : tant qu'elle
-        // l'est, aucune autre requête ne peut tourner sur `backend_pid`.
+        // A connection whose stream was abandoned may have kept unread bytes:
+        // returning it to the pool would desynchronize the next borrower. It is
+        // held **until after** the cancellation is sent: as long as it is, no
+        // other query can run on `backend_pid`.
         connection.discard();
         match canceller.cancel_backend(backend_pid).await {
             Ok(()) => verdict.settle(Verdict::Cancelled),
             Err(erreur) => {
-                // Signalé ici, et rendu à `Session::cancel` s'il attend : un
-                // curseur détruit, lui, n'a personne à qui le dire.
+                // Reported here, and returned to `Session::cancel` if it is
+                // waiting: a dropped cursor, for its part, has nobody to tell.
                 tracing::warn!(
                     target: "oxyn::driver::postgres",
                     error = %erreur,
@@ -462,22 +462,21 @@ async fn run(request: StreamRequest, cancel: CancelToken, events: mpsc::Sender<C
             }
         }
     } else {
-        // Rien à couper : `Session::cancel` n'a pas à attendre le nettoyage.
+        // Nothing to cut: `Session::cancel` need not wait for the cleanup.
         verdict.settle(Verdict::Finished);
-        // Chaque remise au défaut doit être **confirmée** par le serveur pour
-        // que la connexion reparte au bassin. La première qui échoue laisse
-        // l'emprunt sale, donc la connexion fermée : mieux vaut en ouvrir une
-        // neuve que laisser l'introspection ou une autre console hériter d'un
-        // état qu'elle n'a pas demandé. Une tâche interrompue entre deux
-        // `await` — arrêt du runtime — laisse l'emprunt sale, elle aussi.
+        // Each reset to the default must be **confirmed** by the server for the
+        // connection to go back to the pool. The first one that fails leaves
+        // the borrow dirty, hence the connection closed: better open a fresh one
+        // than let introspection or another console inherit a state it did not
+        // ask for. A task interrupted between two `await`s — runtime shutdown —
+        // leaves the borrow dirty too.
         let mut remises: Vec<(&'static str, &'static str)> = Vec::with_capacity(2);
         if limits.read_only {
-            // La transaction ouverte par `BEGIN READ ONLY` doit être refermée
-            // avant le retour au bassin : une connexion laissée `idle in
-            // transaction` garde des verrous et bloque le `VACUUM` de toute la
-            // base. Le `ROLLBACK` défait aussi tout `SET` que l'instruction de
-            // l'utilisateur aurait posé dans la transaction — pas le `SET` de
-            // contexte, posé avant elle.
+            // The transaction opened by `BEGIN READ ONLY` must be closed before
+            // returning to the pool: a connection left `idle in transaction`
+            // keeps locks and blocks the `VACUUM` of the whole database. The
+            // `ROLLBACK` also undoes any `SET` the user's statement may have set
+            // inside the transaction — not the context `SET`, set before it.
             remises.push((
                 SQL_ROLLBACK,
                 "the read-only transaction could not be closed",
@@ -489,18 +488,18 @@ async fn run(request: StreamRequest, cancel: CancelToken, events: mpsc::Sender<C
                 ));
             }
         } else if opens_transaction {
-            // L'utilisateur a ouvert une transaction. La rendre au bassin la
-            // ferait hériter par l'emprunteur suivant ; la défaire par un
-            // `ROLLBACK` annulerait en silence ce qu'il voulait garder. Rien
-            // n'est remis : l'emprunt reste sale, la connexion est fermée.
-            // Voir `transaction_text::opens_transaction`.
+            // The user opened a transaction. Returning it to the pool would
+            // have the next borrower inherit it; undoing it with a `ROLLBACK`
+            // would silently cancel what they wanted to keep. Nothing is reset:
+            // the borrow stays dirty, the connection is closed. See
+            // `transaction_text::opens_transaction`.
         } else {
-            // Hors transaction, rien ne défait un `SET` tapé dans une console :
-            // ni `standard_conforming_strings = off`, que le découpeur ne
-            // suppose pas, ni un `search_path`, que le bassin rend de toute façon
-            // non fiable pour l'utilisateur — la requête suivante peut partir
-            // sur une autre connexion. Le schéma d'une console passe par son
-            // contexte de session (ADR-0019), que cette remise défait aussi.
+            // Outside a transaction, nothing undoes a `SET` typed in a console:
+            // neither `standard_conforming_strings = off`, which the splitter
+            // does not assume, nor a `search_path`, which the pool makes
+            // unreliable for the user anyway — the next query may go out on
+            // another connection. A console's schema goes through its session
+            // context (ADR-0019), which this reset undoes too.
             remises.push((
                 SQL_RESET_AFTER_WRITE,
                 "the session state could not be reset after a write",
@@ -510,8 +509,8 @@ async fn run(request: StreamRequest, cancel: CancelToken, events: mpsc::Sender<C
         let mut remise = !remises.is_empty();
         for (instruction, echec) in remises {
             if let Err(erreur) = sqlx::raw_sql(instruction).execute(&mut *connection).await {
-                // Traduite avant d'être journalisée, comme partout ailleurs : un
-                // `sqlx::Error` brut peut porter l'URL de connexion.
+                // Translated before being logged, as everywhere else: a raw
+                // `sqlx::Error` can carry the connection URL.
                 tracing::warn!(
                     target: "oxyn::driver::postgres",
                     error = %crate::error::map_exec_error(
@@ -540,9 +539,9 @@ async fn run(request: StreamRequest, cancel: CancelToken, events: mpsc::Sender<C
         }
         Halt::TimedOut => {
             let delai = limits.timeout.unwrap_or_default();
-            // `Timeout` est ambigu par construction : le serveur a peut-être
-            // appliqué l'écriture (I-13). C'est `OxynError::class` qui le dit,
-            // pas ce message.
+            // `Timeout` is ambiguous by construction: the server may have
+            // applied the write (I-13). `OxynError::class` says so, not this
+            // message.
             let _ = events
                 .send(CursorEvent::Failed(Box::new(OxynError::Timeout {
                     after: delai,
@@ -566,34 +565,35 @@ async fn run(request: StreamRequest, cancel: CancelToken, events: mpsc::Sender<C
     }
 }
 
-/// Ce qu'une itération de la boucle a produit.
+/// What one iteration of the loop produced.
 enum Etape {
-    /// Le flux a rendu un élément.
+    /// The stream returned an element.
     Recu(
         std::result::Result<
             Either<sqlx::postgres::PgQueryResult, sqlx::postgres::PgRow>,
             sqlx::Error,
         >,
     ),
-    /// Le flux est épuisé.
+    /// The stream is exhausted.
     Fin,
-    /// Une interruption a gagné la course.
+    /// An interruption won the race.
     Interrompu(Halt),
 }
 
-/// Ce qu'a donné l'émission d'un lot.
+/// What emitting a batch gave.
 enum Emission {
-    /// Le lot est parti, on continue.
+    /// The batch went out, carry on.
     Poursuivre,
-    /// Le jeton s'est déclenché pendant que le canal était plein.
+    /// The token fired while the channel was full.
     Annulee,
-    /// Plus personne n'écoute : le curseur a été détruit.
+    /// Nobody listens any more: the cursor was dropped.
     Abandonne,
-    /// Le lot n'a pas pu être construit ; l'erreur est déjà émise.
+    /// The batch could not be built; the error is already emitted.
     Echouee,
 }
 
-/// Clôt le lot courant et l'envoie, en respectant la contre-pression du canal.
+/// Closes the current batch and sends it, honoring the channel's
+/// back-pressure.
 async fn emettre(
     assembleur: &mut BatchAssembler,
     driver: &DriverId,
@@ -607,18 +607,18 @@ async fn emettre(
             return Emission::Echouee;
         }
     };
-    // `send` sur un canal plein **attend** : c'est là que la contre-pression
-    // s'exerce, et c'est ce qui empêche la mémoire de gonfler.
+    // `send` on a full channel **waits**: that is where back-pressure applies,
+    // and it is what keeps memory from inflating.
     if events.send(CursorEvent::Batch(lot)).await.is_err() {
         return Emission::Abandonne;
     }
     Emission::Poursuivre
 }
 
-/// Attend l'échéance, ou jamais quand il n'y en a pas.
+/// Waits for the deadline, or forever when there is none.
 ///
-/// L'instant est **absolu** : recréer ce futur à chaque tour de boucle ne
-/// repousse donc pas le délai, ce qu'une durée relative ferait.
+/// The instant is **absolute**: recreating this future on every loop turn
+/// therefore does not push the delay back, which a relative duration would.
 async fn attendre(deadline: Option<tokio::time::Instant>) {
     match deadline {
         Some(instant) => tokio::time::sleep_until(instant).await,
@@ -626,14 +626,13 @@ async fn attendre(deadline: Option<tokio::time::Instant>) {
     }
 }
 
-// Le dimensionnement des lots, vérifié à la **compilation**.
+// Batch sizing, checked at **compile time**.
 //
-// Un `assert!` d'exécution sur des constantes ne peut pas échouer autrement
-// qu'en refusant de compiler plus tard : autant le dire ici. Le seuil en octets
-// protège de l'OOM sur des BLOB ; le plafond de lignes garantit qu'un premier
-// lot arrive vite sur des colonnes étroites
-// ([drivers.md](../../../.claude/rules/drivers.md) — « le lot se dimensionne en
-// octets, pas en lignes »).
+// A runtime `assert!` on constants cannot fail other than by refusing to
+// compile later: might as well say it here. The byte threshold protects from
+// OOM on BLOBs; the row ceiling guarantees a first batch arrives quickly on
+// narrow columns ([drivers.md](../../../.claude/rules/drivers.md) — "the batch
+// is sized in bytes, not in rows").
 const _: () = {
     assert!(BATCH_BYTE_BUDGET == 1 << 20);
     assert!(BATCH_ROW_CEILING > 0);
@@ -644,13 +643,14 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tout_arret_qui_n_est_pas_un_epuisement_demande_l_annulation_serveur() {
-        // C'est la règle de DRIVER-CONTRACT §2 réduite à une ligne : abandonner
-        // le flux côté client ne libère ni la connexion ni le verrou.
+    fn every_stop_that_is_not_exhaustion_requests_server_cancel() {
+        // It is DRIVER-CONTRACT §2's rule reduced to one line: abandoning the
+        // stream on the client side releases neither the connection nor the
+        // lock.
         assert!(!Halt::Exhausted.needs_server_cancel());
         assert!(
             !Halt::Failed.needs_server_cancel(),
-            "le serveur a déjà fini"
+            "the server has already finished"
         );
         for raison in [
             Halt::Cancelled,
@@ -660,7 +660,7 @@ mod tests {
         ] {
             assert!(
                 raison.needs_server_cancel(),
-                "{raison:?} laisse une requête en cours"
+                "{raison:?} leaves a query running"
             );
         }
     }

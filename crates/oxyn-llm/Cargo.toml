@@ -1,6 +1,6 @@
 [package]
 name = "oxyn-llm"
-description = "Abstraction des fournisseurs de modèles, locaux et cloud"
+description = "Model provider abstraction, local and cloud"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

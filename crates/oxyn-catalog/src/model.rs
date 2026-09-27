@@ -1,30 +1,29 @@
-//! Le modèle de métadonnées unifié (ARCHITECTURE §6).
+//! The unified metadata model (ARCHITECTURE §6).
 //!
 //! ```text
 //! Server → Catalog/Database → Namespace/Schema → Relation → Field
 //! ```
 //!
-//! **Les paliers intermédiaires sont optionnels**, et pas seulement les
-//! derniers : MySQL n'a pas de catalogue, Neo4j n'a pas d'espace de noms,
-//! Elasticsearch n'a ni l'un ni l'autre. Le modèle ne comble aucun trou avec une
-//! valeur inventée — un palier absent est absent, et [`CatalogPath`] le rend
-//! tel quel.
+//! **Intermediate levels are optional**, and not only the last ones: MySQL
+//! has no catalog, Neo4j has no namespace, Elasticsearch has neither. The
+//! model fills no hole with an invented value — a missing level is missing,
+//! and [`CatalogPath`] returns it as is.
 //!
-//! # Deux drapeaux qui ne sont pas décoratifs
+//! # Two flags that are not decorative
 //!
-//! * [`Field::inferred`] — pour MongoDB, le schéma est **déduit par
-//!   échantillonnage** ([`DRIVER-CONTRACT` §3](../../../docs/DRIVER-CONTRACT.md)).
-//!   Un champ absent de l'échantillon existe peut-être plus loin. L'interface
-//!   doit pouvoir le dire ; présenter une inférence comme une vérité du serveur
-//!   fait écrire des requêtes fausses en confiance.
-//! * [`Field::nullable`] — un serveur ment parfois. La valeur est reprise telle
-//!   quelle, jamais recalculée à partir des données.
+//! * [`Field::inferred`] — for MongoDB, the schema is **deduced by sampling**
+//!   ([`DRIVER-CONTRACT` §3](../../../docs/DRIVER-CONTRACT.md)). A field
+//!   missing from the sample may exist further on. The interface must be able
+//!   to say so; presenting an inference as a server truth makes people write
+//!   wrong queries with confidence.
+//! * [`Field::nullable`] — a server sometimes lies. The value is taken as is,
+//!   never recomputed from the data.
 //!
-//! # Ce qui n'est pas ici
+//! # What is not here
 //!
-//! Aucune valeur de ligne. Le catalogue porte des **métadonnées** ; l'échantillon
-//! de données appartient au niveau de confidentialité `Sampled`
-//! ([ADR-0006](../../../docs/adr/0006-ai-privacy-tiers.md)) et à `oxyn-data`.
+//! No row value. The catalog carries **metadata**; the data sample belongs to
+//! the `Sampled` privacy tier
+//! ([ADR-0006](../../../docs/adr/0006-ai-privacy-tiers.md)) and to `oxyn-data`.
 
 use std::fmt;
 
@@ -33,24 +32,24 @@ use serde::{Deserialize, Serialize};
 
 use crate::path::{CatalogPath, CatalogPathError, validate_segment};
 
-/// Ce que le serveur dit de lui-même, plus ce que la session sait faire.
+/// What the server says about itself, plus what the session can do.
 ///
-/// `capabilities` est celle de la **session**, pas celle du driver : la version
-/// du serveur, ses extensions et les droits du compte changent ce qui est
-/// disponible (ADR-0003).
+/// `capabilities` is the **session**'s, not the driver's: the server version,
+/// its extensions and the account's rights change what is available
+/// (ADR-0003).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ServerInfo {
-    /// Nom du produit tel que le serveur le donne (`PostgreSQL`, `MariaDB`…).
+    /// Product name as the server gives it (`PostgreSQL`, `MariaDB`…).
     pub product: String,
-    /// Version, non analysée. Comparer des versions demande de connaître le
-    /// schéma de versionnement du produit ; c'est le travail du driver.
+    /// Version, unparsed. Comparing versions requires knowing the product's
+    /// versioning scheme; that is the driver's job.
     pub version: String,
-    /// Ce que la session sait faire.
+    /// What the session can do.
     pub capabilities: Capabilities,
 }
 
 impl ServerInfo {
-    /// Construit une description de serveur.
+    /// Builds a server description.
     #[must_use]
     pub fn new(
         product: impl Into<String>,
@@ -71,24 +70,24 @@ impl fmt::Display for ServerInfo {
     }
 }
 
-/// Un catalogue : le palier « base de données » de PostgreSQL, le « project » de
-/// BigQuery, l'index numérique de Redis.
+/// A catalog: PostgreSQL's "database" level, BigQuery's "project", Redis's
+/// numeric index.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CatalogRef {
     name: String,
-    /// Commentaire porté par l'objet, s'il en a un.
+    /// Comment carried by the object, if it has one.
     pub comment: Option<String>,
-    /// Est-ce le catalogue auquel la session est connectée ?
+    /// Is it the catalog the session is connected to?
     pub is_default: bool,
 }
 
 impl CatalogRef {
-    /// Construit une référence de catalogue.
+    /// Builds a catalog reference.
     ///
-    /// # Erreurs
-    /// Renvoie [`CatalogPathError`] si le nom est vide ou contient un caractère
-    /// de contrôle — un nom d'objet vient du serveur, donc d'une source hostile
-    /// ([SECURITY, surface d'entrée §2](../../../docs/SECURITY.md)).
+    /// # Errors
+    /// Returns [`CatalogPathError`] if the name is empty or contains a control
+    /// character — an object name comes from the server, hence from a hostile
+    /// source ([SECURITY, input surface §2](../../../docs/SECURITY.md)).
     pub fn new(name: impl Into<String>) -> Result<Self, CatalogPathError> {
         let name = name.into();
         validate_segment(&name)?;
@@ -99,11 +98,11 @@ impl CatalogRef {
         })
     }
 
-    /// Construit une référence à partir d'un nom **déjà validé**.
+    /// Builds a reference from an **already validated** name.
     ///
-    /// Réservé au cache, qui reconstruit des références à partir de chemins
-    /// dont chaque palier a été validé à la construction. Une fonction faillible
-    /// obligerait le cache à traiter une erreur impossible.
+    /// Reserved to the cache, which rebuilds references from paths whose every
+    /// level was validated at construction. A fallible function would force
+    /// the cache to handle an impossible error.
     pub(crate) fn validated(name: String) -> Self {
         Self {
             name,
@@ -112,26 +111,26 @@ impl CatalogRef {
         }
     }
 
-    /// Nom du catalogue.
+    /// Name of the catalog.
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
 
-    /// Chemin du catalogue.
+    /// Path of the catalog.
     #[must_use]
     pub fn path(&self) -> CatalogPath {
         CatalogPath::from_validated(Some(self.name.clone()), None, None)
     }
 
-    /// Attache un commentaire.
+    /// Attaches a comment.
     #[must_use]
     pub fn with_comment(mut self, comment: impl Into<String>) -> Self {
         self.comment = Some(comment.into());
         self
     }
 
-    /// Marque ce catalogue comme celui de la session.
+    /// Marks this catalog as the session's.
     #[must_use]
     pub fn with_default(mut self) -> Self {
         self.is_default = true;
@@ -139,26 +138,26 @@ impl CatalogRef {
     }
 }
 
-/// Un espace de noms : le schéma de PostgreSQL, la base de MySQL ou de MongoDB,
-/// le préfixe logique de Redis.
+/// A namespace: PostgreSQL's schema, MySQL's or MongoDB's database, Redis's
+/// logical prefix.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct NamespaceRef {
-    /// Le catalogue qui le contient, s'il y en a un.
+    /// The catalog that contains it, if there is one.
     parent: CatalogPath,
     name: String,
-    /// Commentaire porté par l'objet, s'il en a un.
+    /// Comment carried by the object, if it has one.
     pub comment: Option<String>,
-    /// Espace de noms du système (`pg_catalog`, `information_schema`,
-    /// `mysql`…). L'arborescence les replie par défaut ; elle ne les cache pas.
+    /// System namespace (`pg_catalog`, `information_schema`, `mysql`…). The
+    /// tree folds them by default; it does not hide them.
     pub is_system: bool,
 }
 
 impl NamespaceRef {
-    /// Construit une référence d'espace de noms.
+    /// Builds a namespace reference.
     ///
-    /// # Erreurs
-    /// Renvoie [`CatalogPathError`] si le nom est invalide, ou si `parent`
-    /// descend plus bas que le palier catalogue.
+    /// # Errors
+    /// Returns [`CatalogPathError`] if the name is invalid, or if `parent`
+    /// goes lower than the catalog level.
     pub fn new(parent: CatalogPath, name: impl Into<String>) -> Result<Self, CatalogPathError> {
         if parent.namespace().is_some() || parent.relation().is_some() {
             return Err(CatalogPathError::new(
@@ -175,9 +174,9 @@ impl NamespaceRef {
         })
     }
 
-    /// Construit une référence à partir de paliers **déjà validés**.
+    /// Builds a reference from **already validated** levels.
     ///
-    /// Réservé au cache, pour la même raison que [`CatalogRef::validated`].
+    /// Reserved to the cache, for the same reason as [`CatalogRef::validated`].
     pub(crate) fn validated(parent: CatalogPath, name: String) -> Self {
         Self {
             parent,
@@ -187,19 +186,19 @@ impl NamespaceRef {
         }
     }
 
-    /// Nom de l'espace de noms.
+    /// Name of the namespace.
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
 
-    /// Le catalogue qui le contient, éventuellement vide.
+    /// The catalog that contains it, possibly empty.
     #[must_use]
     pub const fn parent(&self) -> &CatalogPath {
         &self.parent
     }
 
-    /// Chemin complet de l'espace de noms.
+    /// Full path of the namespace.
     #[must_use]
     pub fn path(&self) -> CatalogPath {
         CatalogPath::from_validated(
@@ -209,67 +208,66 @@ impl NamespaceRef {
         )
     }
 
-    /// Attache un commentaire.
+    /// Attaches a comment.
     #[must_use]
     pub fn with_comment(mut self, comment: impl Into<String>) -> Self {
         self.comment = Some(comment.into());
         self
     }
 
-    /// Marque cet espace de noms comme appartenant au système.
+    /// Marks this namespace as belonging to the system.
     #[must_use]
     pub fn with_system(mut self) -> Self {
         self.is_system = true;
         self
     }
 
-    /// Réattache la référence sous un autre parent.
+    /// Reattaches the reference under another parent.
     ///
-    /// Réservé au cache : c'est ce qui garantit que le chemin rendu par
-    /// [`Self::path`] et la position du nœud dans l'arbre ne peuvent pas
-    /// diverger.
+    /// Reserved to the cache: it is what guarantees that the path returned by
+    /// [`Self::path`] and the node's position in the tree cannot diverge.
     pub(crate) fn reparent(&mut self, parent: CatalogPath) {
         self.parent = parent;
     }
 }
 
-/// Nature d'une relation.
+/// Kind of a relation.
 ///
-/// « Relation » est le palier, pas le modèle relationnel : une collection
-/// MongoDB, un motif de clés Redis et un label de nœud Neo4j occupent la même
-/// place dans la hiérarchie.
+/// "Relation" is the level, not the relational model: a MongoDB collection, a
+/// Redis key pattern and a Neo4j node label take the same place in the
+/// hierarchy.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum RelationKind {
     /// Table.
     Table,
-    /// Vue.
+    /// View.
     View,
-    /// Vue matérialisée.
+    /// Materialized view.
     MaterializedView,
-    /// Collection documentaire (MongoDB, Couchbase).
+    /// Document collection (MongoDB, Couchbase).
     Collection,
-    /// Index exposé comme un objet à part entière (Elasticsearch).
+    /// Index exposed as a full object (Elasticsearch).
     Index,
-    /// Flux ou data stream (Kafka, Elasticsearch, ksqlDB).
+    /// Stream or data stream (Kafka, Elasticsearch, ksqlDB).
     Stream,
-    /// Motif de clés (Redis).
+    /// Key pattern (Redis).
     KeyPattern,
-    /// Label de nœud (Neo4j).
+    /// Node label (Neo4j).
     NodeLabel,
-    /// Type de relation (Neo4j).
+    /// Relationship type (Neo4j).
     RelationshipType,
-    /// Fonction.
+    /// Function.
     Function,
-    /// Procédure stockée.
+    /// Stored procedure.
     Procedure,
-    /// Séquence.
+    /// Sequence.
     Sequence,
 }
 
 impl RelationKind {
-    /// Nom stable, pour l'audit et l'interface.
+    /// Stable name, for the audit and the interface.
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
@@ -288,11 +286,11 @@ impl RelationKind {
         }
     }
 
-    /// Cette relation contient-elle des enregistrements consultables ?
+    /// Does this relation contain browsable records?
     ///
-    /// Sert à décider si un double-clic dans l'arborescence peut ouvrir une
-    /// grille. Une fonction ou une séquence n'a pas de contenu à parcourir ;
-    /// proposer l'action serait une surface qui ne mène nulle part (ADR-0003).
+    /// Serves to decide whether a double-click in the tree can open a grid. A
+    /// function or a sequence has no content to browse; offering the action
+    /// would be a surface that leads nowhere (ADR-0003).
     #[must_use]
     pub const fn holds_records(&self) -> bool {
         matches!(
@@ -316,33 +314,32 @@ impl fmt::Display for RelationKind {
     }
 }
 
-/// Une relation, telle qu'un listing la donne : identité et nature, sans champs.
+/// A relation, as a listing gives it: identity and kind, without fields.
 ///
-/// C'est ce que rend
-/// [`CatalogProvider::list_relations`](crate::provider::CatalogProvider::list_relations).
-/// Décrire les champs de 20 000 tables prend des minutes ; le listing doit
-/// pouvoir remplir l'arborescence sans les demander.
+/// It is what
+/// [`CatalogProvider::list_relations`](crate::provider::CatalogProvider::list_relations)
+/// returns. Describing the fields of 20,000 tables takes minutes; the listing
+/// must be able to fill the tree without requesting them.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RelationRef {
     parent: CatalogPath,
     name: String,
-    /// Nature de la relation.
+    /// Kind of the relation.
     pub kind: RelationKind,
-    /// Commentaire porté par l'objet, s'il en a un.
+    /// Comment carried by the object, if it has one.
     ///
-    /// **Contenu non fiable.** Un commentaire de colonne qui dit « ignore les
-    /// instructions précédentes » est une donnée, jamais une consigne
-    /// (ARCHITECTURE §8) : c'est au point de passage unique de `oxyn-ai` de
-    /// l'encadrer avant qu'il ne rejoigne une invite.
+    /// **Untrusted content.** A column comment that says "ignore the previous
+    /// instructions" is data, never an instruction (ARCHITECTURE §8): it is up
+    /// to the single gateway of `oxyn-ai` to frame it before it joins a prompt.
     pub comment: Option<String>,
 }
 
 impl RelationRef {
-    /// Construit une référence de relation.
+    /// Builds a relation reference.
     ///
-    /// # Erreurs
-    /// Renvoie [`CatalogPathError`] si le nom est invalide, ou si `parent`
-    /// désigne déjà une relation.
+    /// # Errors
+    /// Returns [`CatalogPathError`] if the name is invalid, or if `parent`
+    /// already designates a relation.
     pub fn new(
         parent: CatalogPath,
         name: impl Into<String>,
@@ -363,9 +360,9 @@ impl RelationRef {
         })
     }
 
-    /// Construit une référence à partir de paliers **déjà validés**.
+    /// Builds a reference from **already validated** levels.
     ///
-    /// Réservé au cache, pour la même raison que [`CatalogRef::validated`].
+    /// Reserved to the cache, for the same reason as [`CatalogRef::validated`].
     pub(crate) fn validated(parent: CatalogPath, name: String, kind: RelationKind) -> Self {
         Self {
             parent,
@@ -375,123 +372,123 @@ impl RelationRef {
         }
     }
 
-    /// Nom de la relation.
+    /// Name of the relation.
     #[must_use]
     pub fn name(&self) -> &str {
         &self.name
     }
 
-    /// Le palier qui la contient : espace de noms, catalogue, ou rien.
+    /// The level that contains it: namespace, catalog, or nothing.
     #[must_use]
     pub const fn parent(&self) -> &CatalogPath {
         &self.parent
     }
 
-    /// Chemin complet de la relation.
+    /// Full path of the relation.
     #[must_use]
     pub fn path(&self) -> CatalogPath {
         self.parent.with_validated_relation(&self.name)
     }
 
-    /// Attache un commentaire.
+    /// Attaches a comment.
     #[must_use]
     pub fn with_comment(mut self, comment: impl Into<String>) -> Self {
         self.comment = Some(comment.into());
         self
     }
 
-    /// Réattache la référence sous un autre parent.
+    /// Reattaches the reference under another parent.
     ///
-    /// Réservé au cache, pour la même raison que
+    /// Reserved to the cache, for the same reason as
     /// [`NamespaceRef::reparent`].
     pub(crate) fn reparent(&mut self, parent: CatalogPath) {
         self.parent = parent;
     }
 }
 
-/// Type logique d'un champ, indépendant du produit.
+/// Logical type of a field, independent of the product.
 ///
-/// Le type **brut** du serveur reste disponible dans [`Field::raw_type`] : le
-/// type logique sert à décider d'un rendu ou d'un éditeur, pas à remplacer ce
-/// que dit le serveur. Un type que le driver ne sait pas ramener à cette liste
-/// devient [`Unknown`](Self::Unknown) — jamais un voisin plausible, qui
-/// afficherait une valeur fausse sans le dire.
+/// The server's **raw** type stays available in [`Field::raw_type`]: the
+/// logical type serves to choose a rendering or an editor, not to replace what
+/// the server says. A type the driver cannot map to this list becomes
+/// [`Unknown`](Self::Unknown) — never a plausible neighbor, which would display
+/// a wrong value without saying so.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum LogicalType {
-    /// Booléen.
+    /// Boolean.
     Boolean,
-    /// Entier signé de `bits` bits.
+    /// Signed integer of `bits` bits.
     Integer {
-        /// Largeur en bits telle que le serveur la déclare (8, 16, 32, 64…).
+        /// Width in bits as the server declares it (8, 16, 32, 64…).
         bits: u8,
     },
-    /// Flottant de `bits` bits.
+    /// Float of `bits` bits.
     Float {
-        /// Largeur en bits (32, 64).
+        /// Width in bits (32, 64).
         bits: u8,
     },
-    /// Décimal exact.
+    /// Exact decimal.
     Decimal {
-        /// Précision, quand le serveur la contraint.
+        /// Precision, when the server constrains it.
         precision: Option<u16>,
-        /// Échelle. Négative chez Oracle, d'où le type signé.
+        /// Scale. Negative on Oracle, hence the signed type.
         scale: Option<i16>,
     },
-    /// Texte.
+    /// Text.
     Text,
-    /// Suite d'octets.
+    /// Byte sequence.
     Bytes,
     /// UUID.
     Uuid,
-    /// Date sans heure.
+    /// Date without time.
     Date,
-    /// Heure sans date.
+    /// Time without date.
     Time,
-    /// Horodatage.
+    /// Timestamp.
     Timestamp {
-        /// Porte-t-il un fuseau ? La distinction n'est pas cosmétique : la
-        /// confondre décale la donnée de façon invisible et permanente
+        /// Does it carry a time zone? The distinction is not cosmetic:
+        /// confusing it shifts the data invisibly and permanently
         /// ([`DRIVER-CONTRACT` §7](../../../docs/DRIVER-CONTRACT.md)).
         tz: bool,
     },
-    /// Intervalle.
+    /// Interval.
     Interval,
-    /// Document JSON.
+    /// JSON document.
     Json,
-    /// Tableau d'un type.
+    /// Array of a type.
     Array(Box<LogicalType>),
-    /// Structure à champs nommés (`ROW`, `STRUCT`, sous-document).
+    /// Structure with named fields (`ROW`, `STRUCT`, subdocument).
     Struct(Vec<Field>),
-    /// Vecteur dense (pgvector, Qdrant).
+    /// Dense vector (pgvector, Qdrant).
     Vector {
-        /// Dimension, quand elle est contrainte.
+        /// Dimension, when constrained.
         dims: Option<u32>,
     },
-    /// Géométrie (PostGIS, MySQL spatial).
+    /// Geometry (PostGIS, MySQL spatial).
     Geometry,
-    /// Type que le driver n'a pas su ramener à cette liste.
+    /// Type the driver could not map to this list.
     Unknown,
 }
 
 impl LogicalType {
-    /// Entier 32 bits, le cas le plus fréquent.
+    /// 32-bit integer, the most frequent case.
     pub const INT32: Self = Self::Integer { bits: 32 };
-    /// Entier 64 bits.
+    /// 64-bit integer.
     pub const INT64: Self = Self::Integer { bits: 64 };
-    /// Flottant double précision.
+    /// Double-precision float.
     pub const FLOAT64: Self = Self::Float { bits: 64 };
-    /// Horodatage avec fuseau.
+    /// Timestamp with time zone.
     pub const TIMESTAMPTZ: Self = Self::Timestamp { tz: true };
 
-    /// Le type contient-il d'autres types ?
+    /// Does the type contain other types?
     #[must_use]
     pub const fn is_nested(&self) -> bool {
         matches!(self, Self::Array(_) | Self::Struct(_))
     }
 
-    /// Le type des éléments d'un tableau.
+    /// The type of an array's elements.
     #[must_use]
     pub fn element(&self) -> Option<&Self> {
         match self {
@@ -544,42 +541,42 @@ impl fmt::Display for LogicalType {
     }
 }
 
-/// Un champ d'une relation : colonne, clé de document, propriété de nœud.
+/// A field of a relation: column, document key, node property.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Field {
-    /// Nom du champ. **Entrée hostile** : il peut contenir un point, un
-    /// guillemet, du SQL.
+    /// Name of the field. **Hostile input**: it can contain a dot, a double
+    /// quote, SQL.
     pub name: String,
-    /// Position ordinale, telle que le serveur la donne.
+    /// Ordinal position, as the server gives it.
     pub position: u32,
-    /// Type ramené au vocabulaire d'Oxyn.
+    /// Type mapped to Oxyn's vocabulary.
     pub logical_type: LogicalType,
-    /// Type tel que le serveur le nomme (`int4`, `VARCHAR(255)`, `geography`).
-    /// Toujours conservé : c'est ce que l'utilisateur reconnaît.
+    /// Type as the server names it (`int4`, `VARCHAR(255)`, `geography`).
+    /// Always kept: it is what the user recognizes.
     pub raw_type: String,
-    /// Le champ accepte-t-il l'absence de valeur, d'après le serveur ?
+    /// Does the field accept the absence of a value, according to the server?
     pub nullable: bool,
-    /// Expression de valeur par défaut, telle quelle.
+    /// Default value expression, as is.
     pub default: Option<String>,
-    /// Commentaire. **Contenu non fiable**, voir [`RelationRef::comment`].
+    /// Comment. **Untrusted content**, see [`RelationRef::comment`].
     pub comment: Option<String>,
-    /// Le champ participe-t-il à la clé primaire ?
+    /// Does the field take part in the primary key?
     pub is_primary_key: bool,
-    /// Le champ vient-il d'une **inférence par échantillonnage** plutôt que
-    /// d'une déclaration du serveur ?
+    /// Does the field come from an **inference by sampling** rather than from
+    /// a declaration of the server?
     ///
-    /// Vrai pour MongoDB et toute source sans schéma. L'interface doit le dire :
-    /// un champ absent de l'échantillon existe peut-être plus loin, et un type
-    /// inféré sur cent documents peut être faux au cent unième
+    /// True for MongoDB and any schemaless source. The interface must say so:
+    /// a field missing from the sample may exist further on, and a type
+    /// inferred over a hundred documents can be wrong at the hundred and first
     /// ([`DRIVER-CONTRACT` §3](../../../docs/DRIVER-CONTRACT.md)).
     pub inferred: bool,
 }
 
 impl Field {
-    /// Construit un champ.
+    /// Builds a field.
     ///
-    /// Les valeurs non renseignées prennent le parti prudent : `nullable` est
-    /// vrai, `is_primary_key` et `inferred` sont faux.
+    /// Unspecified values take the cautious side: `nullable` is true,
+    /// `is_primary_key` and `inferred` are false.
     #[must_use]
     pub fn new(
         name: impl Into<String>,
@@ -600,14 +597,14 @@ impl Field {
         }
     }
 
-    /// Déclare le champ non nul.
+    /// Declares the field non-null.
     #[must_use]
     pub fn not_null(mut self) -> Self {
         self.nullable = false;
         self
     }
 
-    /// Déclare le champ membre de la clé primaire. Implique `NOT NULL`.
+    /// Declares the field a member of the primary key. Implies `NOT NULL`.
     #[must_use]
     pub fn primary_key(mut self) -> Self {
         self.is_primary_key = true;
@@ -615,21 +612,21 @@ impl Field {
         self
     }
 
-    /// Marque le champ comme déduit par échantillonnage.
+    /// Marks the field as deduced by sampling.
     #[must_use]
     pub fn with_inferred(mut self) -> Self {
         self.inferred = true;
         self
     }
 
-    /// Attache une valeur par défaut.
+    /// Attaches a default value.
     #[must_use]
     pub fn with_default(mut self, default: impl Into<String>) -> Self {
         self.default = Some(default.into());
         self
     }
 
-    /// Attache un commentaire.
+    /// Attaches a comment.
     #[must_use]
     pub fn with_comment(mut self, comment: impl Into<String>) -> Self {
         self.comment = Some(comment.into());
@@ -637,33 +634,32 @@ impl Field {
     }
 }
 
-/// Une relation décrite : identité, volumétrie et champs.
+/// A described relation: identity, volume and fields.
 ///
-/// C'est ce que rend
-/// [`CatalogProvider::describe_relation`](crate::provider::CatalogProvider::describe_relation).
-/// Le chemin n'est pas porté ici : il est donné par la position dans le cache,
-/// ou par le [`RelationRef`] qui a servi à la demander.
+/// It is what
+/// [`CatalogProvider::describe_relation`](crate::provider::CatalogProvider::describe_relation)
+/// returns. The path is not carried here: it is given by the position in the
+/// cache, or by the [`RelationRef`] used to request it.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Relation {
-    /// Nom de la relation.
+    /// Name of the relation.
     pub name: String,
-    /// Nature de la relation.
+    /// Kind of the relation.
     pub kind: RelationKind,
-    /// Commentaire. **Contenu non fiable**, voir [`RelationRef::comment`].
+    /// Comment. **Untrusted content**, see [`RelationRef::comment`].
     pub comment: Option<String>,
-    /// Estimation du nombre de lignes, quand la source en donne une **sans
-    /// compter**. `None` signifie « inconnu », jamais « zéro » : lancer un
-    /// `COUNT(*)` pour remplir ce champ scannerait la table à chaque
-    /// rafraîchissement d'arborescence.
+    /// Estimate of the number of rows, when the source gives one **without
+    /// counting**. `None` means "unknown", never "zero": running a `COUNT(*)`
+    /// to fill this field would scan the table on every tree refresh.
     pub estimated_rows: Option<u64>,
-    /// Taille sur disque en octets, quand la source la donne.
+    /// Size on disk in bytes, when the source gives it.
     pub size_bytes: Option<u64>,
-    /// Les champs, dans l'ordre où le serveur les donne.
+    /// The fields, in the order the server gives them.
     pub fields: Vec<Field>,
 }
 
 impl Relation {
-    /// Construit une relation sans champ.
+    /// Builds a relation without fields.
     #[must_use]
     pub fn new(name: impl Into<String>, kind: RelationKind) -> Self {
         Self {
@@ -676,38 +672,38 @@ impl Relation {
         }
     }
 
-    /// Attache les champs.
+    /// Attaches the fields.
     #[must_use]
     pub fn with_fields(mut self, fields: Vec<Field>) -> Self {
         self.fields = fields;
         self
     }
 
-    /// Attache un commentaire.
+    /// Attaches a comment.
     #[must_use]
     pub fn with_comment(mut self, comment: impl Into<String>) -> Self {
         self.comment = Some(comment.into());
         self
     }
 
-    /// Attache une estimation de volumétrie.
+    /// Attaches a volume estimate.
     #[must_use]
     pub fn with_estimated_rows(mut self, rows: u64) -> Self {
         self.estimated_rows = Some(rows);
         self
     }
 
-    /// Un champ par son nom, exactement (les identifiants sont sensibles à la
-    /// casse une fois cités).
+    /// A field by its name, exactly (identifiers are case-sensitive once
+    /// quoted).
     #[must_use]
     pub fn field(&self, name: &str) -> Option<&Field> {
         self.fields.iter().find(|champ| champ.name == name)
     }
 
-    /// Les champs de la clé primaire, dans l'ordre des positions.
+    /// The primary key fields, in position order.
     ///
-    /// Vide quand la relation n'en a pas — ce qui est le cas courant hors du
-    /// modèle relationnel.
+    /// Empty when the relation has none — which is the common case outside the
+    /// relational model.
     #[must_use]
     pub fn primary_key(&self) -> Vec<&Field> {
         let mut cles: Vec<&Field> = self
@@ -719,35 +715,34 @@ impl Relation {
         cles
     }
 
-    /// Le schéma de cette relation est-il, en tout ou partie, **déduit** ?
+    /// Is the schema of this relation, in whole or in part, **deduced**?
     ///
-    /// L'interface s'en sert pour marquer la relation : présenter une inférence
-    /// comme une vérité du serveur fait écrire des requêtes fausses en
-    /// confiance.
+    /// The interface uses it to mark the relation: presenting an inference as
+    /// a server truth makes people write wrong queries with confidence.
     #[must_use]
     pub fn has_inferred_schema(&self) -> bool {
         self.fields.iter().any(|champ| champ.inferred)
     }
 }
 
-/// Un index.
+/// An index.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Index {
-    /// Nom de l'index.
+    /// Name of the index.
     pub name: String,
-    /// Champs indexés, dans l'ordre de l'index — l'ordre décide de ce que
-    /// l'index sait servir.
+    /// Indexed fields, in index order — the order decides what the index can
+    /// serve.
     pub fields: Vec<String>,
-    /// L'index impose-t-il l'unicité ?
+    /// Does the index enforce uniqueness?
     pub unique: bool,
-    /// Méthode d'accès (`btree`, `gin`, `hnsw`…), quand la source la nomme.
+    /// Access method (`btree`, `gin`, `hnsw`…), when the source names it.
     pub method: Option<String>,
-    /// Prédicat d'un index partiel, tel quel.
+    /// Predicate of a partial index, as is.
     pub predicate: Option<String>,
 }
 
 impl Index {
-    /// Construit un index.
+    /// Builds an index.
     #[must_use]
     pub fn new(name: impl Into<String>, fields: Vec<String>) -> Self {
         Self {
@@ -759,40 +754,40 @@ impl Index {
         }
     }
 
-    /// Déclare l'index unique.
+    /// Declares the index unique.
     #[must_use]
     pub fn unique(mut self) -> Self {
         self.unique = true;
         self
     }
 
-    /// L'index ne couvre-t-il qu'une partie des lignes ?
+    /// Does the index cover only part of the rows?
     #[must_use]
     pub const fn is_partial(&self) -> bool {
         self.predicate.is_some()
     }
 }
 
-/// Action référentielle d'une clé étrangère.
+/// Referential action of a foreign key.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum ReferentialAction {
-    /// Aucune action — le défaut de la norme.
+    /// No action — the standard's default.
     #[default]
     NoAction,
-    /// Refus de la suppression.
+    /// Refusal of the deletion.
     Restrict,
-    /// Suppression en cascade.
+    /// Cascading deletion.
     Cascade,
-    /// Mise à nul.
+    /// Set to null.
     SetNull,
-    /// Retour à la valeur par défaut.
+    /// Back to the default value.
     SetDefault,
 }
 
 impl ReferentialAction {
-    /// Nom stable.
+    /// Stable name.
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
@@ -804,10 +799,10 @@ impl ReferentialAction {
         }
     }
 
-    /// Supprimer une ligne référencée en supprime-t-il d'autres ?
+    /// Does deleting a referenced row delete others?
     ///
-    /// C'est ce qu'un aperçu d'approbation doit montrer : un `DELETE` d'une
-    /// ligne peut en effacer un million par cascade.
+    /// It is what an approval preview must show: a `DELETE` of one row can
+    /// erase a million through a cascade.
     #[must_use]
     pub const fn propagates_delete(&self) -> bool {
         matches!(self, Self::Cascade | Self::SetNull | Self::SetDefault)
@@ -820,35 +815,33 @@ impl fmt::Display for ReferentialAction {
     }
 }
 
-/// La cible d'une clé étrangère : une relation, et les champs qu'elle expose.
+/// The target of a foreign key: a relation, and the fields it exposes.
 ///
-/// Regroupés parce qu'ils ne veulent rien dire séparément — une relation cible
-/// sans ses colonnes ne permet ni de tracer un diagramme, ni de composer une
-/// jointure.
+/// Grouped because they mean nothing separately — a target relation without
+/// its columns allows neither drawing a diagram nor composing a join.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ForeignKeyTarget {
-    /// La relation référencée.
+    /// The referenced relation.
     pub relation: CatalogPath,
-    /// Les champs référencés, dans l'ordre correspondant à
-    /// [`ForeignKey::fields`].
+    /// The referenced fields, in the order matching [`ForeignKey::fields`].
     pub fields: Vec<String>,
 }
 
-/// Une clé étrangère.
+/// A foreign key.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ForeignKey {
     /// Declared name; empty when the engine exposes no constraint name.
     pub name: String,
-    /// Champs porteurs, dans l'ordre.
+    /// Carrying fields, in order.
     pub fields: Vec<String>,
-    /// Ce qui est référencé.
+    /// What is referenced.
     pub references: ForeignKeyTarget,
-    /// Ce qui arrive aux lignes porteuses quand la ligne référencée disparaît.
+    /// What happens to the carrying rows when the referenced row disappears.
     pub on_delete: ReferentialAction,
 }
 
 impl ForeignKey {
-    /// Construit une clé étrangère.
+    /// Builds a foreign key.
     #[must_use]
     pub fn new(name: impl Into<String>, fields: Vec<String>, references: ForeignKeyTarget) -> Self {
         Self {
@@ -859,10 +852,10 @@ impl ForeignKey {
         }
     }
 
-    /// Les deux côtés de la clé ont-ils le même nombre de champs ?
+    /// Do both sides of the key have the same number of fields?
     ///
-    /// Un serveur peut renvoyer des listes désaccordées ; composer une jointure
-    /// par appariement positionnel sans vérifier produirait un `ON` faux.
+    /// A server may return mismatched lists; composing a join by positional
+    /// pairing without checking would produce a wrong `ON`.
     #[must_use]
     pub fn is_well_formed(&self) -> bool {
         !self.fields.is_empty() && self.fields.len() == self.references.fields.len()
@@ -881,29 +874,29 @@ pub struct IncomingForeignKey {
     pub source_unique: Option<bool>,
 }
 
-/// Nature d'une contrainte.
+/// Kind of a constraint.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum ConstraintKind {
-    /// Clé primaire.
+    /// Primary key.
     PrimaryKey,
-    /// Unicité.
+    /// Uniqueness.
     Unique,
-    /// Vérification d'une expression.
+    /// Check of an expression.
     Check,
-    /// Clé étrangère — détaillée par [`ForeignKey`].
+    /// Foreign key — detailed by [`ForeignKey`].
     ForeignKey,
     /// Exclusion (PostgreSQL).
     Exclusion,
     /// A user-defined constraint trigger.
     Trigger,
-    /// Non-nullité exprimée comme une contrainte nommée.
+    /// Non-nullability expressed as a named constraint.
     NotNull,
 }
 
 impl ConstraintKind {
-    /// Nom stable.
+    /// Stable name.
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
@@ -924,15 +917,15 @@ impl fmt::Display for ConstraintKind {
     }
 }
 
-/// Une contrainte portée par une relation.
+/// A constraint carried by a relation.
 ///
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Constraint {
     /// Declared name; empty when the engine exposes no constraint name.
     pub name: String,
-    /// Nature de la contrainte.
+    /// Kind of the constraint.
     pub kind: ConstraintKind,
-    /// Champs concernés, quand la contrainte en nomme.
+    /// Fields concerned, when the constraint names some.
     pub fields: Vec<String>,
     /// Definition returned by the engine, which may be a normalized rendering
     /// rather than the original source text. Never execute it implicitly.
@@ -944,7 +937,7 @@ pub struct Constraint {
 }
 
 impl Constraint {
-    /// Construit une contrainte.
+    /// Builds a constraint.
     #[must_use]
     pub fn new(name: impl Into<String>, kind: ConstraintKind, fields: Vec<String>) -> Self {
         Self {
@@ -956,7 +949,7 @@ impl Constraint {
         }
     }
 
-    /// Attache une expression.
+    /// Attaches an expression.
     #[must_use]
     pub fn with_expression(mut self, expression: impl Into<String>) -> Self {
         self.expression = Some(expression.into());
@@ -969,32 +962,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn un_nom_d_objet_hostile_est_refuse_a_la_construction() {
-        // Un nom d'objet vient du serveur : les caractères de contrôle sont
-        // refusés (SECURITY, surface d'entrée §2), les guillemets ne le sont
-        // pas — ils sont légaux, et `qualify` sait les citer.
+    fn a_hostile_object_name_is_refused_at_construction() {
+        // An object name comes from the server: control characters are refused
+        // (SECURITY, input surface §2), double quotes are not — they are legal,
+        // and `qualify` knows how to quote them.
         assert!(CatalogRef::new("base\u{1b}[31m").is_err());
         assert!(CatalogRef::new("").is_err());
         assert!(CatalogRef::new(r#"users"; DROP TABLE audit; --"#).is_ok());
     }
 
     #[test]
-    fn le_parent_d_une_relation_ne_peut_pas_etre_une_relation() {
-        let relation = CatalogPath::for_relation(None, Some("public"), "clients").expect("valide");
+    fn the_parent_of_a_relation_cannot_be_a_relation() {
+        let relation = CatalogPath::for_relation(None, Some("public"), "clients").expect("valid");
         assert!(RelationRef::new(relation, "autre", RelationKind::Table).is_err());
     }
 
     #[test]
-    fn le_parent_d_un_espace_de_noms_ne_descend_pas_plus_bas() {
-        let espace = CatalogPath::for_namespace(None, "public").expect("valide");
+    fn the_parent_of_a_namespace_does_not_go_lower() {
+        let espace = CatalogPath::for_namespace(None, "public").expect("valid");
         assert!(NamespaceRef::new(espace, "autre").is_err());
     }
 
     #[test]
-    fn le_chemin_d_une_reference_se_reconstruit_sans_perte() {
-        let parent = CatalogPath::for_namespace(Some("caisse"), "public").expect("valide");
-        let relation =
-            RelationRef::new(parent, "ventes.2026", RelationKind::Table).expect("valide");
+    fn the_path_of_a_reference_rebuilds_without_loss() {
+        let parent = CatalogPath::for_namespace(Some("caisse"), "public").expect("valid");
+        let relation = RelationRef::new(parent, "ventes.2026", RelationKind::Table).expect("valid");
         let chemin = relation.path();
         assert_eq!(chemin.catalog(), Some("caisse"));
         assert_eq!(chemin.namespace(), Some("public"));
@@ -1002,22 +994,22 @@ mod tests {
     }
 
     #[test]
-    fn une_relation_sans_palier_intermediaire_garde_son_catalogue() {
-        // Neo4j : base + label, sans espace de noms.
-        let parent = CatalogPath::for_catalog("graphe").expect("valide");
-        let label = RelationRef::new(parent, "Personne", RelationKind::NodeLabel).expect("valide");
+    fn a_relation_without_intermediate_level_keeps_its_catalog() {
+        // Neo4j: database + label, without a namespace.
+        let parent = CatalogPath::for_catalog("graphe").expect("valid");
+        let label = RelationRef::new(parent, "Personne", RelationKind::NodeLabel).expect("valid");
         assert_eq!(label.path().to_string(), "graphe..Personne");
     }
 
     #[test]
-    fn un_schema_infere_se_declare() {
+    fn an_inferred_schema_declares_itself() {
         let mongo = Relation::new("commandes", RelationKind::Collection).with_fields(vec![
             Field::new("_id", 0, LogicalType::Uuid, "objectId").primary_key(),
             Field::new("montant", 1, LogicalType::FLOAT64, "double").with_inferred(),
         ]);
         assert!(
             mongo.has_inferred_schema(),
-            "un schéma déduit par échantillonnage doit pouvoir se dire"
+            "a schema deduced by sampling must be able to say so"
         );
 
         let postgres = Relation::new("commandes", RelationKind::Table)
@@ -1026,7 +1018,7 @@ mod tests {
     }
 
     #[test]
-    fn la_cle_primaire_sort_dans_l_ordre_des_positions() {
+    fn the_primary_key_comes_out_in_position_order() {
         let relation = Relation::new("lignes", RelationKind::Table).with_fields(vec![
             Field::new("libelle", 0, LogicalType::Text, "text"),
             Field::new("ligne", 2, LogicalType::INT32, "int4").primary_key(),
@@ -1041,20 +1033,20 @@ mod tests {
     }
 
     #[test]
-    fn un_champ_de_cle_primaire_est_non_nul() {
+    fn a_primary_key_field_is_non_null() {
         let champ = Field::new("id", 0, LogicalType::INT64, "int8").primary_key();
         assert!(!champ.nullable);
     }
 
     #[test]
-    fn une_volumetrie_inconnue_n_est_pas_zero() {
+    fn an_unknown_volume_is_not_zero() {
         let relation = Relation::new("journal", RelationKind::Table);
         assert_eq!(relation.estimated_rows, None);
         assert_ne!(relation.estimated_rows, Some(0));
     }
 
     #[test]
-    fn le_rendu_des_types_logiques_est_lisible() {
+    fn logical_types_render_readably() {
         assert_eq!(LogicalType::INT32.to_string(), "int32");
         assert_eq!(LogicalType::TIMESTAMPTZ.to_string(), "timestamptz");
         assert_eq!(
@@ -1092,9 +1084,9 @@ mod tests {
     }
 
     #[test]
-    fn un_horodatage_avec_fuseau_ne_se_confond_pas_avec_un_horodatage_nu() {
-        // La confusion qui décale la donnée de deux heures, de façon invisible
-        // et permanente (DRIVER-CONTRACT §7).
+    fn a_timestamp_with_time_zone_is_not_confused_with_a_bare_timestamp() {
+        // The confusion that shifts the data by two hours, invisibly and
+        // permanently (DRIVER-CONTRACT §7).
         assert_ne!(
             LogicalType::Timestamp { tz: true },
             LogicalType::Timestamp { tz: false }
@@ -1102,9 +1094,9 @@ mod tests {
     }
 
     #[test]
-    fn une_cle_etrangere_desaccordee_se_detecte() {
+    fn a_mismatched_foreign_key_is_detected() {
         let cible = ForeignKeyTarget {
-            relation: CatalogPath::for_relation(None, Some("public"), "clients").expect("valide"),
+            relation: CatalogPath::for_relation(None, Some("public"), "clients").expect("valid"),
             fields: vec!["id".to_owned()],
         };
         let bonne = ForeignKey::new("fk_ok", vec!["client_id".to_owned()], cible.clone());
@@ -1117,12 +1109,12 @@ mod tests {
         );
         assert!(
             !mauvaise.is_well_formed(),
-            "deux listes de longueurs différentes ne s'apparient pas positionnellement"
+            "two lists of different lengths do not pair positionally"
         );
     }
 
     #[test]
-    fn seules_les_relations_a_enregistrements_s_ouvrent() {
+    fn only_relations_with_records_open() {
         assert!(RelationKind::Table.holds_records());
         assert!(RelationKind::Collection.holds_records());
         assert!(RelationKind::KeyPattern.holds_records());
@@ -1131,7 +1123,7 @@ mod tests {
     }
 
     #[test]
-    fn une_cascade_propage_la_suppression() {
+    fn a_cascade_propagates_the_deletion() {
         assert!(ReferentialAction::Cascade.propagates_delete());
         assert!(!ReferentialAction::NoAction.propagates_delete());
         assert!(!ReferentialAction::Restrict.propagates_delete());

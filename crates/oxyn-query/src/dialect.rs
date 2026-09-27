@@ -1,23 +1,23 @@
-//! Correspondance entre les dialectes du domaine et ceux de `sqlparser`.
+//! Mapping between the domain's dialects and those of `sqlparser`.
 //!
-//! Deux vocabulaires cohabitent :
+//! Two vocabularies live side by side:
 //!
-//! * [`SqlDialect`] appartient à `oxyn-core`. C'est du vocabulaire de domaine :
-//!   il apparaît dans les fichiers de workspace et dans le journal, il est
-//!   sérialisé, et il ne bouge pas quand une dépendance bouge ;
-//! * les types de [`sqlparser::dialect`] appartiennent à la grammaire. Ils
-//!   changent de version en version.
+//! * [`SqlDialect`] belongs to `oxyn-core`. It is domain vocabulary: it appears
+//!   in workspace files and in the journal, it is serialized, and it does not
+//!   move when a dependency moves;
+//! * the types of [`sqlparser::dialect`] belong to the grammar. They change
+//!   from version to version.
 //!
-//! Ce module est le seul endroit du workspace où les deux se rencontrent.
-//! Personne d'autre n'importe `sqlparser::dialect`.
+//! This module is the only place in the workspace where the two meet. Nobody
+//! else imports `sqlparser::dialect`.
 //!
-//! # Ce que la correspondance ne prétend pas
+//! # What the mapping does not claim
 //!
-//! Un dialecte sans grammaire dédiée retombe sur
-//! [`sqlparser::dialect::GenericDialect`], qui est **permissif**.
-//! Ce n'est pas un défaut dangereux : ce que `sqlparser` refuse de lire est
-//! classé [`Unknown`](oxyn_core::StatementIntent::Unknown), donc traité comme
-//! mutant. Un dialecte approximatif dégrade le confort, jamais la sécurité.
+//! A dialect without a dedicated grammar falls back on
+//! [`sqlparser::dialect::GenericDialect`], which is **permissive**. It is not a
+//! dangerous defect: what `sqlparser` refuses to read is classified
+//! [`Unknown`](oxyn_core::StatementIntent::Unknown), hence treated as mutating.
+//! An approximate dialect degrades comfort, never security.
 
 use oxyn_core::{DriverId, QueryLanguage, SqlDialect};
 use sqlparser::dialect::{
@@ -25,8 +25,8 @@ use sqlparser::dialect::{
     MySqlDialect, PostgreSqlDialect, SQLiteDialect, SnowflakeDialect,
 };
 
-// Les grammaires de `sqlparser` sont des types sans champ : une instance
-// statique suffit, et évite une allocation par appel d'analyse.
+// The `sqlparser` grammars are field-less types: a static instance is enough,
+// and avoids an allocation per parse call.
 static GENERIC: GenericDialect = GenericDialect;
 static POSTGRES: PostgreSqlDialect = PostgreSqlDialect {};
 static MYSQL: MySqlDialect = MySqlDialect {};
@@ -37,16 +37,16 @@ static DUCKDB: DuckDbDialect = DuckDbDialect;
 static SNOWFLAKE: SnowflakeDialect = SnowflakeDialect;
 static BIGQUERY: BigQueryDialect = BigQueryDialect;
 
-/// La grammaire `sqlparser` à utiliser pour un dialecte du domaine.
+/// The `sqlparser` grammar to use for a domain dialect.
 ///
-/// Les valeurs sans grammaire propre dans `sqlparser` sont rattachées à la plus
-/// proche :
+/// Values without their own grammar in `sqlparser` are attached to the
+/// closest one:
 ///
-/// | [`SqlDialect`] | grammaire | pourquoi |
+/// | [`SqlDialect`] | grammar | why |
 /// |---|---|---|
-/// | `Ansi` | `Generic` | `AnsiDialect` refuse trop de SQL réel pour servir de défaut |
-/// | `Redshift` | `PostgreSql` | Redshift dérive de PostgreSQL (ADR-0003) |
-/// | `Oracle` | `Generic` | PL/SQL n'a pas de grammaire suffisante ici |
+/// | `Ansi` | `Generic` | `AnsiDialect` refuses too much real SQL to serve as a default |
+/// | `Redshift` | `PostgreSql` | Redshift derives from PostgreSQL (ADR-0003) |
+/// | `Oracle` | `Generic` | PL/SQL has no sufficient grammar here |
 #[must_use]
 pub fn parser_dialect(dialect: SqlDialect) -> &'static dyn Dialect {
     match dialect {
@@ -58,30 +58,30 @@ pub fn parser_dialect(dialect: SqlDialect) -> &'static dyn Dialect {
         SqlDialect::DuckDb => &DUCKDB,
         SqlDialect::Snowflake => &SNOWFLAKE,
         SqlDialect::BigQuery => &BIGQUERY,
-        // `Ansi`, `Oracle`, et toute valeur ajoutée plus tard à l'énumération
-        // (elle est `#[non_exhaustive]`) : la grammaire permissive.
+        // `Ansi`, `Oracle`, and any value added to the enumeration later (it
+        // is `#[non_exhaustive]`): the permissive grammar.
         _ => &GENERIC,
     }
 }
 
-/// Le dialecte SQL qu'un driver parle, à défaut d'information de session.
+/// The SQL dialect a driver speaks, in the absence of session information.
 ///
-/// **Ce n'est qu'un défaut.** Un driver PostgreSQL branché sur Redshift parle
-/// le dialecte Redshift, et seule la session sait le dire : les capacités se
-/// déclarent par session, pas par crate de driver (ADR-0003). Un appelant qui
-/// dispose d'une session doit préférer ce qu'elle annonce.
+/// **It is only a default.** A PostgreSQL driver plugged into Redshift speaks
+/// the Redshift dialect, and only the session can tell: capabilities are
+/// declared per session, not per driver crate (ADR-0003). A caller that has a
+/// session must prefer what it announces.
 ///
-/// Un identifiant de driver inconnu donne [`SqlDialect::Ansi`], donc la
-/// grammaire permissive.
+/// An unknown driver identifier gives [`SqlDialect::Ansi`], hence the
+/// permissive grammar.
 #[must_use]
 pub fn dialect_for(driver: &DriverId) -> SqlDialect {
     match driver.as_str() {
         DriverId::POSTGRES => SqlDialect::Postgres,
         DriverId::MYSQL => SqlDialect::MySql,
         DriverId::SQLITE => SqlDialect::Sqlite,
-        // Identifiants attendus pour les drivers de la vision, reconnus dès
-        // maintenant pour que l'ajout d'un driver ne demande pas de repasser
-        // ici. Un identifiant absent de cette liste n'est pas une erreur.
+        // Identifiers expected for the drivers of the vision, recognized now so
+        // that adding a driver does not require coming back here. An
+        // identifier missing from this list is not an error.
         "sqlserver" | "mssql" => SqlDialect::SqlServer,
         "oracle" => SqlDialect::Oracle,
         "clickhouse" => SqlDialect::ClickHouse,
@@ -93,12 +93,12 @@ pub fn dialect_for(driver: &DriverId) -> SqlDialect {
     }
 }
 
-/// Le dialecte SQL d'un langage de requête, s'il y en a un.
+/// The SQL dialect of a query language, if there is one.
 ///
-/// Renvoie `None` pour tout ce qui n'est pas du SQL. Cette crate n'analyse que
-/// le SQL : Cypher, Gremlin ou une commande Redis ne passent pas par
-/// `sqlparser`, et [`classify_language`](crate::classify_language) le traduit
-/// en [`Unknown`](oxyn_core::StatementIntent::Unknown) plutôt qu'en supposition.
+/// Returns `None` for anything that is not SQL. This crate only parses SQL:
+/// Cypher, Gremlin or a Redis command do not go through `sqlparser`, and
+/// [`classify_language`](crate::classify_language) translates that into
+/// [`Unknown`](oxyn_core::StatementIntent::Unknown) rather than a guess.
 #[must_use]
 pub fn dialect_for_language(language: QueryLanguage) -> Option<SqlDialect> {
     language.sql_dialect()
@@ -109,10 +109,10 @@ mod tests {
     use super::*;
     use sqlparser::parser::Parser;
 
-    /// Le point du module : chaque dialecte du domaine sait lire du SQL.
-    /// Un `match` incomplet ou une grammaire mal branchée casse ici.
+    /// The point of the module: every domain dialect can read SQL. An
+    /// incomplete `match` or a badly wired grammar breaks here.
     #[test]
-    fn chaque_dialecte_sait_lire_un_select() {
+    fn every_dialect_can_read_a_select() {
         for dialecte in [
             SqlDialect::Ansi,
             SqlDialect::Postgres,
@@ -128,21 +128,21 @@ mod tests {
         ] {
             let grammaire = parser_dialect(dialecte);
             let lu = Parser::parse_sql(grammaire, "SELECT 1");
-            assert!(lu.is_ok(), "{dialecte} ne lit pas SELECT 1 : {lu:?}");
+            assert!(lu.is_ok(), "{dialecte} cannot read SELECT 1: {lu:?}");
         }
     }
 
     #[test]
-    fn la_grammaire_postgres_lit_du_postgres() {
+    fn the_postgres_grammar_reads_postgres() {
         let grammaire = parser_dialect(SqlDialect::Postgres);
         let lu = Parser::parse_sql(grammaire, "SELECT * FROM t WHERE id = $1");
         assert!(lu.is_ok(), "{lu:?}");
     }
 
     #[test]
-    fn redshift_emprunte_la_grammaire_postgres() {
-        // Un emplacement `$1` n'est accepté que par une grammaire PostgreSQL :
-        // c'est la preuve observable du rattachement.
+    fn redshift_borrows_the_postgres_grammar() {
+        // A `$1` placeholder is only accepted by a PostgreSQL grammar: it is
+        // the observable proof of the attachment.
         let lu = Parser::parse_sql(
             parser_dialect(SqlDialect::Redshift),
             "SELECT * FROM t WHERE id = $1",
@@ -151,20 +151,20 @@ mod tests {
     }
 
     #[test]
-    fn les_drivers_connus_ont_leur_dialecte() {
+    fn known_drivers_have_their_dialect() {
         assert_eq!(dialect_for(&DriverId::postgres()), SqlDialect::Postgres);
         assert_eq!(dialect_for(&DriverId::mysql()), SqlDialect::MySql);
         assert_eq!(dialect_for(&DriverId::sqlite()), SqlDialect::Sqlite);
     }
 
     #[test]
-    fn un_driver_inconnu_retombe_sur_ansi() {
-        let inconnu = DriverId::new("mongo").expect("identifiant valide");
+    fn an_unknown_driver_falls_back_on_ansi() {
+        let inconnu = DriverId::new("mongo").expect("valid identifier");
         assert_eq!(dialect_for(&inconnu), SqlDialect::Ansi);
     }
 
     #[test]
-    fn seul_le_sql_a_un_dialecte() {
+    fn only_sql_has_a_dialect() {
         assert_eq!(
             dialect_for_language(QueryLanguage::Sql(SqlDialect::MySql)),
             Some(SqlDialect::MySql)

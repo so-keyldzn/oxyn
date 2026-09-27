@@ -1,4 +1,4 @@
-// `Open object under cursor` (UX-SPEC, « Menus contextuels », Éditeur SQL):
+// `Open object under cursor` (UX-SPEC, « Context menus », Éditeur SQL):
 // the name under the cursor, resolved against the catalog already read — the
 // tree the sidebar holds —, as a mention resolves what is typed after `@`.
 // Nothing is read from the server for it, and nothing runs.

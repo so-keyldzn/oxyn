@@ -21,7 +21,7 @@ speaking ACP. Its entry point is:
 pub async fn run_turn(
     agent: &ExternalAgentConfig,
     tier: PrivacyTier,
-    prompt: &str,          // ← n'importe quelle String
+    prompt: &str,          // ← any String
     cancel: &CancelToken,
     observer: Arc<dyn AgentObserver>,
 ) -> Result<TurnEnd>
@@ -68,7 +68,7 @@ that is when it costs the least.
 `run_turn` **keeps its own tier check**. It is not a redundancy to clean up:
 the gateway protects assembly, the check protects the launch, and neither must
 rely on the other. The test
-`le_niveau_local_refuse_avant_meme_de_lancer_le_processus` now composes its
+`the_local_tier_refuses_before_even_launching_the_process` now composes its
 prompt under a permissive tier to exercise that second line alone.
 
 What follows remains the record of the three options as they were weighed.

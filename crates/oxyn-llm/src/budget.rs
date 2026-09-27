@@ -1,79 +1,76 @@
-//! Ce qu'une génération peut accumuler, au total.
+//! What a generation can accumulate, in total.
 //!
-//! Le décodeur SSE borne la trame **en cours** ; rien ne bornait leur somme.
-//! Une suite de petites trames, chacune valide et sous le plafond, faisait
-//! grossir sans fin le texte, les arguments d'un appel d'outil ou le nombre de
-//! blocs ouverts — jusqu'à ce que le système tue le processus, sans trace.
+//! The SSE decoder bounds the **current** frame; nothing bounded their sum. A
+//! sequence of small frames, each valid and under the ceiling, made the text,
+//! the arguments of a tool call or the number of open blocks grow without
+//! end — until the system killed the process, without a trace.
 //!
-//! Un [`GenerationBudget`] se tient pour **une** génération. Chaque octet
-//! accumulé ou émis y est compté avant de l'être, et chaque bloc ou appel
-//! d'outil ouvert aussi. Le premier dépassement arrête la génération : le
-//! décodeur le signale par une erreur qui nomme la limite, jette ce qui n'était
-//! pas clos — un appel d'outil coupé n'est pas une proposition d'action — et
-//! termine le flux en [`StopReason::Interrupted`](crate::types::StopReason) :
-//! le fournisseur a peut-être continué, et facturé, ce qu'on a cessé de lire
-//! (I-13).
+//! A [`GenerationBudget`] is kept for **one** generation. Every byte
+//! accumulated or emitted is counted before it is, and every open block or
+//! tool call too. The first overrun stops the generation: the decoder reports
+//! it with an error that names the limit, throws away what was not closed — a
+//! cut tool call is not a proposed action — and ends the stream with
+//! [`StopReason::Interrupted`](crate::types::StopReason): the provider may
+//! have continued, and billed, what we stopped reading (I-13).
 //!
-//! Les limites sont des choix d'Oxyn, pas des valeurs de fournisseur : elles
-//! bornent la mémoire, elles ne cherchent pas à coller au plus grand modèle du
-//! moment. Chacune est placée loin au-dessus de ce qu'un assistant SQL produit
-//! pour être lu.
+//! The limits are Oxyn's choices, not provider values: they bound memory,
+//! they do not try to match the largest model of the moment. Each one is set
+//! far above what an SQL assistant produces to be read.
 
 use std::fmt;
 
-/// Octets de contenu cumulés sur une génération : texte, refus,
-/// raisonnement, noms et arguments d'outils, identifiants.
+/// Content bytes accumulated over a generation: text, refusal, reasoning,
+/// tool names and arguments, identifiers.
 ///
-/// Même ordre de grandeur que la borne d'une trame SSE
-/// (`sse::DEFAULT_BUFFER_LIMIT`) : une réponse de huit mébioctets se lit en
-/// plusieurs heures, et au-delà la génération ne sert plus personne mais peut
-/// encore épuiser la mémoire.
+/// Same order of magnitude as the bound of an SSE frame
+/// (`sse::DEFAULT_BUFFER_LIMIT`): a response of eight mebibytes takes hours
+/// to read, and beyond that the generation serves no one but can still
+/// exhaust memory.
 pub const MAX_GENERATION_BYTES: usize = 8 * 1024 * 1024;
 
-/// Octets d'arguments d'**un** appel d'outil.
+/// Argument bytes of **one** tool call.
 ///
-/// Les arguments d'un outil d'Oxyn sont une instruction SQL ou une adresse de
-/// catalogue. Un mébioctet de SQL proposé par un modèle n'est plus relisible
-/// par l'utilisateur qui doit l'approuver ; c'est un flux qui dérape.
+/// The arguments of an Oxyn tool are an SQL statement or a catalog address. A
+/// mebibyte of SQL proposed by a model is no longer reviewable by the user who
+/// must approve it; it is a stream going off the rails.
 pub const MAX_TOOL_ARGUMENTS_BYTES: usize = 1024 * 1024;
 
-/// Octets du nom d'un outil.
+/// Bytes of a tool name.
 ///
-/// Les noms valables sont ceux du registre d'Oxyn, quelques dizaines
-/// d'octets. Un nom plus long ne désignera jamais un outil connu : le laisser
-/// grossir — certains serveurs le fragmentent — n'aurait aucun usage.
+/// Valid names are those of Oxyn's registry, a few dozen bytes. A longer name
+/// will never designate a known tool: letting it grow — some servers fragment
+/// it — would have no use.
 pub const MAX_TOOL_NAME_BYTES: usize = 256;
 
-/// Appels d'outils ouverts dans une génération.
+/// Tool calls open in a generation.
 ///
-/// Chaque appel devient une `Command` que le `PolicyGate` juge, et que
-/// l'utilisateur peut avoir à approuver une par une. Au-delà de quelques
-/// dizaines par tour, ce n'est plus une conversation mais une rafale.
+/// Each call becomes a `Command` that the `PolicyGate` judges, and that the
+/// user may have to approve one by one. Beyond a few dozen per turn, it is no
+/// longer a conversation but a burst.
 pub const MAX_TOOL_CALLS: usize = 64;
 
-/// Blocs de contenu ouverts dans une génération — texte, raisonnement,
-/// outil, types inconnus compris.
+/// Content blocks open in a generation — text, reasoning, tool, unknown types
+/// included.
 ///
-/// Chaque bloc ouvert porte un état jusqu'à sa fermeture ; un serveur qui en
-/// ouvre sans jamais les fermer fait croître cet état sans rien émettre.
-/// Le plafond est au-dessus de [`MAX_TOOL_CALLS`], puisqu'un appel d'outil
-/// est un bloc.
+/// Each open block carries a state until it closes; a server that opens some
+/// without ever closing them makes this state grow without emitting anything.
+/// The ceiling is above [`MAX_TOOL_CALLS`], since a tool call is a block.
 pub const MAX_CONTENT_BLOCKS: usize = 256;
 
-/// Une limite atteinte. Le message la nomme et donne sa valeur.
+/// A limit reached. The message names it and gives its value.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum BudgetExceeded {
     /// [`MAX_GENERATION_BYTES`].
     Generation,
-    /// [`MAX_TOOL_ARGUMENTS_BYTES`], pour l'appel d'index donné.
+    /// [`MAX_TOOL_ARGUMENTS_BYTES`], for the call of the given index.
     ToolArguments {
-        /// L'index de l'appel dans la génération.
+        /// The index of the call in the generation.
         index: u32,
     },
-    /// [`MAX_TOOL_NAME_BYTES`], pour l'appel d'index donné.
+    /// [`MAX_TOOL_NAME_BYTES`], for the call of the given index.
     ToolName {
-        /// L'index de l'appel dans la génération.
+        /// The index of the call in the generation.
         index: u32,
     },
     /// [`MAX_TOOL_CALLS`].
@@ -112,11 +109,11 @@ impl fmt::Display for BudgetExceeded {
 
 impl std::error::Error for BudgetExceeded {}
 
-/// Le compte d'une génération.
+/// The account of a generation.
 ///
-/// Rien n'est jamais « rendu » au budget : un bloc fermé a déjà coûté sa
-/// mémoire à un moment, et le texte émis est accumulé plus loin par
-/// l'appelant.
+/// Nothing is ever "given back" to the budget: a closed block has already
+/// cost its memory at some point, and the emitted text is accumulated further
+/// on by the caller.
 #[derive(Debug, Default, Clone)]
 pub struct GenerationBudget {
     bytes: usize,
@@ -125,17 +122,17 @@ pub struct GenerationBudget {
 }
 
 impl GenerationBudget {
-    /// Un budget neuf, pour une génération.
+    /// A fresh budget, for one generation.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Compte `len` octets de contenu.
+    /// Counts `len` content bytes.
     ///
-    /// # Erreurs
-    /// [`BudgetExceeded::Generation`] si le cumul dépasserait
-    /// [`MAX_GENERATION_BYTES`] ; rien n'est alors compté.
+    /// # Errors
+    /// [`BudgetExceeded::Generation`] if the total would exceed
+    /// [`MAX_GENERATION_BYTES`]; nothing is counted then.
     pub fn charge(&mut self, len: usize) -> Result<(), BudgetExceeded> {
         let total = self.bytes.saturating_add(len);
         if total > MAX_GENERATION_BYTES {
@@ -145,16 +142,16 @@ impl GenerationBudget {
         Ok(())
     }
 
-    /// Appels d'outils déjà ouverts : l'index du prochain.
+    /// Tool calls already open: the index of the next one.
     #[must_use]
     pub const fn tool_calls(&self) -> usize {
         self.tool_calls
     }
 
-    /// Compte un bloc de contenu ouvert.
+    /// Counts an open content block.
     ///
-    /// # Erreurs
-    /// [`BudgetExceeded::ContentBlocks`] au-delà de [`MAX_CONTENT_BLOCKS`].
+    /// # Errors
+    /// [`BudgetExceeded::ContentBlocks`] beyond [`MAX_CONTENT_BLOCKS`].
     pub fn open_block(&mut self) -> Result<(), BudgetExceeded> {
         if self.blocks >= MAX_CONTENT_BLOCKS {
             return Err(BudgetExceeded::ContentBlocks);
@@ -163,11 +160,11 @@ impl GenerationBudget {
         Ok(())
     }
 
-    /// Compte un appel d'outil ouvert, qui est aussi un bloc.
+    /// Counts an open tool call, which is also a block.
     ///
-    /// # Erreurs
-    /// [`BudgetExceeded::ToolCalls`] au-delà de [`MAX_TOOL_CALLS`], ou le refus
-    /// de [`open_block`](Self::open_block).
+    /// # Errors
+    /// [`BudgetExceeded::ToolCalls`] beyond [`MAX_TOOL_CALLS`], or the refusal
+    /// of [`open_block`](Self::open_block).
     pub fn open_tool_call(&mut self) -> Result<(), BudgetExceeded> {
         if self.tool_calls >= MAX_TOOL_CALLS {
             return Err(BudgetExceeded::ToolCalls);
@@ -177,12 +174,12 @@ impl GenerationBudget {
         Ok(())
     }
 
-    /// Compte un fragment d'arguments de l'appel `index`, dont les arguments
-    /// font déjà `current` octets.
+    /// Counts a fragment of arguments of call `index`, whose arguments are
+    /// already `current` bytes.
     ///
-    /// # Erreurs
-    /// [`BudgetExceeded::ToolArguments`] si l'appel dépasserait
-    /// [`MAX_TOOL_ARGUMENTS_BYTES`], ou le refus de [`charge`](Self::charge).
+    /// # Errors
+    /// [`BudgetExceeded::ToolArguments`] if the call would exceed
+    /// [`MAX_TOOL_ARGUMENTS_BYTES`], or the refusal of [`charge`](Self::charge).
     pub fn charge_tool_arguments(
         &mut self,
         index: u32,
@@ -195,15 +192,15 @@ impl GenerationBudget {
         self.charge(fragment)
     }
 
-    /// Vérifie qu'un appel **complet** tient dans [`MAX_TOOL_ARGUMENTS_BYTES`],
-    /// sans le compter dans le cumul.
+    /// Checks that a **complete** call fits in [`MAX_TOOL_ARGUMENTS_BYTES`],
+    /// without counting it in the total.
     ///
-    /// Pour l'appelant qui reçoit l'appel entier après ses fragments : ceux-ci
-    /// sont déjà comptés, les recompter réduirait le budget de moitié. Pour un
-    /// fournisseur qui livre l'appel d'un bloc, c'est la seule vérification.
+    /// For the caller that receives the whole call after its fragments: those
+    /// are already counted, counting them again would halve the budget. For a
+    /// provider that delivers the call in one block, it is the only check.
     ///
-    /// # Erreurs
-    /// [`BudgetExceeded::ToolArguments`] au-delà de la limite.
+    /// # Errors
+    /// [`BudgetExceeded::ToolArguments`] beyond the limit.
     pub fn check_tool_arguments(&self, index: u32, len: usize) -> Result<(), BudgetExceeded> {
         if len > MAX_TOOL_ARGUMENTS_BYTES {
             return Err(BudgetExceeded::ToolArguments { index });
@@ -211,12 +208,12 @@ impl GenerationBudget {
         Ok(())
     }
 
-    /// Compte un fragment du nom de l'appel `index`, dont le nom fait déjà
-    /// `current` octets.
+    /// Counts a fragment of the name of call `index`, whose name is already
+    /// `current` bytes.
     ///
-    /// # Erreurs
-    /// [`BudgetExceeded::ToolName`] si le nom dépasserait
-    /// [`MAX_TOOL_NAME_BYTES`], ou le refus de [`charge`](Self::charge).
+    /// # Errors
+    /// [`BudgetExceeded::ToolName`] if the name would exceed
+    /// [`MAX_TOOL_NAME_BYTES`], or the refusal of [`charge`](Self::charge).
     pub fn charge_tool_name(
         &mut self,
         index: u32,

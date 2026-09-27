@@ -1,6 +1,6 @@
 [package]
 name = "oxyn-ai"
-description = "Runtime d'agents : outils, contexte, niveaux de confidentialité"
+description = "Agent runtime: tools, context, privacy tiers"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -28,20 +28,20 @@ schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true
-# Lire les **noms** des serveurs MCP et des plugins de `~/.codex/config.toml`
-# pour les couper au lancement : aucune clé ne les coupe en bloc (ADR-0032).
+# Read the **names** of the MCP servers and plugins in `~/.codex/config.toml`
+# to switch them off at launch: no key switches them off as a block (ADR-0032).
 toml.workspace = true
-# `net` et `rt` pour l'écoute MCP sur la boucle locale : sans les nommer ici, la
-# crate ne compile que grâce à l'unification des fonctionnalités d'un voisin.
+# `net` and `rt` for MCP listening on the loopback: without naming them here,
+# the crate only compiles thanks to a neighbor's feature unification.
 tokio = { workspace = true, features = ["net", "rt"] }
 tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-# Monter un journal en `debug` et vérifier ce qui n'y apparaît pas (I-03).
+# Raise a log to `debug` and check what does not appear in it (I-03).
 tracing-subscriber.workspace = true
 
-# Tuer le **groupe** de processus d'un agent lancé derrière `npx` : sans cela,
-# l'agent réel se ré-attache à pid 1 et survit à la fin de la conversation.
+# Kill the process **group** of an agent launched behind `npx`: otherwise the
+# real agent reattaches to pid 1 and outlives the end of the conversation.
 [target.'cfg(unix)'.dependencies]
 rustix.workspace = true

@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0028-pas-dordre-par-defaut-pas-de-page-sans-ordre-total.md" sha256="3602fa9ee9a8" -->
+<!-- oxyn-translation source="docs/adr/0028-pas-dordre-par-defaut-pas-de-page-sans-ordre-total.md" sha256="39f59036fca3" -->
 
 > Traduction française de [docs/adr/0028-pas-dordre-par-defaut-pas-de-page-sans-ordre-total.md](../../../../docs/adr/0028-pas-dordre-par-defaut-pas-de-page-sans-ordre-total.md). **La version anglaise fait foi.**
 
@@ -27,7 +27,7 @@ documents qui ne disaient pas la même chose :
 * [UX-SPEC](../UX-SPEC.md) : « sans tri demandé, l'ordre des lignes n'est pas
   garanti » ;
 * le code : les deux drivers ne composent **aucun** `ORDER BY` sans demande, ce
-  qu'ancre le test `un_apercu_sans_demande_ne_compose_ni_where_ni_order_by`.
+  qu'ancre le test `a_preview_without_request_composes_neither_where_nor_order_by`.
 
 Cette contradiction a été relevée le 2026-09-15. Ce qui la rendait coûteuse
 n'est pas l'incohérence elle-même : c'est qu'ADR-0020 est le **seul** document
@@ -84,7 +84,7 @@ avant de « corriger » `pagination_from`.
 **Faible, mais pas nul.** Revenir à l'ordre imposé demanderait : la lecture de la
 clé primaire à chaque aperçu dans les deux drivers, la composition de l'`ORDER
 BY` par défaut, et la révision des tests qui ancrent l'absence d'ordre
-(`un_apercu_sans_demande_ne_compose_ni_where_ni_order_by` dans chaque driver,
+(`a_preview_without_request_composes_neither_where_nor_order_by` dans chaque driver,
 `a_page_is_offered_only_where_the_order_is_total` côté interface).
 
 Ce qui coûterait davantage est invisible : les utilisateurs auraient pris

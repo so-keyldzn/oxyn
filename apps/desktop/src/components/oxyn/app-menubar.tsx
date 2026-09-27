@@ -159,7 +159,7 @@ function Entry({
           <Mnemonic label={label} mnemonic={entry.mnemonic} shown={mnemonics} />
         </span>
         {/* The reason is shown with the entry, by pointer and by keyboard
-            alike (UX-SPEC, « Une action, un libellé, un raccourci »), and
+            alike (UX-SPEC, « One action, one label, one shortcut »), and
             read as its description rather than as part of its name. */}
         {reason ? (
           <span

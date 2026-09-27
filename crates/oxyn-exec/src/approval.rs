@@ -1,38 +1,38 @@
-//! Les commandes qui attendent un accord, et leur péremption.
+//! Commands awaiting approval, and their expiry.
 //!
-//! Quand le `PolicyGate` répond
-//! [`RequireApproval`](oxyn_core::Decision::RequireApproval), **rien ne
-//! s'exécute**. La commande — déjà reclassifiée, telle qu'elle sera lancée si
-//! elle est acceptée — est mise de côté ici, et l'interface reçoit un
-//! [`Event::ApprovalRequested`](oxyn_core::Event) portant son [`CommandId`].
+//! When the `PolicyGate` answers
+//! [`RequireApproval`](oxyn_core::Decision::RequireApproval), **nothing
+//! executes**. The command — already reclassified, as it will run if it is
+//! accepted — is set aside here, and the interface receives an
+//! [`Event::ApprovalRequested`](oxyn_core::Event) carrying its [`CommandId`].
 //!
-//! # Trois propriétés, et ce que chacune empêche
+//! # Three properties, and what each prevents
 //!
-//! **Ce qui est mis de côté est ce qui sera exécuté.** La commande stockée est
-//! celle que le gate a vue, pas le texte d'origine. Sans cela, on rouvrirait
-//! l'écart exact que la reclassification ferme : approuver un `SELECT` et
-//! exécuter un `DELETE`.
+//! **What is set aside is what will be executed.** The stored command is the
+//! one the gate saw, not the original text. Without that, the exact gap that
+//! reclassification closes would reopen: approving a `SELECT` and executing a
+//! `DELETE`.
 //!
-//! **Une approbation ne sert qu'une fois.** [`take`](ApprovalRegistry::take)
-//! **retire** l'entrée. Un accord rejouable est un accord qu'un agent peut
-//! rejouer.
+//! **An approval is used only once.** [`take`](ApprovalRegistry::take)
+//! **removes** the entry. A replayable approval is an approval an agent can
+//! replay.
 //!
-//! **Une approbation périme.** Une demande restée à l'écran une nuit entière ne
-//! porte plus sur le même état du monde : la table a changé, la connexion a pu
-//! être remarquée production. Passé le délai, la commande n'est pas exécutée —
-//! elle est réémise, et repasse par le gate.
+//! **An approval expires.** A request left on screen for a whole night no
+//! longer concerns the same state of the world: the table changed, the
+//! connection may have been re-marked production. Past the delay, the command
+//! is not executed — it is re-emitted, and goes through the gate again.
 //!
-//! Le péremption est vérifiée **au retrait**, pas par une tâche de fond : une
-//! horloge de nettoyage qui ne tourne pas laisserait une entrée périmée
-//! utilisable, alors qu'une vérification au retrait ne peut pas être oubliée.
-//! [`sweep`](ApprovalRegistry::sweep) n'existe que pour vider l'affichage.
+//! Expiry is checked **on removal**, not by a background task: a cleanup clock
+//! that does not run would leave a stale entry usable, whereas a check on
+//! removal cannot be forgotten. [`sweep`](ApprovalRegistry::sweep) only exists
+//! to clear the display.
 //!
-//! Une demande périmée **reste dite périmée** une fois retirée : le registre
-//! garde les derniers identifiants expirés, et un accord qui arrive après dit
-//! « expired », pas « aucune commande n'attend ». Sans cela, la demande
-//! suivante — qui purge les périmées pour ne pas les compter dans la borne —
-//! changeait la réponse faite à l'utilisateur, qui lisait alors que sa demande
-//! n'avait jamais existé.
+//! A stale request **is still reported stale** once removed: the registry
+//! keeps the last expired identifiers, and an approval arriving afterwards
+//! says "expired", not "no command is waiting". Without that, the next request
+//! — which purges stale ones so as not to count them in the bound — changed
+//! the answer given to the user, who then read that their request had never
+//! existed.
 
 use std::collections::{HashMap, VecDeque};
 use std::time::{Duration, Instant};
@@ -40,108 +40,105 @@ use std::time::{Duration, Instant};
 use oxyn_core::{Actor, Command, CommandId, OxynError, Preview};
 use parking_lot::Mutex;
 
-/// Délai au bout duquel une demande d'approbation cesse d'être valable.
+/// Delay after which an approval request stops being valid.
 ///
-/// Cinq minutes : assez pour lire l'instruction, la comparer à ce qu'on
-/// attendait et trancher ; trop court pour qu'une demande oubliée soit acceptée
-/// par réflexe le lendemain matin.
+/// Five minutes: enough to read the statement, compare it with what was
+/// expected and decide; too short for a forgotten request to be accepted by
+/// reflex the next morning.
 pub const DEFAULT_TTL: Duration = Duration::from_secs(5 * 60);
 
-/// Nombre maximal de commandes en attente simultanée.
+/// Maximum number of simultaneously pending commands.
 ///
-/// Une borne, parce qu'un agent en boucle produirait sinon une file sans fin —
-/// et une file sans fin est une fuite de mémoire *et* une interface
-/// inutilisable. Au-delà, les nouvelles demandes sont refusées, pas les
-/// anciennes évincées : évincer laisserait croire à l'utilisateur qu'il a
-/// répondu à une demande qui a disparu.
+/// A bound, because an agent in a loop would otherwise produce an endless
+/// queue — and an endless queue is a memory leak *and* an unusable interface.
+/// Beyond it, new requests are refused, old ones are not evicted: evicting
+/// would make the user believe they answered a request that has disappeared.
 pub const DEFAULT_CAPACITY: usize = 64;
 
-/// Une commande mise de côté en attendant un accord.
+/// A command set aside while waiting for an approval.
 #[derive(Debug, Clone, PartialEq)]
 pub struct PendingCommand {
-    /// L'identifiant sous lequel l'accord sera donné. C'est aussi la clé de
-    /// corrélation avec le journal d'audit.
+    /// The identifier under which the approval will be given. It is also the
+    /// correlation key with the audit log.
     pub id: CommandId,
-    /// Qui a demandé. **Conservé tel quel** : approuver la commande d'un agent
-    /// n'en fait pas une commande humaine, et le journal doit continuer de dire
-    /// qui l'a écrite.
+    /// Who asked. **Kept as is**: approving an agent's command does not make it
+    /// a human command, and the log must keep saying who wrote it.
     pub actor: Actor,
-    /// La commande **reclassifiée**, telle qu'elle sera exécutée.
+    /// The **reclassified** command, as it will be executed.
     pub command: Command,
-    /// Ce sur quoi l'utilisateur doit se prononcer.
+    /// What the user must decide on.
     pub reason: String,
-    /// De quoi juger sans aller lire ailleurs.
+    /// What is needed to judge without reading elsewhere.
     pub preview: Option<Preview>,
-    /// Quand l'accord a été demandé.
+    /// When the approval was requested.
     pub requested_at: Instant,
-    /// Quand la demande cesse d'être valable.
+    /// When the request stops being valid.
     pub expires_at: Instant,
 }
 
 impl PendingCommand {
-    /// La demande est-elle périmée à l'instant `now` ?
+    /// Is the request stale at instant `now`?
     #[must_use]
     pub fn is_expired_at(&self, now: Instant) -> bool {
         now >= self.expires_at
     }
 
-    /// La demande est-elle périmée ?
+    /// Is the request stale?
     #[must_use]
     pub fn is_expired(&self) -> bool {
         self.is_expired_at(Instant::now())
     }
 
-    /// Depuis combien de temps la demande attend.
+    /// How long the request has been waiting.
     #[must_use]
     pub fn waiting_for(&self) -> Duration {
         self.requested_at.elapsed()
     }
 }
 
-/// Ce qui peut empêcher un accord d'aboutir.
+/// What can keep an approval from going through.
 ///
-/// Aucune de ces variantes ne décrit une panne : ce sont les trois façons dont
-/// un accord peut être sans objet. Elles se traduisent toutes en refus — jamais
-/// en exécution.
+/// None of these variants describes a failure: they are the three ways an
+/// approval can be moot. They all translate into a denial — never into an
+/// execution.
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[non_exhaustive]
 pub enum ApprovalError {
-    /// Aucune commande n'attend sous cet identifiant.
+    /// No command is waiting under this identifier.
     ///
-    /// Soit l'accord a déjà été donné — une approbation ne sert qu'une fois —,
-    /// soit la demande a été rejetée entre-temps.
+    /// Either the approval was already given — an approval is used only once
+    /// —, or the request was rejected in the meantime.
     #[error("no command is awaiting approval under this identifier")]
     Unknown,
 
-    /// La demande a expiré. **Rien n'a été exécuté.**
+    /// The request expired. **Nothing was executed.**
     #[error("the approval request expired after {after:?}: nothing was executed")]
     Expired {
-        /// Délai au bout duquel la demande a cessé d'être valable.
+        /// Delay after which the request stopped being valid.
         after: Duration,
     },
 
-    /// La file d'attente est pleine.
+    /// The waiting queue is full.
     #[error("too many commands are awaiting approval ({limit}): answer the pending requests")]
     QueueFull {
-        /// La borne atteinte.
+        /// The bound reached.
         limit: usize,
     },
 
-    /// Une demande attend déjà sous cet identifiant.
+    /// A request is already waiting under this identifier.
     ///
-    /// La remplacer changerait ce qu'un accord en cours de lecture approuve :
-    /// l'utilisateur lirait une instruction et en validerait une autre
-    /// (ADR-0037 § 2).
+    /// Replacing it would change what an approval being read approves: the
+    /// user would read one statement and validate another (ADR-0037 § 2).
     #[error("a command is already awaiting approval under this identifier")]
     AlreadyPending,
 }
 
 impl From<ApprovalError> for OxynError {
-    /// Une approbation sans objet est un **refus**, pas une erreur interne.
+    /// A moot approval is a **denial**, not an internal error.
     ///
-    /// L'appelant — l'interface comme le runtime d'agents — doit en conclure
-    /// que la commande n'a pas eu lieu et ne l'aura pas ; c'est exactement ce
-    /// que dit [`PolicyDenied`](OxynError::PolicyDenied).
+    /// The caller — the interface as well as the agent runtime — must conclude
+    /// that the command did not take place and will not; that is exactly what
+    /// [`PolicyDenied`](OxynError::PolicyDenied) says.
     fn from(err: ApprovalError) -> Self {
         Self::PolicyDenied {
             reason: err.to_string(),
@@ -149,7 +146,7 @@ impl From<ApprovalError> for OxynError {
     }
 }
 
-/// Les commandes en attente d'accord.
+/// The commands awaiting approval.
 #[derive(Debug)]
 pub struct ApprovalRegistry {
     ttl: Duration,
@@ -157,13 +154,12 @@ pub struct ApprovalRegistry {
     queue: Mutex<Queue>,
 }
 
-/// Ce qui attend, et ce qui a expiré sans réponse.
+/// What is waiting, and what expired without an answer.
 #[derive(Debug, Default)]
 struct Queue {
     pending: HashMap<CommandId, PendingCommand>,
-    /// Les derniers identifiants retirés parce que périmés, les plus anciens
-    /// en tête. Borné par la capacité : c'est la mémoire d'une file pleine,
-    /// pas un historique.
+    /// The last identifiers removed because stale, oldest first. Bounded by the
+    /// capacity: it is the memory of a full queue, not a history.
     expired: VecDeque<CommandId>,
 }
 
@@ -178,7 +174,7 @@ impl Queue {
         self.expired.push_back(id);
     }
 
-    /// Retire les demandes périmées à `now`, en s'en souvenant, et les rend.
+    /// Removes the requests stale at `now`, remembering them, and returns them.
     fn purge(&mut self, now: Instant, capacity: usize) -> Vec<PendingCommand> {
         let perimees: Vec<CommandId> = self
             .pending
@@ -196,8 +192,8 @@ impl Queue {
         retirees
     }
 
-    /// L'identifiant a-t-il expiré ? Oublié une fois lu : la réponse
-    /// « expired » est donnée une fois, comme un accord ne sert qu'une fois.
+    /// Has the identifier expired? Forgotten once read: the "expired" answer is
+    /// given once, as an approval is used only once.
     fn forget_expired(&mut self, id: CommandId) -> bool {
         let before = self.expired.len();
         self.expired.retain(|expired| *expired != id);
@@ -206,13 +202,13 @@ impl Queue {
 }
 
 impl ApprovalRegistry {
-    /// Registre aux réglages par défaut : [`DEFAULT_TTL`], [`DEFAULT_CAPACITY`].
+    /// Registry with default settings: [`DEFAULT_TTL`], [`DEFAULT_CAPACITY`].
     #[must_use]
     pub fn new() -> Self {
         Self::with_ttl(DEFAULT_TTL)
     }
 
-    /// Registre à durée de validité choisie.
+    /// Registry with a chosen validity duration.
     #[must_use]
     pub fn with_ttl(ttl: Duration) -> Self {
         Self {
@@ -222,29 +218,29 @@ impl ApprovalRegistry {
         }
     }
 
-    /// Fixe le nombre maximal de demandes simultanées.
+    /// Sets the maximum number of simultaneous requests.
     #[must_use]
     pub fn with_capacity(mut self, capacity: usize) -> Self {
         self.capacity = capacity;
         self
     }
 
-    /// La durée de validité d'une demande.
+    /// The validity duration of a request.
     #[must_use]
     pub const fn ttl(&self) -> Duration {
         self.ttl
     }
 
-    /// Met une commande de côté et rend la demande créée.
+    /// Sets a command aside and returns the created request.
     ///
-    /// `command` doit être la commande **reclassifiée** : c'est elle qui sera
-    /// exécutée si l'accord est donné.
+    /// `command` must be the **reclassified** command: it is the one that will
+    /// be executed if the approval is given.
     ///
-    /// # Erreurs
-    /// [`ApprovalError::QueueFull`] quand la borne de demandes simultanées est
-    /// atteinte, [`ApprovalError::AlreadyPending`] quand une demande attend
-    /// déjà sous `id`. La commande n'est alors pas mise de côté, et l'appelant
-    /// doit la traiter comme refusée.
+    /// # Errors
+    /// [`ApprovalError::QueueFull`] when the bound of simultaneous requests is
+    /// reached, [`ApprovalError::AlreadyPending`] when a request is already
+    /// waiting under `id`. The command is then not set aside, and the caller
+    /// must treat it as denied.
     pub fn submit(
         &self,
         id: CommandId,
@@ -265,8 +261,8 @@ impl ApprovalRegistry {
         };
 
         let mut guard = self.queue.lock();
-        // Les périmées ne comptent pas dans la borne : sinon une file remplie
-        // de demandes mortes bloquerait le produit jusqu'au redémarrage.
+        // Stale ones do not count in the bound: otherwise a queue filled with
+        // dead requests would block the product until restart.
         guard.purge(now, self.capacity);
         if guard.pending.len() >= self.capacity {
             return Err(ApprovalError::QueueFull {
@@ -280,22 +276,21 @@ impl ApprovalRegistry {
         Ok(entree)
     }
 
-    /// Retire la commande approuvée, si elle est encore valable.
+    /// Removes the approved command, if it is still valid.
     ///
-    /// L'entrée est retirée **dans tous les cas** — accord donné ou demande
-    /// périmée : ce qui a été présenté une fois ne doit pas pouvoir être
-    /// approuvé une seconde.
+    /// The entry is removed **in every case** — approval given or request
+    /// stale: what was presented once must not be approvable a second time.
     ///
-    /// # Erreurs
-    /// [`ApprovalError::Expired`] si la demande a expiré, qu'elle soit encore
-    /// là ou déjà retirée pour cette raison ; [`ApprovalError::Unknown`] si
-    /// rien n'attend sous cet identifiant — rien n'est exécuté dans les deux
-    /// cas.
+    /// # Errors
+    /// [`ApprovalError::Expired`] if the request expired, whether it is still
+    /// there or already removed for that reason; [`ApprovalError::Unknown`] if
+    /// nothing is waiting under this identifier — nothing is executed in
+    /// either case.
     pub fn take(&self, id: CommandId) -> Result<PendingCommand, ApprovalError> {
         self.take_at(id, Instant::now())
     }
 
-    /// [`take`](Self::take), à un instant donné. Réservé aux tests.
+    /// [`take`](Self::take), at a given instant. Reserved for tests.
     #[doc(hidden)]
     pub fn take_at(&self, id: CommandId, now: Instant) -> Result<PendingCommand, ApprovalError> {
         let mut guard = self.queue.lock();
@@ -312,21 +307,21 @@ impl ApprovalRegistry {
         Ok(entree)
     }
 
-    /// Retire une demande à laquelle l'utilisateur a répondu « non ».
+    /// Removes a request the user answered "no" to.
     ///
-    /// Un refus explicite n'est pas une erreur : il n'y a rien à signaler
-    /// au-delà du fait que la commande n'aura pas lieu.
+    /// An explicit denial is not an error: there is nothing to report beyond
+    /// the fact that the command will not take place.
     pub fn reject(&self, id: CommandId) -> Option<PendingCommand> {
         self.queue.lock().pending.remove(&id)
     }
 
-    /// Retire une demande **comme périmée**, que son délai soit passé ou non
-    /// à l'horloge de ce registre.
+    /// Removes a request **as stale**, whether or not its delay has passed on
+    /// this registry's clock.
     ///
-    /// Pour qui tient lui-même l'échéance d'une demande — l'appel d'un agent
-    /// qui l'attend : il la retire quand son attente prend fin, et un accord
-    /// arrivé ensuite doit dire « expired ». `None` si elle n'attendait plus :
-    /// déjà tranchée, ou retirée.
+    /// For whoever holds a request's deadline themselves — the call of an agent
+    /// waiting for it: it removes it when its wait ends, and an approval
+    /// arriving afterwards must say "expired". `None` if it was no longer
+    /// waiting: already decided, or removed.
     pub fn expire(&self, id: CommandId) -> Option<PendingCommand> {
         let mut guard = self.queue.lock();
         let entree = guard.pending.remove(&id)?;
@@ -334,26 +329,26 @@ impl ApprovalRegistry {
         Some(entree)
     }
 
-    /// Ce qui attend une réponse, sans rien retirer.
+    /// What is waiting for an answer, without removing anything.
     ///
-    /// L'ordre n'est pas garanti : c'est à l'interface de trier ce qu'elle
-    /// affiche, sur [`PendingCommand::requested_at`].
+    /// The order is not guaranteed: it is up to the interface to sort what it
+    /// displays, on [`PendingCommand::requested_at`].
     #[must_use]
     pub fn pending(&self) -> Vec<PendingCommand> {
         self.queue.lock().pending.values().cloned().collect()
     }
 
-    /// La demande qui attend sous `id`, sans la retirer.
+    /// The request waiting under `id`, without removing it.
     ///
-    /// Pour qui doit savoir sur quoi porte un accord **avant** de le donner —
-    /// le dialogue natif d'ADR-0037 ; [`take`](Self::take) reste le seul
-    /// retrait, et le seul à vérifier la péremption.
+    /// For whoever must know what an approval is about **before** giving it —
+    /// ADR-0037's native dialog; [`take`](Self::take) remains the only
+    /// removal, and the only one that checks expiry.
     #[must_use]
     pub fn peek(&self, id: CommandId) -> Option<PendingCommand> {
         self.queue.lock().pending.get(&id).cloned()
     }
 
-    /// Nombre de demandes en attente, périmées comprises.
+    /// Number of pending requests, stale ones included.
     #[must_use]
     pub fn len(&self) -> usize {
         self.queue.lock().pending.len()
@@ -365,11 +360,11 @@ impl ApprovalRegistry {
         self.queue.lock().pending.is_empty()
     }
 
-    /// Retire les demandes périmées et les rend.
+    /// Removes stale requests and returns them.
     ///
-    /// Purement cosmétique : la péremption est déjà vérifiée par
-    /// [`take`](Self::take), qui ne peut pas être oubliée. Ceci sert à retirer
-    /// de l'écran des demandes auxquelles il ne sert plus à rien de répondre.
+    /// Purely cosmetic: expiry is already checked by [`take`](Self::take),
+    /// which cannot be forgotten. This serves to remove from the screen
+    /// requests it is no longer any use answering.
     pub fn sweep(&self) -> Vec<PendingCommand> {
         self.queue.lock().purge(Instant::now(), self.capacity)
     }
@@ -405,13 +400,13 @@ mod tests {
     }
 
     #[test]
-    fn une_approbation_ne_sert_qu_une_fois() {
-        // Un accord rejouable est un accord qu'un agent peut rejouer.
+    fn an_approval_is_used_only_once() {
+        // A replayable approval is an approval an agent can replay.
         let registre = ApprovalRegistry::new();
         let id = CommandId::new();
         registre
-            .submit(id, agent(), commande(), "écriture par un agent", None)
-            .expect("la file est vide");
+            .submit(id, agent(), commande(), "write by an agent", None)
+            .expect("the queue is empty");
 
         assert!(registre.take(id).is_ok());
         assert_eq!(registre.take(id), Err(ApprovalError::Unknown));
@@ -419,62 +414,59 @@ mod tests {
     }
 
     #[test]
-    fn une_demande_perimee_n_execute_rien() {
+    fn a_stale_request_executes_nothing() {
         let registre = ApprovalRegistry::with_ttl(Duration::ZERO);
         let id = CommandId::new();
         registre
-            .submit(id, agent(), commande(), "écriture par un agent", None)
-            .expect("la file est vide");
+            .submit(id, agent(), commande(), "write by an agent", None)
+            .expect("the queue is empty");
 
         let issue = registre.take(id);
         assert!(
             matches!(issue, Err(ApprovalError::Expired { .. })),
             "{issue:?}"
         );
-        // Et elle a été retirée : elle ne pourra pas être « rattrapée ».
+        // And it was removed: it cannot be "caught up".
         assert!(registre.is_empty());
     }
 
     #[test]
-    fn une_approbation_perimee_devient_un_refus_et_non_une_panne() {
+    fn a_stale_approval_becomes_a_denial_not_a_failure() {
         let erreur: OxynError = ApprovalError::Expired {
             after: Duration::from_secs(300),
         }
         .into();
         assert!(matches!(erreur, OxynError::PolicyDenied { .. }));
         assert!(erreur.is_user_error(), "{erreur:?}");
-        assert!(
-            !erreur.is_retryable(),
-            "une approbation périmée ne se rejoue pas"
-        );
+        assert!(!erreur.is_retryable(), "a stale approval is not replayed");
     }
 
     #[test]
-    fn la_commande_mise_de_cote_est_celle_qui_sera_executee() {
-        // Elle est stockée telle quelle : approuver un texte et en exécuter un
-        // autre rouvrirait l'écart que la reclassification ferme.
+    fn the_command_set_aside_is_the_one_that_will_run() {
+        // It is stored as is: approving one text and executing another would
+        // reopen the gap that reclassification closes.
         let registre = ApprovalRegistry::new();
         let id = CommandId::new();
         let cmd = commande();
         registre
             .submit(id, Actor::Human, cmd.clone(), "production", None)
-            .expect("la file est vide");
+            .expect("the queue is empty");
 
-        let reprise = registre.take(id).expect("accord donné");
+        let reprise = registre.take(id).expect("approval given");
         assert_eq!(reprise.command, cmd);
         assert_eq!(reprise.actor, Actor::Human);
     }
 
     #[test]
-    fn une_demande_en_attente_ne_se_remplace_pas() {
-        // Remplacée pendant qu'un dialogue la montre, l'accord donné à ce
-        // qu'on a lu exécuterait autre chose (ADR-0037).
+    fn a_pending_request_is_not_replaced() {
+        // Replaced while a dialog shows it, the approval given to what was read
+        // would execute something else (ADR-0037).
         let registre = ApprovalRegistry::new();
         let id = CommandId::new();
         let lue = commande();
         registre
             .submit(id, Actor::Human, lue.clone(), "production", None)
-            .expect("la file est vide");
+            .expect("the queue is empty");
         let autre = Command::Execute {
             connection: ConnectionId::new(),
             session: SessionId::new(),
@@ -486,56 +478,56 @@ mod tests {
                 .err(),
             Some(ApprovalError::AlreadyPending)
         );
-        assert_eq!(registre.take(id).expect("accord donné").command, lue);
+        assert_eq!(registre.take(id).expect("approval given").command, lue);
     }
 
     #[test]
-    fn approuver_ne_change_pas_l_acteur() {
-        // Une commande d'agent approuvée reste une commande d'agent : le
-        // journal doit continuer de dire qui l'a écrite.
+    fn approving_does_not_change_the_actor() {
+        // An approved agent command stays an agent command: the log must keep
+        // saying who wrote it.
         let registre = ApprovalRegistry::new();
         let id = CommandId::new();
         let acteur = agent();
         registre
-            .submit(id, acteur, commande(), "écriture par un agent", None)
-            .expect("la file est vide");
+            .submit(id, acteur, commande(), "write by an agent", None)
+            .expect("the queue is empty");
 
-        let reprise = registre.take(id).expect("accord donné");
+        let reprise = registre.take(id).expect("approval given");
         assert!(reprise.actor.is_agent());
         assert_eq!(reprise.actor, acteur);
     }
 
     #[test]
-    fn la_file_est_bornee() {
+    fn the_queue_is_bounded() {
         let registre = ApprovalRegistry::new().with_capacity(2);
         for _ in 0..2 {
             registre
                 .submit(CommandId::new(), agent(), commande(), "motif", None)
-                .expect("sous la borne");
+                .expect("under the bound");
         }
         let issue = registre.submit(CommandId::new(), agent(), commande(), "motif", None);
         assert_eq!(
             issue.err(),
             Some(ApprovalError::QueueFull { limit: 2 }),
-            "la borne doit refuser la nouvelle demande"
+            "the bound must refuse the new request"
         );
-        assert_eq!(registre.len(), 2, "aucune ancienne n'a été évincée");
+        assert_eq!(registre.len(), 2, "no old one was evicted");
     }
 
     #[test]
-    fn les_demandes_perimees_ne_bloquent_pas_la_file() {
+    fn stale_requests_do_not_block_the_queue() {
         let registre = ApprovalRegistry::with_ttl(Duration::ZERO).with_capacity(1);
         registre
             .submit(CommandId::new(), agent(), commande(), "motif", None)
             .expect("file vide");
-        // La précédente est périmée : elle ne compte plus dans la borne.
+        // The previous one is stale: it no longer counts in the bound.
         registre
             .submit(CommandId::new(), agent(), commande(), "motif", None)
-            .expect("la périmée a laissé la place");
+            .expect("the stale one made room");
     }
 
     #[test]
-    fn le_balayage_ne_retire_que_les_perimees() {
+    fn the_sweep_removes_only_stale_ones() {
         let vivantes = ApprovalRegistry::new();
         let id = CommandId::new();
         vivantes
@@ -553,10 +545,10 @@ mod tests {
     }
 
     #[test]
-    fn une_demande_purgee_par_la_suivante_reste_dite_perimee() {
-        // La régression : la demande suivante purgeait la périmée, et
-        // l'accord tardif lisait « no command is awaiting approval » — une
-        // demande qui n'aurait jamais existé.
+    fn a_request_purged_by_the_next_is_still_reported_stale() {
+        // The regression: the next request purged the stale one, and the late
+        // approval read "no command is awaiting approval" — a request that
+        // would never have existed.
         let registre = ApprovalRegistry::with_ttl(Duration::ZERO);
         let perimee = CommandId::new();
         registre
@@ -564,19 +556,19 @@ mod tests {
             .expect("file vide");
         registre
             .submit(CommandId::new(), agent(), commande(), "motif", None)
-            .expect("la périmée a laissé la place");
+            .expect("the stale one made room");
 
         let issue = registre.take(perimee);
         assert!(
             matches!(issue, Err(ApprovalError::Expired { .. })),
             "{issue:?}"
         );
-        // Dit une fois : ensuite, plus rien n'attend sous cet identifiant.
+        // Said once: afterwards, nothing waits under this identifier any more.
         assert_eq!(registre.take(perimee), Err(ApprovalError::Unknown));
     }
 
     #[test]
-    fn expirer_retire_la_demande_et_l_accord_tardif_le_dit() {
+    fn expiring_removes_the_request_and_the_late_approval_says_so() {
         let registre = ApprovalRegistry::new();
         let id = CommandId::new();
         registre
@@ -585,7 +577,7 @@ mod tests {
 
         assert!(registre.expire(id).is_some());
         assert!(registre.is_empty());
-        assert!(registre.expire(id).is_none(), "déjà retirée");
+        assert!(registre.expire(id).is_none(), "already removed");
         let issue = registre.take(id);
         assert!(
             matches!(issue, Err(ApprovalError::Expired { .. })),
@@ -594,16 +586,16 @@ mod tests {
     }
 
     #[test]
-    fn la_memoire_des_perimees_est_bornee() {
+    fn the_memory_of_stale_ones_is_bounded() {
         let registre = ApprovalRegistry::new().with_capacity(2);
         let ids: Vec<CommandId> = (0..3).map(|_| CommandId::new()).collect();
         for id in &ids {
             registre
                 .submit(*id, agent(), commande(), "motif", None)
-                .expect("sous la borne");
+                .expect("under the bound");
             registre.expire(*id);
         }
-        // La plus ancienne est oubliée : la borne vaut aussi pour la mémoire.
+        // The oldest is forgotten: the bound also applies to memory.
         assert_eq!(registre.take(ids[0]), Err(ApprovalError::Unknown));
         assert!(matches!(
             registre.take(ids[2]),
@@ -612,7 +604,7 @@ mod tests {
     }
 
     #[test]
-    fn un_refus_explicite_retire_la_demande() {
+    fn an_explicit_denial_removes_the_request() {
         let registre = ApprovalRegistry::new();
         let id = CommandId::new();
         registre

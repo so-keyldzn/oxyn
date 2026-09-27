@@ -398,15 +398,14 @@ mod tests {
         assert!(payload.contains(r#""binary_display":"hex""#), "{payload}");
     }
 
-    /// Un binaire ancien doit pouvoir lire ce qu'un binaire récent a écrit.
+    /// An older binary must be able to read what a newer binary wrote.
     ///
-    /// C'est le sens du refus de `deny_unknown_fields` sur ce type : la lecture
-    /// des préférences échoue au **démarrage** de l'application, donc un champ
-    /// ajouté par une version plus récente empêcherait un retour en arrière de
-    /// lancer Oxyn. Ce qui garde la compatibilité, c'est `version`, contrôlé
-    /// explicitement.
+    /// That is why this type refuses `deny_unknown_fields`: reading the
+    /// preferences fails at application **startup**, so a field added by a
+    /// newer version would prevent a rollback from launching Oxyn. What keeps
+    /// compatibility is `version`, checked explicitly.
     #[test]
-    fn un_champ_venu_d_une_version_plus_recente_est_ignore_pas_refuse() {
+    fn a_field_from_a_newer_version_is_ignored_not_refused() {
         let payload = r#"{
             "version": 1,
             "appearance": "dark",
@@ -414,15 +413,15 @@ mod tests {
             "un_reglage_du_futur": {"forme": "inconnue"}
         }"#;
         let relues: WorkspacePreferences =
-            serde_json::from_str(payload).expect("un champ inconnu ne bloque pas la lecture");
+            serde_json::from_str(payload).expect("an unknown field does not block reading");
         assert_eq!(relues.appearance, Appearance::Dark);
-        assert!(relues.sidebar_collapsed, "les champs connus sont bien lus");
+        assert!(relues.sidebar_collapsed, "known fields are read");
         assert!(relues.validate().is_ok());
 
-        // Une version de format réellement différente, elle, est refusée : c'est
-        // le numéro qui porte l'incompatibilité, pas la présence d'un champ.
+        // A really different format version is refused, though: the number
+        // carries the incompatibility, not the presence of a field.
         let futur = r#"{"version": 99}"#;
-        let futures: WorkspacePreferences = serde_json::from_str(futur).expect("lecture");
+        let futures: WorkspacePreferences = serde_json::from_str(futur).expect("read");
         assert!(futures.validate().is_err());
     }
 }

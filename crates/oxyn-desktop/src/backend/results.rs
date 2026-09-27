@@ -318,8 +318,8 @@ impl Backend {
 
     /// The columns of a result, known from its schema — before its first rows.
     ///
-    /// Lets the grid draw a result while it streams (UX-SPEC, « États d'une
-    /// vue »). `None` when the result is not, or no longer, held.
+    /// Lets the grid draw a result while it streams (UX-SPEC, « States of a
+    /// view »). `None` when the result is not, or no longer, held.
     #[must_use]
     pub fn result_columns(&self, result: ResultId) -> Option<Vec<ResultColumn>> {
         let buffer = self.inner.executor.result(result)?;

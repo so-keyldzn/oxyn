@@ -1,49 +1,46 @@
-# Les interdits de CLAUDE.md, écrits pour clippy plutôt que pour un relecteur.
+# The prohibitions of CLAUDE.md, written for clippy rather than for a reviewer.
 #
-# Un invariant violé ne fait rien échouer au moment de la faute : c'est sa
-# définition. Tout ce qui peut être ramené à un chemin d'appel interdit doit
-# l'être ici, parce que `-D warnings` en fait alors un mur et non un rappel.
+# A violated invariant makes nothing fail at the moment of the mistake: that is
+# its definition. Everything that can be reduced to a forbidden call path must
+# be reduced to one here, because `-D warnings` then makes it a wall and not a
+# reminder.
 #
-# Ce fichier vaut pour TOUT le workspace : clippy le résout une seule fois, à la
-# racine. Un interdit qui ne doit valoir que pour une crate — « aucun I/O dans
-# une commande Tauri synchrone », par exemple — n'a donc pas sa place ici ; il
-# demande un lint écrit à la main, ou un hook. Ne sont listées que des méthodes qu'AUCUNE crate n'appelle
-# aujourd'hui : ajouter un interdit déjà violé transformerait la porte de
-# qualité en dette, et la première réaction serait de le retirer.
+# This file applies to the WHOLE workspace: clippy resolves it once, at the
+# root. A prohibition that should only hold for one crate — "no I/O in a
+# synchronous Tauri command", for instance — therefore has no place here; it
+# needs a hand-written lint, or a hook. Only methods that NO crate calls today
+# are listed: adding a prohibition that is already violated would turn the
+# quality gate into debt, and the first reaction would be to remove it.
 #
-# Les `reason` sont en anglais : elles sortent dans le diagnostic du compilateur.
+# The `reason`s show up in the compiler diagnostic.
 
-# Le workspace est en 0.0.1 et n'a aucun consommateur externe. Sans ce réglage,
-# clippy se tait sur tout ce qui toucherait à une API publique — c'est-à-dire
-# sur presque tout, puisque les crates s'exposent mutuellement.
+# The workspace is at 0.0.1 and has no external consumer. Without this setting,
+# clippy stays silent on anything that would touch a public API — that is, on
+# almost everything, since the crates expose themselves to each other.
 avoid-breaking-exported-api = false
 
 disallowed-methods = [
-    # I-05 — rien ne bloque le thread qui dessine. `thread::sleep` sur le thread
-    # UI fige la fenêtre entière ; l'utilisateur conclut au plantage.
+    # I-05 — nothing blocks the drawing thread. `thread::sleep` on the UI thread
+    # freezes the whole window; the user concludes it crashed.
     { path = "std::thread::sleep", reason = "Blocking sleep freezes the UI thread (I-05). Use the async executor's timer, or `tokio::time::sleep` on a worker.", replacement = "tokio::time::sleep" },
 
-    # I-05 — un appel réseau synchrone n'a aucun délai maximal et aucune
-    # annulation : il ne peut pas exister dans ce dépôt.
+    # I-05 — a synchronous network call has no maximum delay and no
+    # cancellation: it cannot exist in this repository.
     { path = "std::net::TcpStream::connect", reason = "Synchronous network I/O has no timeout and no cancellation path (I-05). Drivers connect through their async runtime." },
 
-    # I-03 — un processus enfant hérite de l'environnement du parent, donc de
-    # tout secret qui s'y trouverait, et son démarrage bloque l'appelant pour
-    # une durée inconnue.
+    # I-03 — a child process inherits the parent's environment, hence any
+    # secret in it, and starting it blocks the caller for an unknown duration.
     { path = "std::process::Command::new", reason = "Spawning a child process leaks the parent environment, including secrets (I-03), and blocks the caller for an unknown duration." },
 
-    # I-03 — `set_var` est en outre non sûr en présence de plusieurs fils
-    # depuis l'édition 2024.
+    # I-03 — `set_var` is moreover unsound with several threads since the 2024
+    # edition.
     { path = "std::env::set_var", reason = "Mutating the process environment is unsound with threads and is how a secret reaches a child process (I-03)." },
     { path = "std::env::remove_var", reason = "Mutating the process environment is unsound with threads (I-03)." },
 
-    # Analyser depuis un lecteur relit octet par octet ; c'est aussi le chemin
-    # sur lequel une réponse serveur arrive (I-09), et il faut pouvoir borner sa
-    # taille avant de la désérialiser.
-    # ADR-0043 — rien n'est diffusé aux webviews. Les six méthodes d'émission
-    # de `tauri::Emitter` (tauri 2.11.5, `src/lib.rs`, relevées le 2026-09-25)
-    # sont le chemin de la diffusion : chaque fenêtre recevrait le flux des
-    # autres et le trierait elle-même. Un `Channel` par fenêtre, filtré en Rust.
+    # ADR-0043 — nothing is broadcast to the webviews. The six emit methods of
+    # `tauri::Emitter` (tauri 2.11.5, `src/lib.rs`, read on 2026-09-25) are the
+    # broadcast path: each window would receive the others' stream and sort it
+    # itself. One `Channel` per window, filtered in Rust.
     { path = "tauri::Emitter::emit", reason = "Broadcasting to every webview leaks one window's stream to the others (ADR-0043). Send on the window's own Channel, filtered in Rust." },
     { path = "tauri::Emitter::emit_str", reason = "Broadcasting to every webview leaks one window's stream to the others (ADR-0043). Send on the window's own Channel, filtered in Rust." },
     { path = "tauri::Emitter::emit_to", reason = "An event is not a window's own channel, and the front has no permission to listen (ADR-0043). Send on the window's own Channel." },
@@ -51,5 +48,8 @@ disallowed-methods = [
     { path = "tauri::Emitter::emit_filter", reason = "Filtering a broadcast is still a broadcast (ADR-0043). Send on the window's own Channel, filtered in Rust." },
     { path = "tauri::Emitter::emit_str_filter", reason = "Filtering a broadcast is still a broadcast (ADR-0043). Send on the window's own Channel, filtered in Rust." },
 
+    # Parsing from a reader re-reads byte by byte; it is also the path a server
+    # response arrives on (I-09), and its size must be boundable before it is
+    # deserialized.
     { path = "serde_json::from_reader", reason = "Parsing from a reader is far slower than from a slice, and gives no way to bound the input before deserializing it (I-09). Read into a buffer first.", replacement = "serde_json::from_slice" },
 ]

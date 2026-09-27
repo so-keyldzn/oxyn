@@ -33,10 +33,10 @@ impl Documents<'_> {
         let revision =
             i64::try_from(update.revision).map_err(|_| invalid("revision out of range"))?;
         let language = tag_to_json(&update.language)?;
-        // Une provenance absente ne dit pas « personne » : elle dit « rien de
-        // neuf à écrire ». `coalesce` la laisse donc en place, exactement comme
-        // dans `Documents::save`, pour qu'il n'existe qu'une règle de
-        // provenance dans le dépôt et non deux qui divergeront (ADR-0023).
+        // An absent provenance does not say "nobody": it says "nothing new to
+        // write". `coalesce` therefore leaves it in place, exactly as in
+        // `Documents::save`, so that the repository has one provenance rule
+        // and not two that will diverge (ADR-0023).
         let provenance = super::provenance_to_column(update.provenance.as_ref())?;
         self.store.with_connection_cancellable(cancel, |connection| {
             let transaction = connection.unchecked_transaction()?;

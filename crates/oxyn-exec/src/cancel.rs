@@ -1,32 +1,33 @@
-//! Le registre des exécutions en cours, et l'annulation qui va **jusqu'au
-//! serveur**.
+//! The registry of executions in progress, and the cancellation that goes
+//! **all the way to the server**.
 //!
-//! `Échap` doit annuler vraiment. Abandonner le futur côté client ne libère ni
-//! la connexion, ni le verrou posé, ni le plan en cours d'exécution : au dixième
-//! onglet fermé, la base refuse les connexions et l'utilisateur conclut qu'Oxyn
-//! a cassé sa production ([`DRIVER-CONTRACT` §2](../../../docs/DRIVER-CONTRACT.md),
+//! `Esc` must really cancel. Abandoning the future on the client side frees
+//! neither the connection, nor the lock held, nor the plan being executed: at
+//! the tenth closed tab, the database refuses connections and the user
+//! concludes that Oxyn broke their production
+//! ([`DRIVER-CONTRACT` §2](../../../docs/DRIVER-CONTRACT.md),
 //! [I-13](../../../CLAUDE.md#i-13)).
 //!
-//! L'annulation se fait donc **dans cet ordre**, et l'ordre est porté par
-//! [`CancelRegistry::cancel`] plutôt que par ses appelants :
+//! Cancellation is therefore done **in this order**, and the order is carried
+//! by [`CancelRegistry::cancel`] rather than by its callers:
 //!
-//! 1. le [`CancelToken`] de l'exécution est déclenché — la boucle de drainage
-//!    rend la main au prochain point de contrôle, sans attendre le réseau ;
-//! 2. si — et seulement si — la session déclare
-//!    [`Capabilities::SERVER_SIDE_CANCEL`], l'annulation est demandée au serveur
-//!    (`pg_cancel_backend`, `KILL QUERY`, `sqlite3_interrupt`).
+//! 1. the execution's [`CancelToken`] is triggered — the draining loop hands
+//!    back control at the next checkpoint, without waiting for the network;
+//! 2. if — and only if — the session declares
+//!    [`Capabilities::SERVER_SIDE_CANCEL`], cancellation is requested from the
+//!    server (`pg_cancel_backend`, `KILL QUERY`, `sqlite3_interrupt`).
 //!
-//! Le deuxième temps est conditionnel parce qu'une session qui ne le déclare pas
-//! rendrait [`OxynError::NotSupported`](oxyn_core::OxynError) : appeler quand
-//! même produirait une erreur dans le journal à chaque `Échap` sur SQLite, et
-//! une erreur systématique cesse d'être lue.
+//! The second step is conditional because a session that does not declare it
+//! would return [`OxynError::NotSupported`](oxyn_core::OxynError): calling
+//! anyway would produce an error in the log at every `Esc` on SQLite, and a
+//! systematic error stops being read.
 //!
-//! # Ce que le registre ne fait pas
+//! # What the registry does not do
 //!
-//! Il ne retire pas l'entrée à l'annulation. C'est la boucle de drainage qui
-//! appelle [`finish`](CancelRegistry::finish) quand elle a réellement rendu la
-//! main : un `Échap` appuyé deux fois doit être sans effet, pas une erreur
-//! « exécution inconnue » alors qu'elle tourne encore.
+//! It does not remove the entry on cancellation. It is the draining loop that
+//! calls [`finish`](CancelRegistry::finish) when it has really handed back
+//! control: `Esc` pressed twice must have no effect, not an "unknown
+//! execution" error while it is still running.
 
 use std::collections::HashMap;
 use std::time::Instant;
@@ -36,33 +37,33 @@ use parking_lot::RwLock;
 
 use crate::sessions::SessionRegistry;
 
-/// Une exécution en cours, telle que le registre la connaît.
+/// An execution in progress, as the registry knows it.
 ///
-/// Ne porte **ni** le texte de la requête **ni** ses paramètres : ce registre
-/// est consulté sur le chemin de l'annulation, pas sur celui de l'audit, et
-/// dupliquer le texte ici en ferait un second endroit d'où il peut fuir (I-03).
+/// Carries **neither** the query text **nor** its parameters: this registry is
+/// consulted on the cancellation path, not the audit path, and duplicating the
+/// text here would make it a second place it can leak from (I-03).
 #[derive(Debug, Clone)]
 pub struct RunningStatement {
-    /// La poignée frappée par le driver, cible de l'annulation serveur.
+    /// The handle minted by the driver, target of the server-side cancellation.
     pub statement: StatementHandle,
-    /// La commande qui l'a lancée, pour corréler avec le journal.
+    /// The command that started it, to correlate with the log.
     pub command: CommandId,
-    /// La connexion visée.
+    /// The target connection.
     pub connection: ConnectionId,
-    /// La session sur laquelle elle tourne.
+    /// The session it runs on.
     pub session: SessionId,
-    /// Ce que la session sait faire — c'est ici que se lit
-    /// [`Capabilities::SERVER_SIDE_CANCEL`].
+    /// What the session can do — this is where
+    /// [`Capabilities::SERVER_SIDE_CANCEL`] is read.
     pub capabilities: Capabilities,
-    /// Quand l'exécution a été soumise.
+    /// When the execution was submitted.
     pub started_at: Instant,
-    /// Le jeton propre à cette exécution. Fils du jeton de l'appelant :
-    /// l'annuler n'annule pas l'onglet.
+    /// The token specific to this execution. Child of the caller's token:
+    /// cancelling it does not cancel the tab.
     token: CancelToken,
 }
 
 impl RunningStatement {
-    /// Enregistre une exécution qui démarre.
+    /// Records an execution that starts.
     #[must_use]
     pub fn new(
         statement: StatementHandle,
@@ -83,73 +84,72 @@ impl RunningStatement {
         }
     }
 
-    /// Le jeton de cette exécution.
+    /// The token of this execution.
     #[must_use]
     pub fn token(&self) -> &CancelToken {
         &self.token
     }
 
-    /// La session sait-elle annuler côté serveur ?
+    /// Can the session cancel server-side?
     #[must_use]
     pub const fn supports_server_cancel(&self) -> bool {
         self.capabilities.contains(Capabilities::SERVER_SIDE_CANCEL)
     }
 
-    /// L'exécution a-t-elle déjà été annulée ?
+    /// Was the execution already cancelled?
     #[must_use]
     pub fn is_cancelled(&self) -> bool {
         self.token.is_cancelled()
     }
 }
 
-/// Ce qui a été tenté côté serveur.
+/// What was attempted server-side.
 ///
-/// Distingue « pas essayé », « pas possible » et « essayé sans succès » : les
-/// trois se ressemblent à l'écran et n'appellent pas la même conclusion. Une
-/// requête que le serveur n'a pas su interrompre tourne encore.
+/// Distinguishes "not tried", "not possible" and "tried without success": the
+/// three look alike on screen and do not call for the same conclusion. A query
+/// the server could not interrupt is still running.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ServerCancel {
-    /// Rien n'a été tenté : l'exécution n'était plus en cours.
+    /// Nothing was attempted: the execution was no longer in progress.
     NotAttempted,
-    /// La session ne déclare pas [`Capabilities::SERVER_SIDE_CANCEL`].
+    /// The session does not declare [`Capabilities::SERVER_SIDE_CANCEL`].
     ///
-    /// Ce n'est pas une panne : c'est une limite du driver, honnêtement
-    /// déclarée. La requête peut continuer côté serveur jusqu'à son terme.
+    /// It is not a failure: it is a driver limit, honestly declared. The query
+    /// may continue server-side until it ends.
     Unsupported,
-    /// Le serveur a accepté la demande d'interruption.
+    /// The server accepted the interruption request.
     Requested,
-    /// Le serveur a refusé ou n'a pas répondu.
+    /// The server refused or did not answer.
     Failed,
 }
 
 impl ServerCancel {
-    /// L'interruption a-t-elle réellement été demandée au serveur ?
+    /// Was the interruption really requested from the server?
     #[must_use]
     pub const fn reached_server(&self) -> bool {
         matches!(self, Self::Requested)
     }
 }
 
-/// Ce qu'une annulation a effectivement fait.
+/// What a cancellation actually did.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub struct CancelReport {
-    /// L'exécution visée.
+    /// The target execution.
     pub statement: StatementHandle,
-    /// Était-elle encore en cours au moment de la demande ?
+    /// Was it still in progress at the time of the request?
     pub was_running: bool,
-    /// Le jeton client a-t-il été déclenché ?
+    /// Was the client token triggered?
     pub client: bool,
-    /// Ce qui a été tenté côté serveur.
+    /// What was attempted server-side.
     pub server: ServerCancel,
 }
 
-/// Les exécutions en cours, indexées par leur poignée.
+/// The executions in progress, indexed by their handle.
 ///
-/// Le verrou est un `RwLock` : la lecture est fréquente — chaque annulation,
-/// chaque fermeture d'onglet — et l'écriture ne se produit qu'au début et à la
-/// fin d'une exécution.
+/// The lock is a `RwLock`: reading is frequent — every cancellation, every tab
+/// closing — and writing only happens at the start and end of an execution.
 #[derive(Debug, Default)]
 pub struct CancelRegistry {
     running: RwLock<HashMap<StatementHandle, RunningStatement>>,
@@ -162,26 +162,26 @@ impl CancelRegistry {
         Self::default()
     }
 
-    /// Enregistre une exécution qui démarre.
+    /// Records an execution that starts.
     pub fn register(&self, entry: RunningStatement) {
         self.running.write().insert(entry.statement, entry);
     }
 
-    /// Retire une exécution terminée et rend ce que le registre en savait.
+    /// Removes a finished execution and returns what the registry knew of it.
     ///
-    /// À appeler quand la boucle de drainage a **réellement** rendu la main,
-    /// pas quand l'annulation est demandée.
+    /// To be called when the draining loop has **really** handed back control,
+    /// not when cancellation is requested.
     pub fn finish(&self, statement: StatementHandle) -> Option<RunningStatement> {
         self.running.write().remove(&statement)
     }
 
-    /// Ce que le registre sait d'une exécution.
+    /// What the registry knows about an execution.
     #[must_use]
     pub fn get(&self, statement: StatementHandle) -> Option<RunningStatement> {
         self.running.read().get(&statement).cloned()
     }
 
-    /// Les exécutions en cours sur une connexion.
+    /// The executions in progress on a connection.
     #[must_use]
     pub fn for_connection(&self, connection: ConnectionId) -> Vec<RunningStatement> {
         self.running
@@ -192,7 +192,7 @@ impl CancelRegistry {
             .collect()
     }
 
-    /// Les exécutions en cours sur une session.
+    /// The executions in progress on a session.
     #[must_use]
     pub fn for_session(&self, session: SessionId) -> Vec<RunningStatement> {
         self.running
@@ -203,39 +203,39 @@ impl CancelRegistry {
             .collect()
     }
 
-    /// Nombre d'exécutions en cours.
+    /// Number of executions in progress.
     #[must_use]
     pub fn len(&self) -> usize {
         self.running.read().len()
     }
 
-    /// Aucune exécution en cours ?
+    /// No execution in progress?
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.running.read().is_empty()
     }
 
-    /// Déclenche le jeton d'une exécution, **sans** toucher au serveur.
+    /// Triggers an execution's token, **without** touching the server.
     ///
-    /// Utile quand l'appelant sait déjà que la session est perdue — coupure,
-    /// fermeture — et qu'une demande d'interruption n'aurait nulle part où
-    /// aller. Dans tous les autres cas, [`cancel`](Self::cancel) est ce qu'il
-    /// faut appeler : ne signaler que le client laisse la requête tourner.
+    /// Useful when the caller already knows the session is lost — disconnection,
+    /// closing — and an interruption request would have nowhere to go. In every
+    /// other case, [`cancel`](Self::cancel) is what to call: signalling only the
+    /// client leaves the query running.
     pub fn cancel_client(&self, statement: StatementHandle) -> Option<RunningStatement> {
         let entry = self.running.read().get(&statement).cloned()?;
         entry.token.cancel();
         Some(entry)
     }
 
-    /// Annule une exécution : jeton client d'abord, serveur ensuite.
+    /// Cancels an execution: client token first, server next.
     ///
-    /// L'ordre compte. Le jeton rend la main au prochain point de contrôle,
-    /// donc immédiatement du point de vue de l'utilisateur ; la demande au
-    /// serveur, elle, est un aller-retour réseau qui peut durer. Les inverser
-    /// ferait attendre l'interface pour rien.
+    /// The order matters. The token hands back control at the next checkpoint,
+    /// hence immediately from the user's point of view; the request to the
+    /// server is a network round trip that can take time. Reversing them would
+    /// make the interface wait for nothing.
     ///
-    /// Annuler une exécution déjà terminée n'est **pas** une erreur : le
-    /// rapport le dit avec `was_running: false`.
+    /// Cancelling an already finished execution is **not** an error: the report
+    /// says so with `was_running: false`.
     pub async fn cancel(
         &self,
         sessions: &SessionRegistry,
@@ -255,9 +255,9 @@ impl CancelRegistry {
                 Some(slot) => match slot.cancel_statement(statement).await {
                     Ok(()) => ServerCancel::Requested,
                     Err(erreur) => {
-                        // Journalisé au niveau `warn` et non remonté : l'appelant
-                        // vient de demander une annulation, lui rendre une erreur
-                        // ne lui laisserait rien à faire de plus.
+                        // Logged at `warn` level and not propagated: the caller
+                        // just asked for a cancellation, returning an error would
+                        // leave it nothing more to do.
                         tracing::warn!(
                             error = %erreur,
                             "server-side cancellation refused; the statement may still run"
@@ -279,10 +279,10 @@ impl CancelRegistry {
         }
     }
 
-    /// Annule toutes les exécutions d'une connexion.
+    /// Cancels every execution of a connection.
     ///
-    /// C'est ce que fait la fermeture d'une connexion : sans cela, les requêtes
-    /// lancées depuis ses onglets continueraient de tourner côté serveur.
+    /// It is what closing a connection does: without that, the queries started
+    /// from its tabs would keep running server-side.
     pub async fn cancel_connection(
         &self,
         sessions: &SessionRegistry,
@@ -312,7 +312,7 @@ mod tests {
     }
 
     #[test]
-    fn une_annulation_declenche_le_jeton_de_l_execution() {
+    fn a_cancellation_triggers_the_execution_token() {
         let registre = CancelRegistry::new();
         let entree = entree(Capabilities::empty());
         let jeton = entree.token().clone();
@@ -322,15 +322,15 @@ mod tests {
         assert!(!jeton.is_cancelled());
         let annulee = registre
             .cancel_client(poignee)
-            .expect("l'exécution est enregistrée");
+            .expect("the execution is registered");
         assert!(jeton.is_cancelled());
         assert!(annulee.is_cancelled());
     }
 
     #[test]
-    fn l_entree_survit_a_l_annulation() {
-        // `Échap` appuyé deux fois ne doit pas produire « exécution inconnue »
-        // alors qu'elle tourne encore : c'est la boucle de drainage qui retire.
+    fn the_entry_survives_cancellation() {
+        // `Esc` pressed twice must not produce "unknown execution" while it is
+        // still running: it is the draining loop that removes.
         let registre = CancelRegistry::new();
         let entree = entree(Capabilities::empty());
         let poignee = entree.statement;
@@ -346,13 +346,13 @@ mod tests {
     }
 
     #[test]
-    fn annuler_une_execution_inconnue_n_est_pas_une_erreur() {
+    fn cancelling_an_unknown_execution_is_not_an_error() {
         let registre = CancelRegistry::new();
         assert!(registre.cancel_client(StatementHandle::new()).is_none());
     }
 
     #[test]
-    fn la_capacite_d_annulation_serveur_se_lit_sur_la_session() {
+    fn the_server_cancel_capability_is_read_on_the_session() {
         assert!(!entree(Capabilities::SQL).supports_server_cancel());
         assert!(
             entree(Capabilities::SQL | Capabilities::SERVER_SIDE_CANCEL).supports_server_cancel()
@@ -360,7 +360,7 @@ mod tests {
     }
 
     #[test]
-    fn le_registre_retrouve_les_executions_d_une_connexion() {
+    fn the_registry_finds_the_executions_of_a_connection() {
         let registre = CancelRegistry::new();
         let connexion = ConnectionId::new();
 
@@ -376,7 +376,7 @@ mod tests {
     }
 
     #[test]
-    fn un_rapport_distingue_les_trois_issues_serveur() {
+    fn a_report_tells_the_three_server_outcomes_apart() {
         assert!(ServerCancel::Requested.reached_server());
         assert!(!ServerCancel::Unsupported.reached_server());
         assert!(!ServerCancel::Failed.reached_server());

@@ -1,38 +1,38 @@
-//! Ce que le domaine sait d'un fournisseur de modèles : son identité, sa
-//! famille de protocole, et la déclaration que l'utilisateur en a faite.
+//! What the domain knows about a model provider: its identity, its protocol
+//! family, and the declaration the user made of it.
 //!
-//! Autorité : [ADR-0023](../../../docs/adr/0023-fournisseurs-declares-et-provenance.md),
-//! qui précise [ADR-0006](../../../docs/adr/0006-ai-privacy-tiers.md).
+//! Authority: [ADR-0023](../../../docs/adr/0023-fournisseurs-declares-et-provenance.md),
+//! which clarifies [ADR-0006](../../../docs/adr/0006-ai-privacy-tiers.md).
 //!
-//! # Pourquoi ces types vivent ici et non dans `oxyn-llm`
+//! # Why these types live here and not in `oxyn-llm`
 //!
-//! Une [`Command`](crate::Command) porte l'identité d'un fournisseur et sa
-//! déclaration complète : c'est le bus qui enregistre, liste et retire un
-//! fournisseur, comme il le fait d'une connexion ([I-01](../../../CLAUDE.md#i-01)).
-//! `oxyn-core` ne dépend d'aucune crate du workspace, `oxyn-llm` en dépend :
-//! le seul placement possible est donc celui-ci. C'est le précédent exact de
-//! [`PrivacyTier`](crate::PrivacyTier), défini à côté de la
-//! [`ConnectionConfig`](crate::ConnectionConfig) qui le porte plutôt que dans
-//! la crate d'IA. [`ProviderId`] est ré-exporté par `oxyn_llm::provider` : il
-//! n'a **qu'une** définition dans le dépôt.
+//! A [`Command`](crate::Command) carries a provider's identity and its full
+//! declaration: it is the bus that registers, lists and removes a provider,
+//! as it does a connection ([I-01](../../../CLAUDE.md#i-01)). `oxyn-core`
+//! depends on no crate of the workspace, `oxyn-llm` depends on it: this is
+//! therefore the only possible placement. It is the exact precedent of
+//! [`PrivacyTier`](crate::PrivacyTier), defined next to the
+//! [`ConnectionConfig`](crate::ConnectionConfig) that carries it rather than in
+//! the AI crate. [`ProviderId`] is re-exported by `oxyn_llm::provider`: it has
+//! **a single** definition in the repository.
 //!
-//! # Aucune clé n'entre ici
+//! # No key enters here
 //!
-//! [`AiProviderConfig`] porte une *référence* de secret, jamais un secret —
-//! même forme que [`ConnectionConfig::secret_ref`](crate::ConnectionConfig).
-//! Son `Debug` est écrit à la main pour masquer cette référence, et
-//! [`AiProviderConfig::validate`] **refuse** une URL de base portant un couple
-//! `utilisateur:motdepasse` : la nettoyer en silence rendrait à l'utilisateur
-//! une configuration différente de celle qu'il a saisie, sans lui dire que sa
-//! clé vient de traverser un champ non prévu pour elle
+//! [`AiProviderConfig`] carries a secret *reference*, never a secret — same
+//! shape as [`ConnectionConfig::secret_ref`](crate::ConnectionConfig). Its
+//! `Debug` is written by hand to mask that reference, and
+//! [`AiProviderConfig::validate`] **refuses** a base URL carrying a
+//! `user:password` pair: cleaning it silently would give the user back a
+//! configuration different from the one they entered, without telling them
+//! their key just went through a field not meant for it
 //! ([I-03](../../../CLAUDE.md#i-03)).
 //!
-//! # Ce qui n'est **pas** ici
+//! # What is **not** here
 //!
-//! Le classement local/distant (`oxyn_llm::Reach`). Il se calcule après
-//! résolution DNS, à chaque enregistrement et à chaque ouverture de runtime, et
-//! ne se persiste jamais : une valeur en base serait une réponse DNS d'hier
-//! appliquée à un envoi d'aujourd'hui (ADR-0023).
+//! The local/remote classification (`oxyn_llm::Reach`). It is computed after
+//! DNS resolution, on every registration and every runtime opening, and is
+//! never persisted: a value in the database would be yesterday's DNS answer
+//! applied to today's send (ADR-0023).
 
 use std::fmt;
 use std::str::FromStr;
@@ -51,49 +51,47 @@ pub use provenance::{MAX_PROVENANCE_BYTES, Provenance};
 mod turn;
 pub use turn::{ReasoningBlock, Role, StopReason};
 
-/// Identifiant stable d'un fournisseur de modèles.
+/// Stable identifier of a model provider.
 ///
-/// Mêmes contraintes que [`DriverId`](crate::DriverId) et pour la même raison :
-/// cette valeur finit dans l'état local et dans une clé de trousseau.
-/// Minuscules ASCII, chiffres, `-` et `_`, première lettre alphabétique, 32
-/// caractères au plus.
+/// Same constraints as [`DriverId`](crate::DriverId) and for the same reason:
+/// this value ends up in the local state and in a keychain key. Lowercase
+/// ASCII, digits, `-` and `_`, first character a letter, 32 characters at
+/// most.
 ///
-/// L'identifiant nomme une **configuration**, pas un protocole : `ollama`,
-/// `lm-studio` et `openai` partagent la même implémentation de transport, et ce
-/// sont pourtant trois fournisseurs distincts pour l'utilisateur — trois points
-/// d'accès, trois niveaux de sortie de données. C'est [`AiProviderKind`] qui
-/// dit le protocole.
+/// The identifier names a **configuration**, not a protocol: `ollama`,
+/// `lm-studio` and `openai` share the same transport implementation, and yet
+/// they are three distinct providers for the user — three endpoints, three
+/// levels of data egress. It is [`AiProviderKind`] that says the protocol.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct ProviderId(Arc<str>);
 
 impl ProviderId {
-    /// Ollama, en local.
+    /// Ollama, locally.
     pub const OLLAMA: &'static str = "ollama";
-    /// LM Studio, en local.
+    /// LM Studio, locally.
     pub const LM_STUDIO: &'static str = "lm-studio";
-    /// `llama.cpp` et son serveur HTTP, en local.
+    /// `llama.cpp` and its HTTP server, locally.
     pub const LLAMA_CPP: &'static str = "llama-cpp";
-    /// L'API d'OpenAI.
+    /// OpenAI's API.
     pub const OPENAI: &'static str = "openai";
     /// Azure OpenAI Service.
     pub const AZURE_OPENAI: &'static str = "azure-openai";
-    /// OpenRouter, passerelle multi-fournisseurs.
+    /// OpenRouter, multi-provider gateway.
     pub const OPENROUTER: &'static str = "openrouter";
-    /// L'API d'Anthropic (protocole propre).
+    /// Anthropic's API (own protocol).
     pub const ANTHROPIC: &'static str = "anthropic";
-    /// L'API Gemini de Google (protocole propre).
+    /// Google's Gemini API (own protocol).
     pub const GEMINI: &'static str = "gemini";
-    /// Un point d'accès compatible OpenAI qui ne se nomme pas autrement.
+    /// An OpenAI-compatible endpoint that has no other name.
     pub const OPENAI_COMPATIBLE: &'static str = "openai-compatible";
 
-    /// Construit un identifiant après validation.
+    /// Builds an identifier after validation.
     ///
-    /// # Erreurs
-    /// Renvoie [`IdParseError`] si la chaîne est vide, dépasse 32 caractères,
-    /// ne commence pas par une lettre minuscule ASCII, ou contient un caractère
-    /// hors `[a-z0-9_-]`. La valeur fautive n'est jamais reprise dans le
-    /// message.
+    /// # Errors
+    /// Returns [`IdParseError`] if the string is empty, exceeds 32 characters,
+    /// does not start with a lowercase ASCII letter, or contains a character
+    /// outside `[a-z0-9_-]`. The faulty value is never repeated in the message.
     pub fn new(name: impl AsRef<str>) -> std::result::Result<Self, IdParseError> {
         let name = name.as_ref();
         if name.is_empty() {
@@ -120,110 +118,110 @@ impl ProviderId {
         Ok(Self(Arc::from(name)))
     }
 
-    /// Construit un identifiant dont la validité est garantie par ce module.
+    /// Builds an identifier whose validity is guaranteed by this module.
     fn known(name: &'static str) -> Self {
         debug_assert!(Self::new(name).is_ok(), "invalid provider constant");
         Self(Arc::from(name))
     }
 
-    /// Identifiant d'Ollama.
+    /// Ollama identifier.
     #[must_use]
     pub fn ollama() -> Self {
         Self::known(Self::OLLAMA)
     }
 
-    /// Identifiant de LM Studio.
+    /// LM Studio identifier.
     #[must_use]
     pub fn lm_studio() -> Self {
         Self::known(Self::LM_STUDIO)
     }
 
-    /// Identifiant de `llama.cpp`.
+    /// `llama.cpp` identifier.
     #[must_use]
     pub fn llama_cpp() -> Self {
         Self::known(Self::LLAMA_CPP)
     }
 
-    /// Identifiant d'OpenAI.
+    /// OpenAI identifier.
     #[must_use]
     pub fn openai() -> Self {
         Self::known(Self::OPENAI)
     }
 
-    /// Identifiant d'Azure OpenAI.
+    /// Azure OpenAI identifier.
     #[must_use]
     pub fn azure_openai() -> Self {
         Self::known(Self::AZURE_OPENAI)
     }
 
-    /// Identifiant d'OpenRouter.
+    /// OpenRouter identifier.
     #[must_use]
     pub fn openrouter() -> Self {
         Self::known(Self::OPENROUTER)
     }
 
-    /// Identifiant d'Anthropic.
+    /// Anthropic identifier.
     #[must_use]
     pub fn anthropic() -> Self {
         Self::known(Self::ANTHROPIC)
     }
 
-    /// Identifiant de Gemini.
+    /// Gemini identifier.
     #[must_use]
     pub fn gemini() -> Self {
         Self::known(Self::GEMINI)
     }
 
-    /// Identifiant d'un point d'accès compatible OpenAI sans nom propre.
+    /// Identifier of an OpenAI-compatible endpoint without a proper name.
     #[must_use]
     pub fn openai_compatible() -> Self {
         Self::known(Self::OPENAI_COMPATIBLE)
     }
 
-    /// Vue empruntée de l'identifiant.
+    /// Borrowed view of the identifier.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
 
-    /// Frappe l'identité d'une déclaration neuve : `<famille>-<8 hexadécimaux>`.
+    /// Mints the identity of a new declaration: `<family>-<8 hex digits>`.
     ///
-    /// # Pourquoi ce n'est pas dérivé du libellé
+    /// # Why it is not derived from the label
     ///
-    /// Le libellé est un nom d'affichage : l'utilisateur le choisit libre, avec
-    /// des accents, des espaces, et rien ne l'empêche d'appeler deux
-    /// déclarations « Prod ». Un identifiant qui en dériverait ferait de deux
-    /// déclarations distinctes une seule — donc un **remplacement silencieux**,
-    /// clé du trousseau comprise, au moment où l'utilisateur croyait en ajouter
-    /// une. Une identité opaque rend cette confusion impossible.
+    /// The label is a display name: the user chooses it freely, with accents,
+    /// spaces, and nothing stops them from calling two declarations "Prod". An
+    /// identifier derived from it would turn two distinct declarations into
+    /// one — hence a **silent replacement**, keychain key included, at the
+    /// moment the user believed they were adding one. An opaque identity makes
+    /// that confusion impossible.
     ///
-    /// La famille reste en préfixe pour une seule raison : cet identifiant
-    /// devient un nom d'entrée dans le trousseau du système, que l'utilisateur
-    /// voit dans Keychain Access. `anthropic-3f2a9b1c` s'y reconnaît,
-    /// `3f2a9b1c` non.
+    /// The family stays as a prefix for a single reason: this identifier
+    /// becomes an entry name in the system keychain, which the user sees in
+    /// Keychain Access. `anthropic-3f2a9b1c` is recognizable there,
+    /// `3f2a9b1c` is not.
     ///
-    /// La longueur tient dans les 32 caractères que [`new`](Self::new) accepte,
-    /// famille la plus longue comprise — `openai-compatible` fait 26 avec son
-    /// suffixe — et le premier caractère est une lettre minuscule, comme exigé.
+    /// The length fits in the 32 characters that [`new`](Self::new) accepts,
+    /// longest family included — `openai-compatible` makes 26 with its suffix —
+    /// and the first character is a lowercase letter, as required.
     #[must_use]
     pub fn for_new_declaration(kind: AiProviderKind) -> Self {
-        // Les 32 premiers bits d'un UUID v4 : de quoi rendre une collision
-        // improbable parmi les quelques déclarations d'une machine, sans
-        // prétendre à une unicité globale dont personne n'a l'usage ici.
+        // The first 32 bits of a UUID v4: enough to make a collision unlikely
+        // among the few declarations of one machine, without claiming a global
+        // uniqueness nobody has any use for here.
         let empreinte = uuid::Uuid::new_v4().as_u128() >> 96;
         Self(Arc::from(format!("{}-{empreinte:08x}", kind.as_str())))
     }
 
-    /// Frappe l'identité d'un **agent externe** neuf : `agent-<8 hexadécimaux>`.
+    /// Mints the identity of a new **external agent**: `agent-<8 hex digits>`.
     ///
-    /// Pendant de [`for_new_declaration`](Self::for_new_declaration), et pour
-    /// les mêmes raisons — une identité opaque plutôt que dérivée du libellé,
-    /// que l'utilisateur peut donner deux fois identique sans vouloir remplacer
-    /// quoi que ce soit.
+    /// Counterpart of [`for_new_declaration`](Self::for_new_declaration), and
+    /// for the same reasons — an opaque identity rather than one derived from
+    /// the label, which the user can give twice identically without meaning to
+    /// replace anything.
     ///
-    /// Le préfixe est `agent` et non une famille de protocole : un agent
-    /// externe n'en a pas, et lui en inventer une le ferait passer pour un
-    /// fournisseur dans tout ce qui lit cet identifiant.
+    /// The prefix is `agent` and not a protocol family: an external agent has
+    /// none, and inventing one for it would make it pass for a provider in
+    /// everything that reads this identifier.
     #[must_use]
     pub fn for_new_agent() -> Self {
         let empreinte = uuid::Uuid::new_v4().as_u128() >> 96;
@@ -271,46 +269,44 @@ impl From<ProviderId> for String {
     }
 }
 
-/// La famille de protocole d'un point d'accès.
+/// The protocol family of an endpoint.
 ///
-/// Distincte de [`ProviderId`], qui nomme **une déclaration** : trois
-/// déclarations d'un même utilisateur peuvent partager
-/// [`OpenAiCompatible`](Self::OpenAiCompatible) et viser trois machines
-/// différentes. C'est cette valeur, et elle seule, qui dit quel transport
-/// `oxyn-llm` doit instancier.
+/// Distinct from [`ProviderId`], which names **a declaration**: three
+/// declarations of the same user can share
+/// [`OpenAiCompatible`](Self::OpenAiCompatible) and target three different
+/// machines. It is this value, and it alone, that says which transport
+/// `oxyn-llm` must instantiate.
 ///
-/// `#[non_exhaustive]` : une famille de protocole de plus est une extension
-/// ordinaire, pas une rupture pour les appelants.
+/// `#[non_exhaustive]`: one more protocol family is an ordinary extension, not
+/// a break for callers.
 ///
-/// Elle ne dit **rien** de local ou distant. Un point d'accès compatible OpenAI
-/// est aussi bien un Ollama sur la boucle locale qu'une passerelle dans le
-/// nuage, et c'est exactement pourquoi le classement se fait après résolution
-/// (ADR-0023).
+/// It says **nothing** about local or remote. An OpenAI-compatible endpoint is
+/// as much an Ollama on the loopback as a gateway in the cloud, and that is
+/// exactly why the classification is made after resolution (ADR-0023).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[non_exhaustive]
 pub enum AiProviderKind {
-    /// Le protocole propre d'Anthropic.
+    /// Anthropic's own protocol.
     #[serde(rename = "anthropic")]
     Anthropic,
-    /// Le protocole propre d'OpenAI, tel que l'API d'OpenAI le sert.
+    /// OpenAI's own protocol, as OpenAI's API serves it.
     #[serde(rename = "openai")]
     OpenAi,
-    /// Le protocole propre de Google Gemini.
+    /// Google Gemini's own protocol.
     #[serde(rename = "gemini")]
     Gemini,
-    /// Tout point d'accès qui parle « compatible OpenAI » : Ollama, LM Studio,
+    /// Any endpoint that speaks "OpenAI-compatible": Ollama, LM Studio,
     /// `llama.cpp`, Azure, OpenRouter.
     #[serde(rename = "openai_compatible")]
     OpenAiCompatible,
 }
 
 impl AiProviderKind {
-    /// Nom stable, celui qui est écrit dans l'état local et dans une
-    /// provenance.
+    /// Stable name, the one written in the local state and in a provenance.
     ///
-    /// Le `match` est exhaustif à l'intérieur de la crate qui définit le type :
-    /// ajouter une famille casse ici, à la compilation, plutôt que d'étiqueter
-    /// deux protocoles de la même façon dans un fichier persisté.
+    /// The `match` is exhaustive inside the crate that defines the type:
+    /// adding a family breaks here, at compile time, rather than labeling two
+    /// protocols the same way in a persisted file.
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
@@ -345,55 +341,55 @@ impl FromStr for AiProviderKind {
     }
 }
 
-/// Longueur maximale du nom montré à l'utilisateur.
+/// Maximum length of the name shown to the user.
 pub const MAX_PROVIDER_LABEL_BYTES: usize = 128;
 
-/// Longueur maximale d'un nom de modèle.
+/// Maximum length of a model name.
 ///
-/// Bornée parce qu'un nom de modèle est recopié dans une [`Provenance`], dont
-/// le budget total est [`MAX_PROVENANCE_BYTES`] : sans cette borne, une
-/// déclaration valide produirait une provenance impossible à écrire.
+/// Bounded because a model name is copied into a [`Provenance`], whose total
+/// budget is [`MAX_PROVENANCE_BYTES`]: without this bound, a valid declaration
+/// would produce a provenance impossible to write.
 pub const MAX_PROVIDER_MODEL_BYTES: usize = 128;
 
-/// Longueur maximale d'une URL de base.
+/// Maximum length of a base URL.
 ///
-/// Un point d'accès plus long qu'une barre d'adresse est un collage accidentel,
-/// pas une configuration.
+/// An endpoint longer than an address bar is an accidental paste, not a
+/// configuration.
 pub const MAX_PROVIDER_BASE_URL_BYTES: usize = 2048;
 
-/// La déclaration qu'un utilisateur a faite d'un fournisseur de modèles.
+/// The declaration a user made of a model provider.
 ///
-/// **Par machine, pas par workspace** (ADR-0023) : un Ollama qui écoute sur la
-/// machine sert tous les workspaces, et le dupliquer par workspace créerait
-/// autant d'endroits où sa configuration peut diverger. Ce qui reste par
-/// connexion, c'est le [`PrivacyTier`](crate::PrivacyTier) — un fournisseur
-/// commun ne fait pas un niveau commun.
+/// **Per machine, not per workspace** (ADR-0023): an Ollama listening on the
+/// machine serves every workspace, and duplicating it per workspace would
+/// create as many places where its configuration can diverge. What stays per
+/// connection is the [`PrivacyTier`](crate::PrivacyTier) — a shared provider
+/// does not make a shared tier.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct AiProviderConfig {
-    /// Identifiant de cette déclaration.
+    /// Identifier of this declaration.
     pub id: ProviderId,
-    /// La famille de protocole à instancier.
+    /// The protocol family to instantiate.
     pub kind: AiProviderKind,
-    /// Le nom que l'utilisateur donne à cette déclaration. C'est **lui** qui
-    /// est montré.
+    /// The name the user gives this declaration. It is **this** that is
+    /// shown.
     pub label: String,
-    /// Le point d'accès, **débarrassé de ses identifiants** : voir
+    /// The endpoint, **stripped of its credentials**: see
     /// [`validate`](Self::validate).
     pub base_url: String,
-    /// Le modèle par défaut de cette déclaration.
+    /// The default model of this declaration.
     pub model: String,
-    /// Référence au trousseau du système, `None` pour un point d'accès sans
-    /// clé. Jamais la clé elle-même.
+    /// Reference to the system keychain, `None` for an endpoint without a key.
+    /// Never the key itself.
     #[serde(default)]
     pub secret_ref: Option<String>,
-    /// Date de la déclaration.
+    /// Date of the declaration.
     pub created_at: DateTime<Utc>,
-    /// Date de la dernière modification.
+    /// Date of the last modification.
     pub updated_at: DateTime<Utc>,
 }
 
 impl AiProviderConfig {
-    /// Déclare un fournisseur, sans secret et daté de maintenant.
+    /// Declares a provider, without a secret and dated now.
     #[must_use]
     pub fn new(
         id: ProviderId,
@@ -415,27 +411,25 @@ impl AiProviderConfig {
         }
     }
 
-    /// Rattache une référence de secret.
+    /// Attaches a secret reference.
     #[must_use]
     pub fn with_secret_ref(mut self, secret_ref: impl Into<String>) -> Self {
         self.secret_ref = Some(secret_ref.into());
         self
     }
 
-    /// Vérifie ce qui doit l'être **avant** que la déclaration n'atteigne le
-    /// disque.
+    /// Checks what must be checked **before** the declaration reaches the disk.
     ///
-    /// La règle qui compte : une URL de base portant un couple
-    /// `utilisateur:motdepasse` est **refusée**. La nettoyer en silence
-    /// écrirait une configuration que l'utilisateur n'a pas saisie et
-    /// laisserait sa clé sans propriétaire — un mot de passe collé dans le
-    /// champ « point d'accès » doit produire un message, pas une correction
-    /// invisible (I-03).
+    /// The rule that matters: a base URL carrying a `user:password` pair is
+    /// **refused**. Cleaning it silently would write a configuration the user
+    /// did not enter and leave their key without an owner — a password pasted
+    /// into the "endpoint" field must produce a message, not an invisible
+    /// correction (I-03).
     ///
-    /// # Erreurs
-    /// [`OxynError::Config`] : identifiants dans l'URL, URL illisible ou sans
-    /// hôte, nom vide, ou champ hors de sa borne. Aucun message ne recopie la
-    /// valeur fautive.
+    /// # Errors
+    /// [`OxynError::Config`]: credentials in the URL, unreadable URL or URL
+    /// without a host, empty name, or a field outside its bound. No message
+    /// copies the faulty value.
     pub fn validate(&self) -> Result<()> {
         if self.label.trim().is_empty() || self.label.len() > MAX_PROVIDER_LABEL_BYTES {
             return Err(OxynError::Config(
@@ -498,12 +492,12 @@ impl AiProviderConfig {
     }
 }
 
-/// Refuse une URL de base inutilisable ou porteuse d'identifiants.
+/// Refuses an unusable base URL or one carrying credentials.
 ///
-/// Le schéma n'est pas contraint ici : ce qu'un transport sait joindre est
-/// l'affaire d'`oxyn-llm`, et `oxyn-core` ne connaît aucun transport. En
-/// revanche un hôte est exigé — une URL sans autorité (`data:`, `mailto:`)
-/// n'est pas un point d'accès.
+/// The scheme is not constrained here: what a transport can reach is
+/// `oxyn-llm`'s business, and `oxyn-core` knows no transport. A host is
+/// required, though — a URL without an authority (`data:`, `mailto:`) is not an
+/// endpoint.
 fn validate_base_url(raw: &str) -> Result<()> {
     let url = Url::parse(raw)
         .map_err(|_| OxynError::Config("provider base URL is not a valid absolute URL".into()))?;
@@ -513,8 +507,8 @@ fn validate_base_url(raw: &str) -> Result<()> {
         ));
     }
     if !url.username().is_empty() || url.password().is_some() {
-        // Le message ne cite pas l'URL : elle porte précisément ce qu'il ne
-        // faut pas écrire.
+        // The message does not quote the URL: it carries precisely what must
+        // not be written.
         return Err(OxynError::Config(
             "provider base URL must not carry credentials; \
              keep the key in the system keychain and reference it"
@@ -524,77 +518,77 @@ fn validate_base_url(raw: &str) -> Result<()> {
     Ok(())
 }
 
-/// Combien d'arguments une commande d'agent peut porter.
+/// How many arguments an agent command can carry.
 ///
-/// Une ligne de commande d'agent en compte une poignée. La borne existe pour
-/// qu'un fichier d'état écrit par un tiers ne fasse pas construire un
-/// `Vec` de taille arbitraire à l'ouverture.
+/// An agent command line has a handful. The bound exists so that a state file
+/// written by a third party does not make us build a `Vec` of arbitrary size
+/// on opening.
 pub const MAX_AGENT_ARGS: usize = 32;
 
-/// Combien de variables d'environnement une déclaration d'agent peut porter.
+/// How many environment variables an agent declaration can carry.
 pub const MAX_AGENT_ENV: usize = 32;
 
-/// Longueur maximale d'une **valeur** de variable d'environnement.
+/// Maximum length of an environment variable **value**.
 ///
-/// Choix de produit, pas une limite externe : ce qui légitime cette borne est
-/// qu'une valeur d'environnement déclarée à la main n'a aucune raison d'être
-/// longue, et que ce champ est persisté en clair dans l'état local. Sans borne,
-/// il devient un endroit commode où ranger n'importe quoi.
+/// A product choice, not an external limit: what justifies this bound is that
+/// an environment value declared by hand has no reason to be long, and that
+/// this field is persisted in clear in the local state. Without a bound, it
+/// becomes a convenient place to store anything.
 pub const MAX_AGENT_ENV_VALUE_BYTES: usize = 4096;
 
-/// Un agent externe déclaré : un programme à lancer, et rien de plus.
+/// A declared external agent: a program to launch, and nothing more.
 ///
-/// # Pourquoi ce type n'est pas un [`AiProviderConfig`]
+/// # Why this type is not an [`AiProviderConfig`]
 ///
-/// Un agent externe n'a ni point d'accès, ni modèle, ni — surtout — de
-/// **référence de secret** : il porte sa propre authentification, et c'est tout
-/// l'intérêt du mode ([ADR-0026](../../docs/adr/0026-agents-externes-acp.md)).
-/// Le faire entrer dans `AiProviderConfig` produirait une structure dont la
-/// moitié des champs ne veut rien dire selon la variante, et la question « ce
-/// champ compte-t-il ici ? » se reposerait à chaque lecture.
+/// An external agent has no endpoint, no model, and — above all — no **secret
+/// reference**: it carries its own authentication, and that is the whole point
+/// of the mode ([ADR-0026](../../docs/adr/0026-agents-externes-acp.md)).
+/// Fitting it into `AiProviderConfig` would produce a structure half of whose
+/// fields mean nothing depending on the variant, and the question "does this
+/// field count here?" would come up again at every read.
 ///
-/// # Ce qu'Oxyn ne saura jamais de lui
+/// # What Oxyn will never know about it
 ///
-/// Où va son modèle. L'agent est un processus opaque : il peut parler à un
-/// modèle local, à un service distant, ou changer entre deux tours.
+/// Where its model goes. The agent is an opaque process: it can talk to a
+/// local model, to a remote service, or switch between two turns.
 ///
-/// Ce type ne porte donc **aucune** portée, et n'expose pas de quoi en poser
-/// une. Le classement vit dans `oxyn-ai`, avec le reste de la confidentialité —
-/// `oxyn-core` ne connaît pas `Reach`, et dépendre d'`oxyn-llm` pour l'obtenir
-/// inverserait le sens des dépendances.
-/// Pas de `#[non_exhaustive]`, à la différence des énumérations publiques de
-/// cette crate : `oxyn-store` doit pouvoir **reconstruire** une déclaration
-/// relue du disque, comme il le fait déjà pour [`AiProviderConfig`]. L'attribut
-/// l'en empêcherait sans rien protéger — un champ ajouté casse de toute façon
-/// la reconstruction, et il vaut mieux que ce soit à la compilation.
+/// This type therefore carries **no** reach, and exposes nothing to set one.
+/// The classification lives in `oxyn-ai`, with the rest of privacy —
+/// `oxyn-core` does not know `Reach`, and depending on `oxyn-llm` to get it
+/// would reverse the direction of dependencies.
+/// No `#[non_exhaustive]`, unlike this crate's public enumerations:
+/// `oxyn-store` must be able to **rebuild** a declaration read back from disk,
+/// as it already does for [`AiProviderConfig`]. The attribute would prevent it
+/// without protecting anything — an added field breaks the rebuilding anyway,
+/// and it is better that it happen at compile time.
 #[derive(Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ExternalAgentConfig {
-    /// Identifiant de cette déclaration.
+    /// Identifier of this declaration.
     pub id: ProviderId,
-    /// Le nom que l'utilisateur donne à cette déclaration. C'est **lui** qui
-    /// est montré.
+    /// The name the user gives this declaration. It is **this** that is
+    /// shown.
     pub label: String,
-    /// Le programme à lancer.
+    /// The program to launch.
     pub command: String,
-    /// Ses arguments, dans l'ordre.
+    /// Its arguments, in order.
     #[serde(default)]
     pub args: Vec<String>,
-    /// Les variables d'environnement à lui donner.
+    /// The environment variables to give it.
     ///
-    /// **Ne doit pas porter de secret** : ce que l'utilisateur met là part dans
-    /// l'environnement d'un processus, visible de la table des processus sur
-    /// certains systèmes. Un agent qui a besoin d'un jeton le lit lui-même, là
-    /// où il l'a rangé ([I-03](../../CLAUDE.md#i-03)).
+    /// **Must not carry a secret**: what the user puts there goes into a
+    /// process's environment, visible from the process table on some systems.
+    /// An agent that needs a token reads it itself, where it stored it
+    /// ([I-03](../../CLAUDE.md#i-03)).
     #[serde(default)]
     pub env: Vec<(String, String)>,
-    /// Date de la déclaration.
+    /// Date of the declaration.
     pub created_at: DateTime<Utc>,
-    /// Date de la dernière modification.
+    /// Date of the last modification.
     pub updated_at: DateTime<Utc>,
 }
 
 impl ExternalAgentConfig {
-    /// Déclare un agent externe, daté de maintenant.
+    /// Declares an external agent, dated now.
     #[must_use]
     pub fn new(id: ProviderId, label: impl Into<String>, command: impl Into<String>) -> Self {
         let maintenant = Utc::now();
@@ -609,20 +603,20 @@ impl ExternalAgentConfig {
         }
     }
 
-    /// Ajoute les arguments de la commande.
+    /// Adds the command's arguments.
     #[must_use]
     pub fn with_args<S: Into<String>>(mut self, args: impl IntoIterator<Item = S>) -> Self {
         self.args = args.into_iter().map(Into::into).collect();
         self
     }
 
-    /// Vérifie ce qui doit l'être **avant** que la déclaration n'atteigne le
-    /// disque.
+    /// Checks what must be checked **before** the declaration reaches the disk.
     ///
-    /// # Erreurs
-    /// [`OxynError::Config`] : nom ou commande vide, caractère de contrôle dans
-    /// le nom, la commande, un argument ou une variable d'environnement, listes
-    /// hors borne, variable d'environnement sans nom. Aucun message ne recopie la valeur fautive.
+    /// # Errors
+    /// [`OxynError::Config`]: empty name or command, control character in the
+    /// name, the command, an argument or an environment variable, lists out of
+    /// bounds, environment variable without a name. No message copies the
+    /// faulty value.
     pub fn validate(&self) -> Result<()> {
         if self.label.trim().is_empty() || self.label.len() > MAX_PROVIDER_LABEL_BYTES {
             return Err(OxynError::Config(
@@ -641,10 +635,10 @@ impl ExternalAgentConfig {
         if self.command.trim().is_empty() {
             return Err(OxynError::Config("agent command must be nonempty".into()));
         }
-        // Un caractère de contrôle dans une commande ou un argument n'a aucun
-        // usage légitime, et il rend illisible tout ce qui affichera la
-        // déclaration — la même raison qui fait refuser un nom de palier de
-        // catalogue porteur de contrôle.
+        // A control character in a command or an argument has no legitimate
+        // use, and it makes everything that displays the declaration unreadable
+        // — the same reason that makes us refuse a catalog level name carrying
+        // a control character.
         if self.command.chars().any(char::is_control)
             || self
                 .args
@@ -672,12 +666,12 @@ impl ExternalAgentConfig {
                     .into(),
             ));
         }
-        // Les **valeurs** étaient la moitié non vérifiée : bornées par rien, et
-        // libres de porter un NUL ou un caractère de contrôle. Une valeur avec
-        // NUL est tronquée en silence par l'appel système au moment de lancer
-        // le processus — l'agent reçoit alors autre chose que ce qui est
-        // affiché, et que ce qui est persisté. Le reste des contrôles
-        // n'empêcherait rien sans celui-ci.
+        // The **values** were the unchecked half: bounded by nothing, and
+        // free to carry a NUL or a control character. A value with a NUL is
+        // silently truncated by the system call when launching the process —
+        // the agent then receives something other than what is displayed, and
+        // than what is persisted. The rest of the checks would prevent nothing
+        // without this one.
         if self
             .env
             .iter()
@@ -700,13 +694,13 @@ impl ExternalAgentConfig {
     }
 }
 
-/// Rendu **manuel** : les valeurs d'environnement ne se journalisent pas.
+/// **Manual** rendering: environment values are not logged.
 ///
-/// Le corollaire vérifiable d'[I-03](../../CLAUDE.md#i-03) interdit un `Debug`
-/// dérivé sur un type porteur de secret. `env` ne *doit* pas en porter — la
-/// documentation du champ le dit —, mais c'est une consigne à l'utilisateur, pas
-/// une garantie : un `tracing::debug!("{config:?}")` ajouté six mois plus tard
-/// ne doit pas la mettre à l'épreuve.
+/// The checkable corollary of [I-03](../../CLAUDE.md#i-03) forbids a derived
+/// `Debug` on a type carrying a secret. `env` *must* not carry one — the
+/// field's documentation says so —, but that is an instruction to the user,
+/// not a guarantee: a `tracing::debug!("{config:?}")` added six months later
+/// must not put it to the test.
 impl fmt::Debug for ExternalAgentConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("ExternalAgentConfig")
@@ -720,27 +714,27 @@ impl fmt::Debug for ExternalAgentConfig {
 }
 
 impl fmt::Debug for AiProviderConfig {
-    /// Rendu volontairement partiel : la référence de secret n'est pas
-    /// imprimée. Un `Debug` dérivé est le mode de fuite le plus fréquent parce
-    /// qu'il est invisible à la relecture (I-03).
+    /// Deliberately partial rendering: the secret reference is not printed. A
+    /// derived `Debug` is the most frequent leak because it is invisible in
+    /// review (I-03).
     ///
-    /// De l'URL de base, seul **l'hôte** est montré — pas la valeur saisie.
+    /// Of the base URL, only the **host** is shown — not the value entered.
     ///
-    /// Ce champ rendait l'URL entière, au motif que [`validate`](Self::validate)
-    /// refuse une URL porteuse d'identifiants. C'était vrai d'une déclaration
-    /// déjà validée, et faux partout ailleurs : `Command::SaveAiProvider`
-    /// transporte la configuration **avant** que l'exécuteur ne la valide. Une
-    /// clé collée dans le champ « point d'accès » — l'erreur de saisie la plus
-    /// ordinaire qui soit — vivait donc en mémoire dans un `Debug` complet, et
-    /// il suffisait d'un `tracing::debug!` ajouté six mois plus tard pour la
-    /// journaliser ([I-03](../../CLAUDE.md#i-03)).
+    /// This field used to render the whole URL, on the grounds that
+    /// [`validate`](Self::validate) refuses a URL carrying credentials. That
+    /// was true of an already validated declaration, and false everywhere
+    /// else: `Command::SaveAiProvider` carries the configuration **before** the
+    /// executor validates it. A key pasted into the "endpoint" field — the most
+    /// ordinary typing mistake there is — therefore lived in memory in a full
+    /// `Debug`, and a `tracing::debug!` added six months later was enough to
+    /// log it ([I-03](../../CLAUDE.md#i-03)).
     ///
-    /// L'hôte seul garde le diagnostic — savoir vers où partaient les requêtes
-    /// — sans dépendre d'une validation qui n'a peut-être pas eu lieu.
+    /// The host alone keeps the diagnosis — knowing where the requests were
+    /// going — without depending on a validation that may not have happened.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let hote = url::Url::parse(&self.base_url).ok().map_or_else(
-            // Une URL illisible n'est pas montrée : ce qu'on n'a pas su
-            // analyser est justement ce dont on ne sait pas ce qu'il contient.
+            // An unreadable URL is not shown: what we could not parse is
+            // precisely what we do not know the contents of.
             || "<unreadable endpoint>".to_owned(),
             |analysee| match (analysee.host_str(), analysee.port()) {
                 (Some(hote), Some(port)) => format!("{hote}:{port}"),
@@ -777,36 +771,36 @@ mod tests {
     }
 
     #[test]
-    fn une_url_portant_des_identifiants_est_refusee() {
-        // ADR-0023 : la `base_url` est stockée débarrassée de ses identifiants.
-        // Le refus est la forme retenue — un nettoyage silencieux rendrait à
-        // l'utilisateur une configuration qu'il n'a pas saisie.
+    fn a_url_carrying_credentials_is_refused() {
+        // ADR-0023: the `base_url` is stored stripped of its credentials. The
+        // refusal is the chosen form — a silent cleanup would give the user
+        // back a configuration they did not enter.
         let mut config = ollama();
         config.base_url = "https://alice:motdepasse@api.example.com/v1".to_owned();
 
         let erreur = config
             .validate()
-            .expect_err("une URL avec identifiants ne s'écrit pas");
+            .expect_err("a URL with credentials is not written");
         let message = erreur.to_string();
         assert!(!message.contains("motdepasse"), "{message}");
         assert!(!message.contains("alice"), "{message}");
 
-        // Un nom d'utilisateur seul suffit à refuser : c'est déjà la moitié
-        // d'un couple, et le champ mot de passe suivra.
+        // A user name alone is enough to refuse: it is already half of a
+        // pair, and the password field will follow.
         config.base_url = "https://alice@api.example.com/v1".to_owned();
         assert!(config.validate().is_err());
     }
 
-    /// Les **valeurs** d'environnement sont vérifiées, pas seulement les noms.
+    /// Environment **values** are checked, not only the names.
     ///
-    /// La moitié valeur ne l'était pas du tout. Le cas qui fait mal n'est pas
-    /// esthétique : une valeur contenant un NUL est tronquée en silence par
-    /// l'appel système au lancement, si bien que l'agent reçoit autre chose
-    /// que ce que l'écran montre et que ce que l'état local a persisté.
+    /// The value half was not checked at all. The case that hurts is not
+    /// cosmetic: a value containing a NUL is silently truncated by the system
+    /// call at launch, so that the agent receives something other than what
+    /// the screen shows and what the local state persisted.
     #[test]
-    fn une_valeur_denvironnement_hostile_est_refusee() {
+    fn a_hostile_environment_value_is_refused() {
         let base = ExternalAgentConfig::new(
-            ProviderId::new("claude-code").expect("identifiant valide"),
+            ProviderId::new("claude-code").expect("valid identifier"),
             "Claude Code",
             "claude",
         );
@@ -817,15 +811,15 @@ mod tests {
         };
         assert!(
             avec("acp".to_owned()).validate().is_ok(),
-            "une valeur ordinaire reste acceptée"
+            "an ordinary value stays accepted"
         );
 
         for (cas, valeur) in [
             ("NUL", "acp\0suite".to_owned()),
-            ("saut de ligne", "acp\nsuite".to_owned()),
-            ("trop longue", "v".repeat(MAX_AGENT_ENV_VALUE_BYTES + 1)),
+            ("line break", "acp\nsuite".to_owned()),
+            ("too long", "v".repeat(MAX_AGENT_ENV_VALUE_BYTES + 1)),
         ] {
-            assert!(avec(valeur).validate().is_err(), "{cas} doit être refusé");
+            assert!(avec(valeur).validate().is_err(), "{cas} must be refused");
         }
     }
 
@@ -854,7 +848,7 @@ mod tests {
     }
 
     #[test]
-    fn une_url_sans_identifiants_est_acceptee() {
+    fn a_url_without_credentials_is_accepted() {
         assert!(ollama().validate().is_ok());
         let mut config = ollama();
         config.base_url = "https://api.anthropic.com".to_owned();
@@ -863,27 +857,27 @@ mod tests {
     }
 
     #[test]
-    fn une_url_sans_hote_ou_illisible_est_refusee() {
+    fn a_url_without_host_or_unreadable_is_refused() {
         for brut in [
             "",
-            "pas une url",
+            "not a url",
             "/v1/chat",
             "mailto:quelquun@example.com",
             "data:text/plain,bonjour",
         ] {
             let mut config = ollama();
             config.base_url = brut.to_owned();
-            assert!(config.validate().is_err(), "acceptée à tort : `{brut}`");
+            assert!(config.validate().is_err(), "wrongly accepted: `{brut}`");
         }
     }
 
     #[test]
-    fn les_bornes_des_champs_montrables_sont_tenues() {
+    fn the_bounds_of_showable_fields_hold() {
         let mut config = ollama();
         config.label = "   ".to_owned();
         assert!(
             config.validate().is_err(),
-            "un nom vide est insélectionnable"
+            "an empty name cannot be selected"
         );
 
         config = ollama();
@@ -895,9 +889,9 @@ mod tests {
         assert!(config.validate().is_err());
 
         config = ollama();
-        // La borne du modèle existe pour que la provenance tienne dans son
-        // budget : la dépasser rendrait une déclaration valide inutilisable au
-        // moment d'écrire un document.
+        // The model bound exists so that the provenance fits in its budget:
+        // exceeding it would make a valid declaration unusable at the moment of
+        // writing a document.
         config.model = "m".repeat(MAX_PROVIDER_MODEL_BYTES + 1);
         assert!(config.validate().is_err());
 
@@ -907,77 +901,77 @@ mod tests {
     }
 
     #[test]
-    fn aucune_cle_ne_transite_par_cette_configuration() {
-        // I-03 : la seule voie est une référence, et le `Debug` ne la rend pas.
-        // Le test rougit si quelqu'un remplace le `Debug` écrit à la main par
-        // un `#[derive(Debug)]`.
+    fn no_key_goes_through_this_configuration() {
+        // I-03: the only path is a reference, and the `Debug` does not render
+        // it. The test fails if someone replaces the hand-written `Debug` with
+        // a `#[derive(Debug)]`.
         let config = ollama().with_secret_ref("keychain://oxyn/ollama");
 
         let rendu = format!("{config:?}");
         assert!(
             !rendu.contains("keychain://oxyn/ollama"),
-            "référence fuitée : {rendu}"
+            "reference leaked: {rendu}"
         );
         assert!(rendu.contains("Ollama du portable"), "{rendu}");
-        assert!(rendu.contains("11434"), "l'hôte reste diagnosticable");
+        assert!(rendu.contains("11434"), "the host stays diagnosable");
 
-        // Et rien dans la structure ne peut porter la clé elle-même : le seul
-        // champ prévu pour le trousseau est une référence.
-        let json = serde_json::to_string(&config).expect("sérialisation");
+        // And nothing in the structure can carry the key itself: the only
+        // field meant for the keychain is a reference.
+        let json = serde_json::to_string(&config).expect("serialization");
         assert!(json.contains("keychain://oxyn/ollama"));
         assert!(!json.contains("api_key"), "{json}");
         assert!(!json.contains("password"), "{json}");
     }
 
-    /// Le `Debug` protège une configuration **non encore validée**.
+    /// The `Debug` protects a configuration **not yet validated**.
     ///
-    /// C'est le cas réel : `Command::SaveAiProvider` transporte la
-    /// configuration, et `validate` n'est appelée qu'à l'autre bout, dans
-    /// l'exécuteur. Entre les deux, une clé collée dans le champ « point
-    /// d'accès » — la faute de saisie la plus banale — ne doit pas pouvoir
-    /// atteindre un journal ([I-03](../../CLAUDE.md#i-03)).
+    /// It is the real case: `Command::SaveAiProvider` carries the
+    /// configuration, and `validate` is only called at the other end, in the
+    /// executor. In between, a key pasted into the "endpoint" field — the most
+    /// common typing mistake — must not be able to reach a log
+    /// ([I-03](../../CLAUDE.md#i-03)).
     #[test]
-    fn une_url_porteuse_didentifiants_ne_se_rend_pas_avant_validation() {
+    fn a_url_carrying_credentials_is_not_rendered_before_validation() {
         let mut config = ollama();
         config.base_url = "https://cle:motdepasse@api.example.com/v1".to_owned();
 
-        // La prémisse du test : cette configuration n'est pas validée, et ne le
-        // serait pas. Sans cette ligne, le test prouverait le cas facile.
+        // The test's premise: this configuration is not validated, and would
+        // not be. Without this line, the test would prove the easy case.
         assert!(
             config.validate().is_err(),
-            "la validation refuse bien une URL porteuse d'identifiants"
+            "validation does refuse a URL carrying credentials"
         );
 
         let rendu = format!("{config:?}");
-        assert!(!rendu.contains("motdepasse"), "secret fuité : {rendu}");
-        assert!(!rendu.contains("cle:"), "identifiant fuité : {rendu}");
+        assert!(!rendu.contains("motdepasse"), "secret leaked: {rendu}");
+        assert!(!rendu.contains("cle:"), "identifier leaked: {rendu}");
         assert!(
             rendu.contains("api.example.com"),
-            "l'hôte reste diagnosticable : {rendu}"
+            "the host stays diagnosable: {rendu}"
         );
     }
 
     #[test]
-    fn une_reference_de_secret_vide_est_refusee() {
-        // Une référence blanche est un champ laissé à moitié rempli : elle ne
-        // désigne rien dans le trousseau et l'échec surviendrait à l'ouverture
-        // du runtime, loin de la saisie.
+    fn an_empty_secret_reference_is_refused() {
+        // A blank reference is a field left half filled: it designates
+        // nothing in the keychain and the failure would occur when the runtime
+        // opens, far from the input.
         let config = ollama().with_secret_ref("  ");
         assert!(config.validate().is_err());
     }
 
     #[test]
-    fn la_declaration_fait_un_aller_retour_fidele() {
+    fn the_declaration_round_trips_faithfully() {
         let config = ollama().with_secret_ref("keychain://oxyn/ollama");
-        let json = serde_json::to_string(&config).expect("sérialisation");
-        let relu: AiProviderConfig = serde_json::from_str(&json).expect("désérialisation");
+        let json = serde_json::to_string(&config).expect("serialization");
+        let relu: AiProviderConfig = serde_json::from_str(&json).expect("deserialization");
         assert_eq!(relu, config);
     }
 
     #[test]
-    fn les_familles_de_protocole_ont_un_nom_stable() {
-        // Ce nom est écrit en base et dans une provenance : le changer
-        // rendrait illisible ce qui a déjà été écrit.
+    fn protocol_families_have_a_stable_name() {
+        // This name is written to the database and into a provenance:
+        // changing it would make what was already written unreadable.
         for (kind, nom) in [
             (AiProviderKind::Anthropic, "anthropic"),
             (AiProviderKind::OpenAi, "openai"),
@@ -987,7 +981,7 @@ mod tests {
             assert_eq!(kind.as_str(), nom);
             assert_eq!(nom.parse::<AiProviderKind>(), Ok(kind));
             assert_eq!(
-                serde_json::to_string(&kind).expect("sérialisation"),
+                serde_json::to_string(&kind).expect("serialization"),
                 format!("\"{nom}\"")
             );
         }
@@ -996,9 +990,9 @@ mod tests {
     }
 
     #[test]
-    fn la_famille_ne_se_deduit_pas_de_l_identifiant() {
-        // Trois déclarations compatibles OpenAI, trois points d'accès : c'est
-        // la famille qui dit le transport, pas le nom.
+    fn the_family_is_not_deduced_from_the_identifier() {
+        // Three OpenAI-compatible declarations, three endpoints: it is the
+        // family that says the transport, not the name.
         for id in [
             ProviderId::ollama(),
             ProviderId::openrouter(),
@@ -1007,7 +1001,7 @@ mod tests {
             let config = AiProviderConfig::new(
                 id,
                 AiProviderKind::OpenAiCompatible,
-                "point d'accès",
+                "endpoint",
                 "http://127.0.0.1:8080/v1",
                 "modele",
             );
@@ -1017,29 +1011,29 @@ mod tests {
     }
 
     #[test]
-    fn les_identifiants_invalides_sont_refuses() {
+    fn invalid_identifiers_are_refused() {
         assert!(ProviderId::new("").is_err());
         assert!(ProviderId::new("OpenAI").is_err(), "majuscules");
-        assert!(ProviderId::new("1ollama").is_err(), "chiffre en tête");
+        assert!(ProviderId::new("1ollama").is_err(), "leading digit");
         assert!(ProviderId::new("open ai").is_err(), "espace");
         assert!(ProviderId::new("open.ai").is_err(), "point");
-        assert!(ProviderId::new("a".repeat(33)).is_err(), "trop long");
+        assert!(ProviderId::new("a".repeat(33)).is_err(), "too long");
         assert!(ProviderId::new("a").is_ok());
         assert!(ProviderId::new("lm-studio").is_ok());
         assert!(ProviderId::new("openai_v2").is_ok());
     }
 
     #[test]
-    fn l_erreur_ne_recopie_pas_la_valeur_fautive() {
-        // Un identifiant de fournisseur mal formé peut être une clé collée dans
-        // le mauvais champ (I-03).
+    fn the_error_does_not_copy_the_faulty_value() {
+        // A malformed provider identifier may be a key pasted into the wrong
+        // field (I-03).
         let err = ProviderId::new("sk-proj-CECINEDOITPASFUIR").expect_err("invalide");
         let rendu = err.to_string();
         assert!(!rendu.contains("CECINEDOITPASFUIR"), "{rendu}");
     }
 
     #[test]
-    fn les_constantes_sont_des_identifiants_valides() {
+    fn the_constants_are_valid_identifiers() {
         for nom in [
             ProviderId::OLLAMA,
             ProviderId::LM_STUDIO,
@@ -1056,18 +1050,18 @@ mod tests {
     }
 
     #[test]
-    fn un_identifiant_se_serialise_en_chaine_nue() {
-        let json = serde_json::to_string(&ProviderId::openai()).expect("sérialisation");
+    fn an_identifier_serializes_as_a_bare_string() {
+        let json = serde_json::to_string(&ProviderId::openai()).expect("serialization");
         assert_eq!(json, "\"openai\"");
-        let relu: ProviderId = serde_json::from_str(&json).expect("désérialisation");
+        let relu: ProviderId = serde_json::from_str(&json).expect("deserialization");
         assert_eq!(relu, ProviderId::openai());
         assert!(serde_json::from_str::<ProviderId>("\"OPENAI\"").is_err());
     }
 
     #[test]
-    fn une_declaration_neuve_recoit_une_identite_valide_et_distincte() {
-        // La famille la plus longue est celle qui déborderait si la forme
-        // changeait : c'est elle qu'on éprouve, pas la plus courte.
+    fn a_new_declaration_gets_a_valid_and_distinct_identity() {
+        // The longest family is the one that would overflow if the shape
+        // changed: it is the one tested, not the shortest.
         for famille in [
             AiProviderKind::OpenAiCompatible,
             AiProviderKind::Anthropic,
@@ -1076,18 +1070,18 @@ mod tests {
         ] {
             let frappe = ProviderId::for_new_declaration(famille);
             ProviderId::new(frappe.as_str()).unwrap_or_else(|erreur| {
-                panic!("identité refusée par sa propre validation : {erreur}")
+                panic!("identity refused by its own validation: {erreur}")
             });
             assert!(
                 frappe.as_str().starts_with(famille.as_str()),
-                "la famille reste lisible dans le trousseau : {frappe:?}"
+                "the family stays readable in the keychain: {frappe:?}"
             );
         }
 
-        // Deux déclarations de même famille et de même libellé restent deux
-        // déclarations. Le piège que ce test ferme : un identifiant dérivé du
-        // libellé ferait de la seconde un remplacement silencieux de la
-        // première, clé du trousseau comprise.
+        // Two declarations of the same family and label remain two
+        // declarations. The trap this test closes: an identifier derived from
+        // the label would turn the second into a silent replacement of the
+        // first, keychain key included.
         let premiere = ProviderId::for_new_declaration(AiProviderKind::Anthropic);
         let seconde = ProviderId::for_new_declaration(AiProviderKind::Anthropic);
         assert_ne!(premiere, seconde);

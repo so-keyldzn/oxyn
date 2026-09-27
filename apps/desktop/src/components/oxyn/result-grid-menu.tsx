@@ -1,6 +1,6 @@
-// The context menus of the result grid (docs/UX-SPEC.md, « Menus
-// contextuels », Grille and En-tête de colonne): a cell or the selection
-// around it, and a column header. Every entry is a registry action
+// The context menus of the result grid (docs/UX-SPEC.md, « Context menus »,
+// Grid cell or selection and Column header): a cell or the selection around it,
+// and a column header. Every entry is a registry action
 // (docs/adr/0041-registre-d-actions-menus-et-raccourcis.md, point 6); this
 // file only says what was right-clicked and which handlers the grid's
 // source offers.

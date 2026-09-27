@@ -120,8 +120,7 @@ function inConsole(
     enabled: (context) => {
       if (context.modal) return DIALOG_OPEN
       // ⌘↵ or ⌘S in a stored query's read-only view runs and writes
-      // nothing, not even the active console's (UX-SPEC, « Consultation
-      // locale des requêtes »).
+      // nothing, not even the active console's (UX-SPEC, « Local query browsing »).
       if (
         action !== "cancel" &&
         zoneElement(context, "editor")?.hasAttribute("data-read-only")
@@ -260,7 +259,7 @@ export const behaviours: Record<string, ActionBehaviour> = {
     }
   ),
   // The last console closed comes back as it was written, never run (UX-SPEC,
-  // « Menus contextuels », Onglet).
+  // « Context menus », Onglet).
   "tab.reopen": inWorkspace(
     (workspace) => {
       if (!workspace.actions.reopenTab) return "absent"
@@ -323,8 +322,9 @@ export const behaviours: Record<string, ActionBehaviour> = {
   },
   // Outside the editor only: there, ⌘/ is Toggle comment (ADR-0041, point 2).
   "help.shortcuts": overlay((actions) => actions.openShortcuts()),
-  // TODO(2026-12-31, débloqué par la commande open_external du plan
-  // « Interactions », reportée du lot 1) — Oxyn opens no external link yet.
+  // TODO(2026-12-31, unblocked by the open_external command of the
+  // « Interactions » plan, deferred from batch 1) — Oxyn opens no external link
+  // yet.
   "help.documentation": {
     enabled: () => ({
       reason: "Opening the documentation is not available yet",
@@ -361,7 +361,7 @@ export const behaviours: Record<string, ActionBehaviour> = {
   },
   // What the export control of the result on screen offers, from the same
   // trigger: the formats, the save dialog and the reason of a greyed one
-  // stay there (UX-SPEC, « Ce qui est exporté est ce qui est affiché »).
+  // stay there (UX-SPEC, « What is exported is what is displayed »).
   "result.export": inWorkspace(
     () => {
       const trigger = visibleExport()
@@ -391,8 +391,8 @@ export const behaviours: Record<string, ActionBehaviour> = {
     (actions) => actions.setTheme("system"),
     (state) => state.theme === "system"
   ),
-  // TODO(2026-12-31, débloqué par le lot 9 du plan « Interactions » : le
-  // formatage SQL, qui choisira un formateur par /versions) — no formatter
+  // TODO(2026-12-31, unblocked by batch 9 of the « Interactions » plan: SQL
+  // formatting, which will choose a formatter through /versions) — no formatter
   // is shipped.
   "console.format": {
     enabled: () => ({ reason: "SQL formatting is not available yet" }),
@@ -407,8 +407,8 @@ export const behaviours: Record<string, ActionBehaviour> = {
       workspace.state.hasAside ? true : { reason: "No side panel here" },
     (workspace) => workspace.actions.toggleAside()
   ),
-  // Without a declared destination the entry does not exist (UX-SPEC, « Le
-  // workspace IA n'existe que s'il a été configuré »).
+  // Without a declared destination the entry does not exist (UX-SPEC, « The AI
+  // workspace only exists if it has been configured »).
   "view.assistant": {
     enabled: (context) => {
       const workspace = context.sources.workspace

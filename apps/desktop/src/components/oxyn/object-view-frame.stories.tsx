@@ -603,7 +603,7 @@ export const DefinitionBesideKeepsItsWidth: Story = {
 /**
  * Below 1200 px: Data and Structure stay tabs, the four others are in `More`;
  * Columns, Export preview… and Inspect row are in `Actions` only, with no
- * duplicate in the bar (docs/UX-SPEC.md, « Largeur réduite »).
+ * duplicate in the bar (docs/UX-SPEC.md, « Reduced width »).
  */
 export const Compact: Story = {
   args: { compact: true },

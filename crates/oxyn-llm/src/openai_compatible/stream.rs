@@ -1,9 +1,9 @@
-//! Le flux d'un fournisseur compatible OpenAI, de bout en bout.
+//! The stream of an OpenAI-compatible provider, end to end.
 //!
-//! Le pilote est commun à tous les protocoles ([`crate::stream`]) ; ce module
-//! n'ajoute que le branchement du décodeur de trames de ce protocole-ci, et les
-//! tests qui vérifient l'assemblage sur des flux réels — découpés comme le
-//! réseau les découpe, c'est-à-dire n'importe où.
+//! The driver is shared by every protocol ([`crate::stream`]); this module
+//! only adds the plugging of this protocol's frame decoder, and the tests
+//! that check the assembly on real streams — split the way the network
+//! splits them, that is, anywhere.
 
 use futures::stream::BoxStream;
 use oxyn_core::CancelToken;
@@ -13,7 +13,7 @@ use crate::secret::ApiKey;
 use crate::stream::{ByteStream, events_stream};
 use crate::types::ChatEvent;
 
-/// Branche le décodeur compatible OpenAI sur le pilote commun.
+/// Plugs the OpenAI-compatible decoder into the shared driver.
 pub(crate) fn openai_events(
     bytes: ByteStream,
     cancel: CancelToken,
@@ -43,7 +43,7 @@ mod tests {
     }
 
     #[test]
-    fn un_flux_complet_devient_des_evenements() {
+    fn a_complete_stream_becomes_events() {
         let flux = openai_events(
             morceaux(&[
                 "data: {\"choices\":[{\"delta\":{\"content\":\"SELECT \"}}]}\n\n",
@@ -67,7 +67,7 @@ mod tests {
     }
 
     #[test]
-    fn une_trame_coupee_entre_deux_morceaux_reseau_se_recolle() {
+    fn a_frame_cut_between_two_network_chunks_is_reassembled() {
         let flux = openai_events(
             morceaux(&[
                 "data: {\"choices\":[{\"delta\":{\"con",
@@ -84,9 +84,9 @@ mod tests {
     }
 
     #[test]
-    fn un_flux_octet_par_octet_donne_le_meme_resultat() {
-        // Le réseau ne respecte pas les frontières de trame : le seul découpage
-        // qui les couvre tous est celui qui n'en respecte aucune.
+    fn a_byte_by_byte_stream_gives_the_same_result() {
+        // The network does not respect frame boundaries: the only split that
+        // covers them all is the one that respects none.
         const BRUT: &str = concat!(
             "data: {\"choices\":[{\"delta\":{\"content\":\"café\"}}]}\n\n",
             "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n",
@@ -114,7 +114,7 @@ mod tests {
     }
 
     #[test]
-    fn une_annulation_au_milieu_d_un_appel_d_outil_ne_propose_rien() {
+    fn a_cancellation_in_the_middle_of_a_tool_call_proposes_nothing() {
         let jeton = CancelToken::new();
         let declencheur = jeton.clone();
         let octets = futures::stream::iter(vec![
@@ -131,7 +131,7 @@ mod tests {
             !evenements
                 .iter()
                 .any(|e| matches!(e, ChatEvent::ToolCallComplete(_))),
-            "des arguments tronqués ne sont pas des arguments : {evenements:?}"
+            "truncated arguments are not arguments: {evenements:?}"
         );
         assert_eq!(
             evenements.last(),

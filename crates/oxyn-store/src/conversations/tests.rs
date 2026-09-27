@@ -1,10 +1,9 @@
-//! Ce que la persistance des conversations doit tenir.
+//! What conversation persistence must hold.
 //!
-//! Les tests de cette table portent sur quatre choses qu'une régression rendrait
-//! silencieuse : la fidélité de la relecture — raisonnement chiffré compris —,
-//! l'ouverture d'un fichier qu'une version antérieure a écrit, la tolérance à
-//! une ligne que personne ne sait plus lire, et l'élagage qui ne coupe jamais un
-//! transcript en deux.
+//! The tests of this table cover four things a regression would make silent:
+//! faithful reading back — encrypted reasoning included —, opening a file an
+//! earlier version wrote, tolerating a row nobody can read anymore, and
+//! pruning that never cuts a transcript in two.
 
 use super::*;
 use crate::Store;
@@ -15,24 +14,23 @@ use oxyn_core::{
     ExecRequest, PrivacyTier, QueryLanguage, ScalarValue, StatementIntent, WorkspaceId,
 };
 
-/// Un magasin migré, un workspace, une connexion : le décor commun.
+/// A migrated store, a workspace, a connection: the common setup.
 fn decor() -> (Store, WorkspaceId, ConnectionId) {
-    let store = Store::open_in_memory().expect("ouverture");
+    let store = Store::open_in_memory().expect("open");
     let workspace = store.workspaces().create("atelier").expect("workspace").id;
     let connexion = ConnectionConfig::new("base client", DriverId::postgres())
         .with_environment(Environment::Production);
     store
         .connections()
         .save(workspace, &connexion)
-        .expect("connexion");
+        .expect("connection");
     (store, workspace, connexion.id)
 }
 
-/// Relit un fil entier, page par page, comme un appelant doit le faire.
+/// Reads a whole thread back, page by page, as a caller must.
 ///
-/// Les pages sont volontairement petites : c'est la couture entre deux pages
-/// qu'on veut éprouver à chaque test, pas seulement dans le test qui lui est
-/// consacré.
+/// Pages are deliberately small: the seam between two pages is what every
+/// test should exercise, not only the test dedicated to it.
 fn tout_le_fil(store: &Store, id: ConversationId) -> Vec<Turn> {
     let mut tours = Vec::new();
     let mut apres = None;
@@ -40,7 +38,7 @@ fn tout_le_fil(store: &Store, id: ConversationId) -> Vec<Turn> {
         let page = store
             .conversations()
             .transcript_page(id, apres, 2)
-            .expect("relecture d'une page");
+            .expect("read back a page");
         tours.extend(page.turns);
         match page.next {
             Some(suivant) => apres = Some(suivant),
@@ -49,16 +47,16 @@ fn tout_le_fil(store: &Store, id: ConversationId) -> Vec<Turn> {
     }
 }
 
-/// Une destination de fournisseur, la forme courante.
+/// A provider destination, the common shape.
 fn fournisseur() -> Destination {
     Destination::provider(
-        ProviderId::new("anthropic-1a2b3c4d").expect("identifiant"),
+        ProviderId::new("anthropic-1a2b3c4d").expect("identifier"),
         "Anthropic",
         "un-modele",
     )
 }
 
-/// Un fil ouvert et enregistré.
+/// An open and saved thread.
 fn fil(store: &Store, workspace: WorkspaceId, connexion: ConnectionId) -> ConversationId {
     let conversation = Conversation::new(workspace, fournisseur(), "Doublons de commandes")
         .on_connection(connexion, "base client");
@@ -66,12 +64,12 @@ fn fil(store: &Store, workspace: WorkspaceId, connexion: ConnectionId) -> Conver
     store
         .conversations()
         .save(&conversation)
-        .expect("enregistrement du fil");
+        .expect("save the thread");
     id
 }
 
-/// Un tour d'assistant chargé : raisonnement rédigé, raisonnement chiffré,
-/// appel d'outil, consommation déclarée, raison d'arrêt.
+/// A loaded assistant turn: written reasoning, encrypted reasoning, tool call,
+/// declared usage, stop reason.
 fn tour_charge() -> TurnRecord {
     TurnRecord::new(
         TurnRole::Assistant,
@@ -101,16 +99,17 @@ fn tour_charge() -> TurnRecord {
     .stopped(StopReason::EndTurn)
 }
 
-// --- Fidélité de l'aller-retour ------------------------------------------
+// --- Round-trip fidelity ------------------------------------------------
 
-/// Un fil relu est le fil écrit, blocs de raisonnement et consommation compris.
+/// A thread read back is the thread written, reasoning blocks and usage
+/// included.
 ///
-/// Le point qui compte n'est pas que la relecture rende « à peu près » la même
-/// chose : c'est qu'un bloc de raisonnement revienne **à l'identique**, signature
-/// comprise. Un fournisseur qui signe ses blocs refuse le tour suivant si l'un
-/// d'eux a été reconstruit — et ce refus n'apparaîtrait ni ici, ni en revue.
+/// What matters is not that reading back returns "roughly" the same thing: it
+/// is that a reasoning block comes back **identical**, signature included. A
+/// provider that signs its blocks refuses the next turn if one of them was
+/// rebuilt — and that refusal would show up neither here nor in review.
 #[test]
-fn un_fil_relu_est_le_fil_ecrit() {
+fn a_thread_read_back_is_the_thread_written() {
     let (store, workspace, connexion) = decor();
     let id = fil(&store, workspace, connexion);
     let session = AgentSessionId::new();
@@ -124,17 +123,11 @@ fn un_fil_relu_est_le_fil_ecrit() {
     let reponse = tour_charge().in_agent_session(session);
 
     assert_eq!(
-        store
-            .conversations()
-            .append(id, &question)
-            .expect("écriture"),
+        store.conversations().append(id, &question).expect("write"),
         Some(0)
     );
     assert_eq!(
-        store
-            .conversations()
-            .append(id, &reponse)
-            .expect("écriture"),
+        store.conversations().append(id, &reponse).expect("write"),
         Some(1)
     );
 
@@ -149,28 +142,28 @@ fn un_fil_relu_est_le_fil_ecrit() {
     assert_eq!(tour.tier, PrivacyTier::Metadata);
     assert_eq!(
         tour.reasoning, reponse.reasoning,
-        "un bloc reconstruit fait refuser le tour suivant"
+        "a rebuilt block makes the next turn refused"
     );
     assert!(
         tour.reasoning.iter().any(ReasoningBlock::is_redacted),
-        "le bloc chiffré doit survivre : sans lui le fournisseur perd le fil"
+        "the encrypted block must survive: without it the provider loses the thread"
     );
     assert_eq!(tour.tool_calls, reponse.tool_calls);
     assert_eq!(tour.usage, reponse.usage);
     assert_eq!(tour.stop, Some(StopReason::EndTurn));
 
-    // « Non déclaré » et « zéro » restent deux faits différents.
+    // "Not declared" and "zero" stay two different facts.
     assert_eq!(tour.usage.cache_read, None);
     assert_eq!(tour.usage.cache_write, Some(800));
 }
 
-/// Un appel d'outil relu garde son SQL à l'octet près, mise en page comprise.
+/// A tool call read back keeps its SQL byte for byte, layout included.
 ///
-/// Le panneau d'une conversation rouverte dessine l'instruction telle qu'elle
-/// revient du store : des retours à la ligne ou une indentation normalisés à
-/// l'écriture la montreraient d'un bloc, sans que rien n'échoue.
+/// The panel of a reopened conversation draws the statement as it comes back
+/// from the store: line breaks or indentation normalized on write would show
+/// it as one block, without anything failing.
 #[test]
-fn un_appel_d_outil_relu_garde_la_mise_en_page_de_son_sql() {
+fn a_tool_call_read_back_keeps_its_sql_layout() {
     let (store, workspace, connexion) = decor();
     let id = fil(&store, workspace, connexion);
     let sql = "WITH ventes AS (\n  SELECT c.name AS category,\n         SUM(oi.quantity) AS total\n  FROM main.order_items AS oi\n\tJOIN main.categories AS c ON c.id = oi.category_id\n  GROUP BY c.name\n)\nSELECT * FROM ventes ORDER BY total DESC;\n";
@@ -184,28 +177,32 @@ fn un_appel_d_outil_relu_garde_la_mise_en_page_de_son_sql() {
             )
             .with_statement(sql),
         ]);
-    store.conversations().append(id, &tour).expect("écriture");
+    store.conversations().append(id, &tour).expect("write");
 
     let relu = tout_le_fil(&store, id);
-    let appel = relu[0].record.tool_calls.first().expect("l'appel est relu");
+    let appel = relu[0]
+        .record
+        .tool_calls
+        .first()
+        .expect("the call is read back");
     assert_eq!(appel.statement.as_deref(), Some(sql));
     assert_eq!(appel.tool, "execute_query");
     assert_eq!(appel.summary, "7 rows, 1 batches");
     assert_eq!(appel.status, ToolCallStatus::Completed);
 }
 
-/// Une raison d'arrêt propre au fournisseur se conserve telle quelle.
+/// A provider-specific stop reason is kept as is.
 ///
-/// La rabattre sur une variante voisine ferait passer une réponse incomplète
-/// pour une réponse finie, et c'est la relecture, un mois plus tard, qui le
-/// dirait faux.
+/// Folding it into a neighboring variant would pass off an incomplete answer
+/// as a finished one, and it is the rereading, a month later, that would say
+/// it wrong.
 #[test]
-fn une_raison_d_arret_inconnue_garde_le_mot_du_fournisseur() {
+fn an_unknown_stop_reason_keeps_the_provider_word() {
     let (store, workspace, connexion) = decor();
     let id = fil(&store, workspace, connexion);
     let tour = TurnRecord::new(TurnRole::Assistant, PrivacyTier::Local, "")
         .stopped(StopReason::Other("quota_exhausted".into()));
-    store.conversations().append(id, &tour).expect("écriture");
+    store.conversations().append(id, &tour).expect("write");
 
     let relu = tout_le_fil(&store, id);
     assert_eq!(
@@ -214,20 +211,20 @@ fn une_raison_d_arret_inconnue_garde_le_mot_du_fournisseur() {
     );
 }
 
-// --- Anciennes fins anormales -----------------------------------------------
+// --- Legacy abnormal endings -------------------------------------------------
 //
-// Avant `Interrupted` et `ProviderError`, une fin anormale était rangée dans
-// `Other("…")` et se relisait comme une fin ordinaire : une réponse tronquée
-// qui se donne pour complète. Six formes ont existé
+// Before `Interrupted` and `ProviderError`, an abnormal ending was stored in
+// `Other("…")` and read back as an ordinary ending: a truncated answer that
+// presents itself as complete. Six forms existed
 // (`scratchpad/rapport-anthropic-llm-legacy.md`).
 //
-// Chaque forme est écrite **en dur ici**, et non relue depuis la table du
-// module : un test qui parcourrait la table resterait vert le jour où l'on en
-// retire une entrée, c'est-à-dire précisément le jour où il doit rougir. Les
-// lignes sont posées en SQL direct, sous la forme exacte du disque — `append`
-// n'écrit plus ces formes, passer par lui ne prouverait rien.
+// Each form is written **hard-coded here**, not read back from the module's
+// table: a test that walked the table would stay green the day an entry is
+// removed from it, that is, precisely the day it must turn red. The rows are
+// set in direct SQL, in the exact on-disk form — `append` no longer writes
+// these forms, going through it would prove nothing.
 
-/// Écrit un tour portant `stop_reason` tel quel, puis rend la raison relue.
+/// Writes a turn carrying `stop_reason` as is, then returns the reason read back.
 fn raison_relue(stop_reason_json: &str) -> Option<StopReason> {
     let (store, workspace, connexion) = decor();
     let id = fil(&store, workspace, connexion);
@@ -241,47 +238,47 @@ fn raison_relue(stop_reason_json: &str) -> Option<StopReason> {
             )?;
             Ok(())
         })
-        .expect("ligne écrite par une version précédente");
+        .expect("row written by a previous version");
     tout_le_fil(&store, id)
         .pop()
         .and_then(|tour| tour.record.stop)
 }
 
-/// Vérifie qu'une ancienne forme se relit comme `attendu`, et jamais comme une
-/// réponse complète.
+/// Checks that a legacy form reads back as `attendu`, and never as a
+/// complete answer.
 fn verifier_forme_ancienne(stop_reason_json: &str, attendu: StopReason) {
     let relue = raison_relue(stop_reason_json);
-    assert_eq!(relue.as_ref(), Some(&attendu), "forme {stop_reason_json}");
+    assert_eq!(relue.as_ref(), Some(&attendu), "form {stop_reason_json}");
     assert!(
         attendu.is_truncated(),
-        "une fin anormale ne doit jamais se relire comme une réponse complète"
+        "an abnormal ending must never read back as a complete answer"
     );
 }
 
 #[test]
-fn ancienne_forme_flux_interrompu_se_relit_interrompue() {
+fn legacy_form_flux_interrompu_reads_back_interrupted() {
     verifier_forme_ancienne(r#"{"Other":"flux interrompu"}"#, StopReason::Interrupted);
 }
 
 #[test]
-fn ancienne_forme_flux_illisible_se_relit_interrompue() {
+fn legacy_form_flux_illisible_reads_back_interrupted() {
     verifier_forme_ancienne(r#"{"Other":"flux illisible"}"#, StopReason::Interrupted);
 }
 
 #[test]
-fn ancienne_forme_interrupted_stream_se_relit_interrompue() {
+fn legacy_form_interrupted_stream_reads_back_interrupted() {
     verifier_forme_ancienne(r#"{"Other":"interrupted stream"}"#, StopReason::Interrupted);
 }
 
 #[test]
-fn ancienne_forme_unreadable_stream_se_relit_interrompue() {
+fn legacy_form_unreadable_stream_reads_back_interrupted() {
     verifier_forme_ancienne(r#"{"Other":"unreadable stream"}"#, StopReason::Interrupted);
 }
 
-/// Une erreur annoncée par le fournisseur est tronquée mais **pas** ambiguë :
-/// la relire `Interrupted` bloquerait une reprise légitime.
+/// An error announced by the provider is truncated but **not** ambiguous:
+/// reading it back as `Interrupted` would block a legitimate retry.
 #[test]
-fn ancienne_forme_erreur_du_fournisseur_se_relit_erreur_fournisseur() {
+fn legacy_form_erreur_du_fournisseur_reads_back_provider_error() {
     verifier_forme_ancienne(
         r#"{"Other":"erreur du fournisseur"}"#,
         StopReason::ProviderError,
@@ -289,17 +286,17 @@ fn ancienne_forme_erreur_du_fournisseur_se_relit_erreur_fournisseur() {
 }
 
 #[test]
-fn ancienne_forme_provider_error_se_relit_erreur_fournisseur() {
+fn legacy_form_provider_error_reads_back_provider_error() {
     verifier_forme_ancienne(r#"{"Other":"provider error"}"#, StopReason::ProviderError);
 }
 
-/// La frontière : seules les six formes exactes sont reconnues.
+/// The boundary: only the six exact forms are recognized.
 ///
-/// Un autre mot de fournisseur reste le sien, et une forme voisine — casse,
-/// espace, préfixe — n'est pas une ancienne forme : élargir la reconnaissance
-/// transformerait en coupure un arrêt que personne n'a jamais signalé comme tel.
+/// Another provider word stays its own, and a neighboring form — case, space,
+/// prefix — is not a legacy form: widening recognition would turn into a cut
+/// a stop nobody ever reported as such.
 #[test]
-fn aucune_autre_valeur_d_other_n_est_reconnue() {
+fn no_other_other_value_is_recognized() {
     for mot in [
         "quota_exhausted",
         "Interrupted Stream",
@@ -308,22 +305,22 @@ fn aucune_autre_valeur_d_other_n_est_reconnue() {
         "provider",
         "",
     ] {
-        let json = serde_json::to_string(&StopReason::Other(mot.into())).expect("encodage");
+        let json = serde_json::to_string(&StopReason::Other(mot.into())).expect("encoding");
         assert_eq!(
             raison_relue(&json),
             Some(StopReason::Other(mot.into())),
-            "`{mot}` ne doit pas être reconnu"
+            "`{mot}` must not be recognized"
         );
     }
 }
 
-/// Le niveau est noté sur le **tour**, pas sur le fil.
+/// The tier is recorded on the **turn**, not on the thread.
 ///
-/// C'est ce qui permet à un audit de dire sous quel régime chaque tour a eu
-/// lieu quand l'utilisateur change le niveau de la connexion en cours de route
-/// (I-04). Un niveau rangé une fois en tête dirait faux de la moitié du fil.
+/// That is what lets an audit say under which regime each turn took place
+/// when the user changes the connection's tier along the way (I-04). A tier
+/// stored once at the top would be wrong for half of the thread.
 #[test]
-fn le_niveau_suit_le_tour_et_non_le_fil() {
+fn the_tier_follows_the_turn_not_the_thread() {
     let (store, workspace, connexion) = decor();
     let id = fil(&store, workspace, connexion);
 
@@ -333,27 +330,27 @@ fn le_niveau_suit_le_tour_et_non_le_fil() {
             id,
             &TurnRecord::new(TurnRole::User, PrivacyTier::Metadata, "première question"),
         )
-        .expect("écriture");
+        .expect("write");
     store
         .conversations()
         .append(
             id,
             &TurnRecord::new(TurnRole::User, PrivacyTier::Sampled, "seconde question"),
         )
-        .expect("écriture");
+        .expect("write");
 
     let relu = tout_le_fil(&store, id);
     assert_eq!(relu[0].record.tier, PrivacyTier::Metadata);
     assert_eq!(
         relu[1].record.tier,
         PrivacyTier::Sampled,
-        "le second tour a eu lieu sous un autre régime, et la relecture doit le dire"
+        "the second turn took place under another regime, and reading back must say so"
     );
 }
 
-/// Le fil survit à la suppression de la connexion, sous son nom d'alors.
+/// The thread survives the connection's deletion, under its name at the time.
 #[test]
-fn un_fil_survit_a_la_suppression_de_sa_connexion() {
+fn a_thread_survives_the_deletion_of_its_connection() {
     let (store, workspace, connexion) = decor();
     let id = fil(&store, workspace, connexion);
     store
@@ -362,24 +359,24 @@ fn un_fil_survit_a_la_suppression_de_sa_connexion() {
             id,
             &TurnRecord::new(TurnRole::User, PrivacyTier::Metadata, "une question"),
         )
-        .expect("écriture");
+        .expect("write");
 
-    store.connections().delete(connexion).expect("suppression");
+    store.connections().delete(connexion).expect("deletion");
 
     let relu = store
         .conversations()
         .get(id)
-        .expect("relecture")
-        .expect("le fil existe encore");
+        .expect("read back")
+        .expect("the thread still exists");
     assert_eq!(relu.connection_name.as_deref(), Some("base client"));
     assert_eq!(tout_le_fil(&store, id).len(), 1);
 }
 
-/// Une connexion supprimée laisse ses fils lisibles dans la liste des
-/// orphelins, sous son nom d'alors ; ceux d'une connexion vivante, d'un autre
-/// workspace ou sans connexion n'y figurent pas.
+/// A deleted connection leaves its threads readable in the orphan list, under
+/// its name at the time; those of a live connection, of another workspace or
+/// without a connection are not in it.
 #[test]
-fn les_fils_d_une_connexion_supprimee_se_listent_sous_son_nom() {
+fn threads_of_a_deleted_connection_are_listed_under_its_name() {
     let (store, workspace, supprimee) = decor();
     let orphelin = fil(&store, workspace, supprimee);
     store
@@ -388,19 +385,16 @@ fn les_fils_d_une_connexion_supprimee_se_listent_sous_son_nom() {
             orphelin,
             &TurnRecord::new(TurnRole::User, PrivacyTier::Metadata, "une question"),
         )
-        .expect("écriture");
+        .expect("write");
 
     let vivante = ConnectionConfig::new("entrepôt", DriverId::postgres());
     store
         .connections()
         .save(workspace, &vivante)
-        .expect("connexion");
+        .expect("connection");
     fil(&store, workspace, vivante.id);
     let sans_connexion = Conversation::new(workspace, fournisseur(), "Sans connexion");
-    store
-        .conversations()
-        .save(&sans_connexion)
-        .expect("enregistrement");
+    store.conversations().save(&sans_connexion).expect("save");
     let ailleurs = store.workspaces().create("ailleurs").expect("workspace").id;
     fil(&store, ailleurs, ConnectionId::new());
 
@@ -408,59 +402,59 @@ fn les_fils_d_une_connexion_supprimee_se_listent_sous_son_nom() {
         store
             .conversations()
             .orphans(workspace, 10)
-            .expect("liste")
+            .expect("list")
             .is_empty(),
-        "tant que la connexion existe, son fil n'est pas orphelin"
+        "as long as the connection exists, its thread is not orphaned"
     );
 
-    store.connections().delete(supprimee).expect("suppression");
+    store.connections().delete(supprimee).expect("deletion");
 
-    let orphelins = store.conversations().orphans(workspace, 10).expect("liste");
+    let orphelins = store.conversations().orphans(workspace, 10).expect("list");
     assert_eq!(orphelins.len(), 1);
     assert_eq!(orphelins[0].summary.id, orphelin);
     assert_eq!(orphelins[0].summary.turns, 1);
     assert_eq!(orphelins[0].connection_name.as_deref(), Some("base client"));
 
-    // Lister un orphelin ne permet pas de l'effacer au nom d'une autre
-    // connexion : la suppression porte la connexion dans son `WHERE`.
+    // Listing an orphan does not allow erasing it in the name of another
+    // connection: the deletion carries the connection in its `WHERE`.
     assert!(
         !store
             .conversations()
             .delete(vivante.id, orphelin)
-            .expect("suppression refusée sans erreur")
+            .expect("deletion refused without an error")
     );
     assert_eq!(
         store
             .conversations()
             .orphans(workspace, 10)
-            .expect("liste")
+            .expect("list")
             .len(),
         1
     );
 }
 
-/// Un tour écrit dans un fil disparu n'est pas une panne, c'est un `None`.
+/// A turn written into a vanished thread is not a failure, it is a `None`.
 #[test]
-fn ecrire_dans_un_fil_disparu_rend_none() {
+fn writing_into_a_vanished_thread_returns_none() {
     let (store, workspace, connexion) = decor();
     let id = fil(&store, workspace, connexion);
     assert!(
         store
             .conversations()
             .delete(connexion, id)
-            .expect("suppression")
+            .expect("deletion")
     );
 
     let tour = TurnRecord::new(TurnRole::User, PrivacyTier::Metadata, "trop tard");
     assert_eq!(
-        store.conversations().append(id, &tour).expect("écriture"),
+        store.conversations().append(id, &tour).expect("write"),
         None
     );
 }
 
-/// Supprimer un fil emporte ses tours : la clé étrangère le tient, pas le code.
+/// Deleting a thread takes its turns: the foreign key holds it, not the code.
 #[test]
-fn supprimer_un_fil_emporte_ses_tours() {
+fn deleting_a_thread_takes_its_turns() {
     let (store, workspace, connexion) = decor();
     let id = fil(&store, workspace, connexion);
     for index in 0..4 {
@@ -470,12 +464,12 @@ fn supprimer_un_fil_emporte_ses_tours() {
                 id,
                 &TurnRecord::new(TurnRole::User, PrivacyTier::Metadata, format!("q{index}")),
             )
-            .expect("écriture");
+            .expect("write");
     }
     store
         .conversations()
         .delete(connexion, id)
-        .expect("suppression");
+        .expect("deletion");
 
     let restants: i64 = store
         .with_connection(|conn| {
@@ -485,13 +479,13 @@ fn supprimer_un_fil_emporte_ses_tours() {
                 })?,
             )
         })
-        .expect("comptage");
-    assert_eq!(restants, 0, "aucun tour orphelin ne doit subsister");
+        .expect("count");
+    assert_eq!(restants, 0, "no orphan turn may remain");
 }
 
-/// La liste d'une connexion est ordonnée par activité, et compte ses tours.
+/// A connection's list is ordered by activity, and counts its turns.
 #[test]
-fn la_liste_est_ordonnee_par_activite() {
+fn the_list_is_ordered_by_activity() {
     let (store, workspace, connexion) = decor();
     let ancien = fil(&store, workspace, connexion);
     let recent = fil(&store, workspace, connexion);
@@ -502,54 +496,54 @@ fn la_liste_est_ordonnee_par_activite() {
             ancien,
             &TurnRecord::new(TurnRole::User, PrivacyTier::Metadata, "vieux"),
         )
-        .expect("écriture");
+        .expect("write");
     let mut plus_tard = TurnRecord::new(TurnRole::User, PrivacyTier::Metadata, "neuf");
     plus_tard.ts = Utc::now() + TimeDelta::minutes(5);
     store
         .conversations()
         .append(recent, &plus_tard)
-        .expect("écriture");
+        .expect("write");
 
-    let liste = store.conversations().list(connexion, 10).expect("liste");
+    let liste = store.conversations().list(connexion, 10).expect("list");
     assert_eq!(liste.len(), 2);
     assert_eq!(liste[0].id, recent);
     assert_eq!(liste[0].turns, 1);
     assert_eq!(liste[1].id, ancien);
 }
 
-/// Renommer ne réordonne pas l'historique sous le curseur de l'utilisateur.
+/// Renaming does not reorder the history under the user's cursor.
 #[test]
-fn renommer_n_est_pas_une_activite() {
+fn renaming_is_not_an_activity() {
     let (store, workspace, connexion) = decor();
     let id = fil(&store, workspace, connexion);
     let avant = store
         .conversations()
         .get(id)
-        .expect("relecture")
-        .expect("fil")
+        .expect("read back")
+        .expect("thread")
         .updated_at;
 
     assert!(
         store
             .conversations()
             .rename(id, "Nouveau titre")
-            .expect("renommage")
+            .expect("rename")
     );
 
     let apres = store
         .conversations()
         .get(id)
-        .expect("relecture")
-        .expect("fil");
+        .expect("read back")
+        .expect("thread");
     assert_eq!(apres.title, "Nouveau titre");
     assert_eq!(apres.updated_at, avant);
 }
 
-// --- Bornes d'écriture ----------------------------------------------------
+// --- Write bounds -----------------------------------------------------------
 
-/// Ce qui ne rentre pas est refusé, jamais tronqué.
+/// What does not fit is refused, never truncated.
 #[test]
-fn un_tour_trop_gros_est_refuse_et_non_tronque() {
+fn a_turn_too_large_is_refused_not_truncated() {
     let (store, workspace, connexion) = decor();
     let id = fil(&store, workspace, connexion);
     let tour = TurnRecord::new(
@@ -561,20 +555,20 @@ fn un_tour_trop_gros_est_refuse_et_non_tronque() {
     let erreur = store
         .conversations()
         .append(id, &tour)
-        .expect_err("la borne doit refuser");
+        .expect_err("the bound must refuse");
     assert!(
         matches!(erreur, StoreError::TooLarge { field, .. } if field.ends_with(".text")),
         "{erreur:?}"
     );
     assert!(
         tout_le_fil(&store, id).is_empty(),
-        "un refus ne doit rien laisser derrière lui"
+        "a refusal must leave nothing behind"
     );
 }
 
-/// La borne du fichier vaut aussi pour un tiers armé de `sqlite3`.
+/// The file's bound also holds against a third party armed with `sqlite3`.
 #[test]
-fn les_bornes_tiennent_dans_le_fichier() {
+fn the_bounds_hold_in_the_file() {
     let (store, workspace, connexion) = decor();
     let id = fil(&store, workspace, connexion);
     let refus = store.with_connection(|conn| {
@@ -591,11 +585,11 @@ fn les_bornes_tiennent_dans_le_fichier() {
     });
     assert!(
         refus.is_err(),
-        "le budget doit être opposable hors d'Oxyn, pas seulement dans le code"
+        "the budget must be enforceable outside Oxyn, not only in the code"
     );
 }
 
-/// Écrit `count` tours d'utilisateur en SQL direct, sans passer par `append`.
+/// Writes `count` user turns in direct SQL, without going through `append`.
 fn tours_bruts(store: &Store, id: ConversationId, count: u32) {
     store
         .with_connection(|conn| {
@@ -611,17 +605,17 @@ fn tours_bruts(store: &Store, id: ConversationId, count: u32) {
             tx.commit()?;
             Ok(())
         })
-        .expect("tours écrits");
+        .expect("written turns");
 }
 
-/// Le fichier refuse un tour au-delà de la borne et une raison d'arrêt trop
-/// longue, y compris pour un `sqlite3` — à l'insertion comme à la mise à jour.
+/// The file refuses a turn beyond the bound and a stop reason that is too
+/// long, including for a `sqlite3` — on insert as on update.
 ///
-/// Et les deux nombres des déclencheurs sont ceux du code : une borne qui
-/// divergerait entre les deux ferait refuser au fichier ce que le code croit
-/// permis, ou l'inverse, sans que rien ne le signale.
+/// And the triggers' two numbers are the code's: a bound that diverged
+/// between the two would make the file refuse what the code believes is
+/// allowed, or the reverse, without anything reporting it.
 #[test]
-fn le_fichier_borne_les_tours_et_la_raison_d_arret() {
+fn the_file_bounds_turns_and_the_stop_reason() {
     let (store, workspace, connexion) = decor();
     let id = fil(&store, workspace, connexion);
     let inserer = |ordinal: u32, stop: Option<String>| {
@@ -637,22 +631,22 @@ fn le_fichier_borne_les_tours_et_la_raison_d_arret() {
 
     assert!(
         inserer(MAX_TURNS_PER_CONVERSATION, None).is_err(),
-        "un tour au-delà de la borne"
+        "a turn beyond the bound"
     );
     let trop_long = format!("\"{}\"", "x".repeat(MAX_STOP_REASON_BYTES));
     assert!(
         inserer(0, Some(trop_long.clone())).is_err(),
-        "une raison d'arrêt trop longue"
+        "a stop reason too long"
     );
     inserer(MAX_TURNS_PER_CONVERSATION - 1, Some("\"EndTurn\"".into()))
-        .expect("la dernière position admise");
+        .expect("the last accepted position");
     let mise_a_jour = store.with_connection(|conn| {
         Ok(conn.execute(
             "UPDATE ai_conversation_turns SET stop_reason = ?1",
             rusqlite::params![trop_long],
         )?)
     });
-    assert!(mise_a_jour.is_err(), "la mise à jour est bornée aussi");
+    assert!(mise_a_jour.is_err(), "the update is bounded too");
 
     let declencheur: String = store
         .with_connection(|conn| {
@@ -662,14 +656,14 @@ fn le_fichier_borne_les_tours_et_la_raison_d_arret() {
                 |row| row.get(0),
             )?)
         })
-        .expect("déclencheur");
+        .expect("trigger");
     assert!(declencheur.contains(&format!(">= {MAX_TURNS_PER_CONVERSATION}")));
     assert!(declencheur.contains(&format!("> {MAX_STOP_REASON_BYTES}")));
 }
 
-/// `append` refuse le tour de trop avec une erreur qui nomme la borne.
+/// `append` refuses the extra turn with an error that names the bound.
 #[test]
-fn un_fil_plein_refuse_le_tour_suivant() {
+fn a_full_thread_refuses_the_next_turn() {
     let (store, workspace, connexion) = decor();
     let id = fil(&store, workspace, connexion);
     tours_bruts(&store, id, MAX_TURNS_PER_CONVERSATION);
@@ -680,53 +674,53 @@ fn un_fil_plein_refuse_le_tour_suivant() {
             id,
             &TurnRecord::new(TurnRole::User, PrivacyTier::Metadata, "de trop"),
         )
-        .expect_err("le fil est plein");
+        .expect_err("the thread is full");
     assert!(
         matches!(erreur, StoreError::TooLarge { field, .. } if field.ends_with(".ordinal")),
         "{erreur:?}"
     );
 }
 
-/// Un mot de fournisseur trop long est raccourci, et le tour n'est pas perdu.
+/// A provider word that is too long is shortened, and the turn is not lost.
 ///
-/// Refuser le tour ferait disparaître de l'historique la réponse du modèle
-/// parce qu'un fournisseur a choisi un long mot pour dire pourquoi il s'est
-/// arrêté. Le mot est une étiquette, pas un transcript.
+/// Refusing the turn would make the model's answer disappear from the history
+/// because a provider chose a long word to say why it stopped. The word is a
+/// label, not a transcript.
 #[test]
-fn une_raison_d_arret_trop_longue_est_raccourcie_et_le_tour_garde() {
+fn a_stop_reason_too_long_is_shortened_and_the_turn_kept() {
     let (store, workspace, connexion) = decor();
     let id = fil(&store, workspace, connexion);
-    // Des guillemets, pour que l'échappement JSON allonge l'encodage au-delà
-    // du texte brut : c'est le cas où couper au nombre d'octets ne suffit pas.
+    // Quotes, so that JSON escaping lengthens the encoding beyond the raw
+    // text: the case where cutting at a byte count is not enough.
     let mot = "\"é".repeat(10_000);
     let tour = TurnRecord::new(TurnRole::Assistant, PrivacyTier::Metadata, "La réponse")
         .stopped(StopReason::Other(mot));
     store
         .conversations()
         .append(id, &tour)
-        .expect("le tour est écrit");
+        .expect("the turn is written");
 
     let relu = tout_le_fil(&store, id);
     assert_eq!(relu[0].record.text, "La réponse");
     let Some(StopReason::Other(garde)) = &relu[0].record.stop else {
         panic!(
-            "la raison reste le mot du fournisseur : {:?}",
+            "the reason stays the provider's word: {:?}",
             relu[0].record.stop
         );
     };
-    assert!(garde.ends_with('…'), "le raccourci se voit");
+    assert!(garde.ends_with('…'), "the shortening shows");
     assert!(
         serde_json::to_string(&StopReason::Other(garde.clone()))
-            .expect("encodage")
+            .expect("encoding")
             .len()
             <= MAX_STOP_REASON_BYTES
     );
 }
 
-/// La lecture paginée rend tout le fil, dans l'ordre, sans page vide ni
-/// doublon — et ses bornes de `limit` tiennent.
+/// Paginated reading returns the whole thread, in order, without an empty
+/// page or a duplicate — and its `limit` bounds hold.
 #[test]
-fn la_lecture_paginee_rend_tout_le_fil_et_rien_de_plus() {
+fn paginated_reading_returns_the_whole_thread_and_nothing_more() {
     let (store, workspace, connexion) = decor();
     let id = fil(&store, workspace, connexion);
     tours_bruts(&store, id, 20);
@@ -738,7 +732,7 @@ fn la_lecture_paginee_rend_tout_le_fil_et_rien_de_plus() {
     assert_eq!(
         premiere.turns.len(),
         usize::from(MAX_TURN_PAGE),
-        "`limit` est plafonné"
+        "`limit` is capped"
     );
     assert_eq!(premiere.next, Some(u32::from(MAX_TURN_PAGE) - 1));
 
@@ -747,13 +741,13 @@ fn la_lecture_paginee_rend_tout_le_fil_et_rien_de_plus() {
         .transcript_page(id, premiere.next, u16::MAX)
         .expect("page");
     assert_eq!(seconde.turns.len(), 4);
-    assert_eq!(seconde.next, None, "pas de page vide après la dernière");
+    assert_eq!(seconde.next, None, "no empty page after the last one");
 
     let unitaire = store
         .conversations()
         .transcript_page(id, None, 0)
         .expect("page");
-    assert_eq!(unitaire.turns.len(), 1, "`limit` nul vaut un");
+    assert_eq!(unitaire.turns.len(), 1, "a zero `limit` counts as one");
 
     let ordinaux: Vec<u32> = tout_le_fil(&store, id)
         .iter()
@@ -761,7 +755,7 @@ fn la_lecture_paginee_rend_tout_le_fil_et_rien_de_plus() {
         .collect();
     assert_eq!(ordinaux, (0..20).collect::<Vec<_>>());
 
-    // Un fil dont le compte est un multiple exact de la page.
+    // A thread whose count is an exact multiple of the page.
     let pair = fil(&store, workspace, connexion);
     tours_bruts(&store, pair, 4);
     let page = store
@@ -772,25 +766,25 @@ fn la_lecture_paginee_rend_tout_le_fil_et_rien_de_plus() {
     assert_eq!(page.next, None);
 }
 
-// --- Relire est plus permissif qu'écrire ----------------------------------
+// --- Reading back is more permissive than writing ---------------------------
 
-/// Ce que le fichier contenait avant la migration 11 se relit encore.
+/// What the file contained before migration 11 still reads back.
 ///
-/// La migration 11 pose des déclencheurs et non des `CHECK` précisément pour
-/// ce cas : une raison d'arrêt démesurée et des tours au-delà de la borne,
-/// écrits quand rien ne les refusait, ne doivent ni faire échouer l'ouverture
-/// ni être réécrits. La raison trop longue n'est pas chargée — elle se relit
-/// `Unspecified` —, et les tours en surnombre se lisent par pages bornées.
+/// Migration 11 sets triggers and not `CHECK`s precisely for this case: an
+/// oversized stop reason and turns beyond the bound, written when nothing
+/// refused them, must neither fail the opening nor be rewritten. The reason
+/// that is too long is not loaded — it reads back as `Unspecified` —, and the
+/// surplus turns are read in bounded pages.
 #[test]
-fn un_fichier_anterieur_aux_bornes_s_ouvre_et_se_relit() {
-    let racine = tempfile::tempdir().expect("répertoire temporaire");
+fn a_file_older_than_the_bounds_opens_and_reads_back() {
+    let racine = tempfile::tempdir().expect("temporary directory");
     let chemin = racine.path().join("oxyn.sqlite3");
     let id = ConversationId::new();
     {
-        // Un fichier en version 10 : ni bornes, ni arbre.
+        // A version 10 file: neither bounds nor tree.
         let conn = crate::schema::file_at_version(&chemin, 10);
         let atelier = oxyn_core::WorkspaceId::new();
-        // La forme exacte qu'écrit rusqlite pour un `DateTime<Utc>`.
+        // The exact form rusqlite writes for a `DateTime<Utc>`.
         let quand = Utc::now().format("%F %T%.f%:z");
         conn.execute_batch(&format!(
             "INSERT INTO workspaces VALUES ('{atelier}', 'atelier', '{quand}', '{quand}');
@@ -799,7 +793,7 @@ fn un_fichier_anterieur_aux_bornes_s_ouvre_et_se_relit() {
                   created_at, updated_at)
              VALUES ('{id}', '{atelier}', 'provider', 'Anthropic', 'Fil', '{quand}', '{quand}');"
         ))
-        .expect("fil d'une version antérieure");
+        .expect("thread from an earlier version");
         conn.execute(
             "INSERT INTO ai_conversation_turns
                  (conversation_id, ordinal, ts, role, privacy_tier, text, stop_reason)
@@ -811,21 +805,21 @@ fn un_fichier_anterieur_aux_bornes_s_ouvre_et_se_relit() {
                 format!("{{\"Other\":\"{}\"}}", "x".repeat(8 * 1024 * 1024))
             ],
         )
-        .expect("tours d'une version antérieure");
+        .expect("turns from an earlier version");
     }
 
-    let store = Store::open_at(&chemin).expect("l'ouverture ne doit pas échouer");
+    let store = Store::open_at(&chemin).expect("opening must not fail");
     let relu = tout_le_fil(&store, id);
-    assert_eq!(relu.len(), 2, "aucune ligne perdue ni réécrite");
+    assert_eq!(relu.len(), 2, "no row lost or rewritten");
     assert_eq!(relu[0].record.text, "réponse");
     assert_eq!(
         relu[0].record.stop,
         Some(StopReason::Unspecified),
-        "la valeur démesurée n'est pas chargée"
+        "the oversized value is not loaded"
     );
     assert_eq!(relu[1].ordinal, 700);
 
-    // Et les déclencheurs sont revenus pour ce qui s'écrira ensuite.
+    // And the triggers are back for what will be written next.
     let declencheurs: i64 = store
         .with_connection(|conn| {
             Ok(conn.query_row(
@@ -835,18 +829,18 @@ fn un_fichier_anterieur_aux_bornes_s_ouvre_et_se_relit() {
                 |row| row.get(0),
             )?)
         })
-        .expect("comptage");
+        .expect("count");
     assert_eq!(declencheurs, 2);
 }
 
-/// Une ligne que personne ne sait plus lire ne fait pas échouer l'ouverture.
+/// A row nobody can read anymore does not fail the opening.
 ///
-/// Chaque retombée est vérifiée dans le sens contraignant : un rôle inconnu
-/// n'est ni l'utilisateur ni l'assistant, un niveau illisible vaut `Local`, une
-/// issue d'outil illisible ne passe pas pour un succès. Un transcript qu'on ne
-/// peut plus ouvrir parce qu'une ligne est étrange ne protège personne.
+/// Each fallback is checked in the restrictive direction: an unknown role is
+/// neither the user nor the assistant, an unreadable tier counts as `Local`,
+/// an unreadable tool outcome does not pass for a success. A transcript that
+/// can no longer be opened because one row is odd protects no one.
 #[test]
-fn une_ligne_corrompue_n_empeche_pas_l_ouverture() {
+fn a_corrupted_row_does_not_prevent_opening() {
     let (store, workspace, connexion) = decor();
     let id = fil(&store, workspace, connexion);
     store
@@ -855,7 +849,7 @@ fn une_ligne_corrompue_n_empeche_pas_l_ouverture() {
             id,
             &TurnRecord::new(TurnRole::User, PrivacyTier::Metadata, "une question saine"),
         )
-        .expect("écriture");
+        .expect("write");
 
     store
         .with_connection(|conn| {
@@ -870,46 +864,46 @@ fn une_ligne_corrompue_n_empeche_pas_l_ouverture() {
             )?;
             Ok(())
         })
-        .expect("ligne écrite hors d'Oxyn");
+        .expect("row written outside Oxyn");
 
     let relu = tout_le_fil(&store, id);
-    assert_eq!(relu.len(), 2, "la ligne saine et la ligne étrange");
+    assert_eq!(relu.len(), 2, "the healthy row and the odd row");
 
     let etrange = &relu[1].record;
     assert_eq!(
         etrange.role,
         TurnRole::Unknown,
-        "un rôle inconnu n'est ni l'utilisateur ni l'assistant"
+        "an unknown role is neither the user nor the assistant"
     );
     assert_eq!(
         etrange.tier,
         PrivacyTier::Local,
-        "un niveau illisible retombe sur le plus contraignant"
+        "an unreadable tier falls back to the most restrictive"
     );
-    assert_eq!(etrange.text, "du texte", "le texte lisible reste lisible");
+    assert_eq!(etrange.text, "du texte", "the readable text stays readable");
     assert!(
         etrange.reasoning.is_empty(),
-        "un raisonnement illisible est écarté, le tour survit"
+        "an unreadable reasoning is dropped, the turn survives"
     );
     assert_eq!(
         etrange.tool_calls[0].status,
         ToolCallStatus::Unknown,
-        "une issue illisible ne passe pas pour un succès"
+        "an unreadable outcome does not pass for a success"
     );
     assert_eq!(
         etrange.stop,
         Some(StopReason::Other("pas du json non plus".into())),
-        "le mot du fournisseur vaut mieux qu'une absence"
+        "the provider's word is better than an absence"
     );
     assert_eq!(
         etrange.usage.prompt, None,
-        "un compte hors bornes se lit « non déclaré », pas comme un nombre faux"
+        "an out-of-bounds count reads as \"not declared\", not as a wrong number"
     );
 }
 
-/// Un identifiant de destination illisible n'efface pas le fil de la liste.
+/// An unreadable destination identifier does not erase the thread from the list.
 #[test]
-fn une_destination_illisible_laisse_le_fil_lisible() {
+fn an_unreadable_destination_leaves_the_thread_readable() {
     let (store, workspace, connexion) = decor();
     let id = fil(&store, workspace, connexion);
     store
@@ -921,21 +915,21 @@ fn une_destination_illisible_laisse_le_fil_lisible() {
             )?;
             Ok(())
         })
-        .expect("écriture hors d'Oxyn");
+        .expect("write outside Oxyn");
 
     let relu = store
         .conversations()
         .get(id)
-        .expect("relecture")
-        .expect("fil");
+        .expect("read back")
+        .expect("thread");
     assert_eq!(relu.destination.id, None);
     assert_eq!(relu.destination.kind, DestinationKind::Unknown);
     assert_eq!(relu.destination.label, "Anthropic");
 }
 
-// --- Élagage ---------------------------------------------------------------
+// --- Pruning ----------------------------------------------------------------
 
-/// Écrit `count` fils, du plus ancien au plus récent, avec un tour chacun.
+/// Writes `count` threads, oldest to newest, with one turn each.
 fn fils_dates(
     store: &Store,
     workspace: WorkspaceId,
@@ -952,22 +946,22 @@ fn fils_dates(
             conversation.created_at = quand;
             conversation.updated_at = quand;
             let id = conversation.id;
-            store.conversations().save(&conversation).expect("fil");
+            store.conversations().save(&conversation).expect("thread");
             let mut tour = TurnRecord::new(
                 TurnRole::User,
                 PrivacyTier::Metadata,
                 format!("question {index}"),
             );
             tour.ts = quand;
-            store.conversations().append(id, &tour).expect("tour");
+            store.conversations().append(id, &tour).expect("turn");
             id
         })
         .collect()
 }
 
-/// L'élagage respecte la borne de nombre et garde les plus récents.
+/// Pruning respects the count bound and keeps the most recent.
 #[test]
-fn l_elagage_garde_les_plus_recents() {
+fn pruning_keeps_the_most_recent() {
     let (store, workspace, connexion) = decor();
     let fils = fils_dates(&store, workspace, connexion, 10);
     let politique = RetentionPolicy {
@@ -979,39 +973,39 @@ fn l_elagage_garde_les_plus_recents() {
     let rapport = store
         .conversations()
         .prune(workspace, politique)
-        .expect("élagage");
+        .expect("pruning");
     assert_eq!(rapport.conversations, 6);
     assert_eq!(rapport.turns, 6);
 
-    let restants = store.conversations().list(connexion, 100).expect("liste");
+    let restants = store.conversations().list(connexion, 100).expect("list");
     assert_eq!(restants.len(), 4);
     for garde in &fils[6..] {
         assert!(
             restants.iter().any(|fil| fil.id == *garde),
-            "les quatre plus récents doivent rester"
+            "the four most recent must remain"
         );
     }
 
-    // Deux fois de suite ne change rien.
+    // Twice in a row changes nothing.
     assert!(
         store
             .conversations()
             .prune(workspace, politique)
-            .expect("second élagage")
+            .expect("second pruning")
             .is_empty()
     );
 }
 
-/// L'élagage ne coupe **jamais** une conversation en deux.
+/// Pruning **never** cuts a conversation in two.
 ///
-/// C'est la propriété qui compte : un transcript amputé du milieu se relit
-/// comme un transcript complet, et personne ne peut dire que quelque chose a
-/// été retiré plutôt que jamais dit.
+/// That is the property that matters: a transcript cut in the middle reads
+/// back as a complete transcript, and nobody can tell that something was
+/// removed rather than never said.
 #[test]
-fn l_elagage_ne_coupe_jamais_un_fil_en_deux() {
+fn pruning_never_cuts_a_thread_in_two() {
     let (store, workspace, connexion) = decor();
     let fils = fils_dates(&store, workspace, connexion, 6);
-    // Le plus ancien reçoit beaucoup de tours : c'est lui que la borne vise.
+    // The oldest gets many turns: it is the one the bound targets.
     for index in 0..20 {
         let mut tour = TurnRecord::new(
             TurnRole::Assistant,
@@ -1019,10 +1013,7 @@ fn l_elagage_ne_coupe_jamais_un_fil_en_deux() {
             format!("réponse {index}"),
         );
         tour.ts = Utc::now() - TimeDelta::days(7);
-        store
-            .conversations()
-            .append(fils[0], &tour)
-            .expect("écriture");
+        store.conversations().append(fils[0], &tour).expect("write");
     }
 
     store
@@ -1035,10 +1026,10 @@ fn l_elagage_ne_coupe_jamais_un_fil_en_deux() {
                 max_bytes: u64::MAX,
             },
         )
-        .expect("élagage");
+        .expect("pruning");
 
-    // Aucun tour ne subsiste sans son en-tête, et aucun en-tête n'a perdu la
-    // moitié de ses tours : chaque fil restant a exactement ce qu'il avait.
+    // No turn remains without its header, and no header lost half of its
+    // turns: each remaining thread has exactly what it had.
     let orphelins: i64 = store
         .with_connection(|conn| {
             Ok(conn.query_row(
@@ -1048,21 +1039,21 @@ fn l_elagage_ne_coupe_jamais_un_fil_en_deux() {
                 |row| row.get(0),
             )?)
         })
-        .expect("comptage");
+        .expect("count");
     assert_eq!(orphelins, 0);
     assert!(
         store
             .conversations()
             .get(fils[0])
-            .expect("relecture")
+            .expect("read back")
             .is_none(),
-        "le fil visé doit être parti en entier"
+        "the targeted thread must have gone in full"
     );
 }
 
-/// La borne d'âge élague sur l'inactivité, pas sur la création.
+/// The age bound prunes on inactivity, not on creation.
 #[test]
-fn l_elagage_par_age_regarde_la_derniere_activite() {
+fn age_pruning_looks_at_the_last_activity() {
     let (store, workspace, connexion) = decor();
     let ancien = fil(&store, workspace, connexion);
     let mut vieux_tour = TurnRecord::new(TurnRole::User, PrivacyTier::Metadata, "il y a longtemps");
@@ -1070,7 +1061,7 @@ fn l_elagage_par_age_regarde_la_derniere_activite() {
     store
         .conversations()
         .append(ancien, &vieux_tour)
-        .expect("écriture");
+        .expect("write");
 
     let vivant = fil(&store, workspace, connexion);
     store
@@ -1079,7 +1070,7 @@ fn l_elagage_par_age_regarde_la_derniere_activite() {
             vivant,
             &TurnRecord::new(TurnRole::User, PrivacyTier::Metadata, "aujourd'hui"),
         )
-        .expect("écriture");
+        .expect("write");
 
     let rapport = store
         .conversations()
@@ -1091,27 +1082,27 @@ fn l_elagage_par_age_regarde_la_derniere_activite() {
                 max_bytes: u64::MAX,
             },
         )
-        .expect("élagage");
+        .expect("pruning");
     assert_eq!(rapport.conversations, 1);
     assert!(
         store
             .conversations()
             .get(ancien)
-            .expect("relecture")
+            .expect("read back")
             .is_none()
     );
     assert!(
         store
             .conversations()
             .get(vivant)
-            .expect("relecture")
+            .expect("read back")
             .is_some()
     );
 }
 
-/// La borne d'octets n'efface jamais le fil que l'utilisateur regarde.
+/// The byte bound never erases the thread the user is looking at.
 #[test]
-fn la_borne_d_octets_epargne_le_fil_courant() {
+fn the_byte_bound_spares_the_current_thread() {
     let (store, workspace, connexion) = decor();
     let fils = fils_dates(&store, workspace, connexion, 3);
 
@@ -1125,53 +1116,53 @@ fn la_borne_d_octets_epargne_le_fil_courant() {
                 max_bytes: 1,
             },
         )
-        .expect("élagage");
+        .expect("pruning");
     assert_eq!(rapport.conversations, 2);
     assert!(
         store
             .conversations()
             .get(fils[2])
-            .expect("relecture")
+            .expect("read back")
             .is_some(),
-        "supprimer le fil courant pour tenir un budget serait une perte visible"
+        "deleting the current thread to hold a budget would be a visible loss"
     );
 }
 
-/// Supprimer un workspace emporte ses conversations.
+/// Deleting a workspace takes its conversations.
 #[test]
-fn supprimer_un_workspace_emporte_ses_conversations() {
+fn deleting_a_workspace_takes_its_conversations() {
     let (store, workspace, connexion) = decor();
     let id = fil(&store, workspace, connexion);
-    store.workspaces().delete(workspace).expect("suppression");
-    assert!(store.conversations().get(id).expect("relecture").is_none());
+    store.workspaces().delete(workspace).expect("deletion");
+    assert!(store.conversations().get(id).expect("read back").is_none());
 }
 
-// --- Mesure ---------------------------------------------------------------
+// --- Measurement ------------------------------------------------------------
 
-/// Ce que coûte une conversation moyenne, mesuré et non supposé.
+/// What an average conversation costs, measured and not assumed.
 ///
-/// Le chiffre sert à fixer [`RetentionPolicy`] : sans lui, les bornes seraient
-/// des valeurs plausibles, c'est-à-dire des valeurs fausses que rien ne
-/// signale. Le test échoue si le coût unitaire sort de la fourchette annoncée —
-/// ce qui arrive le jour où une colonne s'ajoute, et c'est précisément le jour
-/// où la politique doit être rejugée.
+/// The figure is used to set [`RetentionPolicy`]: without it, the bounds would
+/// be plausible values, that is, wrong values nothing reports. The test fails
+/// if the unit cost leaves the announced range — which happens the day a
+/// column is added, and that is precisely the day the policy must be
+/// reassessed.
 #[test]
-fn une_conversation_moyenne_coute_ce_que_la_politique_suppose() {
-    // Sur fichier et non en mémoire : ce qu'on veut savoir, c'est ce que la
-    // conversation coûte **au disque de l'utilisateur**, index et surcoût de
-    // ligne compris — et une base en mémoire ne le dit pas.
-    let racine = tempfile::tempdir().expect("répertoire temporaire");
-    let store = Store::open_at(racine.path().join("oxyn.sqlite3")).expect("ouverture");
+fn an_average_conversation_costs_what_the_policy_assumes() {
+    // On a file and not in memory: what we want to know is what the
+    // conversation costs **on the user's disk**, indexes and row overhead
+    // included — and an in-memory database does not say.
+    let racine = tempfile::tempdir().expect("temporary directory");
+    let store = Store::open_at(racine.path().join("oxyn.sqlite3")).expect("open");
     let workspace = store.workspaces().create("atelier").expect("workspace").id;
     let connexion = ConnectionConfig::new("base client", DriverId::postgres());
     store
         .connections()
         .save(workspace, &connexion)
-        .expect("connexion");
+        .expect("connection");
     let connexion = connexion.id;
     let avant = octets_du_fichier(&store);
 
-    // Douze échanges : la longueur d'une séance de travail sur un schéma.
+    // Twelve exchanges: the length of a working session on a schema.
     const ECHANGES: usize = 12;
     let id = fil(&store, workspace, connexion);
     for index in 0..ECHANGES {
@@ -1187,17 +1178,20 @@ fn une_conversation_moyenne_coute_ce_que_la_politique_suppose() {
             )
             .expect("question");
         let mut reponse = tour_charge();
-        // Une réponse réelle : un paragraphe, une requête, un raisonnement
-        // rédigé et une charge chiffrée de taille réaliste.
+        // A real answer: a paragraph, a query, a written reasoning and an
+        // encrypted payload of realistic size.
         reponse.text = "r".repeat(2_048);
         reponse.reasoning = vec![
             ReasoningBlock::summarized("t".repeat(1_024), Some("s".repeat(512))),
             ReasoningBlock::redacted("c".repeat(1_536)),
         ];
-        store.conversations().append(id, &reponse).expect("réponse");
+        store.conversations().append(id, &reponse).expect("answer");
     }
 
-    let transcript = store.conversations().bytes_held(workspace).expect("mesure");
+    let transcript = store
+        .conversations()
+        .bytes_held(workspace)
+        .expect("measure");
     let fichier = octets_du_fichier(&store).saturating_sub(avant);
     println!(
         "conversation de {ECHANGES} échanges : {transcript} octets de transcript, \
@@ -1206,27 +1200,27 @@ fn une_conversation_moyenne_coute_ce_que_la_politique_suppose() {
 
     assert!(
         (48 * 1024..=128 * 1024).contains(&transcript),
-        "coût unitaire hors de la fourchette qui fonde RetentionPolicy : {transcript} octets"
+        "unit cost outside the range RetentionPolicy rests on: {transcript} bytes"
     );
-    // Le fichier coûte davantage que le transcript — surcoût de ligne, pages,
-    // index. Le facteur est ce qui traduit `max_bytes` en place occupée ; s'il
-    // s'envole, la borne ne veut plus dire ce que sa documentation dit.
+    // The file costs more than the transcript — row overhead, pages, indexes.
+    // The factor is what translates `max_bytes` into occupied space; if it
+    // soars, the bound no longer means what its documentation says.
     assert!(
         fichier <= transcript * 3,
-        "le fichier coûte {fichier} octets pour {transcript} de transcript"
+        "the file costs {fichier} bytes for {transcript} of transcript"
     );
 
-    // Les deux bornes par défaut doivent parler de la même chose : le budget
-    // d'octets doit tenir au moins la moitié du nombre de conversations admis,
-    // sinon l'une des deux ne sert jamais.
+    // The two default bounds must speak of the same thing: the byte budget
+    // must hold at least half of the allowed number of conversations,
+    // otherwise one of the two is never used.
     let defaut = RetentionPolicy::default();
     assert!(
         defaut.max_bytes / transcript >= u64::from(defaut.max_conversations) / 2,
-        "les deux bornes par défaut ne parlent pas de la même chose"
+        "the two default bounds do not speak of the same thing"
     );
 }
 
-/// La taille réellement occupée par le fichier de l'état local.
+/// The size actually occupied by the local state file.
 fn octets_du_fichier(store: &Store) -> u64 {
     store
         .with_connection(|conn| {
@@ -1236,34 +1230,34 @@ fn octets_du_fichier(store: &Store) -> u64 {
                 pages.saturating_mul(taille),
             ))
         })
-        .expect("mesure du fichier")
+        .expect("measure the file")
 }
 
-// --- Aucun secret ---------------------------------------------------------
+// --- No secret --------------------------------------------------------------
 
-/// Aucun chemin public n'offre d'endroit où ranger une valeur liée.
+/// No public path offers a place to store a bound value.
 ///
-/// Le test passe une valeur témoin par les deux portes qu'un appelant pourrait
-/// croire commodes — les valeurs liées d'une `ExecRequest` et les arguments
-/// d'un appel d'outil — puis balaie **toutes** les colonnes de la table. Ce
-/// qu'il prouve n'est pas qu'on a pensé à ne pas les écrire : c'est qu'il n'y a
-/// pas de champ pour le faire ([I-03](../../../../CLAUDE.md#i-03)).
+/// The test passes a witness value through the two doors a caller might find
+/// convenient — an `ExecRequest`'s bound values and a tool call's arguments —
+/// then sweeps **every** column of the table. What it proves is not that
+/// someone remembered not to write them: it is that there is no field to do
+/// it ([I-03](../../../../CLAUDE.md#i-03)).
 #[test]
-fn aucune_valeur_liee_ni_cle_n_atteint_la_table() {
+fn no_bound_value_or_key_reaches_the_table() {
     const TEMOIN: &str = "oxyn-temoin-ne-doit-jamais-atteindre-la-table-des-conversations";
 
     let (store, workspace, connexion) = decor();
     let id = fil(&store, workspace, connexion);
 
-    // Une requête d'agent, telle qu'elle traverse le bus : l'instruction est
-    // légitime et reste, ses valeurs liées n'ont aucun endroit où aller.
+    // An agent query, as it crosses the bus: the statement is legitimate and
+    // stays, its bound values have nowhere to go.
     let requete = ExecRequest::new(QueryLanguage::SQL, "SELECT * FROM clients WHERE email = $1")
         .with_intent(StatementIntent::Read)
         .with_params(vec![ScalarValue::from(TEMOIN)]);
 
-    // Un fournisseur déclaré, dont la clé n'est qu'une référence de trousseau.
+    // A declared provider, whose key is only a keychain reference.
     let fournisseur_declare = AiProviderConfig::new(
-        ProviderId::new("temoin-fournisseur").expect("identifiant"),
+        ProviderId::new("temoin-fournisseur").expect("identifier"),
         AiProviderKind::OpenAiCompatible,
         "Fournisseur témoin",
         "http://127.0.0.1:11434/v1",
@@ -1273,7 +1267,7 @@ fn aucune_valeur_liee_ni_cle_n_atteint_la_table() {
     store
         .providers()
         .save(&fournisseur_declare)
-        .expect("fournisseur");
+        .expect("provider");
 
     let tour = TurnRecord::new(
         TurnRole::Assistant,
@@ -1289,31 +1283,31 @@ fn aucune_valeur_liee_ni_cle_n_atteint_la_table() {
         )
         .with_statement(requete.text.clone()),
     ]);
-    store.conversations().append(id, &tour).expect("écriture");
+    store.conversations().append(id, &tour).expect("write");
 
     let fuites = balayer_les_conversations(&store, TEMOIN);
     assert!(
         fuites.is_empty(),
-        "la valeur témoin a atteint la table : {fuites:#?}"
+        "the witness value reached the table: {fuites:#?}"
     );
 
-    // Le test ne prouverait rien si rien n'avait été écrit.
+    // The test would prove nothing if nothing had been written.
     let relu = tout_le_fil(&store, id);
     assert_eq!(
         relu[0].record.tool_calls[0].statement.as_deref(),
         Some("SELECT * FROM clients WHERE email = $1"),
-        "le SQL reste : c'est la question, pas une valeur"
+        "the SQL stays: it is the question, not a value"
     );
     assert!(
         !requete.params.is_empty(),
-        "la requête devait bien porter une valeur liée"
+        "the query did have to carry a bound value"
     );
 }
 
-/// Toutes les valeurs textuelles des deux tables, colonne par colonne.
+/// Every text value of the two tables, column by column.
 ///
-/// Passe par `pragma_table_info` plutôt que par une liste : une colonne ajoutée
-/// demain est balayée sans que personne n'ait à y penser.
+/// Goes through `pragma_table_info` rather than a list: a column added
+/// tomorrow is swept without anyone having to think of it.
 fn balayer_les_conversations(store: &Store, temoin: &str) -> Vec<(String, String)> {
     store
         .with_connection(|conn| {
@@ -1338,18 +1332,18 @@ fn balayer_les_conversations(store: &Store, temoin: &str) -> Vec<(String, String
             }
             Ok(trouvailles)
         })
-        .expect("balayage")
+        .expect("sweep")
 }
 
-/// Les `Debug` comptent le texte de l'utilisateur, ils ne le rendent jamais.
+/// The `Debug`s count the user's text, they never render it.
 ///
-/// Les trois formes portent du texte saisi — un tour, un en-tête, une ligne de
-/// liste — et un titre est le plus souvent la première question raccourcie. En
-/// masquer deux sur trois donnerait une protection que le troisième annule, et
-/// c'est le `tracing::debug!` ajouté dans six mois qui s'en chargerait.
+/// The three forms carry typed text — a turn, a header, a list row — and a
+/// title is most often the first question shortened. Masking two out of three
+/// would give a protection the third cancels, and it is the `tracing::debug!`
+/// added six months from now that would do it.
 #[test]
-fn les_debug_ne_rendent_pas_le_texte_de_l_utilisateur() {
-    // Un appel d'outil : l'instruction d'un agent recopie ce qu'il a lu.
+fn debug_does_not_render_the_user_text() {
+    // A tool call: an agent's statement copies what it read.
     let appel = ToolCallRecord::new(
         "call_1",
         "execute",
@@ -1374,20 +1368,20 @@ fn les_debug_ne_rendent_pas_le_texte_de_l_utilisateur() {
     let (store, workspace, connexion) = decor();
     let conversation = Conversation::new(workspace, fournisseur(), "question-collee-par-erreur")
         .on_connection(connexion, "base client");
-    store.conversations().save(&conversation).expect("fil");
+    store.conversations().save(&conversation).expect("thread");
     let rendu = format!("{conversation:?}");
     assert!(!rendu.contains("question-collee"), "{rendu}");
     assert!(rendu.contains("title_bytes"), "{rendu}");
 
-    let liste = store.conversations().list(connexion, 10).expect("liste");
+    let liste = store.conversations().list(connexion, 10).expect("list");
     let rendu = format!("{:?}", liste[0]);
     assert!(!rendu.contains("question-collee"), "{rendu}");
     assert!(rendu.contains("title_bytes"), "{rendu}");
 }
 
-/// Un rôle du fil venu d'`oxyn-llm` se convertit sans perte.
+/// A thread role coming from `oxyn-llm` converts without loss.
 #[test]
-fn les_roles_du_fil_couvrent_ceux_du_protocole() {
+fn thread_roles_cover_the_protocol_roles() {
     for (role, attendu) in [
         (Role::System, TurnRole::System),
         (Role::User, TurnRole::User),

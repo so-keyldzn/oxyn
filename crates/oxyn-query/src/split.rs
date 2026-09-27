@@ -1,27 +1,27 @@
-//! Découpage d'un texte SQL en instructions, et lecture de ses mots nus.
+//! Splitting a SQL text into statements, and reading its bare words.
 //!
-//! Un éditeur contient un *lot* : plusieurs instructions séparées par des
-//! points-virgules. Pour classer ce lot il faut d'abord le découper, et un
-//! découpage naïf sur `';'` se trompe dès la première apostrophe :
+//! An editor holds a *batch*: several statements separated by semicolons. To
+//! classify that batch it must first be split, and a naive split on `';'` goes
+//! wrong at the first apostrophe:
 //!
 //! ```text
-//! SELECT ';' ;                       -- un point-virgule dans une chaîne
-//! SELECT 1; -- puis ; en commentaire
+//! SELECT ';' ;                       -- a semicolon inside a string
+//! SELECT 1; -- then ; in a comment
 //! CREATE FUNCTION f() ... $$ BEGIN ... ; ... END $$;
 //! ```
 //!
-//! Chacune de ces lignes est **une** instruction. Le scanner de ce module
-//! reconnaît donc, sans construire d'AST : chaînes, identifiants cités,
-//! commentaires `--`, `#`, `/* */`, et corps `$$ … $$` de PostgreSQL.
+//! Each of these lines is **one** statement. The scanner of this module
+//! therefore recognizes, without building an AST: strings, quoted identifiers,
+//! `--`, `#`, `/* */` comments, and PostgreSQL `$$ … $$` bodies.
 //!
-//! # La direction de l'erreur
+//! # The direction of the error
 //!
-//! Un scanner peut se tromper. Quand il se trompe, il **fusionne** : une chaîne
-//! non fermée avale la fin du texte, un commentaire non fermé aussi. Le
-//! fragment obtenu ne se lit plus, donc [`classify`](crate::classify()) le classe
-//! [`Unknown`](oxyn_core::StatementIntent::Unknown), donc le `PolicyGate`
-//! demande une approbation. Une erreur de découpage coûte une confirmation de
-//! trop, jamais une écriture de moins.
+//! A scanner can be wrong. When it is wrong, it **merges**: an unclosed string
+//! swallows the end of the text, and so does an unclosed comment. The
+//! resulting fragment no longer parses, so [`classify`](crate::classify())
+//! classifies it [`Unknown`](oxyn_core::StatementIntent::Unknown), so the
+//! `PolicyGate` asks for an approval. A splitting error costs one confirmation
+//! too many, never one write too few.
 
 use std::ops::Range;
 
@@ -29,24 +29,24 @@ use oxyn_core::SqlDialect;
 
 use crate::{QueryError, validate};
 
-/// Une instruction isolée dans un lot.
+/// A statement isolated in a batch.
 ///
-/// Le texte est **emprunté** au lot d'origine et rogné de ses espaces : c'est
-/// exactement ce qu'on donne à l'analyseur, et [`span`](Self::span) permet de
-/// remonter à l'endroit du buffer de l'éditeur.
+/// The text is **borrowed** from the original batch and trimmed of its
+/// whitespace: it is exactly what is given to the parser, and
+/// [`span`](Self::span) leads back to the spot in the editor's buffer.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Fragment<'a> {
-    /// Texte de l'instruction, sans le point-virgule final ni les espaces de bord.
+    /// Text of the statement, without the final semicolon or edge whitespace.
     pub text: &'a str,
-    /// Bornes en octets de [`text`](Self::text) dans le lot d'origine.
+    /// Byte bounds of [`text`](Self::text) in the original batch.
     pub span: Range<usize>,
-    /// Le fragment contient au moins un commentaire.
+    /// The fragment contains at least one comment.
     ///
-    /// Utilisé par [`format`](crate::format()) : le `Display` de l'AST de
-    /// `sqlparser` ne conserve pas les commentaires, donc un fragment qui en
-    /// porte n'est pas reformaté.
+    /// Used by [`format`](crate::format()): the `Display` of the `sqlparser`
+    /// AST does not keep comments, so a fragment that carries some is not
+    /// reformatted.
     pub has_comment: bool,
-    /// Le fragment se terminait par un `;` explicite dans le lot.
+    /// The fragment ended with an explicit `;` in the batch.
     pub terminated: bool,
     /// A line comment in this fragment holds a lone `\r` followed by text, in a
     /// dialect whose lexer was not checked ([`LineCommentEnd::Unverified`]).
@@ -64,7 +64,7 @@ pub struct Fragment<'a> {
 /// exposes a `/*` or a quote the server reads as comment text, and the
 /// statement behind it vanishes into what the splitter takes for a block
 /// comment — SQLite runs the `DROP` in `SELECT 1; -- x\r/*\nDROP TABLE audit -- */`.
-/// Sources: docs/RESEARCH-NOTES.md, « Fin d'un commentaire `--` ».
+/// Sources: docs/RESEARCH-NOTES.md, "End of a `--` comment".
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum LineCommentEnd {
@@ -78,64 +78,63 @@ pub enum LineCommentEnd {
     Unverified,
 }
 
-/// Un mot nu du texte : ni dans une chaîne, ni dans un identifiant cité, ni
-/// dans un commentaire.
+/// A bare word of the text: not in a string, not in a quoted identifier, not
+/// in a comment.
 ///
-/// C'est la matière du filet de sécurité par mots-clés de
-/// [`classify`](crate::classify()) : reconnaître `DELETE` dans
-/// `SELECT * FROM t WHERE note = 'DELETE'` serait un faux positif, et ce type
-/// existe pour que ce faux positif soit impossible.
+/// It is the material of the keyword safety net of
+/// [`classify`](crate::classify()): recognizing `DELETE` in
+/// `SELECT * FROM t WHERE note = 'DELETE'` would be a false positive, and this
+/// type exists to make that false positive impossible.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Word<'a> {
-    /// Le mot, tel qu'écrit (la casse est conservée).
+    /// The word, as written (case is kept).
     pub text: &'a str,
-    /// Bornes en octets dans le texte d'origine.
+    /// Byte bounds in the original text.
     pub span: Range<usize>,
-    /// Le mot est immédiatement suivi d'une parenthèse ouvrante : c'est un
-    /// appel de fonction, pas un mot-clé d'instruction.
+    /// The word is immediately followed by an opening parenthesis: it is a
+    /// function call, not a statement keyword.
     ///
-    /// `TRUNCATE(x, 2)` et `INSERT('abc', 1, 1, 'z')` sont des fonctions de
-    /// MySQL ; les confondre avec `TRUNCATE TABLE` et `INSERT INTO` ferait
-    /// demander une approbation pour un `SELECT`.
+    /// `TRUNCATE(x, 2)` and `INSERT('abc', 1, 1, 'z')` are MySQL functions;
+    /// confusing them with `TRUNCATE TABLE` and `INSERT INTO` would ask for an
+    /// approval for a `SELECT`.
     pub call: bool,
 }
 
-/// Les particularités lexicales d'un dialecte.
+/// The lexical particularities of a dialect.
 ///
-/// Ce n'est pas une grammaire : uniquement ce qu'il faut savoir pour traverser
-/// un texte sans le comprendre.
+/// It is not a grammar: only what one must know to go through a text without
+/// understanding it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SplitProfile {
-    /// `\` échappe le caractère suivant à l'intérieur d'une chaîne (MySQL,
-    /// ClickHouse, Snowflake, BigQuery). PostgreSQL **non** : avec
-    /// `standard_conforming_strings` actif, `'a\'` est une chaîne complète.
+    /// `\` escapes the next character inside a string (MySQL, ClickHouse,
+    /// Snowflake, BigQuery). PostgreSQL does **not**: with
+    /// `standard_conforming_strings` on, `'a\'` is a complete string.
     pub backslash_escapes: bool,
-    /// Un préfixe `E` active les échappements par `\` pour cette chaîne
-    /// (`E'\''` de PostgreSQL).
+    /// An `E` prefix turns on `\` escapes for that string (PostgreSQL's
+    /// `E'\''`).
     pub escape_string_prefix: bool,
-    /// Les accents graves citent un identifiant (MySQL, ClickHouse, BigQuery).
+    /// Backticks quote an identifier (MySQL, ClickHouse, BigQuery).
     pub backtick_quotes: bool,
-    /// Les crochets citent un identifiant (SQL Server, SQLite).
+    /// Square brackets quote an identifier (SQL Server, SQLite).
     pub bracket_quotes: bool,
-    /// `$tag$ … $tag$` délimite un corps littéral (PostgreSQL, Redshift, DuckDB).
+    /// `$tag$ … $tag$` delimits a literal body (PostgreSQL, Redshift, DuckDB).
     pub dollar_quotes: bool,
-    /// `#` ouvre un commentaire de fin de ligne (MySQL).
+    /// `#` opens an end-of-line comment (MySQL).
     pub hash_line_comments: bool,
-    /// `/* /* */ */` s'imbrique (PostgreSQL, DuckDB, ClickHouse).
+    /// `/* /* */ */` nests (PostgreSQL, DuckDB, ClickHouse).
     pub nested_block_comments: bool,
     /// Where a line comment ends.
     pub line_comment_end: LineCommentEnd,
 }
 
 impl SplitProfile {
-    /// Le profil d'un dialecte.
+    /// The profile of a dialect.
     ///
-    /// Un dialecte inconnu reçoit le profil le plus **inclusif** : toutes les
-    /// formes de citation sont reconnues. Reconnaître une citation qui n'existe
-    /// pas dans le dialecte réel fusionne au pire deux instructions, ce qui
-    /// mène à `Unknown` ; ne pas la reconnaître découperait au milieu d'une
-    /// chaîne et produirait deux moitiés dont l'une pourrait se lire comme une
-    /// instruction valide qu'on n'a jamais écrite.
+    /// An unknown dialect gets the most **inclusive** profile: every form of
+    /// quoting is recognized. Recognizing a quoting that does not exist in the
+    /// real dialect merges two statements at worst, which leads to `Unknown`;
+    /// not recognizing it would cut in the middle of a string and produce two
+    /// halves, one of which could parse as a valid statement nobody wrote.
     #[must_use]
     pub fn for_dialect(dialect: SqlDialect) -> Self {
         match dialect {
@@ -213,13 +212,13 @@ impl SplitProfile {
                 nested_block_comments: false,
                 line_comment_end: LineCommentEnd::Unverified,
             },
-            // `Ansi`, `Oracle`, et toute valeur ajoutée plus tard : le profil
-            // inclusif.
+            // `Ansi`, `Oracle`, and any value added later: the inclusive
+            // profile.
             _ => Self::permissive(),
         }
     }
 
-    /// Le profil qui reconnaît toutes les formes de citation connues.
+    /// The profile that recognizes every known form of quoting.
     #[must_use]
     pub const fn permissive() -> Self {
         Self {
@@ -241,11 +240,11 @@ impl Default for SplitProfile {
     }
 }
 
-/// Découpe un lot en instructions.
+/// Splits a batch into statements.
 ///
-/// Les fragments vides — suite de `;;`, texte fait de seuls commentaires — sont
-/// écartés : ils n'ont rien à exécuter. Un commentaire qui **précède** une
-/// instruction lui reste attaché ; c'est bien son texte.
+/// Empty fragments — a run of `;;`, a text made of comments only — are
+/// dropped: they have nothing to run. A comment that **precedes** a statement
+/// stays attached to it; it is indeed its text.
 ///
 /// ```
 /// use oxyn_core::SqlDialect;
@@ -262,12 +261,12 @@ pub fn split(sql: &str, dialect: SqlDialect) -> Vec<Fragment<'_>> {
     split_with(sql, SplitProfile::for_dialect(dialect))
 }
 
-/// Retourne l'instruction complète sous le curseur, ou rien dans un séparateur.
+/// Returns the complete statement under the cursor, or nothing in a separator.
 ///
-/// Le curseur est un indice d'octet UTF-8. Une position au milieu d'un caractère,
-/// dans un séparateur ou dans un espace hors instruction ne sélectionne rien. Le
-/// fragment est validé avant d'être rendu : un texte incomplet ne peut pas être
-/// exécuté comme « instruction courante ».
+/// The cursor is a UTF-8 byte index. A position in the middle of a character,
+/// in a separator or in whitespace outside a statement selects nothing. The
+/// fragment is validated before being returned: an incomplete text cannot be
+/// run as the "current statement".
 pub fn current_statement(
     sql: &str,
     dialect: SqlDialect,
@@ -509,7 +508,7 @@ fn end_closes_trigger(sql: &str, from: usize) -> bool {
     tail.is_empty() || tail.starts_with(';')
 }
 
-/// Découpe un lot avec un profil lexical explicite.
+/// Splits a batch with an explicit lexical profile.
 #[must_use]
 pub fn split_with(sql: &str, profile: SplitProfile) -> Vec<Fragment<'_>> {
     let mut fragments = Vec::new();
@@ -546,11 +545,11 @@ pub fn split_with(sql: &str, profile: SplitProfile) -> Vec<Fragment<'_>> {
     fragments
 }
 
-/// Le texte contient-il au moins un commentaire ?
+/// Does the text contain at least one comment?
 ///
-/// Un commentaire qui n'appartient à aucune instruction — un lot fait d'un seul
-/// `-- note` — n'apparaît dans aucun [`Fragment`] : cette fonction est le seul
-/// moyen de savoir qu'il est là.
+/// A comment that belongs to no statement — a batch made of a single
+/// `-- note` — appears in no [`Fragment`]: this function is the only way to
+/// know it is there.
 #[must_use]
 pub fn contains_comment(sql: &str, dialect: SqlDialect) -> bool {
     let mut seen = false;
@@ -566,9 +565,9 @@ pub fn contains_comment(sql: &str, dialect: SqlDialect) -> bool {
     seen
 }
 
-/// Les mots nus du texte, dans l'ordre.
+/// The bare words of the text, in order.
 ///
-/// Tout ce qui est cité ou commenté est absent du résultat.
+/// Everything quoted or commented is absent from the result.
 ///
 /// ```
 /// use oxyn_core::SqlDialect;
@@ -583,7 +582,7 @@ pub fn words(sql: &str, dialect: SqlDialect) -> Vec<Word<'_>> {
     words_with(sql, SplitProfile::for_dialect(dialect))
 }
 
-/// Les mots nus du texte, avec un profil lexical explicite.
+/// The bare words of the text, with an explicit lexical profile.
 #[must_use]
 pub fn words_with(sql: &str, profile: SplitProfile) -> Vec<Word<'_>> {
     let mut out: Vec<Word<'_>> = Vec::new();
@@ -609,34 +608,34 @@ pub fn words_with(sql: &str, profile: SplitProfile) -> Vec<Word<'_>> {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-// Le scanner
+// The scanner
 // ─────────────────────────────────────────────────────────────────────────────
 
-/// Ce que le scanner sait distinguer. Il ne comprend pas le SQL : il sait
-/// seulement où il a le droit de regarder.
+/// What the scanner can tell apart. It does not understand SQL: it only knows
+/// where it is allowed to look.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Tok {
-    /// Un mot nu (mot-clé, identifiant non cité).
+    /// A bare word (keyword, unquoted identifier).
     Word,
-    /// Une chaîne, un identifiant cité, un corps `$$ … $$`.
+    /// A string, a quoted identifier, a `$$ … $$` body.
     Quoted,
-    /// Un commentaire, quelle que soit sa forme.
+    /// A comment, whatever its form.
     Comment,
     /// A line comment whose end depends on a lexer nobody checked
     /// ([`LineCommentEnd::Unverified`]): it may hold a statement, so it counts
     /// as code and makes its fragment unreadable.
     UnreadableComment,
-    /// Le séparateur d'instructions.
+    /// The statement separator.
     Semicolon,
-    /// Tout le reste : ponctuation, opérateurs, nombres.
+    /// Everything else: punctuation, operators, numbers.
     Symbol,
 }
 
-/// Parcourt le texte une fois et signale chaque élément significatif.
+/// Goes through the text once and reports each significant element.
 ///
-/// Un seul scanner sert au découpage, à la détection des commentaires et à la
-/// lecture des mots : trois copies de cette boucle finiraient par diverger, et
-/// c'est celle qui garde le filet de sécurité qui divergerait.
+/// A single scanner serves splitting, comment detection and word reading:
+/// three copies of this loop would end up diverging, and it would be the one
+/// holding the safety net that diverged.
 fn scan(sql: &str, profile: SplitProfile, on: &mut dyn FnMut(Tok, Range<usize>)) {
     let b = sql.as_bytes();
     let mut i = 0usize;
@@ -686,7 +685,7 @@ fn scan(sql: &str, profile: SplitProfile, on: &mut dyn FnMut(Tok, Range<usize>))
                     i = end;
                 }
                 None => {
-                    // Un `$` seul : emplacement de paramètre `$1`, ou opérateur.
+                    // A lone `$`: a `$1` parameter placeholder, or an operator.
                     on(Tok::Symbol, i..i + 1);
                     i += 1;
                 }
@@ -709,15 +708,15 @@ fn scan(sql: &str, profile: SplitProfile, on: &mut dyn FnMut(Tok, Range<usize>))
     }
 }
 
-/// Premier octet d'un mot nu. Les octets ≥ `0x80` en font partie : un
-/// identifiant accentué est un identifiant.
+/// First byte of a bare word. Bytes ≥ `0x80` belong to it: an accented
+/// identifier is an identifier.
 const fn is_word_start(c: u8) -> bool {
     c.is_ascii_alphabetic() || c == b'_' || c >= 0x80
 }
 
-/// `$` est volontairement **exclu** : `AS$$corps$$` doit ouvrir un corps
-/// dollar, pas produire un mot `AS$$` qui laisserait le corps se faire couper
-/// sur ses points-virgules.
+/// `$` is deliberately **excluded**: `AS$$body$$` must open a dollar body,
+/// not produce an `AS$$` word that would let the body be cut on its
+/// semicolons.
 const fn is_word_byte(c: u8) -> bool {
     c.is_ascii_alphanumeric() || c == b'_' || c >= 0x80
 }
@@ -761,8 +760,8 @@ fn skip_line_comment(b: &[u8], mut i: usize, end: LineCommentEnd) -> (usize, Tok
     (i, token)
 }
 
-/// Un commentaire de bloc non fermé avale la fin du texte : c'est ce que fait
-/// un vrai serveur, et cela mène à un fragment illisible donc `Unknown`.
+/// An unclosed block comment swallows the end of the text: it is what a real
+/// server does, and it leads to an unreadable fragment, hence `Unknown`.
 fn skip_block_comment(b: &[u8], start: usize, nested: bool) -> usize {
     let mut i = start + 2;
     let mut depth = 1usize;
@@ -785,8 +784,8 @@ fn skip_block_comment(b: &[u8], start: usize, nested: bool) -> usize {
     b.len()
 }
 
-/// Traverse une région citée. Le doublement du délimiteur (`''`, `""`) est
-/// toujours reconnu ; l'échappement par `\` dépend du dialecte.
+/// Goes through a quoted region. A doubled delimiter (`''`, `""`) is always
+/// recognized; escaping with `\` depends on the dialect.
 fn skip_quoted(b: &[u8], start: usize, quote: u8, backslash: bool) -> usize {
     let mut i = start + 1;
     while let Some(&c) = b.get(i) {
@@ -806,8 +805,8 @@ fn skip_quoted(b: &[u8], start: usize, quote: u8, backslash: bool) -> usize {
     b.len()
 }
 
-/// `[identifiant]` de SQL Server : le crochet fermant se double pour être
-/// littéral, le crochet ouvrant non.
+/// SQL Server `[identifier]`: the closing bracket is doubled to be literal,
+/// the opening one is not.
 fn skip_bracket(b: &[u8], start: usize) -> usize {
     let mut i = start + 1;
     while let Some(&c) = b.get(i) {
@@ -823,11 +822,11 @@ fn skip_bracket(b: &[u8], start: usize) -> usize {
     b.len()
 }
 
-/// Fin du délimiteur ouvrant `$tag$`, ou `None` si ce `$` n'en ouvre pas un.
+/// End of the opening `$tag$` delimiter, or `None` if this `$` does not open
+/// one.
 ///
-/// `$1` n'est pas un délimiteur : une étiquette ne commence pas par un chiffre.
-/// C'est ce qui permet de ne pas confondre un corps de fonction avec un
-/// emplacement de paramètre PostgreSQL.
+/// `$1` is not a delimiter: a tag does not start with a digit. That is what
+/// keeps a function body apart from a PostgreSQL parameter placeholder.
 fn dollar_tag_end(b: &[u8], start: usize) -> Option<usize> {
     let mut i = start + 1;
     while let Some(&c) = b.get(i) {
@@ -857,11 +856,11 @@ fn skip_dollar_quoted(b: &[u8], start: usize) -> Option<usize> {
         }
         i += 1;
     }
-    // Corps non fermé : on avale la fin.
+    // Unclosed body: the end is swallowed.
     Some(b.len())
 }
 
-/// Le `'` en `start` est-il précédé d'un préfixe `E` isolé ?
+/// Is the `'` at `start` preceded by an isolated `E` prefix?
 fn has_escape_prefix(b: &[u8], start: usize) -> bool {
     let Some(&previous) = start.checked_sub(1).and_then(|k| b.get(k)) else {
         return false;
@@ -947,7 +946,7 @@ mod tests {
     }
 
     #[test]
-    fn instruction_courante_garde_le_corps_du_trigger_sqlite() {
+    fn current_statement_keeps_the_sqlite_trigger_body() {
         let sql = "CREATE TRIGGER t AFTER INSERT ON x BEGIN INSERT INTO log VALUES(CASE WHEN NEW.id > 0 THEN 1 ELSE 0 END); UPDATE x SET seen = 1; END; SELECT 2";
         let cursor = sql.find("UPDATE x").expect("trigger body");
         let fragment = current_statement(sql, SqlDialect::Sqlite, cursor)
@@ -959,7 +958,7 @@ mod tests {
     }
 
     #[test]
-    fn instruction_courante_refuse_les_positions_et_textes_ambigus() {
+    fn current_statement_refuses_ambiguous_positions_and_texts() {
         let sql = "SELECT 'é';  SELECT 2";
         assert!(current_statement(sql, SqlDialect::Postgres, 9).is_err());
         assert_eq!(
@@ -970,7 +969,7 @@ mod tests {
     }
 
     #[test]
-    fn instruction_courante_associe_le_separateur_a_l_instruction_precedente() {
+    fn current_statement_ties_the_separator_to_the_previous_statement() {
         let first = "SELECT 1";
         let trailing = "SELECT 1;";
         assert_eq!(
@@ -1018,7 +1017,7 @@ mod tests {
     }
 
     #[test]
-    fn instruction_courante_ne_saute_pas_au_dela_d_un_commentaire_introductif() {
+    fn current_statement_does_not_jump_past_a_leading_comment() {
         for sql in [
             "SELECT 1; -- commentaire\nDELETE FROM t;",
             "SELECT 1;-- commentaire\nDELETE FROM t;",
@@ -1035,7 +1034,7 @@ mod tests {
     }
 
     #[test]
-    fn instruction_courante_refuse_les_mots_ambigus_dans_un_trigger_sqlite() {
+    fn current_statement_refuses_ambiguous_words_in_a_sqlite_trigger() {
         for sql in [
             "CREATE TRIGGER BEGIN AFTER INSERT ON x BEGIN UPDATE x SET id = 1; END;",
             "CREATE TRIGGER t AFTER INSERT ON x BEGIN UPDATE x SET CASE = 1; END;",
@@ -1048,7 +1047,7 @@ mod tests {
     }
 
     #[test]
-    fn instruction_courante_ne_isole_jamais_un_corps_de_trigger_sqlite() {
+    fn current_statement_never_isolates_a_sqlite_trigger_body() {
         let trigger = "CREATE TEMP TRIGGER t AFTER INSERT ON source BEGIN SELECT end FROM source; UPDATE other SET id = CASE WHEN NEW.id > 0 THEN 999 ELSE 1 END; END;";
         for needle in ["SELECT end", "UPDATE other", "CASE WHEN", "END;"] {
             let cursor = trigger.find(needle).expect("body token");
@@ -1064,7 +1063,7 @@ mod tests {
     }
 
     #[test]
-    fn create_table_avec_des_identifiants_reserves_n_est_pas_un_trigger() {
+    fn create_table_with_reserved_identifiers_is_not_a_trigger() {
         let sql = "CREATE TABLE things (trigger text, begin integer, end integer); UPDATE things SET end = 1;";
         let cursor = sql.find("UPDATE").expect("update");
         assert_eq!(
@@ -1077,7 +1076,7 @@ mod tests {
     }
 
     #[test]
-    fn un_lot_simple_se_decoupe() {
+    fn a_simple_batch_is_split() {
         assert_eq!(
             textes("SELECT 1; SELECT 2", SqlDialect::Ansi),
             ["SELECT 1", "SELECT 2"]
@@ -1085,14 +1084,14 @@ mod tests {
     }
 
     #[test]
-    fn le_dernier_point_virgule_ne_cree_pas_de_fragment_vide() {
+    fn the_last_semicolon_creates_no_empty_fragment() {
         assert_eq!(textes("SELECT 1;", SqlDialect::Ansi), ["SELECT 1"]);
         assert_eq!(textes("SELECT 1;;;", SqlDialect::Ansi), ["SELECT 1"]);
         assert_eq!(textes("  ;  ", SqlDialect::Ansi), Vec::<String>::new());
     }
 
     #[test]
-    fn un_point_virgule_dans_une_chaine_ne_separe_pas() {
+    fn a_semicolon_inside_a_string_does_not_separate() {
         assert_eq!(textes("SELECT ';'", SqlDialect::Ansi), ["SELECT ';'"]);
         assert_eq!(
             textes("SELECT 'a;b', 'c;d' FROM t", SqlDialect::Ansi),
@@ -1101,17 +1100,16 @@ mod tests {
     }
 
     #[test]
-    fn une_apostrophe_doublee_ne_ferme_pas_la_chaine() {
+    fn a_doubled_apostrophe_does_not_close_the_string() {
         assert_eq!(
             textes("SELECT 'l''été ; suite'", SqlDialect::Postgres),
             ["SELECT 'l''été ; suite'"]
         );
     }
 
-    /// Le piège cité par la spécification : un commentaire qui contient un
-    /// point-virgule.
+    /// The trap the specification cites: a comment that contains a semicolon.
     #[test]
-    fn un_point_virgule_dans_un_commentaire_ne_separe_pas() {
+    fn a_semicolon_inside_a_comment_does_not_separate() {
         assert_eq!(
             textes("SELECT 1 -- garder ; ici\n, 2", SqlDialect::Ansi),
             ["SELECT 1 -- garder ; ici\n, 2"]
@@ -1123,7 +1121,7 @@ mod tests {
     }
 
     #[test]
-    fn un_commentaire_de_bloc_s_imbrique_en_postgres() {
+    fn a_block_comment_nests_in_postgres() {
         assert_eq!(
             textes("SELECT /* a /* ; */ ; */ 1", SqlDialect::Postgres),
             ["SELECT /* a /* ; */ ; */ 1"]
@@ -1131,7 +1129,7 @@ mod tests {
     }
 
     #[test]
-    fn un_identifiant_cite_ne_separe_pas() {
+    fn a_quoted_identifier_does_not_separate() {
         assert_eq!(
             textes(r#"SELECT "a;b" FROM t"#, SqlDialect::Postgres),
             [r#"SELECT "a;b" FROM t"#]
@@ -1146,10 +1144,10 @@ mod tests {
         );
     }
 
-    /// Un corps `$$ … $$` contient presque toujours des points-virgules :
-    /// c'est le cas où un découpage naïf casse le plus visiblement.
+    /// A `$$ … $$` body almost always contains semicolons: it is the case where
+    /// a naive split breaks most visibly.
     #[test]
-    fn un_corps_dollar_ne_separe_pas() {
+    fn a_dollar_body_does_not_separate() {
         let sql = "CREATE FUNCTION f() RETURNS int AS $$ BEGIN DELETE FROM t; RETURN 1; END $$ LANGUAGE plpgsql; SELECT 2";
         let fragments = textes(sql, SqlDialect::Postgres);
         assert_eq!(fragments.len(), 2, "{fragments:?}");
@@ -1158,7 +1156,7 @@ mod tests {
     }
 
     #[test]
-    fn une_etiquette_dollar_nommee_est_reconnue() {
+    fn a_named_dollar_tag_is_recognized() {
         let sql = "DO $corps$ BEGIN ; END $corps$; SELECT 1";
         assert_eq!(
             textes(sql, SqlDialect::Postgres),
@@ -1166,10 +1164,10 @@ mod tests {
         );
     }
 
-    /// `$1` est un emplacement de paramètre, pas une ouverture de corps : le
-    /// confondre ferait avaler tout le reste du lot.
+    /// `$1` is a parameter placeholder, not the opening of a body: confusing
+    /// them would swallow the whole rest of the batch.
     #[test]
-    fn un_emplacement_de_parametre_n_ouvre_pas_un_corps() {
+    fn a_parameter_placeholder_does_not_open_a_body() {
         assert_eq!(
             textes("SELECT $1; DELETE FROM t", SqlDialect::Postgres),
             ["SELECT $1", "DELETE FROM t"]
@@ -1177,8 +1175,9 @@ mod tests {
     }
 
     #[test]
-    fn mysql_echappe_par_antislash() {
-        // `'a\';'` est une seule chaîne en MySQL : l'antislash protège l'apostrophe.
+    fn mysql_escapes_with_backslash() {
+        // `'a\';'` is a single string in MySQL: the backslash protects the
+        // apostrophe.
         assert_eq!(
             textes(r"SELECT 'a\';' , 1", SqlDialect::MySql),
             [r"SELECT 'a\';' , 1"]
@@ -1186,8 +1185,8 @@ mod tests {
     }
 
     #[test]
-    fn postgres_n_echappe_pas_par_antislash_sans_prefixe() {
-        // Sans préfixe `E`, `'a\'` est une chaîne complète : le `;` sépare.
+    fn postgres_does_not_escape_with_backslash_without_prefix() {
+        // Without an `E` prefix, `'a\'` is a complete string: the `;` separates.
         assert_eq!(
             textes(r"SELECT 'a\'; SELECT 2", SqlDialect::Postgres),
             [r"SELECT 'a\'", "SELECT 2"]
@@ -1195,13 +1194,13 @@ mod tests {
     }
 
     #[test]
-    fn postgres_echappe_avec_le_prefixe_e() {
+    fn postgres_escapes_with_the_e_prefix() {
         assert_eq!(
             textes(r"SELECT E'a\';' , 1", SqlDialect::Postgres),
             [r"SELECT E'a\';' , 1"]
         );
-        // `table_e` ne doit pas être pris pour un préfixe : le `e` est collé à
-        // un mot.
+        // `table_e` must not be taken for a prefix: the `e` is glued to a
+        // word.
         assert_eq!(
             textes(r"SELECT ligne'a\'; SELECT 2", SqlDialect::Postgres),
             [r"SELECT ligne'a\'", "SELECT 2"]
@@ -1209,7 +1208,7 @@ mod tests {
     }
 
     #[test]
-    fn mysql_commente_avec_le_diese() {
+    fn mysql_comments_with_the_hash() {
         assert_eq!(
             textes("SELECT 1 # ; rien\n, 2", SqlDialect::MySql),
             ["SELECT 1 # ; rien\n, 2"]
@@ -1217,26 +1216,26 @@ mod tests {
     }
 
     #[test]
-    fn une_chaine_non_fermee_fusionne_plutot_que_de_couper() {
-        // Direction de l'erreur : un seul fragment illisible, donc `Unknown`.
+    fn an_unclosed_string_merges_rather_than_cuts() {
+        // Direction of the error: a single unreadable fragment, hence `Unknown`.
         let fragments = split("SELECT 'oups ; DELETE FROM t", SqlDialect::Ansi);
         assert_eq!(fragments.len(), 1);
     }
 
     #[test]
-    fn les_bornes_designent_le_texte_exact() {
+    fn the_bounds_designate_the_exact_text() {
         let sql = "  SELECT 1 ;\n  DELETE FROM t  ";
         for fragment in split(sql, SqlDialect::Ansi) {
             assert_eq!(
                 sql.get(fragment.span.clone()),
                 Some(fragment.text),
-                "bornes fausses pour {fragment:?}"
+                "wrong bounds for {fragment:?}"
             );
         }
     }
 
     #[test]
-    fn le_drapeau_de_commentaire_suit_le_fragment() {
+    fn the_comment_flag_follows_the_fragment() {
         let fragments = split("SELECT 1; -- note\nSELECT 2", SqlDialect::Ansi);
         assert_eq!(fragments.len(), 2);
         assert!(!fragments[0].has_comment);
@@ -1244,14 +1243,14 @@ mod tests {
     }
 
     #[test]
-    fn la_terminaison_est_rapportee() {
+    fn termination_is_reported() {
         let fragments = split("SELECT 1; SELECT 2", SqlDialect::Ansi);
         assert!(fragments[0].terminated);
         assert!(!fragments[1].terminated);
     }
 
     #[test]
-    fn un_lot_de_commentaires_seuls_ne_donne_aucune_instruction() {
+    fn a_batch_of_comments_only_gives_no_statement() {
         assert!(split("-- rien\n/* rien non plus */", SqlDialect::Ansi).is_empty());
         assert!(contains_comment(
             "-- rien\n/* rien non plus */",
@@ -1264,7 +1263,7 @@ mod tests {
     }
 
     #[test]
-    fn les_mots_nus_ignorent_chaines_et_commentaires() {
+    fn bare_words_ignore_strings_and_comments() {
         let mots = words(
             "SELECT x /* DROP */ FROM t WHERE note = 'DELETE FROM u' -- TRUNCATE",
             SqlDialect::Ansi,
@@ -1274,7 +1273,7 @@ mod tests {
     }
 
     #[test]
-    fn un_appel_de_fonction_est_signale() {
+    fn a_function_call_is_flagged() {
         let mots = words(
             "SELECT TRUNCATE(1.234, 2), truncate  (x)",
             SqlDialect::MySql,
@@ -1293,7 +1292,7 @@ mod tests {
     }
 
     #[test]
-    fn les_bornes_des_mots_designent_le_texte() {
+    fn word_bounds_designate_the_text() {
         let sql = "SELECT énergie FROM t";
         for mot in words(sql, SqlDialect::Ansi) {
             assert_eq!(sql.get(mot.span.clone()), Some(mot.text));

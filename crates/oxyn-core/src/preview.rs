@@ -1,22 +1,21 @@
-//! Ce qu'on demande d'un aperçu de relation : un ordre, un prédicat, une page.
+//! What is asked of a relation preview: an order, a predicate, a page.
 //!
-//! # Deux moitiés qui ne se ressemblent pas
+//! # Two halves that do not look alike
 //!
-//! L'**ordre** est structuré : une colonne est un identifiant que le driver
-//! cite, jamais une expression. Le laisser libre rouvrirait la composition de
-//! SQL du mauvais côté de la frontière, sur une chaîne qu'Oxyn insérerait dans
-//! une requête qu'il compose lui-même ([I-10](../../CLAUDE.md#i-10)).
+//! The **order** is structured: a column is an identifier the driver quotes,
+//! never an expression. Leaving it free would reopen SQL composition on the
+//! wrong side of the boundary, on a string Oxyn would insert into a query it
+//! composes itself ([I-10](../../CLAUDE.md#i-10)).
 //!
-//! Le **prédicat**, lui, est du SQL que l'utilisateur écrit. C'est le champ
-//! `WHERE` de la maquette (`272:10667`), et [I-10](../../CLAUDE.md#i-10) le dit
-//! sans ambiguïté : « le SQL que *l'utilisateur écrit* part tel quel — c'est la
-//! fonctionnalité ». Ce qui est interdit, c'est qu'Oxyn concatène un
-//! identifiant **reçu du serveur** ; pas qu'il transmette ce qu'un
-//! professionnel a tapé.
+//! The **predicate**, on the other hand, is SQL the user writes. It is the
+//! `WHERE` field of the mockup (`272:10667`), and [I-10](../../CLAUDE.md#i-10)
+//! says it unambiguously: "the SQL *the user writes* is sent as is — that is
+//! the feature". What is forbidden is Oxyn concatenating an identifier
+//! **received from the server**; not passing on what a professional typed.
 //!
-//! Ce prédicat n'est pour autant pas une porte ouverte. Le texte final est
-//! reclassifié par `oxyn-query` et refusé s'il devient mutant, la session est
-//! tenue en lecture seule par le serveur, et la borne de lignes s'applique
+//! This predicate is not an open door for all that. The final text is
+//! reclassified by `oxyn-query` and refused if it becomes mutating, the session
+//! is held read-only by the server, and the row bound applies
 //! ([ADR-0020](../../docs/adr/0020-apercu-trie-filtre-parcouru.md)).
 
 use std::collections::HashSet;
@@ -25,21 +24,21 @@ use serde::{Deserialize, Serialize};
 
 use crate::{OxynError, Result};
 
-/// Une colonne de tri, et son sens.
+/// A sort column, and its direction.
 ///
-/// `column` est le **nom exact** d'une colonne de la relation, jamais une
-/// expression : c'est la moitié structurée de la demande, celle qu'Oxyn compose
-/// et cite lui-même.
+/// `column` is the **exact name** of a column of the relation, never an
+/// expression: it is the structured half of the request, the one Oxyn composes
+/// and quotes itself.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PreviewSort {
-    /// Nom de colonne, tel que le catalogue le donne.
+    /// Column name, as the catalog gives it.
     pub column: String,
-    /// Décroissant plutôt que croissant.
+    /// Descending rather than ascending.
     pub descending: bool,
 }
 
 impl PreviewSort {
-    /// Trie cette colonne en ordre croissant.
+    /// Sorts this column in ascending order.
     #[must_use]
     pub fn ascending(column: impl Into<String>) -> Self {
         Self {
@@ -48,7 +47,7 @@ impl PreviewSort {
         }
     }
 
-    /// Trie cette colonne en ordre décroissant.
+    /// Sorts this column in descending order.
     #[must_use]
     pub fn descending(column: impl Into<String>) -> Self {
         Self {
@@ -58,67 +57,65 @@ impl PreviewSort {
     }
 }
 
-/// La forme demandée d'un aperçu : son ordre, son prédicat, sa page.
+/// The requested shape of a preview: its order, its predicate, its page.
 ///
-/// Groupée plutôt qu'éclatée en trois champs de commande : ces trois-là ne se
-/// comprennent qu'ensemble — un `offset` sans ordre déterministe ne veut rien
-/// dire — et les séparer inviterait à en oublier un au prochain appelant.
+/// Grouped rather than split into three command fields: these three only make
+/// sense together — an `offset` without a deterministic order means nothing —
+/// and separating them would invite the next caller to forget one.
 #[derive(Debug, Clone, PartialEq, Default, Serialize, Deserialize)]
 pub struct PreviewShape {
-    /// L'ordre demandé, vide quand l'utilisateur n'a rien choisi.
+    /// The requested order, empty when the user chose nothing.
     ///
-    /// Le driver le **complète** par une clé unique pour lever les ex æquo :
-    /// sans ordre total, deux pages consécutives peuvent montrer deux fois la
-    /// même ligne et en omettre une autre.
+    /// The driver **completes** it with a unique key to break ties: without a
+    /// total order, two consecutive pages can show the same row twice and omit
+    /// another.
     pub sort: Vec<PreviewSort>,
-    /// Le prédicat écrit par l'utilisateur, **sans** le mot-clé `WHERE`.
+    /// The predicate written by the user, **without** the `WHERE` keyword.
     ///
-    /// Transmis tel quel : ni analysé, ni réécrit, ni complété. Un prédicat vide
-    /// ou fait d'espaces vaut « aucun filtre » — insérer un `WHERE` sans
-    /// condition produirait une erreur de syntaxe là où l'utilisateur croit
-    /// avoir tout effacé.
+    /// Passed as is: neither parsed, nor rewritten, nor completed. An empty or
+    /// whitespace-only predicate means "no filter" — inserting a `WHERE` without
+    /// a condition would produce a syntax error where the user believes they
+    /// cleared everything.
     pub predicate: Option<String>,
-    /// Combien de lignes sauter avant la page demandée.
+    /// How many rows to skip before the requested page.
     ///
-    /// `0` est la première page. Une valeur non nulle n'a de sens que si l'ordre
-    /// est déterministe, ce que le driver vérifie : autrement il refuse, plutôt
-    /// que de rendre une page dont personne ne peut dire ce qu'elle contient.
+    /// `0` is the first page. A non-zero value only makes sense if the order is
+    /// deterministic, which the driver checks: otherwise it refuses, rather
+    /// than return a page nobody can say the contents of.
     pub offset: u64,
-    /// Les seules colonnes à lire, dans cet ordre ; `None` les lit toutes.
+    /// The only columns to read, in this order; `None` reads them all.
     ///
-    /// C'est ce qui borne une lecture à ce que l'utilisateur a approuvé : un
-    /// échantillon dont trois colonnes sont cochées ne rapatrie pas les douze
-    /// autres pour les jeter ensuite. Comme l'ordre, c'est une moitié
-    /// structurée : des **noms exacts**, que le driver cite et refuse quand la
-    /// relation ne les déclare pas, jamais des expressions
-    /// ([I-10](../../CLAUDE.md#i-10)).
+    /// This is what bounds a read to what the user approved: a sample with
+    /// three columns ticked does not fetch the other twelve only to throw them
+    /// away. Like the order, it is a structured half: **exact names**, which the
+    /// driver quotes and refuses when the relation does not declare them, never
+    /// expressions ([I-10](../../CLAUDE.md#i-10)).
     ///
-    /// Lue par [`Self::projection`], qui la déduplique et la borne. Absente
-    /// d'une forme sérialisée avant elle, elle vaut « toutes ».
+    /// Read through [`Self::projection`], which deduplicates and bounds it.
+    /// Absent from a shape serialized before it, it means "all".
     #[serde(default)]
     pub columns: Option<Vec<String>>,
 }
 
-/// Combien de noms une projection peut porter, doublons compris.
+/// How many names a projection can carry, duplicates included.
 ///
-/// Une borne d'Oxyn, pas celle d'un moteur : elle tient la taille d'une
-/// commande reçue par l'IPC ou d'un agent — comptée avant la déduplication,
-/// sans quoi un million de fois le même nom passerait —, et dépasse ce qu'un
-/// écran d'approbation propose de cocher.
+/// An Oxyn bound, not an engine's: it caps the size of a command received over
+/// IPC or from an agent — counted before deduplication, otherwise a million
+/// times the same name would get through —, and exceeds what an approval screen
+/// offers to tick.
 pub const MAX_PROJECTED_COLUMNS: usize = 1024;
 
 impl PreviewShape {
-    /// Ne demande rien de particulier : la première page, sans ordre ni filtre.
+    /// Asks for nothing in particular: the first page, without order or filter.
     #[must_use]
     pub fn unordered() -> Self {
         Self::default()
     }
 
-    /// Le prédicat, s'il en reste un une fois les espaces retirés.
+    /// The predicate, if one remains once whitespace is trimmed.
     ///
-    /// C'est la seule normalisation appliquée au texte de l'utilisateur, et elle
-    /// ne change pas son sens : un champ où il ne reste qu'une espace est un
-    /// champ vide.
+    /// It is the only normalization applied to the user's text, and it does not
+    /// change its meaning: a field where only a space remains is an empty field.
     #[must_use]
     pub fn predicate(&self) -> Option<&str> {
         self.predicate
@@ -127,43 +124,42 @@ impl PreviewShape {
             .filter(|text| !text.is_empty())
     }
 
-    /// Cette demande exige-t-elle un ordre **total** ?
+    /// Does this request require a **total** order?
     ///
-    /// Vrai dès qu'un tri est demandé ou qu'une page autre que la première
-    /// l'est. Dans les deux cas le driver doit compléter l'ordre par une clé
-    /// unique, ce qui lui coûte une lecture de métadonnées : c'est la seule
-    /// raison pour laquelle un aperçu en paie une, et un aperçu sans demande
-    /// n'en paie aucune.
+    /// True as soon as a sort is requested or a page other than the first is.
+    /// In both cases the driver must complete the order with a unique key,
+    /// which costs it a metadata read: that is the only reason a preview pays
+    /// for one, and a preview without a request pays for none.
     ///
-    /// Le tri seul en a besoin autant que la page : ordonner la première page
-    /// par une colonne et la suivante par deux ferait réapparaître une ligne
-    /// exactement à la frontière.
+    /// Sorting alone needs it as much as paging: ordering the first page by one
+    /// column and the next by two would make a row reappear exactly at the
+    /// boundary.
     #[must_use]
     pub fn needs_total_order(&self) -> bool {
         !self.sort.is_empty() || self.offset > 0
     }
 
-    /// Rien n'a été demandé : ni ordre, ni prédicat, ni page suivante.
+    /// Nothing was requested: no order, no predicate, no next page.
     ///
-    /// C'est ce qui distingue l'aperçu automatique d'une table qu'on vient de
-    /// sélectionner d'une lecture que l'utilisateur a composée.
+    /// This is what distinguishes the automatic preview of a table just
+    /// selected from a read the user composed.
     #[must_use]
     pub fn is_plain(&self) -> bool {
         self.sort.is_empty() && self.predicate().is_none() && self.offset == 0
     }
 
-    /// La projection à composer : `None` pour toutes les colonnes, sinon les
-    /// noms demandés, chacun une fois, dans l'ordre de leur première mention.
+    /// The projection to compose: `None` for all columns, otherwise the
+    /// requested names, each once, in the order of their first mention.
     ///
-    /// Un doublon ne se refuse pas — cocher deux fois la même colonne ne dit
-    /// rien d'autre que la cocher —, mais il ne se compose pas non plus : deux
-    /// colonnes de même nom dans un résultat rendent ambiguë la lecture par nom.
+    /// A duplicate is not refused — ticking the same column twice says nothing
+    /// more than ticking it —, but it is not composed either: two columns of the
+    /// same name in a result make reading by name ambiguous.
     ///
-    /// # Erreurs
-    /// [`OxynError::Config`] quand la liste est vide ou qu'elle dépasse
-    /// [`MAX_PROJECTED_COLUMNS`]. Une liste vide n'est pas « toutes » : c'est une
-    /// demande qui ne lit rien, et la composer en `SELECT *` lirait justement
-    /// ce que personne n'a approuvé.
+    /// # Errors
+    /// [`OxynError::Config`] when the list is empty or exceeds
+    /// [`MAX_PROJECTED_COLUMNS`]. An empty list is not "all": it is a request
+    /// that reads nothing, and composing it as `SELECT *` would read precisely
+    /// what nobody approved.
     pub fn projection(&self) -> Result<Option<Vec<&str>>> {
         let Some(columns) = &self.columns else {
             return Ok(None);
@@ -194,13 +190,13 @@ mod tests {
     use super::*;
 
     #[test]
-    fn un_predicat_vide_ou_blanc_ne_filtre_rien() {
+    fn an_empty_or_blank_predicate_filters_nothing() {
         let vide = PreviewShape {
             predicate: Some(String::new()),
             ..PreviewShape::default()
         };
         assert!(vide.predicate().is_none());
-        assert!(vide.is_plain(), "un champ effacé ne compose aucun WHERE");
+        assert!(vide.is_plain(), "a cleared field composes no WHERE");
 
         let blanc = PreviewShape {
             predicate: Some("   \n\t ".into()),
@@ -210,9 +206,9 @@ mod tests {
     }
 
     #[test]
-    fn le_texte_de_l_utilisateur_n_est_pas_reecrit() {
-        // Les espaces de bordure tombent, le reste est intact : ni normalisation
-        // de casse, ni guillemets ajoutés, ni opérateur traduit.
+    fn the_user_text_is_not_rewritten() {
+        // Surrounding whitespace goes, the rest is intact: no case
+        // normalization, no added quotes, no translated operator.
         let forme = PreviewShape {
             predicate: Some("  status = 'active' AND note LIKE '100%'  ".into()),
             ..PreviewShape::default()
@@ -224,7 +220,7 @@ mod tests {
     }
 
     #[test]
-    fn un_apercu_sans_demande_se_distingue_d_un_apercu_compose() {
+    fn a_preview_without_request_differs_from_a_composed_preview() {
         assert!(PreviewShape::unordered().is_plain());
         let trie = PreviewShape {
             sort: vec![PreviewSort::ascending("id")],
@@ -244,7 +240,7 @@ mod tests {
     }
 
     #[test]
-    fn une_projection_est_dedoublonnee_dans_l_ordre_de_premiere_mention() {
+    fn a_projection_is_deduplicated_in_first_mention_order() {
         assert_eq!(PreviewShape::unordered().projection().ok(), Some(None));
         let forme = PreviewShape {
             columns: Some(vec!["email".into(), "id".into(), "email".into()]),
@@ -254,9 +250,9 @@ mod tests {
     }
 
     #[test]
-    fn une_projection_vide_ou_demesuree_est_refusee() {
-        // Vide, elle ne vaut pas « toutes » : la composer en `SELECT *` lirait
-        // ce que personne n'a coché.
+    fn an_empty_or_oversized_projection_is_refused() {
+        // Empty, it does not mean "all": composing it as `SELECT *` would read
+        // what nobody ticked.
         let vide = PreviewShape {
             columns: Some(Vec::new()),
             ..PreviewShape::default()
@@ -267,7 +263,7 @@ mod tests {
             .map(|n| format!("c{n}"))
             .collect();
         let mut trop = limite.clone();
-        trop.push("une de plus".into());
+        trop.push("one more".into());
         let au_plafond = PreviewShape {
             columns: Some(limite),
             ..PreviewShape::default()
@@ -278,8 +274,8 @@ mod tests {
             ..PreviewShape::default()
         };
         assert!(matches!(dessus.projection(), Err(OxynError::Config(_))));
-        // La borne compte les noms reçus, doublons compris : un seul nom répété
-        // sans fin ne passe pas sous elle.
+        // The bound counts the names received, duplicates included: a single
+        // name repeated endlessly does not slip under it.
         let repete = PreviewShape {
             columns: Some(vec!["id".to_owned(); MAX_PROJECTED_COLUMNS + 1]),
             ..PreviewShape::default()
@@ -288,18 +284,18 @@ mod tests {
     }
 
     #[test]
-    fn une_forme_serialisee_sans_projection_lit_toutes_les_colonnes() {
+    fn a_serialized_shape_without_projection_reads_every_column() {
         let ancienne: PreviewShape =
             serde_json::from_str(r#"{"sort":[],"predicate":null,"offset":0}"#)
-                .expect("forme d'avant la projection");
+                .expect("shape from before the projection");
         assert_eq!(ancienne.columns, None);
     }
 
     #[test]
-    fn un_ordre_total_est_exige_par_le_tri_autant_que_par_la_page() {
+    fn a_total_order_is_required_by_sorting_as_much_as_by_paging() {
         assert!(!PreviewShape::unordered().needs_total_order());
-        // Un prédicat seul ne change pas l'ordre : il n'exige aucune clé, et ne
-        // doit donc pas coûter une lecture de métadonnées.
+        // A predicate alone does not change the order: it requires no key, and
+        // must therefore not cost a metadata read.
         let filtre = PreviewShape {
             predicate: Some("id > 10".into()),
             ..PreviewShape::default()
@@ -310,7 +306,7 @@ mod tests {
             sort: vec![PreviewSort::ascending("name")],
             ..PreviewShape::default()
         };
-        assert!(trie.needs_total_order(), "dès la première page");
+        assert!(trie.needs_total_order(), "from the first page on");
         let page = PreviewShape {
             offset: 200,
             ..PreviewShape::default()

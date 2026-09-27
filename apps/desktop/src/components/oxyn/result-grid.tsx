@@ -48,7 +48,7 @@ import { useColumnOrder } from "./column-order"
 import { dropMark, moveStep, usePointerReorder } from "./pointer-drag"
 
 /**
- * Compact density (docs/UX-SPEC.md, « Lisibilité et hauteur de grille »): the
+ * Compact density (docs/UX-SPEC.md, « Readability and grid height »): the
  * height used until `--grid-row-height` is read from the page.
  */
 export const ROW_HEIGHT = 24

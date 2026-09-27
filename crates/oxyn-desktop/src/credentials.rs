@@ -317,35 +317,35 @@ mod tests {
 
     use super::*;
 
-    fn resolveur() -> (KeyringCredentials, ConnectionConfig) {
+    fn resolver() -> (KeyringCredentials, ConnectionConfig) {
         let store: Arc<dyn SecretStore> = Arc::new(MemorySecretStore::new());
-        let config = ConnectionConfig::new("essai", DriverId::postgres());
+        let config = ConnectionConfig::new("trial", DriverId::postgres());
         (KeyringCredentials::new(store), config)
     }
 
     #[test]
-    fn une_connexion_sans_reference_na_pas_didentifiants() {
-        // Le cas de SQLite sur fichier. Rendre une erreur ici obligerait chaque
-        // appelant à distinguer « pas de secret » de « secret illisible ».
-        let (resolveur, config) = resolveur();
-        let issue = resolveur.resolve(&config).expect("no reference, no error");
-        assert!(issue.is_empty());
+    fn a_connection_without_reference_has_no_credentials() {
+        // The case of file-based SQLite. Returning an error here would force
+        // every caller to tell "no secret" from "unreadable secret".
+        let (resolver, config) = resolver();
+        let outcome = resolver.resolve(&config).expect("no reference, no error");
+        assert!(outcome.is_empty());
     }
 
     #[test]
-    fn le_mot_de_passe_fait_laller_retour() {
-        let (resolveur, mut config) = resolveur();
-        let mut valeurs = BTreeMap::new();
-        valeurs.insert("password".to_owned(), "hunter2".to_owned());
+    fn the_password_makes_the_round_trip() {
+        let (resolver, mut config) = resolver();
+        let mut values = BTreeMap::new();
+        values.insert("password".to_owned(), "hunter2".to_owned());
 
-        let reference = resolveur
-            .store_secrets(&config, &valeurs)
+        let reference = resolver
+            .store_secrets(&config, &values)
             .expect("the memory store accepts every write");
         config = config.with_secret_ref(reference.as_str());
 
-        let issue = resolveur.resolve(&config).expect("the entry exists");
+        let outcome = resolver.resolve(&config).expect("the entry exists");
         assert_eq!(
-            issue
+            outcome
                 .password()
                 .map(oxyn_secrets::ExposeSecret::expose_secret),
             Some("hunter2")
@@ -353,38 +353,38 @@ mod tests {
     }
 
     #[test]
-    fn un_secret_au_nom_libre_devient_un_extra() {
-        // Un driver qui appelle son secret `api_key` doit fonctionner sans que
-        // ce module le connaisse : le tri se fait sur la clé, pas sur une liste.
-        let (resolveur, mut config) = resolveur();
-        let mut valeurs = BTreeMap::new();
-        valeurs.insert("api_key".to_owned(), "sk-abc".to_owned());
+    fn a_freely_named_secret_becomes_an_extra() {
+        // A driver that calls its secret `api_key` must work without this
+        // module knowing it: the sorting is on the key, not on a list.
+        let (resolver, mut config) = resolver();
+        let mut values = BTreeMap::new();
+        values.insert("api_key".to_owned(), "sk-abc".to_owned());
 
-        let reference = resolveur
-            .store_secrets(&config, &valeurs)
+        let reference = resolver
+            .store_secrets(&config, &values)
             .expect("the memory store accepts every write");
         config = config.with_secret_ref(reference.as_str());
 
-        let issue = resolveur.resolve(&config).expect("the entry exists");
+        let outcome = resolver.resolve(&config).expect("the entry exists");
         assert_eq!(
-            issue
+            outcome
                 .extra("api_key")
                 .map(oxyn_secrets::ExposeSecret::expose_secret),
             Some("sk-abc")
         );
-        assert!(issue.password().is_none());
+        assert!(outcome.password().is_none());
     }
 
     #[test]
-    fn une_reference_illisible_est_une_erreur_de_configuration() {
-        // Et non une erreur d'authentification : rien n'a été refusé, la
-        // référence elle-même est cassée. La distinction gouverne ce que
-        // l'interface propose de faire ensuite.
-        let (resolveur, config) = resolveur();
-        let config = config.with_secret_ref("ceci n'est pas une référence");
-        match resolveur.resolve(&config) {
+    fn an_unreadable_reference_is_a_configuration_error() {
+        // And not an authentication error: nothing was refused, the reference
+        // itself is broken. The distinction governs what the interface offers
+        // to do next.
+        let (resolver, config) = resolver();
+        let config = config.with_secret_ref("this is not a reference");
+        match resolver.resolve(&config) {
             Err(OxynError::Config(_)) => {}
-            autre => panic!("expected a config error, got {:?}", autre.err()),
+            other => panic!("expected a config error, got {:?}", other.err()),
         }
     }
 }

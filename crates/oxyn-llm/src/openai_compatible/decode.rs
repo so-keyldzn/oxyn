@@ -1,52 +1,50 @@
-//! De la trame SSE aux événements du domaine.
+//! From the SSE frame to domain events.
 //!
-//! Ce module tient l'état d'un flux de complétion. Il est **pur** : aucune
-//! entrée-sortie, aucun réseau. C'est ce qui permet de le tester sur les
-//! séquences réelles des serveurs, y compris leurs bizarreries, sans en lancer
-//! un.
+//! This module holds the state of a completion stream. It is **pure**: no
+//! input-output, no network. That is what allows testing it on the servers'
+//! real sequences, quirks included, without starting one.
 //!
-//! # Le recollement des appels d'outils
+//! # Reassembling tool calls
 //!
-//! Un appel d'outil n'arrive pas d'un bloc : le nom vient dans une trame, les
-//! arguments en une dizaine de fragments, et les fragments de plusieurs appels
-//! sont **entrelacés**. La seule chose qui les relie est le champ `index`. Un
-//! décodeur qui concatènerait dans l'ordre d'arrivée produirait un JSON mêlant
-//! deux appels — et le modèle, lui, aurait demandé deux actions distinctes.
+//! A tool call does not arrive in one block: the name comes in one frame, the
+//! arguments in a dozen fragments, and the fragments of several calls are
+//! **interleaved**. The only thing that links them is the `index` field. A
+//! decoder that concatenated in order of arrival would produce a JSON mixing
+//! two calls — and the model would have asked for two distinct actions.
 //!
-//! # Quand `Done` est émis
+//! # When `Done` is emitted
 //!
-//! `finish_reason` marque la fin de la génération, mais **pas** la fin du
-//! flux : OpenAI envoie la consommation dans une trame ultérieure. On mémorise
-//! donc la raison, on clôt les appels d'outils, et on n'émet `Done` qu'à la
-//! sentinelle `[DONE]` ou à la fermeture du flux. `Done` est émis exactement une
-//! fois.
+//! `finish_reason` marks the end of the generation, but **not** the end of the
+//! stream: OpenAI sends the usage in a later frame. So the reason is recorded,
+//! the tool calls are closed, and `Done` is only emitted at the `[DONE]`
+//! sentinel or when the stream closes. `Done` is emitted exactly once.
 //!
-//! # Une fin constatée n'est pas une fin annoncée
+//! # An observed end is not an announced end
 //!
-//! Ce protocole a **deux** annonces de fin, et elles ne disent pas la même
-//! chose : `finish_reason` sur le dernier fragment de contenu dit que la
-//! génération est finie ; `data: [DONE]` dit que le flux l'est. OpenAI
-//! documente les deux ([RESEARCH-NOTES](../../../../docs/RESEARCH-NOTES.md)),
-//! mais un serveur compatible peut omettre la sentinelle.
+//! This protocol has **two** end announcements, and they do not say the same
+//! thing: `finish_reason` on the last content fragment says the generation is
+//! finished; `data: [DONE]` says the stream is. OpenAI documents both
+//! ([RESEARCH-NOTES](../../../../docs/RESEARCH-NOTES.md)), but a compatible
+//! server can omit the sentinel.
 //!
-//! La règle retenue ne dépend donc pas de la sentinelle :
+//! The chosen rule therefore does not depend on the sentinel:
 //!
-//! * **`finish_reason` reçu, puis fermeture** : la génération a été annoncée
-//!   finie, le contenu est entier ; seule la trame de consommation a pu se
-//!   perdre. La raison annoncée est conservée ;
-//! * **ni `finish_reason` ni `[DONE]`, puis fermeture** — propre ou non : c'est
-//!   une coupure, [`StopReason::Interrupted`], et les appels d'outils en cours
-//!   sont **jetés**. Un mandataire qui ferme proprement en pleine génération ne
-//!   produit aucune erreur de transport, et des arguments qui se lisent par
-//!   chance ne sont pas des arguments que le modèle a fini d'écrire.
+//! * **`finish_reason` received, then closing**: the generation was announced
+//!   finished, the content is whole; only the usage frame may have been lost.
+//!   The announced reason is kept;
+//! * **neither `finish_reason` nor `[DONE]`, then closing** — clean or not: it
+//!   is a cut, [`StopReason::Interrupted`], and the tool calls in progress are
+//!   **thrown away**. A proxy that closes cleanly in the middle of a generation
+//!   produces no transport error, and arguments that happen to parse are not
+//!   arguments the model finished writing.
 //!
-//! # Tout ce qui s'accumule est compté
+//! # Everything that accumulates is counted
 //!
-//! Texte, refus, identifiants, noms et arguments d'outils passent par un
-//! [`GenerationBudget`] **avant** d'être accumulés ou émis — y compris le nom
-//! d'un appel déjà annoncé, que certains serveurs continuent de fragmenter sans
-//! que rien ne soit émis. Au premier dépassement, la génération s'arrête : voir
-//! [`crate::budget`].
+//! Text, refusal, identifiers, tool names and arguments go through a
+//! [`GenerationBudget`] **before** being accumulated or emitted — including
+//! the name of an already announced call, which some servers keep fragmenting
+//! without anything being emitted. At the first overrun, the generation stops:
+//! see [`crate::budget`].
 
 use std::collections::BTreeMap;
 
@@ -59,11 +57,11 @@ use crate::types::{ChatEvent, StopReason};
 /// Sentinelle de fin des protocoles compatibles OpenAI.
 pub(crate) const DONE_SENTINEL: &str = "[DONE]";
 
-/// Nombre de trames illisibles tolérées avant d'abandonner le flux.
+/// Number of unreadable frames tolerated before giving up the stream.
 ///
-/// Une trame illisible isolée arrive (une passerelle qui insère un objet non
-/// documenté) ; une série signifie qu'on ne parle pas le même protocole, et
-/// continuer ne ferait qu'inonder l'interface d'erreurs.
+/// An isolated unreadable frame happens (a gateway inserting an undocumented
+/// object); a series means we do not speak the same protocol, and continuing
+/// would only flood the interface with errors.
 pub(crate) const MAX_DECODE_ERRORS: usize = 8;
 
 /// Un appel d'outil en cours de reconstruction.
@@ -75,7 +73,7 @@ struct PartialCall {
     started: bool,
 }
 
-/// État d'un flux de complétion compatible OpenAI.
+/// State of an OpenAI-compatible completion stream.
 #[derive(Debug, Default)]
 pub(crate) struct ChunkDecoder {
     calls: BTreeMap<u32, PartialCall>,
@@ -86,17 +84,17 @@ pub(crate) struct ChunkDecoder {
 }
 
 impl ChunkDecoder {
-    /// Décodeur pour un flux neuf.
+    /// Decoder for a fresh stream.
     pub(crate) fn new() -> Self {
         Self::default()
     }
 
-    /// Le flux est-il terminé ? Plus rien ne doit être décodé après.
+    /// Is the stream finished? Nothing more must be decoded afterwards.
     pub(crate) fn is_done(&self) -> bool {
         self.done
     }
 
-    /// Consomme le champ `data` d'une trame SSE.
+    /// Consumes the `data` field of an SSE frame.
     pub(crate) fn on_data(&mut self, data: &str, out: &mut Vec<ChatEvent>) {
         if self.done {
             return;
@@ -114,8 +112,8 @@ impl ChunkDecoder {
         let chunk: ChatChunk = match serde_json::from_str(data) {
             Ok(chunk) => chunk,
             Err(err) => {
-                // La trame fautive n'est pas recopiée : on ne sait pas ce qu'un
-                // point d'accès tiers y met.
+                // The faulty frame is not copied: we do not know what a
+                // third-party endpoint puts in it.
                 self.errors += 1;
                 out.push(ChatEvent::Error(format!(
                     "unreadable stream frame ({}, line {}, column {})",
@@ -131,13 +129,13 @@ impl ChunkDecoder {
             }
         };
 
-        // Une erreur transportée dans le flux est terminale : la passerelle ne
-        // produira plus rien après.
+        // An error carried in the stream is terminal: the gateway will produce
+        // nothing more after it.
         if let Some(erreur) = &chunk.error {
             out.push(ChatEvent::Error(erreur.describe()));
             self.stop = Some(StopReason::ProviderError);
-            // Jetés, pas clos : un appel interrompu par une erreur n'est pas une
-            // proposition d'action.
+            // Thrown away, not closed: a call interrupted by an error is not a
+            // proposed action.
             self.discard_calls(out);
             self.emit_done(out);
             return;
@@ -147,10 +145,10 @@ impl ChunkDecoder {
             out.push(ChatEvent::Usage {
                 prompt_tokens: usage.prompt(),
                 completion_tokens: usage.completion(),
-                // Ce protocole ne distingue pas l'écriture de cache : il ne
-                // rapporte que les jetons **lus**. Déclarer `Some(0)` en
-                // écriture laisserait croire qu'aucun préfixe n'a été mis en
-                // cache, alors qu'on n'en sait rien.
+                // This protocol does not distinguish cache writes: it only
+                // reports the tokens **read**. Declaring `Some(0)` for writes
+                // would suggest no prefix was cached, when we know nothing
+                // about it.
                 cache_write_tokens: None,
                 cache_read_tokens: usage.cache_read(),
                 reasoning_tokens: usage.reasoning(),
@@ -163,14 +161,14 @@ impl ChunkDecoder {
                 return;
             }
             if let Some(raison) = choix.finish_reason {
-                // La génération est finie ; le flux, pas forcément.
+                // The generation is finished; the stream, not necessarily.
                 self.stop = Some(stop_reason(&raison));
                 self.flush_calls(out);
             }
         }
     }
 
-    /// Émet le contenu d'un fragment de choix, compté avant de l'être.
+    /// Emits the content of a choice fragment, counted before it is.
     fn on_delta(
         &mut self,
         delta: wire::Delta,
@@ -182,9 +180,9 @@ impl ChunkDecoder {
             self.budget.charge(texte.len())?;
             out.push(ChatEvent::TextDelta(texte));
         }
-        // Un refus est une réponse, pas une erreur : la requête a abouti et le
-        // modèle a dit qu'il ne répondrait pas. Le confondre avec du texte le
-        // ferait présenter comme une réponse.
+        // A refusal is a response, not an error: the request succeeded and the
+        // model said it would not answer. Confusing it with text would present
+        // it as an answer.
         if let Some(refus) = delta.refusal
             && !refus.is_empty()
         {
@@ -197,12 +195,12 @@ impl ChunkDecoder {
         Ok(())
     }
 
-    /// Arrête la génération sur un budget dépassé.
+    /// Stops the generation on an exceeded budget.
     ///
-    /// L'erreur nomme la limite ; les appels en cours sont **jetés** — un
-    /// appel coupé n'est pas une proposition d'action — et la fin est une
-    /// coupure : le fournisseur a peut-être continué, et facturé, ce qu'on a
-    /// cessé de lire (I-13).
+    /// The error names the limit; the calls in progress are **thrown away** —
+    /// a cut call is not a proposed action — and the end is a cut: the
+    /// provider may have continued, and billed, what we stopped reading
+    /// (I-13).
     fn exceed(&mut self, limite: BudgetExceeded, out: &mut Vec<ChatEvent>) {
         out.push(ChatEvent::Error(limite.to_string()));
         self.discard_calls(out);
@@ -210,17 +208,17 @@ impl ChunkDecoder {
         self.emit_done(out);
     }
 
-    /// Signale la fermeture du flux par le serveur, sans `[DONE]`.
+    /// Signals the closing of the stream by the server, without `[DONE]`.
     ///
-    /// Voir la note du module : seul un `finish_reason` déjà reçu fait de cette
-    /// fermeture une fin ordinaire.
+    /// See the module note: only an already received `finish_reason` makes
+    /// this closing an ordinary end.
     pub(crate) fn finish(&mut self, out: &mut Vec<ChatEvent>) {
         if self.done {
             return;
         }
         if self.stop.is_some() {
-            // Les appels ont été clos au `finish_reason` ; un fragment arrivé
-            // après n'a pas d'annonce de fin.
+            // The calls were closed at `finish_reason`; a fragment arrived
+            // afterwards has no end announcement.
             self.discard_calls(out);
             self.emit_done(out);
             return;
@@ -233,11 +231,11 @@ impl ChunkDecoder {
         self.emit_done(out);
     }
 
-    /// Signale une annulation demandée par l'appelant.
+    /// Signals a cancellation requested by the caller.
     ///
-    /// Les appels d'outils en cours ne sont **pas** clos : des arguments
-    /// tronqués ne sont pas des arguments, et proposer une action à moitié
-    /// décrite serait pire que ne rien proposer.
+    /// The tool calls in progress are **not** closed: truncated arguments are
+    /// not arguments, and proposing a half-described action would be worse
+    /// than proposing nothing.
     pub(crate) fn cancel(&mut self, out: &mut Vec<ChatEvent>) {
         self.calls.clear();
         self.stop = Some(StopReason::Cancelled);
@@ -255,7 +253,7 @@ impl ChunkDecoder {
         self.emit_done(out);
     }
 
-    /// Émet `Done` une seule et unique fois.
+    /// Emits `Done` once and only once.
     fn emit_done(&mut self, out: &mut Vec<ChatEvent>) {
         if self.done {
             return;
@@ -266,10 +264,10 @@ impl ChunkDecoder {
         });
     }
 
-    /// Range un fragment d'appel d'outil et émet ce qui est devenu certain.
+    /// Stores a tool call fragment and emits what has become certain.
     ///
-    /// # Erreurs
-    /// Le budget que ce fragment dépasserait ; rien n'en est alors retenu.
+    /// # Errors
+    /// The budget this fragment would exceed; nothing of it is kept then.
     fn accumulate(
         &mut self,
         brut: DeltaToolCall,
@@ -277,8 +275,8 @@ impl ChunkDecoder {
     ) -> Result<(), BudgetExceeded> {
         let index = brut.index;
         if !self.calls.contains_key(&index) {
-            // Un index neuf est un appel neuf : c'est lui que le plafond du
-            // nombre d'appels compte, avant que l'état n'existe.
+            // A new index is a new call: it is the one the ceiling on the
+            // number of calls counts, before the state exists.
             self.budget.open_tool_call()?;
         }
         let entree = self.calls.entry(index).or_default();
@@ -293,8 +291,8 @@ impl ChunkDecoder {
         let mut fragment = None;
         if let Some(fonction) = brut.function {
             if let Some(nom) = fonction.name.filter(|valeur| !valeur.is_empty()) {
-                // Concaténation et non affectation : quelques serveurs
-                // fragmentent aussi le nom.
+                // Concatenation and not assignment: a few servers fragment the
+                // name too.
                 self.budget
                     .charge_tool_name(index, entree.name.len(), nom.len())?;
                 entree.name.push_str(&nom);
@@ -324,10 +322,10 @@ impl ChunkDecoder {
         Ok(())
     }
 
-    /// Jette les appels d'outils sans annonce de fin, en le signalant.
+    /// Throws away the tool calls without an end announcement, reporting it.
     ///
-    /// Un appel qui disparaît en silence laisserait l'utilisateur croire que le
-    /// modèle n'a rien demandé.
+    /// A call that disappears silently would let the user believe the model
+    /// asked for nothing.
     fn discard_calls(&mut self, out: &mut Vec<ChatEvent>) {
         for (index, partiel) in std::mem::take(&mut self.calls) {
             if !partiel.name.is_empty() || !partiel.arguments.is_empty() {
@@ -338,7 +336,7 @@ impl ChunkDecoder {
         }
     }
 
-    /// Clôt tous les appels d'outils rassemblés, sur une annonce de fin.
+    /// Closes all gathered tool calls, on an end announcement.
     fn flush_calls(&mut self, out: &mut Vec<ChatEvent>) {
         for (index, partiel) in std::mem::take(&mut self.calls) {
             if partiel.name.is_empty() {
@@ -364,8 +362,8 @@ impl ChunkDecoder {
 }
 
 impl EventDecoder for ChunkDecoder {
-    /// Ce protocole ne nomme pas ses trames : seul le champ `data` compte, et
-    /// un éventuel champ `event` est ignoré plutôt que d'inventer un sens.
+    /// This protocol does not name its frames: only the `data` field counts,
+    /// and a possible `event` field is ignored rather than given a meaning.
     fn on_frame(&mut self, frame: &SseFrame, out: &mut Vec<ChatEvent>) {
         self.on_data(&frame.data, out);
     }
@@ -387,12 +385,12 @@ impl EventDecoder for ChunkDecoder {
     }
 }
 
-/// Traduit le `finish_reason` des protocoles compatibles OpenAI.
+/// Translates the `finish_reason` of OpenAI-compatible protocols.
 ///
-/// Fonction de ce module et non méthode de [`StopReason`] : le type vit dans
-/// `oxyn-core`, qui ne connaît aucun protocole. Une raison inconnue se
-/// **conserve** plutôt que d'être rabattue sur `EndTurn`, qui ferait passer une
-/// réponse incomplète pour une réponse finie.
+/// A function of this module and not a method of [`StopReason`]: the type
+/// lives in `oxyn-core`, which knows no protocol. An unknown reason is
+/// **kept** rather than folded into `EndTurn`, which would pass an incomplete
+/// response off as a finished one.
 pub(crate) fn stop_reason(raw: &str) -> StopReason {
     match raw {
         "stop" => StopReason::EndTurn,
@@ -403,12 +401,11 @@ pub(crate) fn stop_reason(raw: &str) -> StopReason {
     }
 }
 
-/// Fabrique un identifiant d'appel quand le serveur n'en donne pas.
+/// Makes up a call identifier when the server gives none.
 ///
-/// Ollama et `llama.cpp` omettent régulièrement `id`. Sans identifiant, le tour
-/// suivant ne peut pas rattacher le résultat de l'outil à sa demande : le
-/// fabriquer à partir de l'index est le seul recours, et il est stable pour un
-/// tour donné.
+/// Ollama and `llama.cpp` regularly omit `id`. Without an identifier, the next
+/// turn cannot attach the tool's result to its request: making it up from the
+/// index is the only recourse, and it is stable for a given turn.
 fn synthetic_id(index: u32) -> String {
     format!("call_{index}")
 }
@@ -418,7 +415,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn les_raisons_d_arret_d_openai_sont_traduites() {
+    fn openai_stop_reasons_are_translated() {
         assert_eq!(stop_reason("stop"), StopReason::EndTurn);
         assert_eq!(stop_reason("length"), StopReason::MaxTokens);
         assert_eq!(stop_reason("tool_calls"), StopReason::ToolCalls);
@@ -427,11 +424,11 @@ mod tests {
         assert_eq!(
             stop_reason("guardrail_intervened"),
             StopReason::Other("guardrail_intervened".to_owned()),
-            "une raison inconnue se conserve, elle ne se rabat pas sur EndTurn"
+            "an unknown reason is kept, it is not folded into EndTurn"
         );
     }
 
-    /// Joue une suite de champs `data` et rend tous les événements produits.
+    /// Plays a sequence of `data` fields and returns all the events produced.
     fn jouer(trames: &[&str]) -> Vec<ChatEvent> {
         let mut decodeur = ChunkDecoder::new();
         let mut sorties = Vec::new();
@@ -465,7 +462,7 @@ mod tests {
     }
 
     #[test]
-    fn un_flux_de_texte_se_recolle_dans_l_ordre() {
+    fn a_text_stream_is_reassembled_in_order() {
         let evenements = jouer(&[
             r#"{"choices":[{"delta":{"role":"assistant","content":""}}]}"#,
             r#"{"choices":[{"delta":{"content":"SELECT "}}]}"#,
@@ -483,7 +480,7 @@ mod tests {
     }
 
     #[test]
-    fn done_est_emis_exactement_une_fois() {
+    fn done_is_emitted_exactly_once() {
         let mut decodeur = ChunkDecoder::new();
         let mut sorties = Vec::new();
         decodeur.on_data(
@@ -491,15 +488,15 @@ mod tests {
             &mut sorties,
         );
         decodeur.on_data(DONE_SENTINEL, &mut sorties);
-        // Le serveur ferme après la sentinelle : `finish` ne doit rien ajouter.
+        // The server closes after the sentinel: `finish` must add nothing.
         decodeur.finish(&mut sorties);
         let fins = sorties.iter().filter(|e| e.is_terminal()).count();
         assert_eq!(fins, 1, "{sorties:?}");
     }
 
     #[test]
-    fn la_consommation_arrivant_apres_la_fin_de_generation_est_conservee() {
-        // Le piège : émettre `Done` sur `finish_reason` perdrait cette trame.
+    fn usage_arriving_after_the_end_of_generation_is_kept() {
+        // The trap: emitting `Done` on `finish_reason` would lose this frame.
         let evenements = jouer(&[
             r#"{"choices":[{"delta":{"content":"ok"}}]}"#,
             r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
@@ -518,12 +515,12 @@ mod tests {
         );
         assert!(
             evenements.last().is_some_and(ChatEvent::is_terminal),
-            "Done doit rester le dernier événement"
+            "Done must remain the last event"
         );
     }
 
     #[test]
-    fn un_appel_d_outil_fragmente_se_recolle() {
+    fn a_fragmented_tool_call_is_reassembled() {
         let evenements = jouer(&[
             r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_abc","type":"function","function":{"name":"execute_query","arguments":""}}]}}]}"#,
             r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"sql\":"}}]}}]}"#,
@@ -552,9 +549,9 @@ mod tests {
     }
 
     #[test]
-    fn deux_appels_entrelaces_ne_se_melangent_pas() {
-        // Le défaut que ce module existe pour éviter : concaténer dans l'ordre
-        // d'arrivée produirait un seul JSON incohérent.
+    fn two_interleaved_calls_do_not_mix() {
+        // The defect this module exists to avoid: concatenating in order of
+        // arrival would produce a single incoherent JSON.
         let evenements = jouer(&[
             r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"a","function":{"name":"lire"}}]}}]}"#,
             r#"{"choices":[{"delta":{"tool_calls":[{"index":1,"id":"b","function":{"name":"ecrire"}}]}}]}"#,
@@ -574,7 +571,7 @@ mod tests {
     }
 
     #[test]
-    fn un_appel_sans_identifiant_en_recoit_un() {
+    fn a_call_without_identifier_receives_one() {
         // Ollama et llama.cpp omettent `id`.
         let evenements = jouer(&[
             r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"ping","arguments":"{}"}}]}}]}"#,
@@ -584,12 +581,12 @@ mod tests {
         assert_eq!(complets.len(), 1);
         assert!(
             !complets[0].id.is_empty(),
-            "sans identifiant, le résultat de l'outil ne peut pas être rattaché"
+            "without an identifier, the tool result cannot be attached"
         );
     }
 
     #[test]
-    fn un_outil_sans_argument_recoit_un_objet_vide() {
+    fn a_tool_without_arguments_receives_an_empty_object() {
         let evenements = jouer(&[
             r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c","function":{"name":"lister"}}]}}]}"#,
             r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
@@ -598,9 +595,9 @@ mod tests {
     }
 
     #[test]
-    fn des_arguments_invalides_produisent_une_erreur_et_pas_un_appel() {
-        // Un modèle produit parfois du JSON cassé. Émettre un appel avec des
-        // arguments nuls serait un mensonge silencieux.
+    fn invalid_arguments_produce_an_error_and_not_a_call() {
+        // A model sometimes produces broken JSON. Emitting a call with null
+        // arguments would be a silent lie.
         let evenements = jouer(&[
             r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"c","function":{"name":"execute","arguments":"{\"sql\": "}}]}}]}"#,
             r#"{"choices":[{"delta":{},"finish_reason":"tool_calls"}]}"#,
@@ -615,9 +612,9 @@ mod tests {
     }
 
     #[test]
-    fn un_flux_ferme_apres_finish_reason_sans_sentinelle_est_complet() {
-        // La génération a été annoncée finie : l'absence de `[DONE]` ne coûte
-        // que la trame de consommation.
+    fn a_stream_closed_after_finish_reason_without_sentinel_is_complete() {
+        // The generation was announced finished: the absence of `[DONE]` only
+        // costs the usage frame.
         let evenements = jouer(&[
             r#"{"choices":[{"delta":{"content":"a"}}]}"#,
             r#"{"choices":[{"delta":{},"finish_reason":"stop"}]}"#,
@@ -636,24 +633,24 @@ mod tests {
     }
 
     #[test]
-    fn un_flux_ferme_proprement_sans_aucune_annonce_est_interrompu() {
-        // Ni `finish_reason` ni `[DONE]` : un mandataire a fermé en pleine
-        // génération. Rien n'a échoué côté transport, et pourtant la réponse
-        // est coupée.
+    fn a_stream_closed_cleanly_without_any_announcement_is_interrupted() {
+        // Neither `finish_reason` nor `[DONE]`: a proxy closed in the middle of
+        // the generation. Nothing failed on the transport side, and yet the
+        // response is cut.
         let evenements = jouer(&[r#"{"choices":[{"delta":{"content":"a"}}]}"#]);
         let Some(ChatEvent::Done { stop_reason }) = evenements.last() else {
-            panic!("le flux doit se terminer : {evenements:?}");
+            panic!("the stream must end: {evenements:?}");
         };
         assert_eq!(*stop_reason, StopReason::Interrupted);
         assert!(stop_reason.is_ambiguous());
         assert!(
             evenements.iter().any(|e| matches!(e, ChatEvent::Error(_))),
-            "la coupure doit se voir : {evenements:?}"
+            "the cut must show: {evenements:?}"
         );
     }
 
     #[test]
-    fn un_appel_d_outil_lisible_mais_sans_annonce_de_fin_n_est_jamais_propose() {
+    fn a_readable_tool_call_without_end_announcement_is_never_proposed() {
         let evenements = jouer(&[
             r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"execute","arguments":""}}]}}]}"#,
             r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"{\"sql\":\"DELETE FROM t\"}"}}]}}]}"#,
@@ -679,7 +676,7 @@ mod tests {
     }
 
     #[test]
-    fn une_erreur_dans_le_flux_jette_les_appels_en_cours() {
+    fn an_error_in_the_stream_throws_away_the_calls_in_progress() {
         let evenements = jouer(&[
             r#"{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"execute","arguments":"{}"}}]}}]}"#,
             r#"{"error":{"message":"overloaded"}}"#,
@@ -699,7 +696,7 @@ mod tests {
     }
 
     #[test]
-    fn une_trame_illisible_isolee_ne_tue_pas_le_flux() {
+    fn an_isolated_unreadable_frame_does_not_kill_the_stream() {
         let evenements = jouer(&[
             r#"{"choices":[{"delta":{"content":"a"}}]}"#,
             "{ceci n'est pas du json",
@@ -711,7 +708,7 @@ mod tests {
     }
 
     #[test]
-    fn une_serie_de_trames_illisibles_abandonne_le_flux() {
+    fn a_series_of_unreadable_frames_gives_up_the_stream() {
         let mut decodeur = ChunkDecoder::new();
         let mut sorties = Vec::new();
         for _ in 0..MAX_DECODE_ERRORS {
@@ -722,7 +719,7 @@ mod tests {
     }
 
     #[test]
-    fn une_erreur_transportee_dans_le_flux_est_terminale() {
+    fn an_error_carried_in_the_stream_is_terminal() {
         let evenements = jouer(&[
             r#"{"choices":[{"delta":{"content":"a"}}]}"#,
             r#"{"error":{"message":"upstream refused","code":502}}"#,
@@ -741,7 +738,7 @@ mod tests {
     }
 
     #[test]
-    fn une_annulation_n_invente_pas_d_appel_a_moitie_decrit() {
+    fn a_cancellation_invents_no_half_described_call() {
         let mut decodeur = ChunkDecoder::new();
         let mut sorties = Vec::new();
         decodeur.on_data(
@@ -752,7 +749,7 @@ mod tests {
 
         assert!(
             appels(&sorties).is_empty(),
-            "un appel tronqué ne devient jamais une proposition d'action : {sorties:?}"
+            "a truncated call never becomes a proposed action: {sorties:?}"
         );
         assert_eq!(
             sorties.last(),
@@ -763,17 +760,17 @@ mod tests {
     }
 
     #[test]
-    fn une_rupture_de_transport_termine_le_flux() {
+    fn a_transport_break_ends_the_stream() {
         let mut decodeur = ChunkDecoder::new();
         let mut sorties = Vec::new();
         decodeur.on_data(r#"{"choices":[{"delta":{"content":"a"}}]}"#, &mut sorties);
-        decodeur.transport_error("connexion réinitialisée".to_owned(), &mut sorties);
+        decodeur.transport_error("connection reset".to_owned(), &mut sorties);
         assert!(decodeur.is_done());
         assert!(sorties.last().is_some_and(ChatEvent::is_terminal));
     }
 
     #[test]
-    fn rien_n_est_decode_apres_la_fin() {
+    fn nothing_is_decoded_after_the_end() {
         let mut decodeur = ChunkDecoder::new();
         let mut sorties = Vec::new();
         decodeur.on_data(DONE_SENTINEL, &mut sorties);

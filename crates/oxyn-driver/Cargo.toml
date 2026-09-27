@@ -1,11 +1,11 @@
 [package]
 name = "oxyn-driver"
-description = "Traits Driver / Session / Cursor et registre de drivers"
+description = "Driver / Session / Cursor traits and driver registry"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
-# Apache-2.0 et non la GPL du workspace : un driver tiers lie cette crate
-# (ADR-0044).
+# Apache-2.0 rather than the workspace's GPL: a third-party driver links this
+# crate (ADR-0044).
 license = "Apache-2.0"
 repository.workspace = true
 

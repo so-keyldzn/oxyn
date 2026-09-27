@@ -141,11 +141,11 @@ the invariant — not the transport:
 * `oxyn_ai::privacy::agent_reach` and `allows_external_agent` carry the privacy
   consequence, **in `oxyn-ai`**: `oxyn-core` does not know `Reach`, and
   depending on it would reverse the direction of dependencies. Held by
-  `un_agent_externe_ne_sert_jamais_une_connexion_locale`.
+  `an_external_agent_never_serves_a_local_connection`.
 
 * `oxyn_ai::external::permission_for` decides the second authorization domain,
   kind by kind, refusal by default. Three tests, including
-  `aucun_acces_au_systeme_nest_accorde`, which enumerates the kinds rather than
+  `no_system_access_is_granted`, which enumerates the kinds rather than
   treating them as a block — adding a variant to the protocol must not relax the
   guarantee silently.
 
@@ -157,7 +157,7 @@ The protocol's example starts from a single string — `"python my_agent.py"` �
 that it splits. Splitting a command line is a grammar, hence a surface: a path
 containing a space, a quote or a semicolon takes on a meaning nobody intended.
 `AcpAgentConfig::new(command).args(…)` passes the parts separately, and that is
-the path taken. Held by `la_commande_et_ses_arguments_ne_sont_jamais_recolles`,
+the path taken. Held by `the_command_and_its_arguments_are_never_glued_back`,
 which passes `/opt/mes agents/claude code` and the argument `; rm -rf /` and
 checks that they arrive intact and distinct.
 
@@ -177,7 +177,7 @@ letting the agent ask again on every turn would make it lose its own in front of
 a user who would not understand why the conversation goes in circles. Failing a
 suitable option, the answer is `Cancelled`: pretending to allow by selecting a
 reject option, or the reverse, would be worse than interrupting. Held by three
-tests, including `aucune_option_convenable_ne_se_remplace_par_son_contraire`.
+tests, including `no_suitable_option_is_replaced_by_its_opposite`.
 
 * `oxyn_ai::external::turn::run_turn` wires the complete turn: tier check,
   launch, `InitializeRequest` → `NewSessionRequest` → `PromptRequest`, chunks
@@ -209,7 +209,7 @@ given two ways to say the same thing.
 A table separate from `ai_providers`, not added columns: an agent has no
 endpoint, no model, no secret reference, and making them cohabit would have
 produced a table half of whose columns mean nothing depending on the row. The
-test `la_table_na_aucune_colonne_de_secret` reads the **schema** rather than the
+test `the_table_has_no_secret_column` reads the **schema** rather than the
 documentation — a column added one day "just for a token" would turn no other
 test red.
 
@@ -224,7 +224,7 @@ This refusal holds for the reason that already protects a provider's
 declaration, **even more strongly**: declaring an external agent means
 designating a **program to launch**. An agent that managed it would obtain
 arbitrary code execution on the machine, by the shortest path there is. Held by
-`un_agent_ne_declare_pas_dagent_externe`, whose hostile declaration is
+`an_agent_does_not_declare_an_external_agent`, whose hostile declaration is
 `/bin/sh -c "curl … | sh"` — reading the list, on the other hand, remains
 allowed, since it declares nothing.
 

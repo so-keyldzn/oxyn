@@ -1,365 +1,367 @@
-//! Ce qu'une conversation laisse voir **pendant** qu'elle se déroule.
+//! What a conversation shows **while** it unfolds.
 //!
-//! # Le défaut que ce module ferme
+//! # The defect this module closes
 //!
-//! [`AgentRuntime::run`](crate::runtime::AgentRuntime::run) déroule plusieurs
-//! tours et plusieurs appels d'outils avant de rendre un [`AgentOutcome`]. Une
-//! interface branchée sur cette seule valeur n'a rien à afficher entre-temps :
-//! un sablier, puis un mur de texte. Or « un agent qui travaille en silence
-//! pendant huit tours est indistinguable d'un agent bloqué »
-//! ([UX-SPEC](../../../docs/UX-SPEC.md)) — et l'utilisateur qui ne peut pas
-//! distinguer les deux tue le processus.
+//! [`AgentRuntime::run`](crate::runtime::AgentRuntime::run) runs several turns
+//! and several tool calls before returning an [`AgentOutcome`]. An interface
+//! wired to that single value has nothing to display in the meantime: an
+//! hourglass, then a wall of text. Yet "an agent working silently for eight
+//! turns is indistinguishable from a stuck agent"
+//! ([UX-SPEC](../../../docs/UX-SPEC.md)) — and the user who cannot tell the
+//! two apart kills the process.
 //!
-//! Un [`AgentObserver`] est donc notifié à chaque instant où quelque chose
-//! devient visible : un tour commence, un fragment de réponse arrive, une
-//! commande part, un rapport revient, la conversation se termine.
+//! An [`AgentObserver`] is therefore notified at every moment something
+//! becomes visible: a turn starts, a fragment of answer arrives, a command
+//! leaves, a report comes back, the conversation ends.
 //!
-//! # L'observateur ne peut pas devenir un canal d'entrée
+//! # The observer cannot become an input channel
 //!
-//! C'est la propriété qui compte. [`AgentObserver::observe`] ne rend **rien**,
-//! et un [`AgentEvent`] n'emprunte la conversation à aucun moment : il n'existe
-//! aucun chemin par lequel ce qu'un observateur a vu — le message entier d'un
-//! serveur, par exemple — puisse rejoindre l'invite du tour suivant. Ce qui
-//! entre dans une invite passe toujours par
-//! [`ContextBuilder::build`](crate::context::ContextBuilder::build) et
-//! `ToolOutcome::from_dispatch`, jamais par ici (I-04).
+//! It is the property that matters. [`AgentObserver::observe`] returns
+//! **nothing**, and an [`AgentEvent`] borrows the conversation at no point:
+//! there is no path by which what an observer saw — a server's whole message,
+//! for instance — could reach the next turn's prompt. What goes into a prompt
+//! always goes through
+//! [`ContextBuilder::build`](crate::context::ContextBuilder::build) and
+//! `ToolOutcome::from_dispatch`, never through here (I-04).
 //!
-//! # Ce qui va à l'utilisateur n'est pas ce qui va au modèle
+//! # What goes to the user is not what goes to the model
 //!
-//! L'utilisateur a le droit de lire le message entier de son serveur : c'est sa
-//! base. Le modèle, non — le niveau de la connexion en décide, et sous
-//! `Metadata` le message ne sort pas (voir [`crate::failure`]). L'observateur
-//! reçoit donc les **faits entiers**, dans un [`DispatchOutcome`], et non le
-//! texte filtré qui est parti au fournisseur.
+//! The user has the right to read their server's whole message: it is their
+//! database. The model does not — the connection's tier decides, and under
+//! `Metadata` the message does not leave (see [`crate::failure`]). The observer
+//! therefore receives the **whole facts**, in a [`DispatchOutcome`], and not
+//! the filtered text that went to the provider.
 //!
-//! Les deux peuvent différer, et UX-SPEC demande que le panneau le dise :
-//! « cacher l'écart ferait passer une réponse mal informée pour une réponse
-//! fausse ». L'écart est donc porté par l'événement lui-même
-//! ([`AgentEvent::CommandReported::withheld`]), constaté et non redéduit — un
-//! appelant qui rejouerait la règle du filtre en divergerait le jour où elle
-//! change.
+//! The two can differ, and UX-SPEC requires the panel to say so: "hiding the
+//! gap would pass a poorly informed answer off as a wrong answer". The gap is
+//! therefore carried by the event itself
+//! ([`AgentEvent::CommandReported::withheld`]), observed and not re-deduced — a
+//! caller that replayed the filter's rule would diverge from it the day it
+//! changes.
 //!
-//! # Ce qu'un observateur n'a pas le droit de faire
+//! # What an observer is not allowed to do
 //!
-//! Bloquer. Il est appelé depuis la boucle asynchrone, entre deux fragments de
-//! flux ; une implémentation qui attend fige la conversation, et avec elle
-//! l'annulation que l'utilisateur cherche à cliquer. La signature l'impose
-//! autant qu'un type le peut : [`observe`](AgentObserver::observe) n'est pas
-//! `async`, donc rien ne s'y attend ; elle prend `&self`, donc rien ne s'y
-//! verrouille en écriture par construction ; et [`AgentEvent`] est emprunté,
-//! donc la garder revient à la recopier. Ce qu'une implémentation fait de
-//! juste, c'est pousser dans un canal et rendre la main.
+//! Block. It is called from the asynchronous loop, between two stream
+//! fragments; an implementation that waits freezes the conversation, and with
+//! it the cancellation the user is trying to click. The signature enforces it
+//! as much as a type can: [`observe`](AgentObserver::observe) is not `async`,
+//! so nothing is awaited in it; it takes `&self`, so nothing is write-locked
+//! in it by construction; and [`AgentEvent`] is borrowed, so keeping it means
+//! copying it. What an implementation does right is push into a channel and
+//! return.
 
 use oxyn_core::ConnectionId;
 
 use crate::error::AiError;
 use crate::runtime::{AgentOutcome, DispatchOutcome};
 
-/// Qui regarde une conversation se dérouler.
+/// Who watches a conversation unfold.
 ///
-/// Implémenté par l'interface, qui pousse chaque événement vers son panneau.
-/// L'implémentation muette est fournie pour `()` : un appelant qui n'observe
-/// rien passe `&()`, et il n'existe donc pas de seconde méthode `run` à
-/// maintenir — un doublon d'API est un chemin qui finit moins audité que
-/// l'autre.
+/// Implemented by the interface, which pushes every event towards its panel.
+/// The silent implementation is provided for `()`: a caller that observes
+/// nothing passes `&()`, and there is therefore no second `run` method to
+/// maintain — a duplicate API is a path that ends up less audited than the
+/// other.
 ///
-/// # Le contrat de l'implémentation
+/// # The implementation's contract
 ///
-/// 1. **rendre la main tout de suite** : aucun I/O, aucune attente, aucun
-///    verrou disputé. La méthode n'est pas `async` précisément pour qu'aucun
-///    `await` ne puisse s'y glisser ; ce qui reste possible — ouvrir un
-///    fichier, verrouiller un mutex tenu ailleurs — fige la conversation et
-///    l'annulation avec elle (I-05) ;
-/// 2. **ne rien décider** : un événement est une notification, pas une
-///    négociation. La méthode ne rend rien, et c'est délibéré ;
-/// 3. **ne pas journaliser un événement en entier** : il porte du contenu de
-///    la base, y compris le message entier d'un serveur (I-03).
+/// 1. **return immediately**: no I/O, no waiting, no contended lock. The method
+///    is not `async` precisely so that no `await` can slip into it; what
+///    remains possible — opening a file, locking a mutex held elsewhere —
+///    freezes the conversation and the cancellation with it (I-05);
+/// 2. **decide nothing**: an event is a notification, not a negotiation. The
+///    method returns nothing, deliberately;
+/// 3. **do not log an event whole**: it carries database content, including a
+///    server's whole message (I-03).
 pub trait AgentObserver: Send + Sync {
-    /// Signale qu'une chose vient de devenir visible.
+    /// Signals that something has just become visible.
     ///
-    /// Appelée depuis la boucle de la conversation, y compris entre deux
-    /// fragments d'un flux. Voir le contrat du trait.
+    /// Called from the conversation's loop, including between two fragments of
+    /// a stream. See the trait's contract.
     fn observe(&self, event: AgentEvent<'_>);
 }
 
-/// L'observateur muet.
+/// The silent observer.
 ///
-/// Ce que passe un appelant qui n'a pas d'interface à nourrir — les tests, un
-/// futur usage en ligne de commande. Le compilateur en efface les appels.
+/// What a caller with no interface to feed passes — the tests, a future
+/// command-line use. The compiler erases the calls.
 impl AgentObserver for () {
     fn observe(&self, _event: AgentEvent<'_>) {}
 }
 
-/// Des jetons consommés, tels que le fournisseur les déclare.
+/// Tokens consumed, as the provider declares them.
 ///
-/// `None` veut dire « non déclaré », jamais zéro : un cache dont on ignore
-/// l'usage n'est pas un cache inutilisé.
+/// `None` means "not declared", never zero: a cache whose use we do not know
+/// is not an unused cache.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub struct TokenUsage {
-    /// Jetons d'entrée facturés.
+    /// Billed input tokens.
     pub input: u32,
-    /// Jetons produits.
+    /// Produced tokens.
     pub output: u32,
-    /// Jetons d'entrée relus depuis le cache du fournisseur.
+    /// Input tokens read back from the provider's cache.
     pub cache_read: Option<u32>,
-    /// Jetons d'entrée écrits dans le cache du fournisseur.
+    /// Input tokens written to the provider's cache.
     pub cache_write: Option<u32>,
-    /// Jetons de raisonnement, quand le fournisseur les distingue. `None`
-    /// signifie « non déclaré », jamais « zéro ».
+    /// Reasoning tokens, when the provider distinguishes them. `None` means
+    /// "not declared", never "zero".
     pub reasoning: Option<u32>,
 }
 
-/// Une étape du plan d'un agent externe.
+/// A step of an external agent's plan.
 ///
-/// Sans identifiant : en v1 du protocole, une entrée n'a pour identité que sa
-/// position. Deux envois successifs peuvent changer son texte comme son état.
+/// Without an identifier: in v1 of the protocol, an entry's only identity is
+/// its position. Two successive sends can change its text as well as its
+/// state.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct PlanStep<'a> {
-    /// Ce que l'étape dit, tel que l'agent l'écrit.
+    /// What the step says, as the agent writes it.
     pub content: &'a str,
-    /// L'importance que l'agent lui donne.
+    /// The importance the agent gives it.
     pub priority: PlanPriority,
-    /// Où elle en est.
+    /// Where it stands.
     pub status: PlanStatus,
 }
 
-/// L'importance d'une étape, telle que le protocole la nomme.
+/// A step's importance, as the protocol names it.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlanPriority {
-    /// Haute.
+    /// High.
     High,
-    /// Moyenne.
+    /// Medium.
     Medium,
-    /// Basse.
+    /// Low.
     Low,
 }
 
-/// L'avancement d'une étape. Trois états, et pas un de plus : le protocole n'a
-/// pas d'étape abandonnée.
+/// A step's progress. Three states, and not one more: the protocol has no
+/// abandoned step.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum PlanStatus {
-    /// Pas encore commencée.
+    /// Not started yet.
     Pending,
-    /// En cours.
+    /// In progress.
     InProgress,
-    /// Terminée.
+    /// Done.
     Completed,
 }
 
-/// Où en est un outil d'agent externe.
+/// Where an external agent's tool stands.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[non_exhaustive]
 pub enum ExternalToolStatus {
-    /// Annoncé, pas encore lancé : arguments en cours ou autorisation attendue.
+    /// Announced, not launched yet: arguments in progress or permission
+    /// awaited.
     Pending,
-    /// En cours.
+    /// In progress.
     Running,
-    /// Terminé.
+    /// Done.
     Completed,
-    /// Échoué — ou refusé par Oxyn.
+    /// Failed — or refused by Oxyn.
     Failed,
 }
 
-/// Ce qui vient de devenir visible dans une conversation.
+/// What has just become visible in a conversation.
 ///
-/// Emprunté plutôt que possédé : un fragment de texte arrive par dizaines par
-/// seconde, et le recopier pour un observateur qui n'en veut peut-être rien
-/// serait un coût imposé à tous. Une implémentation qui doit conserver un
-/// événement en recopie ce dont elle a besoin.
+/// Borrowed rather than owned: a text fragment arrives by the dozens per
+/// second, and copying it for an observer that may want none of it would be a
+/// cost imposed on all. An implementation that must keep an event copies what
+/// it needs.
 ///
-/// Les variantes portent les **faits entiers**, dans les termes de celui qui a
-/// exécuté — pas le texte filtré qui est parti au modèle. C'est l'inverse d'une
-/// invite, et c'est voulu : voir l'en-tête du module.
+/// The variants carry the **whole facts**, in the terms of whoever executed —
+/// not the filtered text that went to the model. It is the opposite of a
+/// prompt, deliberately: see the module header.
 ///
-/// `#[non_exhaustive]` : une variante s'ajoutera, et une interface qui ne la
-/// connaît pas doit continuer de compiler plutôt que d'obliger à tout relire.
+/// `#[non_exhaustive]`: a variant will be added, and an interface that does
+/// not know it must keep compiling rather than forcing everything to be
+/// reread.
 #[derive(Debug, Clone, Copy)]
 #[non_exhaustive]
 pub enum AgentEvent<'a> {
-    /// Un tour commence.
+    /// A turn starts.
     ///
-    /// `turn` compte à partir de 1. `max_turns` l'accompagne pour que le
-    /// panneau puisse dire « 3 / 8 » sans avoir à connaître la déclaration de
-    /// l'agent — et pour que le plafond, quand il tombe, ne surprenne pas.
+    /// `turn` counts from 1. `max_turns` comes with it so that the panel can
+    /// say "3 / 8" without knowing the agent's declaration — and so that the
+    /// ceiling, when it falls, does not surprise.
     TurnStarted {
-        /// Le numéro du tour qui commence, à partir de 1.
+        /// The number of the starting turn, from 1.
         turn: usize,
-        /// Le plafond de tours de cet agent.
+        /// This agent's turn ceiling.
         max_turns: usize,
     },
 
-    /// Un fragment de la réponse du modèle vient d'arriver.
+    /// A fragment of the model's answer has just arrived.
     ///
-    /// C'est ce qui permet à la réponse de s'écrire au fil du flux, et à
-    /// l'annulation de rester offerte pendant tout ce temps plutôt qu'entre
-    /// deux tours seulement (UX-SPEC).
+    /// It is what lets the answer write itself as the stream flows, and the
+    /// cancellation remain offered during all that time rather than only
+    /// between two turns (UX-SPEC).
     ///
-    /// Le texte peut recopier du contenu de la base : le journaliser revient à
-    /// journaliser ce contenu.
+    /// The text can copy database content: logging it amounts to logging that
+    /// content.
     TextDelta {
-        /// Le fragment, tel que le fournisseur l'a émis. Ni découpé sur les
-        /// mots, ni ponctué : c'est à l'affichage de le concaténer.
+        /// The fragment, as the provider emitted it. Neither split on words,
+        /// nor punctuated: it is up to the display to concatenate it.
         text: &'a str,
     },
 
-    /// Un appel d'outil vient d'être traduit en [`Command`](oxyn_core::Command)
-    /// et part au bus.
+    /// A tool call has just been translated into a
+    /// [`Command`](oxyn_core::Command) and leaves for the bus.
     ///
-    /// Émis **avant** l'exécution, et donc avant
-    /// [`CommandReported`](Self::CommandReported) : UX-SPEC exige que chaque
-    /// commande demandée par l'agent soit montrée avant son résultat.
+    /// Emitted **before** execution, hence before
+    /// [`CommandReported`](Self::CommandReported): UX-SPEC requires every
+    /// command requested by the agent to be shown before its result.
     CommandSubmitted {
-        /// Le nom de l'outil, tel que le modèle l'a demandé.
+        /// The tool's name, as the model requested it.
         tool: &'a str,
-        /// Le nom stable de la commande, celui du journal d'audit. La même
-        /// chaîne que celle qui apparaîtra dans l'historique : c'est ce qui
-        /// permet de rapprocher les deux.
+        /// The command's stable name, that of the audit log. The same string
+        /// as the one that will appear in the history: it is what lets the two
+        /// be matched.
         command: &'static str,
-        /// La connexion visée, lue sur la commande elle-même et non sur le
-        /// périmètre de la conversation. Les deux devraient coïncider ; les
-        /// afficher depuis la commande est ce qui rendrait un écart visible.
+        /// The targeted connection, read on the command itself and not on the
+        /// conversation's scope. The two should coincide; displaying it from
+        /// the command is what would make a gap visible.
         connection: Option<ConnectionId>,
-        /// La commande peut-elle modifier des données ? Connu avant le
-        /// résultat, donc affichable avant lui.
+        /// Can the command modify data? Known before the result, hence
+        /// displayable before it.
         mutating: bool,
     },
 
-    /// Le rapport d'exécution d'une commande est revenu.
+    /// A command's execution report came back.
     CommandReported {
-        /// Le nom de l'outil, tel que le modèle l'a demandé.
+        /// The tool's name, as the model requested it.
         tool: &'a str,
-        /// Ce qui s'est passé, **entier** : c'est ce que l'utilisateur a le
-        /// droit de lire, message de serveur compris. Ce n'est pas ce que le
-        /// modèle a reçu.
+        /// What happened, **whole**: it is what the user has the right to
+        /// read, server message included. It is not what the model received.
         outcome: &'a DispatchOutcome,
-        /// Ce que le modèle a reçu est-il plus pauvre que ce qui précède ?
+        /// Is what the model received poorer than the above?
         ///
-        /// `true` quand le niveau de la connexion a retenu quelque chose — le
-        /// message du serveur, sous `Local` et `Metadata`. Le panneau doit le
-        /// dire : une réponse mal informée passerait sinon pour une réponse
-        /// fausse (UX-SPEC).
+        /// `true` when the connection's tier withheld something — the server's
+        /// message, under `Local` and `Metadata`. The panel must say so: a
+        /// poorly informed answer would otherwise pass for a wrong answer
+        /// (UX-SPEC).
         ///
-        /// Constaté en comparant les deux textes, jamais redéduit de la règle
-        /// du filtre.
+        /// Observed by comparing the two texts, never re-deduced from the
+        /// filter's rule.
         withheld: bool,
     },
 
-    /// Un appel d'outil a été refusé à la traduction, avant tout bus.
+    /// A tool call was refused at translation, before any bus.
     ///
-    /// Nom d'outil inventé, outil hors liste blanche, arguments mal formés :
-    /// rien n'a été soumis, rien ne s'est exécuté. Le modèle en est informé et
-    /// peut se corriger au tour suivant ; l'utilisateur doit le voir, sans quoi
-    /// un tour paraît s'être perdu.
+    /// Invented tool name, tool outside the allowlist, malformed arguments:
+    /// nothing was submitted, nothing ran. The model is informed and can
+    /// correct itself at the next turn; the user must see it, otherwise a turn
+    /// seems to have been lost.
     CallRejected {
-        /// Le nom de l'outil, tel que le modèle l'a demandé.
+        /// The tool's name, as the model requested it.
         tool: &'a str,
-        /// Le refus. Son message est en anglais — il part aussi au modèle — et
-        /// ne recopie ni un argument, ni un résultat (voir [`crate::error`]).
+        /// The refusal. Its message is in English — it also goes to the model
+        /// — and copies neither an argument nor a result (see
+        /// [`crate::error`]).
         error: &'a AiError,
     },
 
-    /// Un fragment du raisonnement du modèle.
+    /// A fragment of the model's reasoning.
     ///
-    /// Montré à part de la réponse, replié par défaut : c'est un brouillon, pas
-    /// un avis. Il ne rejoint jamais l'invite suivante par ce chemin.
+    /// Shown apart from the answer, folded by default: it is a draft, not an
+    /// opinion. It never reaches the next prompt by this path.
     ThinkingDelta {
-        /// Le fragment, brut.
+        /// The fragment, raw.
         text: &'a str,
     },
 
-    /// Le fournisseur a raisonné mais n'en montre rien (bloc chiffré ou
-    /// rédigé). Dire qu'il y a eu un raisonnement caché vaut mieux que de le
-    /// taire : la durée d'attente, sinon, ne s'explique pas.
+    /// The provider reasoned but shows none of it (encrypted or redacted
+    /// block). Saying there was hidden reasoning is better than keeping quiet:
+    /// otherwise, the waiting time has no explanation.
     ThinkingRedacted,
 
-    /// Le modèle commence à écrire un appel d'outil.
+    /// The model starts writing a tool call.
     ///
-    /// Émis avant que les arguments soient complets : rien n'est encore
-    /// traduit, rien n'est soumis.
+    /// Emitted before the arguments are complete: nothing is translated yet,
+    /// nothing is submitted.
     ToolCallDrafted {
-        /// La position de l'appel dans le tour, clé des fragments suivants.
+        /// The call's position in the turn, key of the following fragments.
         index: u32,
-        /// Le nom de l'outil demandé.
+        /// The requested tool's name.
         tool: &'a str,
     },
 
-    /// Un fragment des arguments d'un appel en cours d'écriture.
+    /// A fragment of the arguments of a call being written.
     ToolArgumentsDelta {
-        /// La position de l'appel dans le tour.
+        /// The call's position in the turn.
         index: u32,
-        /// Un morceau de JSON, pas forcément valide seul.
+        /// A piece of JSON, not necessarily valid on its own.
         fragment: &'a str,
     },
 
-    /// La consommation déclarée par le fournisseur pour un tour.
+    /// The consumption declared by the provider for a turn.
     Usage(TokenUsage),
 
-    /// Un agent externe signale un outil **à lui** — lire, chercher, penser.
+    /// An external agent reports a tool **of its own** — read, search, think.
     ///
-    /// Ce n'est pas une commande d'Oxyn : rien n'est passé par le bus. Seul le
-    /// genre est porté, pas le titre, que l'agent compose et qui peut recopier
-    /// un chemin de la machine.
-    /// Le plan que l'agent annonce, **en entier**.
+    /// It is not an Oxyn command: nothing went through the bus. Only the kind
+    /// is carried, not the title, which the agent composes and which can copy a
+    /// path of the machine.
+    /// The plan the agent announces, **whole**.
     ///
-    /// Le protocole renvoie la liste complète à chaque envoi, et le client
-    /// **remplace** : il n'y a ni delta, ni identifiant d'entrée. Fusionner
-    /// avec le plan précédent est l'erreur qu'on écrit spontanément, et elle
-    /// produit un plan qui grossit à chaque tour sans que rien n'échoue.
+    /// The protocol sends back the complete list at every send, and the client
+    /// **replaces**: there is neither delta nor entry identifier. Merging with
+    /// the previous plan is the mistake one writes spontaneously, and it
+    /// produces a plan that grows at every turn without anything failing.
     Plan {
-        /// Les étapes, dans l'ordre donné par l'agent.
+        /// The steps, in the order given by the agent.
         steps: &'a [PlanStep<'a>],
     },
 
     ExternalToolCall {
-        /// L'identifiant de l'appel dans la session de l'agent.
+        /// The call's identifier in the agent's session.
         id: &'a str,
-        /// Le genre d'outil, en un mot stable. Absent d'une mise à jour qui ne
-        /// le répète pas.
+        /// The tool's kind, in one stable word. Absent from an update that does
+        /// not repeat it.
         kind: Option<&'static str>,
-        /// Où en est l'appel.
+        /// Where the call stands.
         status: ExternalToolStatus,
     },
 
-    /// Les réglages qu'un agent externe déclare : ses modes, et les options
-    /// qu'il laisse choisir. **L'état entier**, à remplacer. Envoyé au début
-    /// d'une question, pour qu'elle parte des réglages en vigueur ; leurs
-    /// changements, pendant une question ou entre deux, se suivent sur
+    /// The settings an external agent declares: its modes, and the options it
+    /// lets be chosen. **The whole state**, to replace. Sent at the start of a
+    /// question, so that it starts from the settings in force; their changes,
+    /// during a question or between two, are followed on
     /// `ExternalSession::settings`.
     AgentSettings(&'a crate::external::settings::AgentSettings),
 
-    /// L'occupation de la fenêtre de contexte d'un agent externe, et son coût
-    /// cumulé quand l'agent le déclare.
+    /// The occupancy of an external agent's context window, and its cumulative
+    /// cost when the agent declares it.
     ContextWindow {
-        /// Jetons actuellement dans le contexte.
+        /// Tokens currently in the context.
         used: u64,
-        /// Taille de la fenêtre.
+        /// Size of the window.
         size: u64,
-        /// Montant et devise ISO 4217, tels que l'agent les donne.
+        /// Amount and ISO 4217 currency, as the agent gives them.
         cost: Option<(f64, &'a str)>,
     },
 
-    /// Un agent externe a demandé à agir sur la machine, et Oxyn a refusé.
+    /// An external agent asked to act on the machine, and Oxyn refused.
     ///
-    /// Il n'existe pas de variante « accordé sur demande » : Oxyn ne propose
-    /// pas ce qu'il n'a pas de quoi montrer (ADR-0026).
+    /// There is no "granted on request" variant: Oxyn does not offer what it
+    /// has no means to show (ADR-0026).
     PermissionRefused {
-        /// Le genre d'action demandé.
+        /// The kind of action requested.
         kind: &'static str,
-        /// La raison, rendue aussi à l'agent.
+        /// The reason, also returned to the agent.
         reason: &'static str,
     },
 
-    /// La conversation est terminée.
+    /// The conversation is over.
     ///
-    /// Répondu, annulé, ou plafond de tours atteint — ce dernier dit avec son
-    /// nombre de tours, parce que ce n'est ni un succès ni une panne.
+    /// Answered, cancelled, or turn ceiling reached — the latter stated with
+    /// its number of turns, because it is neither a success nor a failure.
     ///
-    /// N'est **pas** émis quand la conversation s'interrompt sur une erreur :
-    /// [`run`](crate::runtime::AgentRuntime::run) la rend à son appelant, qui
-    /// la montre lui-même. L'annoncer aussi ici en ferait un second chemin,
-    /// avec deux affichages possibles pour un seul incident.
+    /// **Not** emitted when the conversation stops on an error:
+    /// [`run`](crate::runtime::AgentRuntime::run) returns it to its caller,
+    /// which shows it itself. Announcing it here too would make a second path,
+    /// with two possible displays for a single incident.
     Finished {
-        /// Comment elle s'est terminée.
+        /// How it ended.
         outcome: &'a AgentOutcome,
     },
 }

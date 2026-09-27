@@ -62,7 +62,7 @@ impl Default for RetentionPolicy {
     ///
     /// # Where the numbers come from
     ///
-    /// `une_conversation_moyenne_coute_ce_que_la_politique_suppose` writes a
+    /// `an_average_conversation_costs_what_the_policy_assumes` writes a
     /// twelve-exchange thread — a working session on a schema, with reasoning
     /// and a redacted block on every answer — and weighs it: **64 KiB of
     /// transcript, 72 KiB of file**. That ratio is the whole reason the byte

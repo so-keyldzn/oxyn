@@ -24,7 +24,7 @@ export interface InspectedRow {
 
 /**
  * The record inspector: the fields of the selected row, read-only
- * (docs/UX-SPEC.md, « Colonnes et inspection des valeurs »).
+ * (docs/UX-SPEC.md, « Columns and value inspection »).
  *
  * It follows the grid's selection and reads nothing itself: a missing page is
  * loaded from the existing result, never by a new query. Arrows move between

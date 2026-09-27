@@ -298,20 +298,20 @@ from the unpacked sources of the local registry. See [RESEARCH-NOTES](RESEARCH-N
 ```rust
 #[async_trait]
 pub trait Driver: Send + Sync + 'static {
-    fn id(&self) -> DriverId;                        // == DriverMetadata::id, vérifié
-    fn metadata(&self) -> &DriverMetadata;           // nom, champs de connexion
-    fn capabilities(&self) -> Capabilities;          // plafond indicatif, pas une promesse
+    fn id(&self) -> DriverId;                        // == DriverMetadata::id, checked
+    fn metadata(&self) -> &DriverMetadata;           // name, connection fields
+    fn capabilities(&self) -> Capabilities;          // indicative ceiling, not a promise
     async fn connect(
         &self,
         config: &ConnectionConfig,
-        credentials: &Credentials,                   // séparés de la config : cf. ci-dessous
+        credentials: &Credentials,                   // separate from the config: see below
         cancel: &CancelToken,
     ) -> Result<Box<dyn Session>>;
 }
 
 #[async_trait]
 pub trait Session: Send + Sync {
-    fn capabilities(&self) -> Capabilities;          // fait foi : dépend du serveur
+    fn capabilities(&self) -> Capabilities;          // authoritative: depends on the server
     async fn execute(&self, request: ExecRequest, cancel: &CancelToken)
         -> Result<Box<dyn Cursor>>;
     async fn cancel(&self, statement: StatementHandle) -> Result<()>;
@@ -319,24 +319,24 @@ pub trait Session: Send + Sync {
     async fn ping(&self) -> Result<Duration>;
     async fn close(self: Box<Self>) -> Result<()>;
 
-    // Fournies par défaut : refusent en nommant la capacité absente, ou rendent
-    // None, plutôt que de faire semblant. Un driver sans aperçu, sans contexte de session ou
-    // sans transactions ne les redéfinit pas.
+    // Provided by default: they refuse by naming the missing capability, or return
+    // None, rather than pretending. A driver without preview, session context or
+    // transactions does not override them.
     async fn preview_request(&self, path: &CatalogPath, limit: u32,
         shape: &PreviewShape, cancel: &CancelToken) -> Result<ExecRequest>;
     async fn set_context(&self, context: &SessionContext, cancel: &CancelToken)
-        -> Result<()>;                               // SESSION_CONTEXT ; le driver cite
-    fn context(&self) -> Option<SessionContext>;     // confirmé par le serveur ; None par défaut
+        -> Result<()>;                               // SESSION_CONTEXT; the driver quotes
+    fn context(&self) -> Option<SessionContext>;     // confirmed by the server; None by default
     async fn begin(&self, cancel: &CancelToken) -> Result<()>;
     async fn commit(&self, cancel: &CancelToken) -> Result<()>;
     async fn rollback(&self, cancel: &CancelToken) -> Result<()>;
     async fn transaction_state(&self, cancel: &CancelToken)
-        -> TransactionState;                         // après tout ce qui a été soumis ; Unknown par défaut
+        -> TransactionState;                         // after everything submitted; Unknown by default
 }
 
 #[async_trait]
 pub trait Cursor: Send {
-    fn handle(&self) -> StatementHandle;             // cible d'une annulation
+    fn handle(&self) -> StatementHandle;             // target of a cancellation
     fn schema(&self) -> SchemaRef;
     async fn next_batch(&mut self) -> Result<Option<RecordBatch>>;
     fn stats(&self) -> ExecStats;
@@ -394,15 +394,15 @@ pub struct ExecRequest {
     pub language: QueryLanguage,
     pub text: String,
     pub params: Vec<ScalarValue>,
-    pub intent: StatementIntent,     // déclaré ; reclassifié par oxyn-exec, cf. §8
-    pub risk: MutationRisk,          // déclaré ; idem
+    pub intent: StatementIntent,     // declared; reclassified by oxyn-exec, see §8
+    pub risk: MutationRisk,          // declared; likewise
     pub limits: ExecLimits,
-    pub transaction_control: bool,   // BEGIN, COMMIT, ROLLBACK… ; reclassifié, cf. §7.2
+    pub transaction_control: bool,   // BEGIN, COMMIT, ROLLBACK…; reclassified, see §7.2
 }
 
 pub struct ExecLimits {
-    pub max_rows: Option<usize>,     // défaut 10 000
-    pub timeout: Option<Duration>,   // défaut 30 s, et l'expiration annule côté serveur
+    pub max_rows: Option<usize>,     // default 10,000
+    pub timeout: Option<Duration>,   // default 30 s, and expiry cancels server-side
     pub read_only: bool,
 }
 

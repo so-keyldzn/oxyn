@@ -1,6 +1,6 @@
 [package]
 name = "oxyn-plugin"
-description = "Hôte de plugins WebAssembly (wasmtime, derrière la feature wasm-host)"
+description = "WebAssembly plugin host (wasmtime, behind the wasm-host feature)"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

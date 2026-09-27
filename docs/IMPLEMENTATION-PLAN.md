@@ -1516,7 +1516,7 @@ cases, and the third is the one that matters:
 * no dated column → **nothing**. Writing "UTC" by default would assert something
   about the content, and a `timestamp without time zone` carries no time zone:
   announcing one would invent information the server did not send.
-  This is what `un_horodatage_sans_fuseau_nen_fait_pas_annoncer_un` holds.
+  This is what `a_timestamp_without_time_zone_does_not_announce_one` holds.
 
 The time zone travels in the `ExecutionStatus::Completed` variant, not next to it:
 stored in the bar, it would survive the next result and describe rows
@@ -1707,7 +1707,7 @@ What the code guarantees, each point held by a test:
 
 * **spilled batches are never read.** `find_rows` only looks at the
   resident part ([I-05](../CLAUDE.md#i-05)), and
-  `un_lot_deborde_est_compte_et_jamais_lu_depuis_le_disque` checks that no
+  `a_spilled_batch_is_counted_and_never_read_from_disk` checks that no
   row of a spilled batch appears in the matches;
 * **what was not scanned is said.** The number of skipped batches is displayed in
   the warning color. Without it, "No match" would mean "no
@@ -1849,11 +1849,11 @@ interface is missing.**
 | Layer | State | What holds it |
 |---|---|---|
 | Declaration | done | `oxyn_core::ExternalAgentConfig` — **no secret field**, manual `Debug` that only renders the number of environment variables |
-| Persistence | done | migration 9, table `external_agents`. `la_table_na_aucune_colonne_de_secret` reads the **schema**, not the documentation |
-| Bus | done | three commands, **refused to an `Actor::Agent`** — `un_agent_ne_declare_pas_dagent_externe` |
-| Privacy | done | `Local` closed, and refused **before launch** — `le_niveau_local_refuse_avant_meme_de_lancer_le_processus` |
+| Persistence | done | migration 9, table `external_agents`. `the_table_has_no_secret_column` reads the **schema**, not the documentation |
+| Bus | done | three commands, **refused to an `Actor::Agent`** — `an_agent_does_not_declare_an_external_agent` |
+| Privacy | done | `Local` closed, and refused **before launch** — `the_local_tier_refuses_before_even_launching_the_process` |
 | Permissions | done | default refusal of everything that touches the machine; `option_for` never authorizes "always" |
-| Launch | done | command and arguments **never glued back** into a string — `la_commande_et_ses_arguments_ne_sont_jamais_recolles` |
+| Launch | done | command and arguments **never glued back** into a string — `the_command_and_its_arguments_are_never_glued_back` |
 | Conversation turn | done | `run_turn`, fragments passed up by the existing `AgentObserver` |
 | Screen row | done | `provider_settings::row::row_display` — the computation goes out, the view draws; 5 **windowless** tests |
 | List and removal | done | both kinds in **one** list, one cursor, one confirmation; `le_rang_dun_retrait_designe_la_bonne_liste` |
@@ -1932,8 +1932,8 @@ can be replayed with `cargo test -p <crate> <pattern>`.
 | Phase | State | What establishes it, by name |
 |---|---|---|
 | **0 — state and split** | held | Authoritative documents reread, Figma boards compared through the MCP server, file ownership distributed without overlap between subagents |
-| **1 — sorted, filtered, paginated preview** | held | `PreviewShape { sort, predicate, offset }` in `oxyn-core/src/preview.rs`, carried by the bus and implemented in **both** drivers. 16 tests, including `un_ordre_total_est_exige_par_le_tri_autant_que_par_la_page`, `le_texte_de_l_utilisateur_n_est_pas_reecrit`, `preview_reclassifies_driver_sql_and_refuses_writes_for_both_actors`, `preview_sqlite_is_bounded_preserves_hostile_table_and_correlates_events_and_audit`, `preview_enforces_read_only_and_row_limit_even_for_an_incorrect_driver`, `two_consecutive_pages_do_not_overlap` |
-| **2 — security and AI** | held | `PrivacyTier` governs `oxyn-ai/src/context.rs` under [I-04](../CLAUDE.md#i-04); `un_appel_d_outil_devient_une_commande_portant_actor_agent` holds [I-07](../CLAUDE.md#i-07); `declarer_un_fournisseur_n_atteint_aucune_base_et_reste_refuse_a_un_agent` and `une_reference_de_secret_vide_est_refusee` hold provider configuration; `un_point_d_acces_non_resolu_est_traite_comme_distant` keeps the cautious side; `sous_sampled_le_message_du_serveur_arrive_entier` covers raw server output |
+| **1 — sorted, filtered, paginated preview** | held | `PreviewShape { sort, predicate, offset }` in `oxyn-core/src/preview.rs`, carried by the bus and implemented in **both** drivers. 16 tests, including `a_total_order_is_required_by_sorting_as_much_as_by_paging`, `the_user_text_is_not_rewritten`, `preview_reclassifies_driver_sql_and_refuses_writes_for_both_actors`, `preview_sqlite_is_bounded_preserves_hostile_table_and_correlates_events_and_audit`, `preview_enforces_read_only_and_row_limit_even_for_an_incorrect_driver`, `two_consecutive_pages_do_not_overlap` |
+| **2 — security and AI** | held | `PrivacyTier` governs `oxyn-ai/src/context.rs` under [I-04](../CLAUDE.md#i-04); `a_tool_call_becomes_a_command_carrying_actor_agent` holds [I-07](../CLAUDE.md#i-07); `declaring_a_provider_reaches_no_database_and_stays_refused_to_an_agent` and `an_empty_secret_reference_is_refused` hold provider configuration; `an_unresolved_endpoint_is_treated_as_remote` keeps the cautious side; `under_sampled_the_server_message_arrives_whole` covers raw server output |
 | **3 — recovery and library** | held on 2026-09-14, **in the GPUI interface**: the tests cited here lived in `oxyn-app` and disappeared with `6ecb8ce`; the state in `apps/desktop` is at the [migration gate](#migration-to-the-tauri-interface) | `recovery_opens_only_after_an_abnormal_shutdown` and `l_ecran_de_reprise_annonce_l_arret_anormal_et_seulement_alors` hold the shutdown marker ([ADR-0021](adr/0021-marqueur-d-arret.md)); `returning_to_a_connection_restores_all_of_its_console_entities` restoration; `a_deleted_connection_stays_choosable_in_the_history_filter`, `merging_history_connections_appends_and_marks_without_moving_ranks` and `history_and_recent_results_read_the_same_execution_without_replaying_it` the cross-workspace filters |
 | **4 — Figma fidelity and accessibility** | held, **except one surface** | `la_marque_et_les_actions_de_l_accueil_ne_se_superposent_pas` tests the home screen **at four widths × two themes**; `chaque_theme_garde_son_texte_lisible` holds WCAG contrast; `un_controle_focalise_nest_pas_active_par_le_clavier` and `production_focus_stays_inside_review_and_enter_never_approves` hold [I-02](../CLAUDE.md#i-02) on the keyboard. `Messages` remains — see below |
 | **5 — final validation** | held | `make qualite` green at each batch, real output cited; budgets measured and dated in [PERFORMANCE](PERFORMANCE.md), "not measured" stated where they are not |
@@ -1967,7 +1967,7 @@ table whose rows are all green teaches nothing.
 | Requirement | State | What establishes it |
 |---|---|---|
 | **Code** | held | `make qualite`: format, Clippy `-D warnings`, tests, doc, foundation, dated TODOs |
-| **Bus** | held | No second execution API. Provider **and agent** declarations are refused to an `Actor::Agent` — `un_agent_ne_declare_pas_dagent_externe`, whose hostile declaration is `/bin/sh -c "curl … \| sh"`. An `oxyn-ui` test forbids any component from building a `Command`, and a second one checks that **all** sources are covered by this guard |
+| **Bus** | held | No second execution API. Provider **and agent** declarations are refused to an `Actor::Agent` — `an_agent_does_not_declare_an_external_agent`, whose hostile declaration is `/bin/sh -c "curl … \| sh"`. An `oxyn-ui` test forbids any component from building a `Command`, and a second one checks that **all** sources are covered by this guard |
 | **Drivers** | held, with its reservation | 136 tests pass without a server; **34 remain ignored** for lack of PostgreSQL. They passed twice in a row during the 2026-09-11 campaign with a disposable cluster; they are not replayed at every gate |
 | **Native UI** | **not held** | The native acceptance test is **forbidden**: the user asked on 2026-09-10 that we stop handling their windows, and the instruction has not been lifted. It is the only possible pixel proof; everything else in the interface is proven without a screen, which does not replace it |
 | **Figma** | held, **except `Messages`** | Boards compared through the MCP server; `Propose change…`, `Find in loaded results…`, the display time zone and the hidden-columns reservation implemented since. `Messages` is blocked **upstream**: `sqlx-postgres 0.9.0` throws notices into a `tracing` event without connection identity, `mod message` being private |
@@ -2209,13 +2209,13 @@ cover it.
 
 | Requirement | What holds it |
 |---|---|
-| Refusal of production writes to an agent | `oxyn-core/src/policy.rs`: `actor.is_agent() && mutating && env.is_production()` returns `Decision::deny` — a refusal, not a confirmation ([I-02](../CLAUDE.md#i-02)). Test: `un_agent_n_est_jamais_moins_restreint_qu_un_humain` |
+| Refusal of production writes to an agent | `oxyn-core/src/policy.rs`: `actor.is_agent() && mutating && env.is_production()` returns `Decision::deny` — a refusal, not a confirmation ([I-02](../CLAUDE.md#i-02)). Test: `an_agent_is_never_less_restricted_than_a_human` |
 | Single context gateway | `ContextBuilder::build` (`oxyn-ai/src/context.rs`), the only factory of `AgentContext` |
 | No raw server output | `FailureReport` filters **at construction**, under the connection's tier |
 | No AI output executed | `open_proposal` opens a console and runs nothing; it even refuses to write without provenance |
 | Persistent provenance | `documents.provenance` column, `coalesce` on write, visible on the tab **and** in the library |
-| Sentinel test | `aucune_sentinelle_natteint_le_fichier_de_workspace` — sweeps **all** tables and columns via `sqlite_master`, without naming any |
-| I-04 gate typed for **both** destinations | **held since 2026-09-15.** `run_turn` takes an `AgentPrompt`, whose only constructor requires the tier ([ADR-0027](adr/0027-porte-unique-pour-les-deux-destinations.md), option B). `run_turn` keeps its own check: the gate protects assembly, the check protects launch. Tests: `sous_local_aucune_invite_ne_se_compose`, plus two `compile_fail` that forbid any naive constructor |
+| Sentinel test | `no_sentinel_reaches_the_workspace_file` — sweeps **all** tables and columns via `sqlite_master`, without naming any |
+| I-04 gate typed for **both** destinations | **held since 2026-09-15.** `run_turn` takes an `AgentPrompt`, whose only constructor requires the tier ([ADR-0027](adr/0027-porte-unique-pour-les-deux-destinations.md), option B). `run_turn` keeps its own check: the gate protects assembly, the check protects launch. Tests: `under_local_no_prompt_is_composed`, plus two `compile_fail` that forbid any naive constructor |
 | I-03 — log channel | **Preventive** test: nothing formats a secret on this path today, so removing a guard elsewhere does not turn it red on its own; checked by hand by adding a `tracing::debug!` that formats a provider key in `save_ai_provider`, confirming the red, then reverting. `no_sentinel_reaches_the_journal` (`crates/oxyn-desktop/src/sentinel_tests.rs`) — the binary's whole tracing output at `OXYN_LOG=trace`, through the two real filters of `logging::layer`, during a refused connection and a provider edit |
 | I-03 — displayed error channel | Tests the removal of an existing guard — `redact_key` (`oxyn-llm`). `no_sentinel_reaches_an_error_shown_to_the_front` (`crates/oxyn-desktop/src/sentinel_tests.rs`) — serialized `IpcError` and all messages of the `Channel<AiUpdate>`, with a hostile provider that copies the key it receives and a provider URL that carries a secret |
 | I-03 — AI prompt channel | **Preventive** test: `ContextBuilder::build` takes neither the connection nor the provider as an argument, so nothing formats the secret there today; checked by hand by making the provider key appear in the question assembled by `converse` (`backend/ai/conversation.rs`), confirming the red, then reverting. `no_sentinel_reaches_the_prompt_sent_to_a_provider` (`crates/oxyn-desktop/src/sentinel_tests.rs`) — the exact body of the `chat/completions` request sent to the provider, prompt assembled by `ContextBuilder` included |
@@ -2232,7 +2232,7 @@ says what is missing.
 | Requirement | What holds it |
 |---|---|
 | Clean/abnormal shutdown marker | `PreviousShutdown { Never, Clean, Abnormal }` ([ADR-0021](adr/0021-marqueur-d-arret.md)) |
-| Crash/restart tests | `une_premiere_ouverture_ne_signale_aucun_arret_anormal`, `une_fermeture_ordinaire_ne_declenche_pas_la_reprise`, `une_session_laissee_ouverte_et_muette_est_un_arret_anormal`, `une_instance_qui_bat_encore_n_est_pas_un_plantage`, `un_battement_ne_ressuscite_pas_une_session_fermee` (`oxyn-store/src/sessions.rs`) |
+| Crash/restart tests | `a_first_opening_reports_no_abnormal_shutdown`, `an_ordinary_close_does_not_trigger_recovery`, `a_session_left_open_and_silent_is_an_abnormal_shutdown`, `an_instance_still_beating_is_not_a_crash`, `a_heartbeat_does_not_revive_a_closed_session` (`oxyn-store/src/sessions.rs`) |
 | Object location and sub-tab restored without reading | **done on 2026-09-25.** The single field `object_location` of [ADR-0013](adr/0013-preferences-workspace.md), read and written by `read_object_location` / `write_object_location`. On the Rust side, `a_restored_location_and_its_sub_tab_come_back_without_reading_anything` (`crates/oxyn-desktop/src/backend/settings/location_tests.rs`) proves that rereading the location only emits preference commands, without a session. On the front-end side, `a restored object tab` (`apps/desktop/src/features/workspace/object-view.test.tsx`) proves that the reopened tab neither makes the preview visible nor loads metadata before "Read it now", and does not move the saved location; the recovery screen offers it (story `Oxyn/RecoveryList`, `WithAnObjectTab`) |
 | Restoration without overwriting data | **done on 2026-09-25.** `a_restored_object_that_vanished_is_explained_and_never_erased` (same Rust file) proves that neither a read nor another write erases it, and that only closing the tab forgets it. The explanation (story `Oxyn/RestoredObjectNotice`, `Vanished`) appears when rereading the columns no longer finds the relation — on Structure, Indexes and outgoing Relations; elsewhere, the server's error says so |
 | Deleted or out-of-workspace connections in the filters | **not held on the interface side** — `a_deleted_connection_stays_choosable_in_the_history_filter` and `merging_history_connections_appends_and_marks_without_moving_ranks` deleted |
@@ -2332,7 +2332,7 @@ a requested sort, the driver orders by the primary key alone, and counts among i
 consequences "a sort imposed by default on the primary key".
 
 **The code does the opposite.** Neither driver composes any `ORDER BY` in
-the absence of a request — the test `un_apercu_sans_demande_ne_compose_ni_where_ni_order_by`
+the absence of a request — the test `a_preview_without_request_composes_neither_where_nor_order_by`
 holds it explicitly in `oxyn-driver-sqlite` as in `oxyn-driver-postgres`.
 [UX-SPEC](UX-SPEC.md) confirms the code: "without a requested sort, the order of rows
 is not guaranteed".
@@ -2381,11 +2381,11 @@ carries `superseded` ([ADR-0029](adr/0029-interface-tauri-shadcn.md)).
 
 | ADR | Status | Test that holds it, or reason for keeping it |
 |---|---|---|
-| [0021](adr/0021-marqueur-d-arret.md) | accepted | `une_session_laissee_ouverte_et_muette_est_un_arret_anormal` (`oxyn-store/src/sessions.rs`), `an_abandoned_session_is_reported_as_abnormal` (`oxyn-desktop/src/backend/recovery.rs`) |
-| [0023](adr/0023-fournisseurs-declares-et-provenance.md) | accepted | `aucune_url_porteuse_d_identifiants_n_atteint_le_disque` (`oxyn-store/src/providers.rs`), `un_point_d_acces_non_resolu_ne_beneficie_pas_du_doute` (`oxyn-llm/src/reach.rs`) |
-| [0026](adr/0026-agents-externes-acp.md) | accepted | `un_agent_externe_ne_sert_jamais_une_connexion_locale` (`oxyn-ai/src/privacy.rs`), `la_table_na_aucune_colonne_de_secret` (`oxyn-store/src/agents/tests.rs`) |
-| [0027](adr/0027-porte-unique-pour-les-deux-destinations.md) | accepted | `sous_local_aucune_invite_ne_se_compose` (`oxyn-ai/src/external/prompt/tests.rs`), `le_niveau_local_refuse_avant_meme_de_lancer_le_processus` (`oxyn-ai/src/external/tests.rs`) |
-| [0028](adr/0028-pas-dordre-par-defaut-pas-de-page-sans-ordre-total.md) | accepted | `un_apercu_sans_demande_ne_compose_ni_where_ni_order_by` (both drivers), `no_page_is_offered_without_a_total_order` (`oxyn-desktop/src/ipc/metadata.rs`) |
+| [0021](adr/0021-marqueur-d-arret.md) | accepted | `a_session_left_open_and_silent_is_an_abnormal_shutdown` (`oxyn-store/src/sessions.rs`), `an_abandoned_session_is_reported_as_abnormal` (`oxyn-desktop/src/backend/recovery.rs`) |
+| [0023](adr/0023-fournisseurs-declares-et-provenance.md) | accepted | `no_url_carrying_credentials_reaches_the_disk` (`oxyn-store/src/providers.rs`), `an_unresolved_endpoint_gets_no_benefit_of_the_doubt` (`oxyn-llm/src/reach.rs`) |
+| [0026](adr/0026-agents-externes-acp.md) | accepted | `an_external_agent_never_serves_a_local_connection` (`oxyn-ai/src/privacy.rs`), `the_table_has_no_secret_column` (`oxyn-store/src/agents/tests.rs`) |
+| [0027](adr/0027-porte-unique-pour-les-deux-destinations.md) | accepted | `under_local_no_prompt_is_composed` (`oxyn-ai/src/external/prompt/tests.rs`), `the_local_tier_refuses_before_even_launching_the_process` (`oxyn-ai/src/external/tests.rs`) |
+| [0028](adr/0028-pas-dordre-par-defaut-pas-de-page-sans-ordre-total.md) | accepted | `a_preview_without_request_composes_neither_where_nor_order_by` (both drivers), `no_page_is_offered_without_a_total_order` (`oxyn-desktop/src/ipc/metadata.rs`) |
 | [0029](adr/0029-interface-tauri-shadcn.md) | accepted | `controler_graphe_dependances` of `.claude/verifier_socle.py` (through `make socle`), `a_window_crosses_batches_and_stays_bounded` (`oxyn-desktop/src/backend/results.rs`). The measurement campaign is its **reconsideration** condition, not a prerequisite |
 | [0031](adr/0031-validation-des-reponses-ipc.md) | accepted | "rejects what the grid could not draw, rather than letting it through" (`apps/desktop/src/lib/ipc/types.test.ts`), "degrades an unknown ending instead of refusing the event" (`ai.test.ts`) |
 | [0032](adr/0032-agent-externe-confine-au-lancement.md) | accepted | `claude_agent_keeps_no_tool_of_its_own` (`oxyn-ai/src/external/confine.rs`), `a_confined_agent_is_put_in_its_mode_first_and_cut_off_as_soon_as_it_leaves` (`external/session/tests.rs`) |

@@ -1,17 +1,17 @@
-//! La taille d'un lot Arrow — en lignes **et** en octets.
+//! The size of an Arrow batch — in rows **and** in bytes.
 //!
-//! Un `batch_size` compté seulement en nombre de lignes marche sur les tables de
-//! démonstration et déclenche l'OOM sur les vraies : mille lignes portant chacune
-//! un BLOB d'un mégaoctet font un gigaoctet
-//! ([`DRIVER-CONTRACT` §3](../../../docs/DRIVER-CONTRACT.md)). Les deux bornes
-//! sont donc portées ensemble, et la première atteinte ferme le lot.
+//! A `batch_size` counted only in rows works on demo tables and triggers the OOM
+//! on real ones: a thousand rows each carrying a one-megabyte BLOB make a
+//! gigabyte ([`DRIVER-CONTRACT` §3](../../../docs/DRIVER-CONTRACT.md)). Both
+//! bounds are therefore carried together, and the first one reached closes the
+//! batch.
 
 use std::fmt;
 
-/// Bornes d'un lot Arrow produit par [`SqliteCursor`](crate::SqliteCursor).
+/// Bounds of an Arrow batch produced by [`SqliteCursor`](crate::SqliteCursor).
 ///
-/// Les deux bornes sont des **plafonds** : un lot est fermé dès que l'une est
-/// atteinte, et un lot peut être plus petit si la source s'épuise avant.
+/// Both bounds are **ceilings**: a batch is closed as soon as one is reached, and
+/// a batch may be smaller if the source runs out before.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct BatchLimits {
     max_rows: usize,
@@ -19,20 +19,20 @@ pub struct BatchLimits {
 }
 
 impl BatchLimits {
-    /// Lignes par lot, par défaut.
+    /// Rows per batch, by default.
     ///
-    /// 8 192 est un compromis usuel : assez grand pour que le coût par lot
-    /// (allocation des tampons Arrow, aller-retour de canal) soit négligeable,
-    /// assez petit pour que le premier lot parte vite.
+    /// 8,192 is a usual compromise: large enough for the per-batch cost (allocation
+    /// of Arrow buffers, channel round trip) to be negligible, small enough for the
+    /// first batch to leave quickly.
     pub const DEFAULT_MAX_ROWS: usize = 8_192;
 
-    /// Octets de données par lot, par défaut.
+    /// Data bytes per batch, by default.
     ///
-    /// C'est **cette** borne qui protège la mémoire : elle est comptée sur la
-    /// taille des valeurs lues, pas sur le nombre de lignes.
+    /// **This** bound is what protects memory: it is counted on the size of the
+    /// values read, not on the number of rows.
     pub const DEFAULT_MAX_BYTES: usize = 8 * 1024 * 1024;
 
-    /// Les bornes par défaut.
+    /// The default bounds.
     #[must_use]
     pub const fn new() -> Self {
         Self {
@@ -41,19 +41,19 @@ impl BatchLimits {
         }
     }
 
-    /// Remplace le plafond de lignes.
+    /// Replaces the row ceiling.
     ///
-    /// La valeur est ramenée à 1 au minimum : un lot de zéro ligne ferait
-    /// tourner la boucle de lecture sans jamais avancer.
+    /// The value is raised to 1 at minimum: a zero-row batch would spin the read
+    /// loop without ever advancing.
     #[must_use]
     pub const fn with_max_rows(mut self, rows: usize) -> Self {
         self.max_rows = if rows == 0 { 1 } else { rows };
         self
     }
 
-    /// Remplace le plafond d'octets.
+    /// Replaces the byte ceiling.
     ///
-    /// Ramené à 1 au minimum, pour la même raison que
+    /// Raised to 1 at minimum, for the same reason as
     /// [`with_max_rows`](Self::with_max_rows).
     #[must_use]
     pub const fn with_max_bytes(mut self, bytes: usize) -> Self {
@@ -61,24 +61,23 @@ impl BatchLimits {
         self
     }
 
-    /// Plafond de lignes.
+    /// Row ceiling.
     #[must_use]
     pub const fn max_rows(&self) -> usize {
         self.max_rows
     }
 
-    /// Plafond d'octets.
+    /// Byte ceiling.
     #[must_use]
     pub const fn max_bytes(&self) -> usize {
         self.max_bytes
     }
 
-    /// Le lot en cours doit-il être fermé ?
+    /// Must the current batch be closed?
     ///
-    /// Appelé **après** avoir ajouté une ligne : un lot contient donc toujours
-    /// au moins une ligne, même si elle dépasse à elle seule le plafond
-    /// d'octets. Refuser une ligne trop grosse reviendrait à ne jamais rendre
-    /// la valeur que l'utilisateur veut voir.
+    /// Called **after** adding a row: a batch therefore always contains at least one
+    /// row, even if that row alone exceeds the byte ceiling. Refusing a row that is
+    /// too large would mean never returning the value the user wants to see.
     #[must_use]
     pub const fn reached(&self, rows: usize, bytes: usize) -> bool {
         rows >= self.max_rows || bytes >= self.max_bytes
@@ -102,26 +101,26 @@ mod tests {
     use super::*;
 
     #[test]
-    fn les_defauts_bornent_les_deux_dimensions() {
+    fn defaults_bound_both_dimensions() {
         let limites = BatchLimits::default();
         assert_eq!(limites.max_rows(), 8_192);
         assert!(limites.max_bytes() > 0);
     }
 
     #[test]
-    fn un_lot_se_ferme_sur_la_premiere_borne_atteinte() {
+    fn a_batch_closes_on_the_first_bound_reached() {
         let limites = BatchLimits::new().with_max_rows(10).with_max_bytes(100);
         assert!(!limites.reached(9, 99));
-        assert!(limites.reached(10, 0), "la borne de lignes suffit");
+        assert!(limites.reached(10, 0), "the row bound is enough");
         assert!(
             limites.reached(1, 100),
-            "une seule ligne d'un mégaoctet ferme le lot"
+            "a single one-megabyte row closes the batch"
         );
     }
 
     #[test]
-    fn une_borne_nulle_est_ramenee_a_une_unite() {
-        // Un lot de zéro ligne ferait tourner la boucle de lecture sans avancer.
+    fn a_zero_bound_is_raised_to_one() {
+        // A zero-row batch would spin the read loop without advancing.
         let limites = BatchLimits::new().with_max_rows(0).with_max_bytes(0);
         assert_eq!(limites.max_rows(), 1);
         assert_eq!(limites.max_bytes(), 1);

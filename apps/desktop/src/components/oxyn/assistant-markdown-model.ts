@@ -2,7 +2,7 @@
 //
 // Why not a Markdown library: every one of them ends in HTML, then relies on a
 // sanitizer to take back what the model should never have been able to write
-// (docs/SECURITY.md, « Surface d'entrée »). Here there is no HTML at any stage:
+// (docs/SECURITY.md, « Input surface »). Here there is no HTML at any stage:
 // raw tags stay text, an image is its alternative text, a link is its label
 // and its address shown as text. Nothing the model writes can load, navigate
 // or run in the webview, and that is a property of the types below rather than

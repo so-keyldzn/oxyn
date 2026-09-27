@@ -163,7 +163,7 @@ pub(crate) fn request_with_columns(
 /// (Redshift, or a caller that needs no cast): a requested name is then
 /// checked against `facts` instead.
 ///
-/// # Erreurs
+/// # Errors
 /// Those of [`PreviewShape::projection`], and [`OxynError::Query`] when a name
 /// is not a column of the relation — the same permanent refusal as an unknown
 /// sort column, before the server sees it.
@@ -222,7 +222,7 @@ fn select_list(
 /// page 1 by `name, id` would show a tied row twice and hide another, exactly
 /// at the boundary nobody inspects.
 ///
-/// # Erreurs
+/// # Errors
 /// [`OxynError::Query`] when a sort names a column the relation does not
 /// declare — sent to the server, it would be rejected far from the column that
 /// caused it; retrying would not make the column appear — and [`OxynError::NotSupported`] when a page is asked
@@ -275,13 +275,13 @@ mod tests {
 
     use super::*;
 
-    /// Une relation décrite comme le catalogue la rendrait.
+    /// A relation described as the catalog would return it.
     fn relation(columns: &[(&str, bool)]) -> Relation {
         let fields = columns
             .iter()
             .enumerate()
             .map(|(rang, (name, key))| {
-                let position = u32::try_from(rang).expect("moins de 2^32 colonnes de test");
+                let position = u32::try_from(rang).expect("fewer than 2^32 test columns");
                 let mut field = Field::new(*name, position, LogicalType::Text, "text");
                 field.is_primary_key = *key;
                 field
@@ -295,7 +295,7 @@ mod tests {
     }
 
     fn path() -> CatalogPath {
-        CatalogPath::for_relation(None, Some("public"), "t").expect("chemin valide")
+        CatalogPath::for_relation(None, Some("public"), "t").expect("valid path")
     }
 
     fn compose(shape: &PreviewShape, facts: &RelationFacts) -> Result<ExecRequest> {
@@ -303,20 +303,20 @@ mod tests {
     }
 
     #[test]
-    fn un_apercu_sans_demande_ne_compose_ni_where_ni_order_by() {
+    fn a_preview_without_request_composes_neither_where_nor_order_by() {
         let request =
-            compose(&PreviewShape::unordered(), &RelationFacts::default()).expect("aperçu simple");
+            compose(&PreviewShape::unordered(), &RelationFacts::default()).expect("plain preview");
         assert_eq!(request.text, "SELECT * FROM \"public\".\"t\" LIMIT 200");
         assert!(request.params.is_empty());
     }
 
     #[test]
-    fn un_tri_est_cite_et_complete_par_la_cle_primaire() {
+    fn a_sort_is_quoted_and_completed_by_the_primary_key() {
         let shape = PreviewShape {
             sort: vec![PreviewSort::descending("name")],
             ..PreviewShape::default()
         };
-        let request = compose(&shape, &facts(&[("id", true), ("name", false)])).expect("tri");
+        let request = compose(&shape, &facts(&[("id", true), ("name", false)])).expect("sort");
         assert_eq!(
             request.text,
             "SELECT * FROM \"public\".\"t\" ORDER BY \"name\" DESC, \"id\" ASC LIMIT 200"
@@ -324,12 +324,12 @@ mod tests {
     }
 
     #[test]
-    fn une_cle_deja_triee_n_est_pas_repetee() {
+    fn a_key_already_sorted_is_not_repeated() {
         let shape = PreviewShape {
             sort: vec![PreviewSort::descending("id")],
             ..PreviewShape::default()
         };
-        let request = compose(&shape, &facts(&[("id", true), ("name", false)])).expect("tri");
+        let request = compose(&shape, &facts(&[("id", true), ("name", false)])).expect("sort");
         assert_eq!(
             request.text,
             "SELECT * FROM \"public\".\"t\" ORDER BY \"id\" DESC LIMIT 200"
@@ -337,7 +337,7 @@ mod tests {
     }
 
     #[test]
-    fn une_cle_composite_complete_l_ordre_dans_l_ordre_du_catalogue() {
+    fn a_composite_key_completes_the_order_in_catalog_order() {
         let shape = PreviewShape {
             sort: vec![PreviewSort::ascending("name")],
             offset: 400,
@@ -353,7 +353,7 @@ mod tests {
     }
 
     #[test]
-    fn une_page_sans_tri_demande_s_ordonne_sur_la_seule_cle() {
+    fn a_page_without_requested_sort_is_ordered_by_the_key_alone() {
         let shape = PreviewShape {
             offset: 200,
             ..PreviewShape::default()
@@ -366,9 +366,9 @@ mod tests {
     }
 
     #[test]
-    fn une_colonne_de_tri_hostile_est_citee_jamais_concatenee() {
+    fn a_hostile_sort_column_is_quoted_never_concatenated() {
         let path = CatalogPath::for_relation(None, Some("s\"; --"), "ta\"ble")
-            .expect("identifiants hostiles légaux");
+            .expect("legal hostile identifiers");
         let shape = PreviewShape {
             sort: vec![PreviewSort::ascending("col\"onne")],
             ..PreviewShape::default()
@@ -381,7 +381,7 @@ mod tests {
             &shape,
             &facts(&[("col\"onne", false)]),
         )
-        .expect("tri");
+        .expect("sort");
         assert_eq!(
             request.text,
             "SELECT * FROM \"s\"\"; --\".\"ta\"\"ble\" ORDER BY \"col\"\"onne\" ASC LIMIT 200"
@@ -389,17 +389,17 @@ mod tests {
     }
 
     #[test]
-    fn une_colonne_de_tri_inconnue_est_refusee_avant_le_serveur() {
+    fn an_unknown_sort_column_is_refused_before_the_server() {
         let shape = PreviewShape {
             sort: vec![PreviewSort::ascending("absente")],
             ..PreviewShape::default()
         };
-        let erreur = compose(&shape, &facts(&[("id", true)])).expect_err("refus attendu");
+        let erreur = compose(&shape, &facts(&[("id", true)])).expect_err("refusal expected");
         refus_permanent(&erreur);
     }
 
-    /// Une colonne que la relation ne déclare pas ne réapparaîtra pas au
-    /// prochain essai : l'erreur est permanente, jamais `Transient`.
+    /// A column the relation does not declare will not reappear on the next
+    /// attempt: the error is permanent, never `Transient`.
     fn refus_permanent(erreur: &OxynError) {
         assert!(
             matches!(erreur, OxynError::Query(message) if message.contains("absente")),
@@ -410,7 +410,7 @@ mod tests {
     }
 
     #[test]
-    fn une_page_sans_cle_unique_est_refusee_en_disant_pourquoi() {
+    fn a_page_without_unique_key_is_refused_saying_why() {
         let shape = PreviewShape {
             sort: vec![PreviewSort::ascending("name")],
             offset: 200,
@@ -419,11 +419,11 @@ mod tests {
         let erreur =
             compose(&shape, &facts(&[("name", false)])).expect_err("pagination impossible");
         let OxynError::NotSupported { capability } = &erreur else {
-            panic!("refus attendu, obtenu {erreur}");
+            panic!("refusal expected, got {erreur}");
         };
         assert!(capability.contains("unique key"), "{capability}");
-        // La même relation reste consultable sur sa première page : c'est
-        // l'aperçu d'aujourd'hui, et il n'a rien perdu.
+        // The same relation stays viewable on its first page: that is today's
+        // preview, and it has lost nothing.
         let premiere = PreviewShape {
             sort: vec![PreviewSort::ascending("name")],
             ..PreviewShape::default()
@@ -432,15 +432,15 @@ mod tests {
     }
 
     #[test]
-    fn le_predicat_part_tel_quel_entre_parentheses_et_finit_sa_ligne() {
+    fn the_predicate_is_sent_as_is_in_parentheses_and_ends_its_line() {
         let shape = PreviewShape {
-            // Un commentaire de fin de ligne : sans le saut de ligne, il avalerait
-            // l'ORDER BY et la LIMIT, et l'aperçu lirait toute la table.
+            // An end-of-line comment: without the newline, it would swallow the
+            // ORDER BY and the LIMIT, and the preview would read the whole table.
             predicate: Some("amount > 100 -- au-delà de cent".into()),
             sort: vec![PreviewSort::ascending("id")],
             ..PreviewShape::default()
         };
-        let request = compose(&shape, &facts(&[("id", true)])).expect("prédicat");
+        let request = compose(&shape, &facts(&[("id", true)])).expect("predicate");
         assert_eq!(
             request.text,
             "SELECT * FROM \"public\".\"t\" WHERE (amount > 100 -- au-delà de cent\n\
@@ -450,15 +450,15 @@ mod tests {
     }
 
     #[test]
-    fn un_commentaire_de_bloc_non_ferme_ne_peut_pas_avaler_la_limite() {
-        // Aucun saut de ligne ne termine un `/*` : c'est la parenthèse ouvrante
-        // qui rend l'instruction incomplète, donc refusée par le moteur, au lieu
-        // d'une lecture sans borne que rien ne signalerait.
+    fn an_unterminated_block_comment_cannot_swallow_the_limit() {
+        // No newline ends a `/*`: the opening parenthesis is what makes the
+        // statement incomplete, hence refused by the engine, instead of an
+        // unbounded read that nothing would report.
         let shape = PreviewShape {
             predicate: Some("amount > 100 /*".into()),
             ..PreviewShape::default()
         };
-        let request = compose(&shape, &RelationFacts::default()).expect("prédicat");
+        let request = compose(&shape, &RelationFacts::default()).expect("predicate");
         assert_eq!(
             request.text,
             "SELECT * FROM \"public\".\"t\" WHERE (amount > 100 /*\n) LIMIT 200"
@@ -466,12 +466,12 @@ mod tests {
     }
 
     #[test]
-    fn un_predicat_deja_parenthese_ne_change_pas_de_sens() {
+    fn an_already_parenthesized_predicate_keeps_its_meaning() {
         let shape = PreviewShape {
             predicate: Some("(a > 0 AND b < 2) OR c IS NULL".into()),
             ..PreviewShape::default()
         };
-        let request = compose(&shape, &RelationFacts::default()).expect("prédicat");
+        let request = compose(&shape, &RelationFacts::default()).expect("predicate");
         assert_eq!(
             request.text,
             "SELECT * FROM \"public\".\"t\" WHERE ((a > 0 AND b < 2) OR c IS NULL\n) LIMIT 200"
@@ -479,12 +479,12 @@ mod tests {
     }
 
     #[test]
-    fn un_predicat_vide_ne_compose_pas_de_where() {
+    fn an_empty_predicate_composes_no_where() {
         let shape = PreviewShape {
             predicate: Some("   ".into()),
             ..PreviewShape::default()
         };
-        let request = compose(&shape, &RelationFacts::default()).expect("prédicat vide");
+        let request = compose(&shape, &RelationFacts::default()).expect("empty predicate");
         assert_eq!(request.text, "SELECT * FROM \"public\".\"t\" LIMIT 200");
     }
 
@@ -513,7 +513,7 @@ mod tests {
     }
 
     #[test]
-    fn une_projection_ne_lit_que_les_colonnes_nommees_et_garde_leur_conversion() {
+    fn a_projection_reads_only_the_named_columns_and_keeps_their_conversion() {
         let hostile = "acl\"; DROP TABLE audit; --";
         let shape = PreviewShape {
             columns: Some(vec![hostile.into(), "id".into(), hostile.into()]),
@@ -533,7 +533,7 @@ mod tests {
             &RelationFacts::default(),
         )
         .expect("projection");
-        // `secret`, non demandée, n'est pas lue ; le doublon ne se compose pas.
+        // `secret`, not requested, is not read; the duplicate is not composed.
         assert_eq!(
             request.text,
             "SELECT \"acl\"\"; DROP TABLE audit; --\"::pg_catalog.text AS \
@@ -543,8 +543,8 @@ mod tests {
     }
 
     #[test]
-    fn une_projection_sans_liste_typee_se_verifie_sur_la_description() {
-        // Redshift : aucune liste typée n'est lue, la description en tient lieu.
+    fn a_projection_without_typed_list_is_checked_against_the_description() {
+        // Redshift: no typed list is read, the description stands in for it.
         let shape = PreviewShape {
             columns: Some(vec!["name".into()]),
             ..PreviewShape::default()
@@ -565,7 +565,7 @@ mod tests {
     }
 
     #[test]
-    fn une_colonne_projetee_inconnue_est_refusee_avant_le_serveur() {
+    fn an_unknown_projected_column_is_refused_before_the_server() {
         let shape = PreviewShape {
             columns: Some(vec!["absente".into(), "id".into()]),
             ..PreviewShape::default()
@@ -580,10 +580,10 @@ mod tests {
             &RelationFacts::default(),
         );
         let decrite = compose(&shape, &facts(&[("id", true)]));
-        // Rien de lu, rien de connu : un nom ne passe pas faute de vérification.
+        // Nothing read, nothing known: a name does not pass for lack of checking.
         let rien = compose(&shape, &RelationFacts::default());
         for erreur in [typee, decrite, rien] {
-            refus_permanent(&erreur.expect_err("refus attendu"));
+            refus_permanent(&erreur.expect_err("refusal expected"));
         }
         let vide = PreviewShape {
             columns: Some(Vec::new()),

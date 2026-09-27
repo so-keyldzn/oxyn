@@ -1,21 +1,21 @@
-//! Le registre des drivers disponibles.
+//! The registry of available drivers.
 //!
-//! C'est le seul endroit où l'application apprend qu'un protocole existe.
-//! `oxyn-desktop` y enregistre les drivers compilés dans le binaire ; la phase 4 y
-//! ajoutera ceux qui viennent d'un plugin WASM
-//! ([ADR-0005](../../../docs/adr/0005-wasm-plugins.md)) et ceux qui tournent en
-//! sidecar ([ADR-0007](../../../docs/adr/0007-driver-sidecar.md)). Le registre
-//! ne fait aucune différence entre les trois : il ne voit que des
-//! `Arc<dyn Driver>`.
+//! It is the only place where the application learns that a protocol exists.
+//! `oxyn-desktop` registers there the drivers compiled into the binary; phase 4
+//! will add those that come from a WASM plugin
+//! ([ADR-0005](../../../docs/adr/0005-wasm-plugins.md)) and those that run as a
+//! sidecar ([ADR-0007](../../../docs/adr/0007-driver-sidecar.md)). The registry
+//! makes no difference between the three: it only sees
+//! `Arc<dyn Driver>`s.
 //!
-//! # Pourquoi l'enregistrement refuse plutôt qu'il ne remplace
+//! # Why registration refuses rather than replaces
 //!
-//! Réenregistrer `postgres` **remplacerait** le driver PostgreSQL — silencieusement,
-//! et pour toutes les connexions ouvertes ensuite. Le jour où un plugin peut
-//! s'enregistrer, ce remplacement devient une prise de contrôle : le plugin
-//! reçoit les identifiants de production que l'utilisateur croit donner au
-//! driver d'origine. Le registre refuse donc un identifiant déjà pris, et il le
-//! dit.
+//! Registering `postgres` again would **replace** the PostgreSQL driver —
+//! silently, and for every connection opened afterwards. The day a plugin can
+//! register itself, that replacement becomes a takeover: the plugin receives
+//! the production credentials the user believes they are giving to the
+//! original driver. The registry therefore refuses an identifier already
+//! taken, and says so.
 
 use std::fmt;
 use std::sync::Arc;
@@ -26,39 +26,38 @@ use oxyn_core::{DriverId, OxynError, Result};
 use crate::metadata::DriverMetadata;
 use crate::traits::Driver;
 
-/// Les drivers connus de cette instance d'Oxyn.
+/// The drivers known to this instance of Oxyn.
 ///
-/// Un [`IndexMap`] et non une `HashMap` : l'ordre d'enregistrement est
-/// reproductible, ce qui rend les tests et les journaux lisibles.
-/// [`sorted`](Self::sorted) donne l'ordre d'affichage, qui est un autre sujet.
+/// An [`IndexMap`] and not a `HashMap`: the registration order is
+/// reproducible, which makes tests and logs readable.
+/// [`sorted`](Self::sorted) gives the display order, which is another subject.
 #[derive(Default)]
 pub struct DriverRegistry {
     drivers: IndexMap<DriverId, Arc<dyn Driver>>,
 }
 
 impl DriverRegistry {
-    /// Un registre vide.
+    /// An empty registry.
     ///
-    /// C'est un état légitime et durable : sans driver, Oxyn affiche sa fenêtre
-    /// et son workspace, il ne propose simplement aucune connexion.
+    /// It is a legitimate and lasting state: without a driver, Oxyn shows its
+    /// window and its workspace, it simply offers no connection.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Enregistre un driver.
+    /// Registers a driver.
     ///
-    /// Trois vérifications, toutes destinées à faire échouer tôt ce qui
-    /// échouerait tard :
+    /// Three checks, all meant to make fail early what would fail late:
     ///
-    /// 1. les métadonnées sont cohérentes ([`DriverMetadata::check`]) ;
-    /// 2. [`Driver::id`] est égal à [`DriverMetadata::id`] — sinon le driver
-    ///    serait rangé sous une clé et se présenterait sous une autre, donc
-    ///    introuvable ;
-    /// 3. l'identifiant n'est pas déjà pris.
+    /// 1. the metadata is consistent ([`DriverMetadata::check`]);
+    /// 2. [`Driver::id`] equals [`DriverMetadata::id`] — otherwise the driver
+    ///    would be stored under one key and present itself under another, and
+    ///    so be unreachable;
+    /// 3. the identifier is not already taken.
     ///
-    /// # Erreurs
-    /// [`OxynError::Config`] dans les trois cas, en nommant le driver fautif.
+    /// # Errors
+    /// [`OxynError::Config`] in all three cases, naming the faulty driver.
     pub fn register(&mut self, driver: Arc<dyn Driver>) -> Result<()> {
         let metadata = driver.metadata();
         metadata.check()?;
@@ -82,23 +81,24 @@ impl DriverRegistry {
         Ok(())
     }
 
-    /// Le driver portant cet identifiant.
+    /// The driver carrying this identifier.
     ///
-    /// Rend un [`Arc`] cloné : l'appelant garde le driver vivant le temps
-    /// d'ouvrir une session, même si le registre est reconstruit entre-temps.
+    /// Returns a cloned [`Arc`]: the caller keeps the driver alive for the
+    /// time it takes to open a session, even if the registry is rebuilt in the
+    /// meantime.
     #[must_use]
     pub fn get(&self, id: &DriverId) -> Option<Arc<dyn Driver>> {
         self.drivers.get(id).map(Arc::clone)
     }
 
-    /// Le driver portant cet identifiant, ou une erreur montrable.
+    /// The driver carrying this identifier, or an error fit to show.
     ///
-    /// C'est la forme utile quand l'identifiant vient d'un fichier de
-    /// workspace : ouvrir une connexion dont le driver a disparu doit produire
-    /// un message, pas un `None` que l'appelant traduira à sa façon.
+    /// It is the useful form when the identifier comes from a workspace file:
+    /// opening a connection whose driver has disappeared must produce a
+    /// message, not a `None` that the caller will translate its own way.
     ///
-    /// # Erreurs
-    /// [`OxynError::Config`] si aucun driver ne porte cet identifiant.
+    /// # Errors
+    /// [`OxynError::Config`] if no driver carries this identifier.
     pub fn require(&self, id: &DriverId) -> Result<Arc<dyn Driver>> {
         self.get(id).ok_or_else(|| {
             OxynError::Config(format!(
@@ -107,65 +107,63 @@ impl DriverRegistry {
         })
     }
 
-    /// Les métadonnées d'un driver, sans le maintenir vivant.
+    /// A driver's metadata, without keeping it alive.
     #[must_use]
     pub fn metadata(&self, id: &DriverId) -> Option<&DriverMetadata> {
         self.drivers.get(id).map(|driver| driver.metadata())
     }
 
-    /// Ce driver est-il enregistré ?
+    /// Is this driver registered?
     #[must_use]
     pub fn contains(&self, id: &DriverId) -> bool {
         self.drivers.contains_key(id)
     }
 
-    /// Nombre de drivers enregistrés.
+    /// Number of registered drivers.
     #[must_use]
     pub fn len(&self) -> usize {
         self.drivers.len()
     }
 
-    /// Aucun driver n'est enregistré.
+    /// No driver is registered.
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.drivers.is_empty()
     }
 
-    /// Les identifiants, dans l'ordre d'enregistrement.
+    /// The identifiers, in registration order.
     pub fn ids(&self) -> impl Iterator<Item = &DriverId> {
         self.drivers.keys()
     }
 
-    /// Les drivers, dans l'ordre d'enregistrement.
+    /// The drivers, in registration order.
     pub fn iter(&self) -> impl Iterator<Item = &Arc<dyn Driver>> {
         self.drivers.values()
     }
 
-    /// Les drivers dans l'ordre d'affichage : **famille, puis nom affiché**.
+    /// The drivers in display order: **family, then display name**.
     ///
-    /// C'est l'ordre du sélecteur de connexion. Il est stable : le tri se fait
-    /// sur des valeurs déclarées, pas sur l'ordre d'enregistrement — deux
-    /// binaires qui enregistrent les mêmes drivers dans un ordre différent
-    /// montrent la même liste.
+    /// It is the order of the connection picker. It is stable: the sort is on
+    /// declared values, not on the registration order — two binaries that
+    /// register the same drivers in a different order show the same list.
     ///
-    /// Alloue à chaque appel ; c'est un chemin d'ouverture de fenêtre, pas un
-    /// chemin par ligne.
+    /// Allocates on every call; it is a window-opening path, not a per-row
+    /// path.
     #[must_use]
     pub fn sorted(&self) -> Vec<Arc<dyn Driver>> {
-        let mut ordonnes: Vec<Arc<dyn Driver>> = self.drivers.values().map(Arc::clone).collect();
-        ordonnes.sort_by(|a, b| {
-            let (famille_a, nom_a) = a.metadata().sort_key();
-            let (famille_b, nom_b) = b.metadata().sort_key();
-            famille_a.cmp(&famille_b).then_with(|| nom_a.cmp(nom_b))
+        let mut ordered: Vec<Arc<dyn Driver>> = self.drivers.values().map(Arc::clone).collect();
+        ordered.sort_by(|a, b| {
+            let (family_a, name_a) = a.metadata().sort_key();
+            let (family_b, name_b) = b.metadata().sort_key();
+            family_a.cmp(&family_b).then_with(|| name_a.cmp(name_b))
         });
-        ordonnes
+        ordered
     }
 }
 
 impl fmt::Debug for DriverRegistry {
-    /// Écrit à la main : `dyn Driver` n'est pas `Debug`, et il n'a pas à
-    /// l'être. Ce qu'un diagnostic veut savoir, c'est quels protocoles sont
-    /// disponibles.
+    /// Written by hand: `dyn Driver` is not `Debug`, and it does not have to
+    /// be. What a diagnostic wants to know is which protocols are available.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("DriverRegistry")
             .field("drivers", &self.drivers.keys().collect::<Vec<_>>())
@@ -183,20 +181,20 @@ mod tests {
     use crate::metadata::{ConnectionField, DriverFamily, FieldKind};
     use crate::traits::Session;
 
-    /// Un driver qui ne sait pas se connecter : le registre n'en demande pas
-    /// plus, et `connect` n'est pas ce qu'on éprouve ici.
+    /// A driver that cannot connect: the registry asks for no more, and
+    /// `connect` is not what is tested here.
     #[derive(Debug)]
-    struct DriverFactice {
+    struct FakeDriver {
         metadata: DriverMetadata,
-        /// Ce que rend `id()`, pour pouvoir le faire diverger des métadonnées.
+        /// What `id()` returns, so it can be made to diverge from the metadata.
         id: DriverId,
     }
 
-    impl DriverFactice {
-        fn new(id: &str, nom: &str, famille: DriverFamily) -> Self {
-            let id = DriverId::new(id).expect("identifiant de test valide");
+    impl FakeDriver {
+        fn new(id: &str, name: &str, family: DriverFamily) -> Self {
+            let id = DriverId::new(id).expect("valid test identifier");
             Self {
-                metadata: DriverMetadata::new(id.clone(), nom, famille),
+                metadata: DriverMetadata::new(id.clone(), name, family),
                 id,
             }
         }
@@ -207,7 +205,7 @@ mod tests {
     }
 
     #[async_trait]
-    impl Driver for DriverFactice {
+    impl Driver for FakeDriver {
         fn id(&self) -> DriverId {
             self.id.clone()
         }
@@ -227,50 +225,48 @@ mod tests {
             _cancel: &CancelToken,
         ) -> Result<Box<dyn Session>> {
             Err(OxynError::Connection(
-                "driver factice : aucune connexion".to_owned(),
+                "fake driver: no connection".to_owned(),
             ))
         }
     }
 
-    fn registre() -> DriverRegistry {
-        let mut registre = DriverRegistry::new();
-        registre
-            .register(DriverFactice::new("postgres", "PostgreSQL", DriverFamily::Relational).arc())
-            .expect("enregistrement");
-        registre
-            .register(DriverFactice::new("redis", "Redis", DriverFamily::KeyValue).arc())
-            .expect("enregistrement");
-        registre
-            .register(
-                DriverFactice::new("clickhouse", "ClickHouse", DriverFamily::Analytical).arc(),
-            )
-            .expect("enregistrement");
-        registre
-            .register(DriverFactice::new("mysql", "MySQL", DriverFamily::Relational).arc())
-            .expect("enregistrement");
-        registre
+    fn registry() -> DriverRegistry {
+        let mut registry = DriverRegistry::new();
+        registry
+            .register(FakeDriver::new("postgres", "PostgreSQL", DriverFamily::Relational).arc())
+            .expect("registration");
+        registry
+            .register(FakeDriver::new("redis", "Redis", DriverFamily::KeyValue).arc())
+            .expect("registration");
+        registry
+            .register(FakeDriver::new("clickhouse", "ClickHouse", DriverFamily::Analytical).arc())
+            .expect("registration");
+        registry
+            .register(FakeDriver::new("mysql", "MySQL", DriverFamily::Relational).arc())
+            .expect("registration");
+        registry
     }
 
     #[test]
-    fn un_registre_vide_est_un_etat_legitime() {
-        let registre = DriverRegistry::new();
-        assert!(registre.is_empty());
-        assert_eq!(registre.len(), 0);
-        assert!(registre.sorted().is_empty());
+    fn an_empty_registry_is_a_legitimate_state() {
+        let registry = DriverRegistry::new();
+        assert!(registry.is_empty());
+        assert_eq!(registry.len(), 0);
+        assert!(registry.sorted().is_empty());
     }
 
     #[test]
-    fn un_driver_enregistre_se_retrouve_par_son_identifiant() {
-        let registre = registre();
+    fn a_registered_driver_is_found_by_its_identifier() {
+        let registry = registry();
         let postgres = DriverId::postgres();
 
-        assert!(registre.contains(&postgres));
-        assert_eq!(registre.len(), 4);
+        assert!(registry.contains(&postgres));
+        assert_eq!(registry.len(), 4);
 
-        let driver = registre.get(&postgres).expect("enregistré");
+        let driver = registry.get(&postgres).expect("registered");
         assert_eq!(driver.id(), postgres);
         assert_eq!(
-            registre
+            registry
                 .metadata(&postgres)
                 .map(|m| m.display_name.as_str()),
             Some("PostgreSQL")
@@ -278,18 +274,18 @@ mod tests {
     }
 
     #[test]
-    fn un_driver_absent_donne_un_message_pas_un_none_muet() {
-        // L'identifiant vient d'un fichier de workspace : l'utilisateur doit
-        // apprendre que ce protocole n'existe pas dans cette version.
-        let registre = registre();
-        let inconnu = DriverId::new("oracle").expect("identifiant valide");
+    fn a_missing_driver_gives_a_message_not_a_silent_none() {
+        // The identifier comes from a workspace file: the user must learn
+        // that this protocol does not exist in this version.
+        let registry = registry();
+        let unknown = DriverId::new("oracle").expect("valid identifier");
 
-        assert!(registre.get(&inconnu).is_none());
-        // `expect_err` exigerait `Debug` sur la variante `Ok`, donc sur
-        // `dyn Driver` — et un driver porte des identifiants de connexion, que
-        // I-03 interdit d'exposer par `Debug`. Le `match` ne demande rien.
-        let err = match registre.require(&inconnu) {
-            Ok(_) => panic!("refus attendu : « oracle » n'est pas enregistré"),
+        assert!(registry.get(&unknown).is_none());
+        // `expect_err` would require `Debug` on the `Ok` variant, hence on
+        // `dyn Driver` — and a driver carries connection credentials, which
+        // I-03 forbids exposing through `Debug`. The `match` asks for nothing.
+        let err = match registry.require(&unknown) {
+            Ok(_) => panic!("refusal expected: \"oracle\" is not registered"),
             Err(err) => err,
         };
         assert!(err.to_string().contains("oracle"), "{err}");
@@ -297,78 +293,80 @@ mod tests {
     }
 
     #[test]
-    fn un_identifiant_deja_pris_est_refuse_pas_remplace() {
-        // Remplacer le driver PostgreSQL détournerait les connexions qui le
-        // visent — et, en phase 4, les identifiants de production avec elles.
-        let mut registre = registre();
-        let err = registre
-            .register(DriverFactice::new("postgres", "Autre chose", DriverFamily::Relational).arc())
-            .expect_err("refus attendu");
+    fn an_identifier_already_taken_is_refused_not_replaced() {
+        // Replacing the PostgreSQL driver would divert the connections that
+        // target it — and, in phase 4, the production credentials with them.
+        let mut registry = registry();
+        let err = registry
+            .register(FakeDriver::new("postgres", "Something else", DriverFamily::Relational).arc())
+            .expect_err("refusal expected");
 
         assert!(err.to_string().contains("postgres"), "{err}");
         assert_eq!(
-            registre
+            registry
                 .metadata(&DriverId::postgres())
                 .map(|m| m.display_name.as_str()),
             Some("PostgreSQL"),
-            "le driver d'origine reste en place"
+            "the original driver stays in place"
         );
     }
 
     #[test]
-    fn un_driver_qui_ment_sur_son_identifiant_est_refuse() {
-        // Rangé sous une clé, présenté sous une autre : introuvable dès le
-        // premier `require`.
-        let mut driver = DriverFactice::new("postgres", "PostgreSQL", DriverFamily::Relational);
+    fn a_driver_that_lies_about_its_identifier_is_refused() {
+        // Stored under one key, presented under another: unreachable from
+        // the first `require`.
+        let mut driver = FakeDriver::new("postgres", "PostgreSQL", DriverFamily::Relational);
         driver.id = DriverId::mysql();
 
-        let mut registre = DriverRegistry::new();
-        let err = registre.register(driver.arc()).expect_err("refus attendu");
+        let mut registry = DriverRegistry::new();
+        let err = registry
+            .register(driver.arc())
+            .expect_err("refusal expected");
         assert!(err.to_string().contains("unreachable"), "{err}");
-        assert!(registre.is_empty());
+        assert!(registry.is_empty());
     }
 
     #[test]
-    fn des_metadonnees_incoherentes_sont_refusees_a_l_enregistrement() {
-        // Découvrir la faute à l'enregistrement plutôt qu'au premier formulaire
-        // affiché.
-        let mut driver = DriverFactice::new("postgres", "PostgreSQL", DriverFamily::Relational);
+    fn inconsistent_metadata_is_refused_at_registration() {
+        // Discover the fault at registration rather than on the first form
+        // displayed.
+        let mut driver = FakeDriver::new("postgres", "PostgreSQL", DriverFamily::Relational);
         driver.metadata = driver.metadata.clone().with_field(
-            ConnectionField::new("password", "Mot de passe", FieldKind::Password)
+            ConnectionField::new("password", "Password", FieldKind::Password)
                 .with_default("postgres"),
         );
 
-        let mut registre = DriverRegistry::new();
-        assert!(registre.register(driver.arc()).is_err());
-        assert!(registre.is_empty());
+        let mut registry = DriverRegistry::new();
+        assert!(registry.register(driver.arc()).is_err());
+        assert!(registry.is_empty());
     }
 
     #[test]
-    fn l_ordre_d_affichage_va_par_famille_puis_par_nom() {
-        let registre = registre();
-        let ordonnes = registre.sorted();
-        let noms: Vec<&str> = ordonnes
+    fn display_order_goes_by_family_then_by_name() {
+        let registry = registry();
+        let ordered = registry.sorted();
+        let names: Vec<&str> = ordered
             .iter()
             .map(|driver| driver.metadata().display_name.as_str())
             .collect();
 
-        // Relational avant Analytical avant KeyValue, et MySQL avant PostgreSQL.
-        assert_eq!(noms, ["MySQL", "PostgreSQL", "ClickHouse", "Redis"]);
+        // Relational before Analytical before KeyValue, and MySQL before PostgreSQL.
+        assert_eq!(names, ["MySQL", "PostgreSQL", "ClickHouse", "Redis"]);
     }
 
     #[test]
-    fn l_iteration_brute_garde_l_ordre_d_enregistrement() {
-        let registre = registre();
-        let ids: Vec<&str> = registre.ids().map(DriverId::as_str).collect();
+    fn raw_iteration_keeps_the_registration_order() {
+        let registry = registry();
+        let ids: Vec<&str> = registry.ids().map(DriverId::as_str).collect();
         assert_eq!(ids, ["postgres", "redis", "clickhouse", "mysql"]);
-        assert_eq!(registre.iter().count(), 4);
+        assert_eq!(registry.iter().count(), 4);
     }
 
     #[test]
-    fn le_debug_ne_montre_que_les_identifiants() {
-        let registre = registre();
-        let rendu = format!("{registre:?}");
-        assert!(rendu.contains("postgres"), "{rendu}");
-        assert!(!rendu.contains("PostgreSQL"), "{rendu}");
+    fn debug_shows_only_the_identifiers() {
+        let registry = registry();
+        let rendered = format!("{registry:?}");
+        assert!(rendered.contains("postgres"), "{rendered}");
+        assert!(!rendered.contains("PostgreSQL"), "{rendered}");
     }
 }

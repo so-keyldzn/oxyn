@@ -1,31 +1,32 @@
 #!/usr/bin/env python3
-"""Les licences des dépendances que l'application livre.
+"""The licenses of the dependencies the application ships.
 
-Deux sous-commandes, parce qu'elles lisent la même chose :
+Two subcommands, because they read the same thing:
 
     licences-tierces verifier-npm
-        refuse une dépendance npm de production dont la licence n'est pas
-        acceptée. C'est `make licences-npm`, le pendant de `make deny` pour le
-        front ; `make qualite` l'appelle.
+        refuses a production npm dependency whose license is not accepted.
+        It is `make licences-npm`, the front-end counterpart of `make deny`;
+        `make qualite` calls it.
 
-    licences-tierces generer [--exiger] <sortie.json>
-        écrit les mentions des dépendances Rust d'`oxyn-desktop` (par
-        `cargo-about`) et des dépendances npm de production d'`apps/desktop`.
-        L'application les affiche dans Settings > About (ADR-0044).
+    licences-tierces generer [--exiger] <output.json>
+        writes the notices of the Rust dependencies of `oxyn-desktop` (through
+        `cargo-about`) and of the production npm dependencies of
+        `apps/desktop`. The application displays them in Settings > About
+        (ADR-0044).
 
-La liste des licences acceptées est **celle de `deny.toml`**, et ce script
-n'en tient pas une seconde : une licence y est acceptée parce qu'elle est
-compatible avec la GPLv3, et ce verdict ne doit se prendre qu'à un endroit.
-`apps/desktop/licences-npm.toml` n'ajoute que ce qui est propre à npm, chaque
-ligne avec sa raison.
+The list of accepted licenses is **the one in `deny.toml`**, and this script
+does not keep a second one: a license is accepted there because it is
+compatible with the GPLv3, and that verdict must be made in one place only.
+`apps/desktop/licences-npm.toml` only adds what is specific to npm, each line
+with its reason.
 
-Seules les dépendances de **production** comptent (`pnpm licenses list
---prod`) : un outil de build ou de test n'est pas distribué avec l'application.
+Only **production** dependencies count (`pnpm licenses list --prod`): a build
+or test tool is not distributed with the application.
 
-`cargo-about` absent, `generer` avertit sans rien écrire, comme `make deny`
-sans `cargo-deny` : une porte qui échoue sur un outil optionnel finit
-contournée. Avec `--exiger`, que passe un build de publication, il échoue :
-un binaire distribué sans ses mentions viole les licences qu'il embarque.
+With `cargo-about` missing, `generer` warns without writing anything, like
+`make deny` without `cargo-deny`: a gate that fails on an optional tool ends up
+bypassed. With `--exiger`, which a release build passes, it fails: a binary
+distributed without its notices violates the licenses it embeds.
 """
 
 from __future__ import annotations
@@ -46,17 +47,17 @@ DENY = RACINE / "deny.toml"
 CONFIG_NPM = FRONT / "licences-npm.toml"
 MANIFESTE_APP = RACINE / "crates" / "oxyn-desktop" / "Cargo.toml"
 
-# La version relevée au registre et datée dans RESEARCH-NOTES (I-12). Une autre
-# version produirait peut-être le même fichier ; rien ne le garantit, et un
-# écart de mentions ne se voit à aucun test.
+# The version read from the registry and dated in RESEARCH-NOTES (I-12).
+# Another version might produce the same file; nothing guarantees it, and a
+# difference in notices shows in no test.
 VERSION_CARGO_ABOUT = "0.9.2"
 
-# Un fichier de licence, quel que soit l'usage du paquet : `LICENSE`,
-# `license.md`, `LICENCE-MIT`, `COPYING`, `NOTICE`…
+# A license file, whatever the package's convention: `LICENSE`, `license.md`,
+# `LICENCE-MIT`, `COPYING`, `NOTICE`…
 MOTIF_FICHIER_LICENCE = re.compile(r"^(licen[cs]e|copying|notice)([-._].*)?$", re.IGNORECASE)
 
 
-# --- Expressions SPDX ----------------------------------------------------------
+# --- SPDX expressions ----------------------------------------------------------
 
 
 def _jetons(expression: str) -> list[str]:
@@ -64,9 +65,9 @@ def _jetons(expression: str) -> list[str]:
 
 
 def acceptee(expression: str, permises: set[str]) -> bool:
-    """Vrai si une des alternatives de l'expression n'utilise que des licences
-    permises. `A OR B` : l'une suffit ; `A AND B` : il faut les deux ;
-    `A WITH E` est un terme à part entière, comme dans `deny.toml`."""
+    """True if one of the expression's alternatives only uses allowed
+    licenses. `A OR B`: one is enough; `A AND B`: both are needed; `A WITH E`
+    is a term in its own right, as in `deny.toml`."""
     jetons = _jetons(expression)
     position = 0
 
@@ -110,7 +111,7 @@ def acceptee(expression: str, permises: set[str]) -> bool:
     return valeur and position == len(jetons)
 
 
-# --- Ce qui est accepté ----------------------------------------------------------
+# --- What is accepted -----------------------------------------------------------
 
 
 def licences_de_deny() -> set[str]:
@@ -121,8 +122,8 @@ def licences_de_deny() -> set[str]:
 class ConfigNpm:
     permises: set[str]
     exceptions: dict[str, set[str]]
-    # (nom, version) → licence : le paquet ne déclare pas la sienne, ou la
-    # déclare mal. Épinglé à une version : une montée demande de relire.
+    # (name, version) → license: the package does not declare its own, or
+    # declares it wrongly. Pinned to a version: a bump requires rereading.
     precisions: dict[tuple[str, str], str]
 
 
@@ -135,7 +136,7 @@ def lire_config_npm() -> ConfigNpm:
     )
 
 
-# --- Les dépendances npm ------------------------------------------------------
+# --- The npm dependencies -----------------------------------------------------
 
 
 @dataclass
@@ -176,29 +177,29 @@ def verifier_npm() -> int:
         if paquet.nom in config.exceptions:
             utilisees.add(paquet.nom)
         if not acceptee(licence, permises):
-            refus.append(f"  {paquet.nom}@{paquet.version} : « {licence} »")
+            refus.append(f"  {paquet.nom}@{paquet.version}: \"{licence}\"")
 
     perimees = [f"  exception {n}" for n in config.exceptions if n not in utilisees]
     perimees += [f"  clarify {n}@{v}" for (n, v) in config.precisions if (n, v) not in utilisees]
 
     if refus:
-        print("Licences npm refusées (dépendances de production d'apps/desktop) :")
+        print("Refused npm licenses (production dependencies of apps/desktop):")
         print("\n".join(refus))
         print(
-            "\nUne licence s'accepte dans deny.toml, après avoir vérifié qu'elle est\n"
-            "compatible avec la GPLv3 (ADR-0044) ; une exception propre à un paquet,\n"
-            "ou une licence mal déclarée, dans apps/desktop/licences-npm.toml."
+            "\nA license is accepted in deny.toml, after checking that it is\n"
+            "compatible with the GPLv3 (ADR-0044); an exception specific to a package,\n"
+            "or a wrongly declared license, in apps/desktop/licences-npm.toml."
         )
     if perimees:
-        print("Entrées de apps/desktop/licences-npm.toml qui ne servent plus :")
+        print("Entries of apps/desktop/licences-npm.toml that no longer serve:")
         print("\n".join(perimees))
     if refus or perimees:
         return 1
-    print(f"Licences npm : {len(paquets)} paquets de production, tous acceptés.")
+    print(f"npm licenses: {len(paquets)} production packages, all accepted.")
     return 0
 
 
-# --- Les mentions -------------------------------------------------------------
+# --- The notices --------------------------------------------------------------
 
 
 def _cible_hote() -> str:
@@ -206,18 +207,18 @@ def _cible_hote() -> str:
     for ligne in sortie.splitlines():
         if ligne.startswith("host: "):
             return ligne.removeprefix("host: ")
-    raise SystemExit("rustc -vV n'indique pas la cible hôte")
+    raise SystemExit("rustc -vV does not give the host target")
 
 
 def mentions_rust() -> list[dict[str, object]]:
-    """Les dépendances d'`oxyn-desktop` pour la cible hôte, celle du binaire
-    qu'on construit, sans les dépendances de build ni de développement."""
+    """The dependencies of `oxyn-desktop` for the host target, the one of the
+    binary being built, without build or development dependencies."""
     cible = _cible_hote()
-    # `--frozen` rend le résultat identique en ligne et hors ligne ; il suppose
-    # les sources présentes, ce qu'assure ce `fetch`. Toutes les cibles : le
-    # `cargo metadata` que lance `cargo about` résout le graphe de chaque
-    # plateforme du lockfile, et un runner au cache vide échouait sur une
-    # crate d'Android.
+    # `--frozen` makes the result identical online and offline; it assumes the
+    # sources are present, which this `fetch` ensures. Every target: the
+    # `cargo metadata` that `cargo about` runs resolves the graph of every
+    # platform in the lockfile, and a runner with an empty cache failed on an
+    # Android crate.
     subprocess.run(
         ["cargo", "fetch", "--locked", "--manifest-path", str(MANIFESTE_APP)],
         cwd=RACINE,
@@ -229,8 +230,8 @@ def mentions_rust() -> list[dict[str, object]]:
             "accepted = " + json.dumps(sorted(licences_de_deny())) + "\n"
             "ignore-build-dependencies = true\n"
             "ignore-dev-dependencies = true\n"
-            # Nos crates sous GPL, `publish = false` : même exemption que
-            # dans deny.toml, et pour la même raison.
+            # Our GPL crates, `publish = false`: same exemption as in
+            # deny.toml, and for the same reason.
             "private = { ignore = true }\n",
             encoding="utf-8",
         )
@@ -248,8 +249,8 @@ def mentions_rust() -> list[dict[str, object]]:
 
     mentions: list[dict[str, object]] = []
     for licence in brut["licenses"]:
-        # Les crates du workspace n'ont pas de `source` : ce sont les nôtres, et
-        # NOTICE dit leur licence.
+        # The workspace crates have no `source`: they are ours, and NOTICE
+        # gives their license.
         paquets = sorted(
             {
                 (u["crate"]["name"], u["crate"]["version"])
@@ -284,8 +285,8 @@ def mentions_npm() -> list[dict[str, object]]:
     groupes: dict[tuple[str, str], list[PaquetNpm]] = {}
     for paquet in paquets_npm():
         licence = config.precisions.get((paquet.nom, paquet.version), paquet.licence)
-        # Sans fichier, reste l'expression déclarée : c'est ce que le paquet
-        # publie de sa licence, et le taire serait pire.
+        # Without a file, the declared expression remains: it is what the
+        # package publishes of its license, and hiding it would be worse.
         texte = _texte_de_licence(paquet.chemin) or f"Licensed under {licence}. The package ships no license file."
         groupes.setdefault((licence, texte), []).append(paquet)
     return [
@@ -309,12 +310,12 @@ def generer(sortie: Path, exiger: bool) -> int:
         else []
     )
     if version != [VERSION_CARGO_ABOUT]:
-        trouvee = version[0] if version else "absent"
+        trouvee = version[0] if version else "missing"
         print(
-            f"cargo-about {VERSION_CARGO_ABOUT} requis ({trouvee}) : les mentions des "
-            "licences tierces n'ont PAS été générées."
+            f"cargo-about {VERSION_CARGO_ABOUT} required ({trouvee}): the third-party "
+            "license notices were NOT generated."
         )
-        print(f"  Pour l'installer : cargo install --locked cargo-about@{VERSION_CARGO_ABOUT}")
+        print(f"  To install it: cargo install --locked cargo-about@{VERSION_CARGO_ABOUT}")
         return 1 if exiger else 0
 
     mentions = mentions_rust() + mentions_npm()
@@ -325,7 +326,7 @@ def generer(sortie: Path, exiger: bool) -> int:
         encoding="utf-8",
     )
     paquets = sum(len(m["packages"]) for m in mentions)  # type: ignore[arg-type]
-    print(f"Mentions tierces : {paquets} paquets, {len(mentions)} textes → {sortie.relative_to(RACINE)}")
+    print(f"Third-party notices: {paquets} packages, {len(mentions)} texts → {sortie.relative_to(RACINE)}")
     return 0
 
 

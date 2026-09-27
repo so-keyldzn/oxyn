@@ -7,8 +7,8 @@
 //!
 //! Every string that is not one of this module's own literals goes through
 //! [`visible`]: a connection name comes from a workspace file, a statement
-//! from a script, a reason quotes the connection name (SECURITY, surface
-//! d'entrée).
+//! from a script, a reason quotes the connection name (SECURITY, input
+//! surface).
 
 use std::collections::BTreeSet;
 use std::fmt::Write as _;

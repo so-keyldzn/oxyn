@@ -32,15 +32,15 @@ mod tests {
     use super::*;
 
     #[test]
-    fn les_etats_voyagent_en_snake_case() {
+    fn states_travel_in_snake_case() {
         for (etat, attendu) in [
             (TransactionState::Idle, "\"idle\""),
             (TransactionState::Open, "\"open\""),
             (TransactionState::Unknown, "\"unknown\""),
         ] {
-            let json = serde_json::to_string(&etat).expect("sérialisation");
+            let json = serde_json::to_string(&etat).expect("serialization");
             assert_eq!(json, attendu);
-            let relu: TransactionState = serde_json::from_str(&json).expect("désérialisation");
+            let relu: TransactionState = serde_json::from_str(&json).expect("deserialization");
             assert_eq!(relu, etat);
         }
     }

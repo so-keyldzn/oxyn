@@ -1,6 +1,6 @@
 [package]
 name = "oxyn-exec"
-description = "Ordonnanceur : Policy gate, annulation, timeouts, journalisation"
+description = "Scheduler: Policy gate, cancellation, timeouts, logging"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -30,8 +30,8 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
-# Un curseur factice rend des `RecordBatch` : la seule façon de prouver le
-# chemin nominal de l'historique — durée et lignes — sans serveur.
+# A fake cursor returns `RecordBatch`es: the only way to prove the history's
+# nominal path — duration and rows — without a server.
 arrow.workspace = true
 oxyn-driver-sqlite.workspace = true
 # A production read calling a writing function must be refused by the server,

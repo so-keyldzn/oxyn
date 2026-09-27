@@ -103,7 +103,8 @@ function EntryItem({
       </span>
       {caption ? (
         // Part of the item's text: read with it by the keyboard and screen
-        // readers, not only on hover (UX-SPEC, « Une action, un libellé »).
+        // readers, not only on hover (UX-SPEC, « One action, one label, one
+        // shortcut »).
         <span className="max-w-60 text-[length:var(--reading-caption)] text-muted-foreground">
           {caption}
         </span>

@@ -56,7 +56,7 @@ export function findSummary(answer: FindAnswer): {
  * `Find in loaded results…`: reveals where the text is, hides nothing.
  *
  * A search is not a filter — every row stays in the grid and in the export
- * (docs/UX-SPEC.md, « Ce qui est exporté est ce qui est affiché »). Enter finds
+ * (docs/UX-SPEC.md, « What is exported is what is displayed »). Enter finds
  * the next match, Shift+Enter the previous one, Escape clears.
  */
 export function ResultFindBar({

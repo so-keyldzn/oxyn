@@ -1,57 +1,56 @@
-//! Les identifiants, et le fait qu'ils ne touchent jamais le disque en clair.
+//! Credentials, and the guarantee that they never touch the disk in clear text.
 //!
-//! Cette crate tient un seul engagement, celui de
-//! [`SECURITY`](../../../docs/SECURITY.md) et de
-//! [`ARCHITECTURE` §8](../../../docs/ARCHITECTURE.md) : **ce qui est persisté
-//! est une référence, jamais une valeur.** La valeur vit dans le trousseau du
-//! système d'exploitation — Keychain, Secret Service, Credential Manager — et
-//! Oxyn ne l'écrit nulle part ailleurs.
+//! This crate holds a single commitment, the one of
+//! [`SECURITY`](../../../docs/SECURITY.md) and of
+//! [`ARCHITECTURE` §8](../../../docs/ARCHITECTURE.md): **what is persisted is a
+//! reference, never a value.** The value lives in the operating system's
+//! keychain — Keychain, Secret Service, Credential Manager — and Oxyn writes it
+//! nowhere else.
 //!
-//! La panne évitée est concrète : un fichier de workspace contenant un mot de
-//! passe de production, commité par l'utilisateur dans le dépôt de son équipe
-//! parce que le fichier avait l'air d'être une simple configuration.
+//! The failure avoided is concrete: a workspace file containing a production
+//! password, committed by the user to their team's repository because the file
+//! looked like plain configuration.
 //!
-//! # Ce qu'on y trouve
+//! # What is in here
 //!
-//! | Module | Sujet |
+//! | Module | Subject |
 //! |---|---|
-//! | [`store`] | [`SecretRef`], la référence persistée, et le contrat [`SecretStore`] |
-//! | [`bundle`] | [`CredentialBundle`] : plusieurs secrets dans une entrée de trousseau |
-//! | [`keyring_store`] | [`KeyringSecretStore`], l'implémentation de production |
-//! | [`memory_store`] | [`MemorySecretStore`], la cible des tests |
-//! | [`error`] | [`SecretError`], dont les variantes ne peuvent pas porter de secret |
+//! | [`store`] | [`SecretRef`], the persisted reference, and the [`SecretStore`] contract |
+//! | [`bundle`] | [`CredentialBundle`]: several secrets in one keychain entry |
+//! | [`keyring_store`] | [`KeyringSecretStore`], the production implementation |
+//! | [`memory_store`] | [`MemorySecretStore`], the target of tests |
+//! | [`error`] | [`SecretError`], whose variants cannot carry a secret |
 //!
-//! # Les trois choses qui, ici, sont tenues par les types
+//! # The three things held by the types here
 //!
-//! **Aucun `Debug` dérivé sur ce qui porte un secret.** [`CredentialBundle`]
-//! rend `<redacted>`, et l'écrit à la main. C'est le corollaire vérifiable de
-//! I-03 : le mode de fuite le plus fréquent est le `tracing::debug!("{x:?}")`
-//! ajouté six mois plus tard, invisible à la relecture.
+//! **No derived `Debug` on anything that carries a secret.** [`CredentialBundle`]
+//! renders `<redacted>`, and writes it by hand. It is the checkable corollary of
+//! I-03: the most frequent leak is the `tracing::debug!("{x:?}")` added six
+//! months later, invisible in review.
 //!
-//! **Aucun message d'erreur ne peut citer un secret.** Les variantes de
-//! [`SecretError`] qui décrivent un contenu illisible ne portent qu'un
-//! `&'static str` — un type dans lequel aucune donnée d'exécution ne peut
-//! entrer. Les erreurs du crate `keyring`, elles, transportent bel et bien les
-//! octets fautifs : elles sont traduites variante par variante et jamais
-//! propagées telles quelles.
+//! **No error message can quote a secret.** The [`SecretError`] variants that
+//! describe unreadable content carry only a `&'static str` — a type no runtime
+//! data can enter. The errors of the `keyring` crate, on the other hand, do carry
+//! the offending bytes: they are translated variant by variant and never
+//! propagated as they are.
 //!
-//! **Aucune référence relue n'est crue sur parole.** Un fichier de workspace
-//! peut avoir été écrit par un tiers ; la référence qu'il porte devient un nom
-//! d'entrée dans le trousseau du système. [`SecretRef::parse`] la valide avant
-//! qu'elle n'atteigne la plateforme.
+//! **No reference read back is taken at its word.** A workspace file may have
+//! been written by a third party; the reference it carries becomes an entry name
+//! in the system keychain. [`SecretRef::parse`] validates it before it reaches the
+//! platform.
 //!
-//! # Exemple
+//! # Example
 //!
 //! ```
 //! use oxyn_core::ConnectionId;
 //! use oxyn_secrets::{CredentialBundle, MemorySecretStore, SecretRef, SecretStore};
 //!
 //! # fn main() -> Result<(), oxyn_secrets::SecretError> {
-//! // En production, c'est `KeyringSecretStore::new()`.
+//! // In production, this is `KeyringSecretStore::new()`.
 //! let trousseau = MemorySecretStore::new();
 //!
-//! // La référence se dérive de l'identifiant de connexion : c'est elle, et
-//! // elle seule, qui part dans le fichier de workspace.
+//! // The reference derives from the connection identifier: it, and it alone,
+//! // goes into the workspace file.
 //! let reference = SecretRef::for_connection(ConnectionId::new());
 //! assert!(reference.as_str().starts_with("oxyn:conn:"));
 //!
@@ -60,25 +59,25 @@
 //!     &CredentialBundle::new().with_password("hunter2"),
 //! )?;
 //!
-//! let identifiants = trousseau.get_bundle(&reference)?.expect("écrit ci-dessus");
+//! let identifiants = trousseau.get_bundle(&reference)?.expect("written above");
 //! assert_eq!(identifiants.password(), Some("hunter2"));
 //!
-//! // Et rien ne s'échappe par le `Debug`.
+//! // And nothing escapes through `Debug`.
 //! assert_eq!(format!("{identifiants:?}"), "CredentialBundle(<redacted>)");
 //! # Ok(())
 //! # }
 //! ```
 //!
-//! # Ce qui n'est pas ici
+//! # What is not here
 //!
-//! Le chiffrement par phrase de passe d'un workspace **partagé** — celui qu'on
-//! transmet à un collègue, hors trousseau de la machine — n'existe pas encore.
+//! Passphrase encryption of a **shared** workspace — one handed to a colleague,
+//! outside the machine's keychain — does not exist yet.
 //!
-//! TODO(phase 4, ouvert le 2026-09-05) : chiffrer un workspace exportable avec
-//! le crate `age`, débloqué par le partage de workspace entre postes
-//! (IMPLEMENTATION-PLAN, phase 4). Aucune primitive cryptographique ne s'écrit ici
-//! d'ici là : `age` n'est pas dans le graphe de dépendances, et improviser un
-//! chiffrement maison serait pire que ne rien offrir.
+//! TODO(phase 4, opened on 2026-09-05): encrypt an exportable workspace with the
+//! `age` crate, unblocked by workspace sharing between machines
+//! (IMPLEMENTATION-PLAN, phase 4). No cryptographic primitive is written here
+//! until then: `age` is not in the dependency graph, and improvising a home-made
+//! encryption would be worse than offering nothing.
 
 pub mod bundle;
 pub mod error;
@@ -92,14 +91,13 @@ pub use keyring_store::KeyringSecretStore;
 pub use memory_store::MemorySecretStore;
 pub use store::{SecretRef, SecretStore};
 
-/// Réexports de `secrecy`, parce qu'ils font partie de la signature de
+/// Re-exports of `secrecy`, because they are part of the signature of
 /// [`SecretStore`].
 ///
-/// Un appelant doit pouvoir nommer [`SecretString`] et exposer son contenu au
-/// moment de le transmettre à un driver. Le lui faire faire en ajoutant
-/// `secrecy` à son propre `Cargo.toml` inviterait à une divergence de version
-/// entre deux crates du workspace — et deux types `SecretString` incompatibles
-/// se diagnostiquent très mal.
+/// A caller must be able to name [`SecretString`] and expose its content when
+/// handing it to a driver. Making it add `secrecy` to its own `Cargo.toml` would
+/// invite a version divergence between two crates of the workspace — and two
+/// incompatible `SecretString` types are very hard to diagnose.
 pub use secrecy::{ExposeSecret, SecretString};
 
 #[cfg(test)]
@@ -109,10 +107,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn le_trajet_complet_d_une_connexion() {
-        // Ce que fait `oxyn-desktop` à la création d'une connexion, puis à chaque
-        // ouverture : écrire le secret sous une référence, ne persister que la
-        // référence, la relire, retrouver le secret.
+    fn the_full_journey_of_a_connection() {
+        // What `oxyn-desktop` does when a connection is created, then at every
+        // opening: write the secret under a reference, persist only the reference,
+        // read it back, find the secret again.
         let trousseau = MemorySecretStore::new();
 
         let connexion = ConnectionConfig::new("prod-eu", DriverId::postgres())
@@ -127,47 +125,47 @@ mod tests {
                     .with_password("hunter2")
                     .with_tls_client_key("-----BEGIN PRIVATE KEY-----"),
             )
-            .expect("écriture");
+            .expect("write");
 
-        // Ce qui part sur le disque.
+        // What goes to disk.
         let connexion = connexion.with_secret_ref(reference.as_str());
-        let persiste = serde_json::to_string(&connexion).expect("sérialisation");
+        let persiste = serde_json::to_string(&connexion).expect("serialization");
         assert!(
             !persiste.contains("hunter2"),
-            "mot de passe fuité dans le workspace : {persiste}"
+            "password leaked into the workspace: {persiste}"
         );
         assert!(
             !persiste.contains("BEGIN PRIVATE KEY"),
-            "clé privée fuitée dans le workspace : {persiste}"
+            "private key leaked into the workspace: {persiste}"
         );
         assert!(persiste.contains(reference.as_str()));
 
-        // Ce qui en revient.
-        let relu: ConnectionConfig = serde_json::from_str(&persiste).expect("désérialisation");
-        let reference = SecretRef::for_connection_config(&relu).expect("référence valide");
+        // What comes back from it.
+        let relu: ConnectionConfig = serde_json::from_str(&persiste).expect("deserialization");
+        let reference = SecretRef::for_connection_config(&relu).expect("valid reference");
         let identifiants = trousseau
             .get_bundle(&reference)
-            .expect("lecture")
-            .expect("le secret a été écrit plus haut");
+            .expect("read")
+            .expect("the secret was written above");
         assert_eq!(identifiants.password(), Some("hunter2"));
     }
 
     #[test]
-    fn une_connexion_sans_secret_n_est_pas_une_erreur() {
-        // SQLite sur fichier, PostgreSQL par socket Unix, `~/.pgpass` : la
-        // majorité des connexions locales n'ont aucun secret à stocker.
+    fn a_connection_without_a_secret_is_not_an_error() {
+        // SQLite on a file, PostgreSQL over a Unix socket, `~/.pgpass`: most local
+        // connections have no secret to store.
         let trousseau = MemorySecretStore::new();
         let reference = SecretRef::for_connection(ConnectionId::new());
-        assert!(trousseau.get(&reference).expect("lecture").is_none());
-        assert!(trousseau.get_bundle(&reference).expect("lecture").is_none());
+        assert!(trousseau.get(&reference).expect("read").is_none());
+        assert!(trousseau.get_bundle(&reference).expect("read").is_none());
         assert!(trousseau.delete(&reference).is_ok());
     }
 
     #[test]
-    fn les_deux_magasins_honorent_le_meme_contrat() {
-        // Le trousseau réel n'est pas sollicité : on vérifie que les deux
-        // implémentations sont bien substituables derrière le trait, ce qui est
-        // la seule chose qu'un test hors ligne peut établir.
+    fn both_stores_honor_the_same_contract() {
+        // The real keychain is not used: we check that both implementations can be
+        // substituted behind the trait, which is the only thing an offline test can
+        // establish.
         fn accepte(_: &dyn SecretStore) {}
         accepte(&MemorySecretStore::new());
         accepte(&KeyringSecretStore::new());

@@ -1,25 +1,25 @@
-# La porte de qualité, exécutée par une machine.
+# The quality gate, run by a machine.
 #
-# Ce fichier n'ajoute AUCUN contrôle : un contrôle qui n'existerait qu'ici serait
-# invisible en local, et personne ne saurait le reproduire avant de pousser. Il
-# appelle les cibles de `make qualite`, réparties en jobs parallèles pour que le
-# Rust n'attende pas les stories :
+# This file adds NO check: a check that existed only here would be invisible
+# locally, and nobody could reproduce it before pushing. It calls the targets
+# of `make qualite`, split into parallel jobs so that Rust does not wait for the
+# stories:
 #
 #   controles  make socle todo front-controles
-#   stories    make front-tests SHARD=i/n, un job par tranche
+#   stories    make front-tests SHARD=i/n, one job per shard
 #   rust       make front-build rust
 #
-# Leur réunion est `make qualite`. `make socle` le vérifie : un workflow qui
-# oublierait une cible atteinte par `qualite` fait échouer la porte.
+# Together they are `make qualite`. `make socle` checks it: a workflow that
+# forgot a target reached by `qualite` fails the gate.
 #
-# Sur une pull request, le job `zones` dit quelles zones la PR touche, et les
-# jobs des zones intactes sont sautés. Sur `main` et à la demande, tout tourne :
-# c'est le filet (ADR-0045). Le job `qualite` agrège les autres, et c'est le
-# seul status check que la protection de branche exige — un check requis sur un
-# job sauté attendrait pour toujours.
+# On a pull request, the `zones` job says which areas the PR touches, and the
+# jobs of untouched areas are skipped. On `main` and on demand, everything
+# runs: that is the safety net (ADR-0045). The `qualite` job aggregates the
+# others, and it is the only status check branch protection requires — a
+# required check on a skipped job would wait forever.
 #
-# Versions des actions et des outils : docs/RESEARCH-NOTES.md, § CI et
-# livraison GitHub.
+# Versions of the actions and tools: docs/RESEARCH-NOTES.md, § CI and GitHub
+# delivery.
 name: qualite
 
 on:
@@ -27,12 +27,12 @@ on:
     branches: [main]
   pull_request:
     branches: ["**"]
-  # La matrice complète, macOS compris, à la demande sur n'importe quelle
-  # branche : pour une PR qui touche au rendu propre à WKWebView.
+  # The full matrix, macOS included, on demand on any branch: for a PR that
+  # touches rendering specific to WKWebView.
   workflow_dispatch:
 
-# Une deuxième poussée sur la même branche rend la première sans objet : la
-# laisser finir consomme un runner pour un résultat que personne ne lira.
+# A second push on the same branch makes the first one moot: letting it finish
+# consumes a runner for a result nobody will read.
 concurrency:
   group: qualite-${{ github.ref }}
   cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
@@ -45,16 +45,16 @@ env:
   CARGO_INCREMENTAL: "0"
   RUST_BACKTRACE: "1"
 
-# macOS et Linux passent la MÊME porte (décision D10 du 2026-09-24, ADR-0029) :
-# la webview n'est pas la même (WKWebView, WebKitGTK), et un rendu vérifié sur
-# l'une ne l'est pas sur l'autre. Windows n'y est pas : la porte suppose un
-# shell POSIX (Makefile, scripts du socle).
+# macOS and Linux pass the SAME gate (decision D10 of 2026-09-24, ADR-0029):
+# the webview is not the same (WKWebView, WebKitGTK), and a rendering checked
+# on one is not checked on the other. Windows is not included: the gate assumes
+# a POSIX shell (Makefile, foundation scripts).
 #
-# Sur une pull request, Linux seul ; macOS s'ajoute sur `main` et à la demande
-# (`workflow_dispatch`). Une minute de runner macOS en compte dix sur un dépôt
-# privé : la matrice complète sur chaque PR a épuisé le quota du compte le
-# 2026-09-24, et plus aucun job ne démarrait. Tout ce qui est fusionné passe
-# encore par macOS, sur `main`.
+# On a pull request, Linux only; macOS is added on `main` and on demand
+# (`workflow_dispatch`). One minute of macOS runner counts as ten on a private
+# repository: the full matrix on every PR exhausted the account's quota on
+# 2026-09-24, and no job started any more. Everything merged still goes through
+# macOS, on `main`.
 jobs:
   zones:
     runs-on: ubuntu-24.04
@@ -63,14 +63,14 @@ jobs:
       rust: ${{ steps.zones.outputs.rust }}
       front: ${{ steps.zones.outputs.front }}
     steps:
-      - name: Récupérer le dépôt
-        # actions/checkout v7.0.1. Sur une PR, HEAD est le commit de fusion : son
-        # premier parent est la base, et `HEAD^1..HEAD` est exactement la PR.
+      - name: Check out the repository
+        # actions/checkout v7.0.1. On a PR, HEAD is the merge commit: its first
+        # parent is the base, and `HEAD^1..HEAD` is exactly the PR.
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
         with:
           fetch-depth: 2
 
-      - name: Ranger les fichiers modifiés par zone
+      - name: Sort the modified files by area
         id: zones
         run: script/zones-ci HEAD^1
 
@@ -84,25 +84,25 @@ jobs:
     timeout-minutes: 20
 
     steps:
-      - name: Récupérer le dépôt
+      - name: Check out the repository
         # actions/checkout v7.0.1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
       - name: make socle todo
         run: make socle todo
 
-      - name: Installer Node
-        # actions/setup-node v7.0.0. La ligne 22 satisfait vite 8.3.0
-        # (`^20.19.0 || >=22.12.0`) et vitest 4.1.11, et c'est celle de la
-        # machine de développement.
+      - name: Install Node
+        # actions/setup-node v7.0.0. The 22 line satisfies vite 8.3.0
+        # (`^20.19.0 || >=22.12.0`) and vitest 4.1.11, and it is the one of the
+        # development machine.
         if: needs.zones.outputs.front == 'true'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: "22"
 
-      - name: Installer pnpm
-        # pnpm/action-setup v6.1.0. Sans `version` : il lit le champ
-        # `packageManager` du paquet, seule source de la version de pnpm.
+      - name: Install pnpm
+        # pnpm/action-setup v6.1.0. Without `version`: it reads the package's
+        # `packageManager` field, the only source of the pnpm version.
         if: needs.zones.outputs.front == 'true'
         uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413
         with:
@@ -110,7 +110,7 @@ jobs:
           cache: true
           cache_dependency_path: apps/desktop/pnpm-lock.yaml
 
-      - name: Installer les dépendances du front
+      - name: Install the front-end dependencies
         if: needs.zones.outputs.front == 'true'
         run: pnpm -C apps/desktop install --frozen-lockfile
 
@@ -119,9 +119,9 @@ jobs:
         run: make front-controles
 
   stories:
-    # Les stories dominent le temps du front (plus de quatre minutes sous
-    # Linux) : chaque tranche tourne sur son propre runner. Le nombre de
-    # tranches est écrit deux fois, dans `tranche` et dans `SHARD`.
+    # The stories dominate the front-end time (more than four minutes on
+    # Linux): each shard runs on its own runner. The number of shards is
+    # written twice, in `tranche` and in `SHARD`.
     needs: zones
     if: needs.zones.outputs.front == 'true'
     strategy:
@@ -133,17 +133,17 @@ jobs:
     timeout-minutes: 30
 
     steps:
-      - name: Récupérer le dépôt
+      - name: Check out the repository
         # actions/checkout v7.0.1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
-      - name: Installer Node
+      - name: Install Node
         # actions/setup-node v7.0.0
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: "22"
 
-      - name: Installer pnpm
+      - name: Install pnpm
         # pnpm/action-setup v6.1.0
         uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413
         with:
@@ -151,35 +151,35 @@ jobs:
           cache: true
           cache_dependency_path: apps/desktop/pnpm-lock.yaml
 
-      - name: Installer les dépendances du front
+      - name: Install the front-end dependencies
         run: pnpm -C apps/desktop install --frozen-lockfile
 
-      - name: Placer les navigateurs de Playwright
-        # Un seul chemin sur les deux OS, hors du dépôt : `prettier --check .`
-        # ne doit pas le parcourir.
+      - name: Place the Playwright browsers
+        # A single path on both OSes, outside the repository: `prettier --check .`
+        # must not walk it.
         run: echo "PLAYWRIGHT_BROWSERS_PATH=$RUNNER_TEMP/ms-playwright" >> "$GITHUB_ENV"
 
-      - name: Restaurer les navigateurs de Playwright
-        # actions/cache v6.1.0. La clé suit le lockfile, qui porte la version
-        # de `playwright` : une montée de version retélécharge le navigateur.
+      - name: Restore the Playwright browsers
+        # actions/cache v6.1.0. The key follows the lockfile, which carries the
+        # `playwright` version: a version bump downloads the browser again.
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9
         with:
           path: ${{ runner.temp }}/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('apps/desktop/pnpm-lock.yaml') }}
 
-      - name: Installer le navigateur des stories
-        # Les stories tournent dans Chromium via Playwright
-        # (apps/desktop/vite.config.ts). Navigateur restauré, il ne reste que
-        # les bibliothèques système, que le cache ne couvre pas.
+      - name: Install the stories browser
+        # The stories run in Chromium through Playwright
+        # (apps/desktop/vite.config.ts). With the browser restored, only the
+        # system libraries remain, which the cache does not cover.
         run: pnpm -C apps/desktop exec playwright install --with-deps chromium
 
       - name: make front-tests
         run: make front-tests SHARD=${{ matrix.tranche }}/2
 
   rust:
-    # Il porte aussi `front-build` : `oxyn-desktop` embarque le front, et le
-    # build du front n'a pas d'autre job. Une PR front le lance donc, sans ce
-    # qui ne sert qu'à `make rust`.
+    # It also carries `front-build`: `oxyn-desktop` embeds the front end, and
+    # the front-end build has no other job. A front-end PR therefore runs it,
+    # without what only serves `make rust`.
     needs: zones
     if: needs.zones.outputs.rust == 'true' || needs.zones.outputs.front == 'true'
     strategy:
@@ -189,48 +189,49 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 75
     env:
-      # Les numéros de ligne suffisent à une trace de panique ; le reste des
-      # informations de débogage alourdit l'édition de liens et le cache sans
-      # servir à rien sur un runner. Le profil `test` hérite de `dev`.
+      # Line numbers are enough for a panic trace; the rest of the debug info
+      # weighs down linking and the cache without serving anything on a runner.
+      # The `test` profile inherits from `dev`.
       CARGO_PROFILE_DEV_DEBUG: line-tables-only
 
     steps:
-      - name: Récupérer le dépôt
+      - name: Check out the repository
         # actions/checkout v7.0.1
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
 
-      - name: Installer les bibliothèques système de Tauri
-        # Liste de la documentation Tauri (prérequis Debian), sans ajout :
-        # `keyring` passe par zbus, du Rust pur, et ne demande pas libdbus.
+      - name: Install Tauri's system libraries
+        # List from the Tauri documentation (Debian prerequisites), with no
+        # addition: `keyring` goes through zbus, pure Rust, and needs no libdbus.
         if: runner.os == 'Linux' && needs.zones.outputs.rust == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev build-essential curl wget file \
             libxdo-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev
 
-      - name: Installer la chaîne d'outils épinglée
-        # Aucune action tierce : `rust-toolchain.toml` fait autorité (ADR-0008),
-        # et rustup l'applique seul. Une action qui prendrait une version en
-        # paramètre créerait une deuxième source de vérité, qui divergerait.
+      - name: Install the pinned toolchain
+        # No third-party action: `rust-toolchain.toml` is authoritative
+        # (ADR-0008), and rustup applies it on its own. An action taking a
+        # version as a parameter would create a second source of truth, which
+        # would diverge.
         run: rustup show active-toolchain || rustup toolchain install
 
-      - name: Restaurer le cache Cargo
+      - name: Restore the Cargo cache
         if: needs.zones.outputs.rust == 'true'
-        # Swatinem/rust-cache v2.9.2. `cache-on-failure` : sans lui, le cache
-        # n'est enregistré qu'après un job réussi, et une porte rouge recompile
-        # tout le graphe à chaque poussée — c'est ce qui s'est produit à chaque
-        # exécution jusqu'au 2026-09-24.
+        # Swatinem/rust-cache v2.9.2. `cache-on-failure`: without it, the cache
+        # is only saved after a successful job, and a red gate recompiles the
+        # whole graph on every push — which is what happened on every run until
+        # 2026-09-24.
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6
         with:
           cache-on-failure: true
 
-      - name: Installer Node
+      - name: Install Node
         # actions/setup-node v7.0.0
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
         with:
           node-version: "22"
 
-      - name: Installer pnpm
+      - name: Install pnpm
         # pnpm/action-setup v6.1.0
         uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413
         with:
@@ -238,15 +239,15 @@ jobs:
           cache: true
           cache_dependency_path: apps/desktop/pnpm-lock.yaml
 
-      - name: Installer les dépendances du front
+      - name: Install the front-end dependencies
         run: pnpm -C apps/desktop install --frozen-lockfile
 
-      - name: Installer cargo-nextest
+      - name: Install cargo-nextest
         if: needs.zones.outputs.rust == 'true'
-        # Le profil de `.config/nextest.toml` — exécution sérialisée des tests
-        # de driver, arrêt d'un test qui pend — ne s'applique que si nextest est
-        # présent. Sans cette étape, `make test` retomberait silencieusement sur
-        # `cargo test` et le profil ne servirait jamais.
+        # The profile of `.config/nextest.toml` — serialized execution of the
+        # driver tests, termination of a hanging test — only applies if nextest
+        # is present. Without this step, `make test` would silently fall back
+        # to `cargo test` and the profile would never be used.
         run: |
           case "$RUNNER_OS" in
             macOS) platform=mac ;;
@@ -254,12 +255,12 @@ jobs:
           esac
           curl -LsSf "https://get.nexte.st/latest/$platform" | tar zxf - -C "${CARGO_HOME:-$HOME/.cargo}/bin"
 
-      - name: Installer cargo-about
-        # `front-build` génère les mentions des licences tierces avec
-        # cargo-about (script/licences-tierces, ADR-0044). Sans lui, le build
-        # passe sans mentions et la génération ne serait jamais exercée ici.
-        # Binaire publié par EmbarkStudios, version et empreintes relevées le
-        # 2026-09-25 (RESEARCH-NOTES § Licences).
+      - name: Install cargo-about
+        # `front-build` generates the third-party license notices with
+        # cargo-about (script/licences-tierces, ADR-0044). Without it, the build
+        # goes through without notices and the generation would never be
+        # exercised here. Binary published by EmbarkStudios, version and
+        # checksums read on 2026-09-25 (RESEARCH-NOTES § Licenses).
         run: |
           case "$RUNNER_OS" in
             macOS) cible=aarch64-apple-darwin
@@ -273,8 +274,8 @@ jobs:
           tar xzf "$archive" --strip-components=1 -C "${CARGO_HOME:-$HOME/.cargo}/bin" "cargo-about-0.9.2-$cible/cargo-about"
 
       - name: make front-build
-        # `front-build` d'abord : `oxyn-desktop` embarque `apps/desktop/dist`
-        # à la compilation.
+        # `front-build` first: `oxyn-desktop` embeds `apps/desktop/dist` at
+        # compile time.
         run: make front-build
 
       - name: make rust
@@ -282,25 +283,25 @@ jobs:
         run: make rust
 
   qualite:
-    # Le seul status check requis. Il réussit si `zones` a réussi et si aucun
-    # autre job n'a échoué ni été annulé : un job sauté parce que sa zone est
-    # intacte compte comme réussi. `zones` en échec sauterait tous les autres,
-    # d'où son cas à part.
+    # The only required status check. It succeeds if `zones` succeeded and no
+    # other job failed or was cancelled: a job skipped because its area is
+    # untouched counts as successful. A failed `zones` would skip all the
+    # others, hence its separate case.
     needs: [zones, controles, stories, rust]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
-      - name: Agréger les résultats
+      - name: Aggregate the results
         env:
           ZONES: ${{ needs.zones.result }}
           RESULTATS: ${{ join(needs.*.result, ' ') }}
         run: |
-          echo "zones : $ZONES ; tous : $RESULTATS"
+          echo "zones: $ZONES; all: $RESULTATS"
           test "$ZONES" = success
           for resultat in $RESULTATS; do
             case "$resultat" in
               success|skipped) ;;
-              *) echo "Un job a fini en « $resultat »."; exit 1 ;;
+              *) echo "A job ended as \"$resultat\"."; exit 1 ;;
             esac
           done

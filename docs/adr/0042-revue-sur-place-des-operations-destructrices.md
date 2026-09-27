@@ -303,7 +303,7 @@ The three entries are human actions of ADR-0041's registry. They appear in no
 menu and no list built for an `Actor::Agent`. No `oxyn-ai` tool reaches
 `review_object_operation` or `run_object_operation`. A test
 `object_operations_are_not_tools`, next to
-`le_changement_de_schema_n_est_pas_un_outil` in `oxyn-ai/src/tools.rs`, fails
+`schema_change_is_not_a_tool` in `oxyn-ai/src/tools.rs`, fails
 the day such a tool appears. An agent that wants to drop a table writes SQL
 like anyone else. In production, the gate **refuses** it
 ([I-02](../../CLAUDE.md#i-02), [I-07](../../CLAUDE.md#i-07)). Elsewhere, it

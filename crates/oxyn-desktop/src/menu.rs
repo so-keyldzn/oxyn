@@ -37,7 +37,7 @@ pub const QUIT: &str = "app.quit";
 const APPLICATION_ENTRIES: &[&str] = &["window.new", "app.settings"];
 
 /// Coupled by path to the front, on purpose: moving the file breaks this
-/// build, not the menu of a released version (ADR-0041, « Conséquences »).
+/// build, not the menu of a released version (ADR-0041, « Consequences »).
 const MANIFEST: &str = include_str!("../../../apps/desktop/src/lib/actions/actions.json");
 
 // ---- The manifest, as far as the bar needs it --------------------------------

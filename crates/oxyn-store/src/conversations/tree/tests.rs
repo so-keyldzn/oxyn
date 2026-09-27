@@ -1,47 +1,47 @@
-//! Ce que l'arbre d'une conversation doit tenir.
+//! What a conversation's tree must hold.
 //!
-//! Quatre garanties, et chacune est silencieuse si elle se perd : la structure
-//! ne peut pas boucler ni changer de conversation, un échange qui a reçu un
-//! échantillon ne garde jamais de réponse — **ni en base, ni dans les octets du
-//! fichier** —, une issue illisible ne se relit jamais comme une affirmation, et
-//! les lignes de la migration 10 restent lisibles.
+//! Four guarantees, each silent if lost: the structure can neither loop nor
+//! change conversation, an exchange that received a sample never keeps an
+//! answer — **neither in the database, nor in the file's bytes** —, an
+//! unreadable outcome never reads back as an assertion, and migration 10's
+//! rows stay readable.
 
 use super::*;
 use crate::conversations::{Conversation, TurnRecord, TurnRole};
 use crate::{Store, StoreError};
 use oxyn_core::{ConnectionConfig, ConnectionId, DriverId, WorkspaceId};
 
-/// Un magasin migré, un workspace, une connexion.
+/// A migrated store, a workspace, a connection.
 fn decor() -> (Store, WorkspaceId, ConnectionId) {
-    let store = Store::open_in_memory().expect("ouverture");
+    let store = Store::open_in_memory().expect("open");
     let workspace = store.workspaces().create("atelier").expect("workspace").id;
     let connexion = ConnectionConfig::new("base client", DriverId::postgres());
     store
         .connections()
         .save(workspace, &connexion)
-        .expect("connexion");
+        .expect("connection");
     (store, workspace, connexion.id)
 }
 
-/// La destination courante.
+/// The common destination.
 fn fournisseur() -> Destination {
     Destination::provider(
-        ProviderId::new("anthropic-1a2b3c4d").expect("identifiant"),
+        ProviderId::new("anthropic-1a2b3c4d").expect("identifier"),
         "Anthropic",
         "un-modele",
     )
 }
 
-/// Un fil enregistré.
+/// A saved thread.
 fn fil(store: &Store, workspace: WorkspaceId, connexion: ConnectionId) -> ConversationId {
     let conversation = Conversation::new(workspace, fournisseur(), "Doublons")
         .on_connection(connexion, "base client");
     let id = conversation.id;
-    store.conversations().save(&conversation).expect("fil");
+    store.conversations().save(&conversation).expect("thread");
     id
 }
 
-/// Ajoute un échange et rend son nœud.
+/// Adds an exchange and returns its node.
 fn echange(store: &Store, id: ConversationId, parent: Option<u32>, question: &str) -> u32 {
     store
         .conversations()
@@ -49,21 +49,21 @@ fn echange(store: &Store, id: ConversationId, parent: Option<u32>, question: &st
             id,
             &ExchangeRecord::new(parent, PrivacyTier::Metadata, question, fournisseur()),
         )
-        .expect("écriture")
-        .expect("le fil existe")
+        .expect("write")
+        .expect("the thread exists")
 }
 
-/// Exécute du SQL hors de l'API, comme le ferait `sqlite3`.
+/// Runs SQL outside the API, as `sqlite3` would.
 fn sql(store: &Store, requete: &str) -> crate::error::Result<usize> {
     store.with_connection(|conn| Ok(conn.execute(requete, [])?))
 }
 
 // --- Structure --------------------------------------------------------------
 
-/// Une régénération crée une sœur, une relance un enfant, et la branche relue
-/// est le chemin de la racine à la feuille.
+/// A regeneration creates a sibling, a follow-up a child, and the branch read
+/// back is the path from the root to the leaf.
 #[test]
-fn l_arbre_porte_les_versions_et_la_branche_les_relit() {
+fn the_tree_carries_versions_and_the_branch_reads_them_back() {
     let (store, workspace, connexion) = decor();
     let id = fil(&store, workspace, connexion);
 
@@ -74,16 +74,16 @@ fn l_arbre_porte_les_versions_et_la_branche_les_relit() {
     let branche = store
         .conversations()
         .branch_page(id, autre_suite, 0, MAX_EXCHANGE_PAGE)
-        .expect("branche");
+        .expect("branch");
     let noeuds: Vec<u32> = branche.exchanges.iter().map(|e| e.node).collect();
-    assert_eq!(noeuds, vec![racine, autre_suite], "racine d'abord");
+    assert_eq!(noeuds, vec![racine, autre_suite], "root first");
     assert_eq!(branche.next, None);
     assert_eq!(branche.exchanges[0].question, "première question");
     assert_eq!(branche.exchanges[1].parent, Some(racine));
 
     let versions = store.conversations().versions(id, suite).expect("versions");
     let noeuds: Vec<u32> = versions.iter().map(|v| v.node).collect();
-    assert_eq!(noeuds, vec![suite, autre_suite], "soi et ses sœurs");
+    assert_eq!(noeuds, vec![suite, autre_suite], "itself and its siblings");
     assert_eq!(
         store
             .conversations()
@@ -91,21 +91,21 @@ fn l_arbre_porte_les_versions_et_la_branche_les_relit() {
             .expect("versions")
             .len(),
         1,
-        "une racine n'a de sœurs que les autres racines"
+        "a root only has the other roots as siblings"
     );
 }
 
-/// Un parent qui n'appartient pas à la conversation est refusé, par l'API comme
-/// par le fichier.
+/// A parent that does not belong to the conversation is refused, by the API as
+/// by the file.
 #[test]
-fn un_parent_d_une_autre_conversation_est_refuse() {
+fn a_parent_from_another_conversation_is_refused() {
     let (store, workspace, connexion) = decor();
     let premier = fil(&store, workspace, connexion);
     let second = fil(&store, workspace, connexion);
-    // Le premier fil va plus loin que le second : c'est ce qui donne un numéro
-    // de nœud que le second ne porte pas. Sans cela, `parent = 0` désignerait
-    // légitimement le nœud 0 du second, et la clé étrangère n'aurait rien à
-    // refuser.
+    // The first thread goes further than the second: that is what yields a
+    // node number the second does not carry. Without it, `parent = 0` would
+    // legitimately designate the second's node 0, and the foreign key would
+    // have nothing to refuse.
     let mut ailleurs = echange(&store, premier, None, "chez le premier");
     for _ in 0..2 {
         ailleurs = echange(&store, premier, Some(ailleurs), "encore chez le premier");
@@ -123,15 +123,15 @@ fn un_parent_d_une_autre_conversation_est_refuse() {
                 fournisseur(),
             ),
         )
-        .expect_err("le parent n'est pas dans cette conversation");
+        .expect_err("the parent is not in this conversation");
     assert!(
         matches!(erreur, StoreError::Corrupted { field, .. } if field.ends_with(".parent")),
         "{erreur:?}"
     );
 
-    // Et la clé étrangère composite refuse la même chose écrite en SQL. Le
-    // nœud inséré est plus récent que son parent, donc le `CHECK(parent < node)`
-    // le laisse passer : seule la clé étrangère peut le refuser ici.
+    // And the composite foreign key refuses the same thing written in SQL.
+    // The inserted node is newer than its parent, so `CHECK(parent < node)`
+    // lets it through: only the foreign key can refuse it here.
     let refus = store.with_connection(|conn| {
         Ok(conn.execute(
             "INSERT INTO ai_conversation_nodes
@@ -146,13 +146,13 @@ fn un_parent_d_une_autre_conversation_est_refuse() {
             ],
         )?)
     });
-    assert!(refus.is_err(), "la clé étrangère composite doit refuser");
+    assert!(refus.is_err(), "the composite foreign key must refuse");
 }
 
-/// Aucun cycle n'est exprimable : un parent est toujours plus ancien, et la
-/// place d'un nœud ne change jamais.
+/// No cycle can be expressed: a parent is always older, and a node's place
+/// never changes.
 #[test]
-fn aucun_cycle_n_est_exprimable() {
+fn no_cycle_can_be_expressed() {
     let (store, workspace, connexion) = decor();
     let id = fil(&store, workspace, connexion);
     let racine = echange(&store, id, None, "racine");
@@ -160,25 +160,25 @@ fn aucun_cycle_n_est_exprimable() {
     let petit = echange(&store, id, Some(enfant), "petit-enfant");
 
     for (cas, requete) in [
-        // Les deux premiers cas sont ceux que seul le déclencheur peut
-        // refuser : le parent visé est plus ancien et il existe, donc le
-        // `CHECK` et la clé étrangère les laissent passer tous les deux.
+        // The first two cases are the ones only the trigger can refuse: the
+        // targeted parent is older and exists, so the `CHECK` and the foreign
+        // key both let them through.
         (
-            "remonter un nœud sous un parent valide",
+            "move a node up under a valid parent",
             format!(
                 "UPDATE ai_conversation_nodes SET parent = {racine}
                   WHERE conversation_id = '{id}' AND node = {petit}"
             ),
         ),
         (
-            "renuméroter un nœud",
+            "renumber a node",
             format!(
                 "UPDATE ai_conversation_nodes SET node = 42
                   WHERE conversation_id = '{id}' AND node = {petit}"
             ),
         ),
         (
-            "un nœud son propre parent",
+            "a node its own parent",
             format!(
                 "INSERT INTO ai_conversation_nodes
                      (conversation_id, node, parent, created_at, privacy_tier, question,
@@ -188,7 +188,7 @@ fn aucun_cycle_n_est_exprimable() {
             ),
         ),
         (
-            "un parent plus récent que son enfant",
+            "a parent newer than its child",
             format!(
                 "INSERT INTO ai_conversation_nodes
                      (conversation_id, node, parent, created_at, privacy_tier, question,
@@ -198,27 +198,27 @@ fn aucun_cycle_n_est_exprimable() {
             ),
         ),
         (
-            "reparenter la racine sous son enfant",
+            "reparent the root under its child",
             format!(
                 "UPDATE ai_conversation_nodes SET parent = {enfant}
                   WHERE conversation_id = '{id}' AND node = {racine}"
             ),
         ),
         (
-            "déplacer un nœud dans une autre conversation",
+            "move a node into another conversation",
             format!(
                 "UPDATE ai_conversation_nodes SET conversation_id = 'ailleurs'
                   WHERE conversation_id = '{id}' AND node = {enfant}"
             ),
         ),
     ] {
-        assert!(sql(&store, &requete).is_err(), "{cas} doit être refusé");
+        assert!(sql(&store, &requete).is_err(), "{cas} must be refused");
     }
 }
 
-/// Le nombre d'échanges est borné, dans le code et dans le fichier.
+/// The number of exchanges is bounded, in the code and in the file.
 #[test]
-fn le_nombre_d_echanges_est_borne() {
+fn the_number_of_exchanges_is_bounded() {
     let (store, workspace, connexion) = decor();
     let id = fil(&store, workspace, connexion);
     store
@@ -236,7 +236,7 @@ fn le_nombre_d_echanges_est_borne() {
             tx.commit()?;
             Ok(())
         })
-        .expect("un fil plein");
+        .expect("a full thread");
 
     let erreur = store
         .conversations()
@@ -244,7 +244,7 @@ fn le_nombre_d_echanges_est_borne() {
             id,
             &ExchangeRecord::new(None, PrivacyTier::Metadata, "de trop", fournisseur()),
         )
-        .expect_err("le fil est plein");
+        .expect_err("the thread is full");
     assert!(
         matches!(erreur, StoreError::TooLarge { field, .. } if field.ends_with(".node")),
         "{erreur:?}"
@@ -262,15 +262,15 @@ fn le_nombre_d_echanges_est_borne() {
             ],
         )?)
     });
-    assert!(refus.is_err(), "le fichier borne le nombre d'échanges");
+    assert!(refus.is_err(), "the file bounds the number of exchanges");
 }
 
-// --- L'échantillon retenu ---------------------------------------------------
+// --- The withheld sample -----------------------------------------------------
 
-/// Un échange qui a reçu un échantillon ne garde que sa question, ses compteurs
-/// et son issue — refus par l'API **et** par le fichier.
+/// An exchange that received a sample only keeps its question, its counters
+/// and its outcome — refused by the API **and** by the file.
 #[test]
-fn un_echange_retenu_refuse_toute_reponse() {
+fn a_withheld_exchange_refuses_any_answer() {
     let (store, workspace, connexion) = decor();
     let id = fil(&store, workspace, connexion);
     let node = echange(&store, id, None, "montre-moi cinq lignes");
@@ -286,7 +286,7 @@ fn un_echange_retenu_refuse_toute_reponse() {
                     columns: 2
                 }
             )
-            .expect("marquage")
+            .expect("marking")
     );
 
     let erreur = store
@@ -296,7 +296,7 @@ fn un_echange_retenu_refuse_toute_reponse() {
             &TurnRecord::new(TurnRole::Assistant, PrivacyTier::Sampled, "la réponse")
                 .in_exchange(node),
         )
-        .expect_err("l'API doit refuser");
+        .expect_err("the API must refuse");
     assert!(
         matches!(erreur, StoreError::SampleWithheld { node: refuse } if refuse == node),
         "{erreur:?}"
@@ -310,9 +310,9 @@ fn un_echange_retenu_refuse_toute_reponse() {
             rusqlite::params![id.to_string(), Utc::now(), i64::from(node)],
         )?)
     });
-    assert!(refus.is_err(), "le fichier doit refuser aussi");
+    assert!(refus.is_err(), "the file must refuse too");
 
-    // La question, les compteurs et l'issue restent.
+    // The question, the counters and the outcome remain.
     store
         .conversations()
         .finish_exchange(id, node, ExchangeOutcome::Answered(AnswerEnding::Answered))
@@ -320,7 +320,7 @@ fn un_echange_retenu_refuse_toute_reponse() {
     let branche = store
         .conversations()
         .branch_page(id, node, 0, MAX_EXCHANGE_PAGE)
-        .expect("branche");
+        .expect("branch");
     let retenu = &branche.exchanges[0];
     assert_eq!(retenu.question, "montre-moi cinq lignes");
     assert_eq!(
@@ -336,9 +336,9 @@ fn un_echange_retenu_refuse_toute_reponse() {
     );
 }
 
-/// Le marqueur ne se retire pas, et les compteurs sont bornés.
+/// The marker cannot be removed, and the counters are bounded.
 #[test]
-fn le_marqueur_ne_se_retire_pas() {
+fn the_marker_cannot_be_removed() {
     let (store, workspace, connexion) = decor();
     let id = fil(&store, workspace, connexion);
     let node = echange(&store, id, None, "question");
@@ -352,11 +352,10 @@ fn le_marqueur_ne_se_retire_pas() {
                 columns: 2,
             },
         )
-        .expect("marquage");
+        .expect("marking");
 
-    // Les compteurs partent avec le marqueur : sans cela, c'est le `CHECK` de
-    // cohérence entre les deux qui refuserait, et le déclencheur ne serait
-    // jamais éprouvé.
+    // The counters go with the marker: otherwise, the consistency `CHECK`
+    // between the two would refuse, and the trigger would never be tested.
     assert!(
         sql(
             &store,
@@ -367,7 +366,7 @@ fn le_marqueur_ne_se_retire_pas() {
             )
         )
         .is_err(),
-        "un échantillon retenu le reste"
+        "a withheld sample stays withheld"
     );
     for hors_bornes in [
         WithheldSample {
@@ -397,44 +396,43 @@ fn le_marqueur_ne_se_retire_pas() {
                     columns: 1
                 }
             )
-            .expect("nœud absent"),
-        "un échange qui n'existe pas rend `false`"
+            .expect("missing node"),
+        "a nonexistent exchange returns `false`"
     );
 }
 
-/// **Les octets du fichier** ne contiennent plus la réponse d'un échange retenu.
+/// **The file's bytes** no longer contain a withheld exchange's answer.
 ///
-/// C'est la seule forme qui prouve la promesse : effacer une ligne ne suffit
-/// pas, SQLite laisse son texte dans ses pages libres, et le journal d'écriture
-/// en garde une copie. `secure_delete` et la troncature du journal ferment les
-/// deux.
+/// It is the only form that proves the promise: erasing a row is not enough,
+/// SQLite leaves its text in its free pages, and the write-ahead log keeps a
+/// copy. `secure_delete` and truncating the log close both.
 #[test]
-fn le_fichier_ne_contient_plus_la_reponse_retenue() {
+fn the_file_no_longer_contains_the_withheld_answer() {
     const TEMOIN: &str = "reponse-temoin-9f3a7c21-alice@example.test";
-    let racine = tempfile::tempdir().expect("répertoire temporaire");
+    let racine = tempfile::tempdir().expect("temporary directory");
     let chemin = racine.path().join("oxyn.sqlite3");
-    let store = Store::open_at(&chemin).expect("ouverture");
+    let store = Store::open_at(&chemin).expect("open");
     let workspace = store.workspaces().create("atelier").expect("workspace").id;
     let config = ConnectionConfig::new("base client", DriverId::postgres());
     store
         .connections()
         .save(workspace, &config)
-        .expect("connexion");
+        .expect("connection");
     let id = fil(&store, workspace, config.id);
     let node = echange(&store, id, None, "montre-moi cinq lignes");
 
-    // La réponse est écrite **avant** que l'échantillon ne soit retenu : c'est
-    // l'ordre qui arrive quand l'approbation tombe au milieu d'un tour.
+    // The answer is written **before** the sample is withheld: that is the
+    // order that happens when the approval lands in the middle of a turn.
     store
         .conversations()
         .append(
             id,
             &TurnRecord::new(TurnRole::Assistant, PrivacyTier::Sampled, TEMOIN).in_exchange(node),
         )
-        .expect("réponse écrite");
+        .expect("written answer");
     assert!(
         contient(&octets_du_fichier(&chemin), TEMOIN.as_bytes()),
-        "le test ne prouve rien si la réponse n'a pas atteint le disque"
+        "the test proves nothing if the answer did not reach the disk"
     );
 
     store
@@ -447,38 +445,38 @@ fn le_fichier_ne_contient_plus_la_reponse_retenue() {
                 columns: 2,
             },
         )
-        .expect("marquage");
+        .expect("marking");
 
     assert!(
         !contient(&octets_du_fichier(&chemin), TEMOIN.as_bytes()),
-        "le texte de la réponse est encore dans les octets du fichier"
+        "the answer's text is still in the file's bytes"
     );
     assert!(
         store
             .conversations()
             .transcript_page(id, None, 16)
-            .expect("relecture")
+            .expect("read back")
             .turns
             .is_empty(),
-        "et la ligne est partie"
+        "and the row is gone"
     );
 }
 
-/// Le témoin apparaît-il quelque part dans ces octets ?
+/// Does the witness appear anywhere in these bytes?
 ///
-/// `Vec::contains` compare **un** octet : c'est une sous-tranche qu'on cherche
-/// ici, donc une fenêtre glissante. Un témoin vide répondrait toujours vrai et
-/// ne prouverait rien.
+/// `Vec::contains` compares **one** byte: a subslice is what is searched here,
+/// hence a sliding window. An empty witness would always answer true and prove
+/// nothing.
 fn contient(octets: &[u8], temoin: &[u8]) -> bool {
-    assert!(!temoin.is_empty(), "un témoin vide ne prouve rien");
+    assert!(!temoin.is_empty(), "an empty witness proves nothing");
     octets
         .windows(temoin.len())
         .any(|fenetre| fenetre == temoin)
 }
 
-/// Les octets du fichier et de son journal d'écriture.
+/// The bytes of the file and of its write-ahead log.
 fn octets_du_fichier(chemin: &std::path::Path) -> Vec<u8> {
-    let mut octets = std::fs::read(chemin).expect("base");
+    let mut octets = std::fs::read(chemin).expect("database");
     for suffixe in ["-wal", "-shm"] {
         let voisin = chemin.with_extension(format!("sqlite3{suffixe}"));
         if let Ok(mut extra) = std::fs::read(&voisin) {
@@ -488,11 +486,11 @@ fn octets_du_fichier(chemin: &std::path::Path) -> Vec<u8> {
     octets
 }
 
-// --- Issue ------------------------------------------------------------------
+// --- Outcome ----------------------------------------------------------------
 
-/// Les trois formes d'issue survivent à l'aller-retour.
+/// The three outcome forms survive the round trip.
 #[test]
-fn les_issues_survivent_a_l_aller_retour() {
+fn outcomes_survive_the_round_trip() {
     let (store, workspace, connexion) = decor();
     let id = fil(&store, workspace, connexion);
     for issue in [
@@ -522,21 +520,21 @@ fn les_issues_survivent_a_l_aller_retour() {
         let branche = store
             .conversations()
             .branch_page(id, node, 0, 1)
-            .expect("branche");
+            .expect("branch");
         assert_eq!(branche.exchanges[0].outcome, Some(issue), "{issue:?}");
     }
     let sans_issue = echange(&store, id, None, "en cours");
     let branche = store
         .conversations()
         .branch_page(id, sans_issue, 0, 1)
-        .expect("branche");
-    assert_eq!(branche.exchanges[0].outcome, None, "rien n'est affirmé");
+        .expect("branch");
+    assert_eq!(branche.exchanges[0].outcome, None, "nothing is asserted");
 }
 
-/// Écrire une ignorance est refusé ; la relire est tolérée, et jamais vers une
-/// affirmation.
+/// Writing an unknown is refused; reading one back is tolerated, and never
+/// towards an assertion.
 #[test]
-fn l_ignorance_se_relit_mais_ne_s_ecrit_pas() {
+fn an_unknown_reads_back_but_is_not_written() {
     let (store, workspace, connexion) = decor();
     let id = fil(&store, workspace, connexion);
     let node = echange(&store, id, None, "question");
@@ -554,23 +552,23 @@ fn l_ignorance_se_relit_mais_ne_s_ecrit_pas() {
                 .conversations()
                 .finish_exchange(id, node, refus)
                 .is_err(),
-            "{refus:?} ne s'écrit pas"
+            "{refus:?} is not written"
         );
     }
 
     for (cas, colonnes, attendu) in [
         (
-            "une issue inconnue",
+            "an unknown outcome",
             "outcome = 'vaporise', outcome_detail = NULL, retryable = NULL",
             ExchangeOutcome::Unknown,
         ),
         (
-            "une fin inconnue",
+            "an unknown ending",
             "outcome = 'answered', outcome_detail = 'vaporise', retryable = NULL",
             ExchangeOutcome::Answered(AnswerEnding::Unknown),
         ),
         (
-            "une catégorie inconnue",
+            "an unknown category",
             "outcome = 'failed', outcome_detail = 'vaporise', retryable = NULL",
             ExchangeOutcome::Failed {
                 kind: FailureKind::Unknown,
@@ -578,7 +576,7 @@ fn l_ignorance_se_relit_mais_ne_s_ecrit_pas() {
             },
         ),
         (
-            "une reprise illisible",
+            "an unreadable retry",
             "outcome = 'failed', outcome_detail = 'provider', retryable = NULL",
             ExchangeOutcome::Failed {
                 kind: FailureKind::Provider,
@@ -593,33 +591,33 @@ fn l_ignorance_se_relit_mais_ne_s_ecrit_pas() {
                   WHERE conversation_id = '{id}' AND node = {node}"
             ),
         )
-        .expect("ligne écrite hors d'Oxyn");
+        .expect("row written outside Oxyn");
         let branche = store
             .conversations()
             .branch_page(id, node, 0, 1)
-            .expect("branche");
+            .expect("branch");
         assert_eq!(branche.exchanges[0].outcome, Some(attendu), "{cas}");
     }
 }
 
-// --- Version sélectionnée ---------------------------------------------------
+// --- Selected version ---------------------------------------------------------
 
-/// La feuille sélectionnée doit appartenir à la conversation.
+/// The selected leaf must belong to the conversation.
 #[test]
-fn la_feuille_selectionnee_appartient_a_la_conversation() {
+fn the_selected_leaf_belongs_to_the_conversation() {
     let (store, workspace, connexion) = decor();
     let premier = fil(&store, workspace, connexion);
     let second = fil(&store, workspace, connexion);
     let ici = echange(&store, second, None, "chez le second");
-    // Deux échanges chez le premier : les nœuds sont numérotés par conversation,
-    // donc un numéro du premier ne désigne rien chez le second que s'il le
-    // dépasse. Sans le second échange, `ailleurs` vaudrait `ici` et le test
-    // passerait sans rien vérifier.
+    // Two exchanges in the first: nodes are numbered per conversation, so a
+    // number from the first designates nothing in the second only if it
+    // exceeds it. Without the second exchange, `ailleurs` would equal `ici`
+    // and the test would pass without checking anything.
     let _ = echange(&store, premier, None, "chez le premier");
     let ailleurs = echange(&store, premier, None, "et sa suite");
     assert_ne!(
         ailleurs, ici,
-        "le test doit viser un numéro absent du second"
+        "the test must target a number absent from the second"
     );
 
     assert!(store.conversations().select(second, Some(ici)).expect("ok"));
@@ -627,8 +625,8 @@ fn la_feuille_selectionnee_appartient_a_la_conversation() {
         store
             .conversations()
             .get(second)
-            .expect("relecture")
-            .expect("fil")
+            .expect("read back")
+            .expect("thread")
             .selected,
         Some(ici)
     );
@@ -636,7 +634,7 @@ fn la_feuille_selectionnee_appartient_a_la_conversation() {
     let erreur = store
         .conversations()
         .select(second, Some(ailleurs))
-        .expect_err("feuille d'une autre conversation");
+        .expect_err("leaf from another conversation");
     assert!(
         matches!(erreur, StoreError::Corrupted { field, .. } if field.ends_with(".selected_node")),
         "{erreur:?}"
@@ -649,26 +647,26 @@ fn la_feuille_selectionnee_appartient_a_la_conversation() {
             )
         )
         .is_err(),
-        "le fichier refuse la même chose"
+        "the file refuses the same thing"
     );
 
-    assert!(store.conversations().select(second, None).expect("effacée"));
+    assert!(store.conversations().select(second, None).expect("erased"));
     assert_eq!(
         store
             .conversations()
             .get(second)
-            .expect("relecture")
-            .expect("fil")
+            .expect("read back")
+            .expect("thread")
             .selected,
         None
     );
 }
 
-// --- Pagination et bornes ---------------------------------------------------
+// --- Pagination and bounds ----------------------------------------------------
 
-/// La branche se lit par pages bornées, sans trou ni doublon.
+/// The branch is read in bounded pages, without gap or duplicate.
 #[test]
-fn la_branche_se_lit_par_pages_bornees() {
+fn the_branch_is_read_in_bounded_pages() {
     let (store, workspace, connexion) = decor();
     let id = fil(&store, workspace, connexion);
     let mut feuille = echange(&store, id, None, "q0");
@@ -695,10 +693,7 @@ fn la_branche_se_lit_par_pages_bornees() {
         lus.extend(page.exchanges.iter().map(|e| e.node));
         depart = page.next;
     }
-    assert_eq!(
-        lus, attendus,
-        "toute la branche, dans l'ordre, une seule fois"
-    );
+    assert_eq!(lus, attendus, "the whole branch, in order, once");
 
     assert_eq!(
         store
@@ -708,39 +703,39 @@ fn la_branche_se_lit_par_pages_bornees() {
             .exchanges
             .len(),
         1,
-        "`limit` nul vaut un"
+        "a zero `limit` counts as one"
     );
     assert!(
         store
             .conversations()
             .branch_page(id, 250, 0, 4)
-            .expect("feuille inconnue")
+            .expect("unknown leaf")
             .exchanges
             .is_empty()
     );
 }
 
-/// La taille d'un `Exchange` est celle que la borne de page suppose.
+/// An `Exchange`'s size is the one the page bound assumes.
 ///
-/// Si elle grossit, le pire cas de [`MAX_EXCHANGE_PAGE`] est faux et doit être
-/// recalculé — c'est tout l'objet de ce test.
+/// If it grows, [`MAX_EXCHANGE_PAGE`]'s worst case is wrong and must be
+/// recomputed — that is the whole point of this test.
 #[test]
-fn la_taille_d_un_echange_est_celle_que_la_borne_suppose() {
+fn an_exchange_size_is_what_the_bound_assumes() {
     assert_eq!(
         std::mem::size_of::<Exchange>(),
         EXCHANGE_LAYOUT_BYTES,
-        "la disposition a changé : recalculer le pire cas de MAX_EXCHANGE_PAGE"
+        "the layout changed: recompute MAX_EXCHANGE_PAGE's worst case"
     );
     assert!(std::mem::size_of::<Version>() <= 64);
 }
 
 // --- Migration --------------------------------------------------------------
 
-/// Les lignes de la migration 10 se relisent sans perte : pas de nœud, pas de
-/// feuille sélectionnée, et la transcription linéaire intacte.
+/// Migration 10's rows read back without loss: no node, no selected leaf, and
+/// the linear transcript intact.
 #[test]
-fn les_lignes_de_la_migration_10_se_relisent_sans_perte() {
-    let racine = tempfile::tempdir().expect("répertoire temporaire");
+fn migration_10_rows_read_back_without_loss() {
+    let racine = tempfile::tempdir().expect("temporary directory");
     let chemin = racine.path().join("oxyn.sqlite3");
     let id = ConversationId::new();
     {
@@ -758,34 +753,34 @@ fn les_lignes_de_la_migration_10_se_relisent_sans_perte() {
              VALUES ('{id}', 0, '{quand}', 'user', 'metadata', 'une question'),
                     ('{id}', 1, '{quand}', 'assistant', 'metadata', 'une réponse');"
         ))
-        .expect("fil d'une version antérieure");
+        .expect("thread from an earlier version");
     }
 
-    let store = Store::open_at(&chemin).expect("l'ouverture ne doit pas échouer");
+    let store = Store::open_at(&chemin).expect("opening must not fail");
     let page = store
         .conversations()
         .transcript_page(id, None, 16)
-        .expect("relecture");
-    assert_eq!(page.turns.len(), 2, "aucune ligne perdue");
+        .expect("read back");
+    assert_eq!(page.turns.len(), 2, "no row lost");
     assert_eq!(page.turns[1].record.text, "une réponse");
     assert!(
         page.turns.iter().all(|tour| tour.record.node.is_none()),
-        "une ligne d'avant l'arbre n'appartient à aucun échange"
+        "a row from before the tree belongs to no exchange"
     );
     let fil = store
         .conversations()
         .get(id)
-        .expect("relecture")
-        .expect("fil");
+        .expect("read back")
+        .expect("thread");
     assert_eq!(fil.selected, None);
     assert!(
         store
             .conversations()
             .branch_page(id, 0, 0, 4)
-            .expect("branche")
+            .expect("branch")
             .exchanges
             .is_empty(),
-        "une conversation sans nœud n'a pas de branche"
+        "a conversation without nodes has no branch"
     );
 }
 
@@ -803,26 +798,26 @@ fn mention_table(nom: &str) -> ExchangeMention {
     }
 }
 
-/// Ce qu'une question a nommé se relit avec elle, dans l'ordre, et le fichier
-/// le garde en JSON lisible sans Oxyn (I-11).
+/// What a question named reads back with it, in order, and the file keeps it
+/// as JSON readable without Oxyn (I-11).
 #[test]
-fn les_mentions_d_une_question_se_relisent_en_json_ouvert() {
+fn a_question_mentions_read_back_as_open_json() {
     let (store, workspace, connexion) = decor();
     let id = fil(&store, workspace, connexion);
-    // Un nom hostile reste une donnée : échappé par le JSON, jamais du SQL.
+    // A hostile name stays data: escaped by the JSON, never SQL.
     let hostile = mention_table("\"users\"; DROP TABLE audit; --");
     let record = ExchangeRecord::new(None, PrivacyTier::Metadata, "@orders", fournisseur())
         .with_mentions(vec![mention_table("orders"), hostile.clone()]);
     let noeud = store
         .conversations()
         .append_exchange(id, &record)
-        .expect("écriture")
-        .expect("le fil existe");
+        .expect("write")
+        .expect("the thread exists");
 
     let relu = store
         .conversations()
         .branch_page(id, noeud, 0, MAX_EXCHANGE_PAGE)
-        .expect("branche");
+        .expect("branch");
     let mentions = &relu.exchanges[0].mentions;
     assert_eq!(mentions, &vec![mention_table("orders"), hostile]);
 
@@ -834,24 +829,24 @@ fn les_mentions_d_une_question_se_relisent_en_json_ouvert() {
                 |row| row.get(0),
             )?)
         })
-        .expect("colonne");
-    let json: serde_json::Value = serde_json::from_str(&brut).expect("du JSON");
+        .expect("column");
+    let json: serde_json::Value = serde_json::from_str(&brut).expect("JSON");
     assert_eq!(json[0]["relation"], "orders");
     assert_eq!(json[0]["namespace"], "public");
 }
 
-/// Une question sans mention, ou écrite avant la migration 14, se relit sans
-/// puce ; le fichier refuse ce qui n'est pas un tableau JSON, et ce qui dépasse
-/// la borne.
+/// A question without a mention, or written before migration 14, reads back
+/// without a chip; the file refuses what is not a JSON array, and what
+/// exceeds the bound.
 #[test]
-fn sans_mention_rien_et_le_fichier_refuse_le_reste() {
+fn without_mention_nothing_and_the_file_refuses_the_rest() {
     let (store, workspace, connexion) = decor();
     let id = fil(&store, workspace, connexion);
     let noeud = echange(&store, id, None, "sans mention");
     let relu = store
         .conversations()
         .branch_page(id, noeud, 0, MAX_EXCHANGE_PAGE)
-        .expect("branche");
+        .expect("branch");
     assert!(relu.exchanges[0].mentions.is_empty());
 
     for invalide in ["'pas du json'", "'{\"kind\":\"table\"}'"] {
@@ -861,7 +856,7 @@ fn sans_mention_rien_et_le_fichier_refuse_le_reste() {
                 &format!("UPDATE ai_conversation_nodes SET mentions = {invalide}")
             )
             .is_err(),
-            "{invalide} ne s'écrit pas"
+            "{invalide} is not written"
         );
     }
 

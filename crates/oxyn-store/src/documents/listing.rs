@@ -24,11 +24,11 @@ pub struct DocumentSummary {
     pub has_changes: bool,
     /// Whether an agent wrote this text.
     ///
-    /// Le **fait**, pas la provenance entière : la liste n'a besoin que de la
-    /// marque, et charger un JSON par ligne pour afficher un préfixe irait
-    /// contre la raison d'être de ce listage — des pages bornées qui ne
-    /// matérialisent pas les corps. Le détail, lui, ouvre le document et lit la
-    /// provenance complète.
+    /// The **fact**, not the whole provenance: the list only needs the mark,
+    /// and loading one JSON per row to display a prefix would defeat the
+    /// purpose of this listing — bounded pages that do not materialize
+    /// bodies. The detail view opens the document and reads the full
+    /// provenance.
     pub from_agent: bool,
 }
 

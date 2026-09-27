@@ -1,25 +1,24 @@
-//! Le vocabulaire du command bus (ADR-0004).
+//! The vocabulary of the command bus (ADR-0004).
 //!
-//! Toute action possible dans Oxyn est une valeur [`Command`] typée. L'interface
-//! ne fait rien d'autre que produire des `Command` ; **les outils exposés aux
-//! agents sont exactement ces mêmes commandes.** Il n'y a donc pas d'API
-//! « outils » parallèle à auditer séparément — et pas de second chemin
-//! d'exécution mal journalisé.
+//! Every possible action in Oxyn is a typed [`Command`] value. The interface
+//! does nothing but produce `Command`s; **the tools exposed to agents are
+//! exactly these same commands.** There is therefore no parallel "tools" API
+//! to audit separately — and no second, poorly logged execution path.
 //!
-//! Chaque commande porte son [`Actor`] et sait répondre à trois questions dont
-//! le `PolicyGate` dépend entièrement :
+//! Each command carries its [`Actor`] and can answer three questions the
+//! `PolicyGate` depends on entirely:
 //!
-//! * [`Command::intent`] — que fait-elle à la base ?
-//! * [`Command::mutation_risk`] — sa portée est-elle bornée ?
-//! * [`Command::target_connection`] — sur quoi agit-elle ?
+//! * [`Command::intent`] — what does it do to the database?
+//! * [`Command::mutation_risk`] — is its scope bounded?
+//! * [`Command::target_connection`] — what does it act on?
 //!
-//! # Classer sur l'effet, jamais sur le nom
+//! # Classify on the effect, never on the name
 //!
-//! `EXPLAIN ANALYZE` **exécute** la requête analysée, `DELETE` compris. Une vue
-//! matérialisée se rafraîchit. Une fonction appelée dans un `SELECT` peut
-//! écrire. C'est pourquoi [`Command::Execute`] ne devine rien : il lit
-//! l'intention *déclarée* dans l'[`ExecRequest`], et l'intention par défaut est
-//! [`StatementIntent::Unknown`], qui compte pour mutante.
+//! `EXPLAIN ANALYZE` **runs** the analyzed query, `DELETE` included. A
+//! materialized view refreshes. A function called in a `SELECT` can write.
+//! That is why [`Command::Execute`] guesses nothing: it reads the intent
+//! *declared* in the [`ExecRequest`], and the default intent is
+//! [`StatementIntent::Unknown`], which counts as mutating.
 
 use std::path::PathBuf;
 
@@ -33,44 +32,42 @@ use crate::ids::{
 use crate::preview::PreviewShape;
 use crate::query::{ExecRequest, MutationRisk, StatementIntent};
 
-/// Qui demande.
+/// Who is asking.
 ///
-/// Énumération **fermée** : la dichotomie humain/agent est celle d'ADR-0004, et
-/// c'est sur elle que repose toute la politique. Un troisième acteur — un
-/// plugin, une automatisation — serait une décision d'ADR, pas une variante
-/// ajoutée au fil de l'eau.
+/// **Closed** enumeration: the human/agent dichotomy is ADR-0004's, and the
+/// whole policy rests on it. A third actor — a plugin, an automation — would be
+/// an ADR decision, not a variant added along the way.
 ///
-/// Il n'existe pas de « mode agent » global : l'acteur est porté par la
-/// commande. Un état global se désynchronise, et c'est alors le journal d'audit
-/// qui ment.
+/// There is no global "agent mode": the actor is carried by the command. A
+/// global state gets out of sync, and then it is the audit log that lies.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "kind")]
 pub enum Actor {
-    /// L'utilisateur, par l'interface.
+    /// The user, through the interface.
     Human,
-    /// Un agent IA, identifié par son rôle et sa conversation.
+    /// An AI agent, identified by its role and its conversation.
     Agent {
-        /// Quel agent (SQL, Schema, Performance…).
+        /// Which agent (SQL, Schema, Performance…).
         id: AgentId,
-        /// Dans quelle conversation.
+        /// In which conversation.
         session: AgentSessionId,
     },
 }
 
 impl Actor {
-    /// Est-ce un agent ?
+    /// Is it an agent?
     #[must_use]
     pub const fn is_agent(&self) -> bool {
         matches!(self, Self::Agent { .. })
     }
 
-    /// Est-ce l'utilisateur ?
+    /// Is it the user?
     #[must_use]
     pub const fn is_human(&self) -> bool {
         matches!(self, Self::Human)
     }
 
-    /// Construit un acteur agent.
+    /// Builds an agent actor.
     #[must_use]
     pub const fn agent(id: AgentId, session: AgentSessionId) -> Self {
         Self::Agent { id, session }
@@ -78,8 +75,8 @@ impl Actor {
 }
 
 impl std::fmt::Display for Actor {
-    /// Ne rend que le rôle : l'identifiant de conversation n'a rien à faire
-    /// dans un message d'interface.
+    /// Renders only the role: the conversation identifier has no business in
+    /// an interface message.
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Self::Human => f.write_str("humain"),
@@ -88,7 +85,7 @@ impl std::fmt::Display for Actor {
     }
 }
 
-/// Format d'export d'un jeu de résultats.
+/// Export format of a result set.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
@@ -97,23 +94,23 @@ pub enum ExportFormat {
     Csv,
     /// TSV.
     Tsv,
-    /// JSON, un tableau d'objets.
+    /// JSON, an array of objects.
     Json,
-    /// JSON par lignes.
+    /// JSON lines.
     JsonLines,
     /// Parquet.
     Parquet,
-    /// Arrow IPC — le format dans lequel les résultats vivent déjà (ADR-0002),
-    /// donc le seul export qui ne convertit rien.
+    /// Arrow IPC — the format results already live in (ADR-0002), hence the
+    /// only export that converts nothing.
     ArrowIpc,
     /// Instructions `INSERT`.
     Sql,
-    /// Tableau Markdown.
+    /// Markdown table.
     Markdown,
 }
 
 impl ExportFormat {
-    /// Extension de fichier usuelle.
+    /// Usual file extension.
     #[must_use]
     pub const fn extension(&self) -> &'static str {
         match self {
@@ -207,29 +204,28 @@ pub enum CatalogRefreshScope {
 /// from growing the audit journal or the search without limit.
 pub const MAX_CATALOG_FOCUS_BYTES: usize = 256;
 
-/// Une action soumise au bus.
+/// An action submitted to the bus.
 ///
-/// Une commande fait **une** chose. Une commande « pratique » qui en emballe
-/// trois contourne la politique : le `PolicyGate` ne décide que sur ce qu'il
-/// voit, et il verrait une lecture là où il y a une écriture cachée.
+/// A command does **one** thing. A "convenient" command that wraps three
+/// bypasses the policy: the `PolicyGate` only decides on what it sees, and it
+/// would see a read where there is a hidden write.
 ///
-/// L'énumération est **fermée**, contrairement à la convention du dépôt. Le bus
-/// d'exécution dispatche sur un `match` exhaustif : ajouter une commande doit
-/// faire échouer sa compilation, sinon il existe une commande que rien
-/// n'exécute — ou pire, qu'un `_ =>` avale en silence après que le `PolicyGate`
-/// l'a pourtant autorisée.
+/// The enumeration is **closed**, unlike the repository's convention. The
+/// execution bus dispatches on an exhaustive `match`: adding a command must
+/// break its compilation, otherwise there is a command nothing executes — or
+/// worse, one a `_ =>` swallows silently after the `PolicyGate` authorized it.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case", tag = "command")]
 pub enum Command {
-    /// Ouvrir une session sur une connexion configurée.
+    /// Open a session on a configured connection.
     Connect {
-        /// La connexion visée.
+        /// The target connection.
         connection: ConnectionId,
     },
 
-    /// Fermer les sessions d'une connexion.
+    /// Close a connection's sessions.
     Disconnect {
-        /// La connexion visée.
+        /// The target connection.
         connection: ConnectionId,
     },
 
@@ -241,30 +237,30 @@ pub enum Command {
         session: SessionId,
     },
 
-    /// Déclarer où une session résout les noms non qualifiés.
+    /// Declare where a session resolves unqualified names.
     ///
-    /// Les paliers voyagent en chaînes plutôt qu'en `CatalogPath` :
-    /// `oxyn-core` ne dépend pas d'`oxyn-catalog`, et l'exécuteur reconstruit
-    /// le chemin à la frontière, comme pour [`PreviewRelation`](Self::PreviewRelation).
+    /// The levels travel as strings rather than as a `CatalogPath`:
+    /// `oxyn-core` does not depend on `oxyn-catalog`, and the executor rebuilds
+    /// the path at the boundary, as for [`PreviewRelation`](Self::PreviewRelation).
     SetSessionContext {
-        /// La connexion dont la politique s'applique.
+        /// The connection whose policy applies.
         connection: ConnectionId,
-        /// La session visée. Le contexte ne quitte jamais celle-ci.
+        /// The target session. The context never leaves it.
         session: SessionId,
-        /// Palier catalogue, quand le moteur en a un.
+        /// Catalog level, when the engine has one.
         catalog: Option<String>,
-        /// Palier espace de noms — un schéma, là où il y en a.
+        /// Namespace level — a schema, where there is one.
         namespace: Option<String>,
     },
 
-    /// Exécuter une instruction.
+    /// Execute a statement.
     Execute {
-        /// La connexion visée.
+        /// The target connection.
         connection: ConnectionId,
-        /// La session sur laquelle exécuter.
+        /// The session to execute on.
         session: SessionId,
-        /// Ce qu'il faut exécuter. Encadré pour ne pas faire grossir toutes les
-        /// autres variantes.
+        /// What to execute. Boxed so as not to make every other variant
+        /// bigger.
         request: Box<ExecRequest>,
     },
 
@@ -282,30 +278,29 @@ pub enum Command {
         relation: String,
         /// Maximum rows requested, in `1..=1000`.
         limit: u32,
-        /// Ordre, filtres et page demandés.
+        /// Requested order, filters and page.
         ///
-        /// Vide pour l'aperçu automatique d'une table qu'on vient de
-        /// sélectionner. Le driver refuse ce qu'il ne sait pas faire plutôt que
-        /// de l'ignorer : un filtre silencieusement abandonné rendrait des
-        /// lignes que l'utilisateur croit avoir exclues
+        /// Empty for the automatic preview of a table just selected. The driver
+        /// refuses what it cannot do rather than ignore it: a silently dropped
+        /// filter would return rows the user believes excluded
         /// ([ADR-0020](../../docs/adr/0020-apercu-trie-filtre-parcouru.md)).
         shape: PreviewShape,
     },
 
-    /// Annuler une exécution en cours.
+    /// Cancel an execution in progress.
     ///
-    /// Toujours autorisée : refuser une annulation ne protège rien et laisse
-    /// une requête tourner côté serveur.
+    /// Always allowed: refusing a cancellation protects nothing and leaves a
+    /// query running on the server side.
     Cancel {
-        /// La connexion visée.
+        /// The target connection.
         connection: ConnectionId,
-        /// L'exécution à interrompre.
+        /// The execution to interrupt.
         statement: StatementHandle,
     },
 
-    /// Relire le catalogue d'une connexion.
+    /// Read a connection's catalog again.
     RefreshCatalog {
-        /// La connexion visée.
+        /// The target connection.
         connection: ConnectionId,
     },
 
@@ -358,15 +353,15 @@ pub enum Command {
         batch: usize,
     },
 
-    /// Écrire un jeu de résultats dans un fichier.
+    /// Write a result set to a file.
     Export {
-        /// La connexion d'où vient le résultat, pour l'audit.
+        /// The connection the result comes from, for the audit.
         connection: ConnectionId,
-        /// Le résultat à exporter.
+        /// The result to export.
         result: ResultId,
-        /// Le format.
+        /// The format.
         format: ExportFormat,
-        /// Le fichier de destination.
+        /// The destination file.
         destination: PathBuf,
     },
 
@@ -443,30 +438,30 @@ pub enum Command {
         result: ResultId,
     },
 
-    /// Ouvrir un document du workspace.
+    /// Open a workspace document.
     OpenDocument {
-        /// Le workspace propriétaire.
+        /// The owning workspace.
         workspace: WorkspaceId,
-        /// Le document.
+        /// The document.
         document: DocumentId,
     },
 
-    /// Écrire un document du workspace.
+    /// Write a workspace document.
     ///
-    /// N'atteint aucune base : voir [`Command::intent`] pour ce que cela
-    /// implique — et ne l'implique pas.
+    /// Reaches no database: see [`Command::intent`] for what that implies —
+    /// and does not imply.
     WriteDocument {
-        /// Le workspace propriétaire.
+        /// The owning workspace.
         workspace: WorkspaceId,
-        /// Le document.
+        /// The document.
         document: DocumentId,
-        /// Le nouveau contenu.
+        /// The new content.
         text: String,
     },
 
-    /// Enregistrer une nouvelle connexion.
+    /// Register a new connection.
     CreateConnection {
-        /// La configuration, sans secret en clair.
+        /// The configuration, without any secret in clear.
         config: Box<ConnectionConfig>,
     },
 
@@ -484,15 +479,15 @@ pub enum Command {
         config: Box<ConnectionConfig>,
     },
 
-    /// Modifier une connexion existante.
+    /// Modify an existing connection.
     UpdateConnection {
-        /// La configuration complète après modification.
+        /// The full configuration after modification.
         config: Box<ConnectionConfig>,
     },
 
-    /// Supprimer une connexion du workspace.
+    /// Remove a connection from the workspace.
     DeleteConnection {
-        /// La connexion visée.
+        /// The target connection.
         connection: ConnectionId,
     },
 
@@ -550,39 +545,38 @@ pub enum Command {
 }
 
 impl Command {
-    /// Ce que la commande fait **à la base de données**.
+    /// What the command does **to the database**.
     ///
-    /// Trois choix méritent d'être explicités, parce qu'ils se relisent mal :
+    /// A few choices deserve to be spelled out, because they read badly:
     ///
-    /// * [`WriteDocument`](Self::WriteDocument) répond
-    ///   [`Read`](StatementIntent::Read). Écrire une requête sauvegardée ne
-    ///   touche aucune base ; la qualifier de mutante ferait apparaître une
-    ///   demande d'approbation « base de données » là où il n'y a qu'un fichier
-    ///   local, et une confirmation qui ne correspond à rien finit par être
-    ///   cliquée sans être lue.
-    /// * les commandes de gestion de connexion répondent
-    ///   [`Ddl`](StatementIntent::Ddl). Ce n'est pas du DDL au sens SQL, mais
-    ///   l'effet est du même ordre : un agent qui pourrait créer une connexion
-    ///   vers l'hôte de son choix disposerait d'un canal d'exfiltration. Elles
-    ///   passent donc par une approbation.
-    /// * [`Cancel`](Self::Cancel) répond `Read` : annuler ne modifie rien, et
-    ///   une annulation qu'il faut faire approuver n'est pas une annulation.
-    /// * [`ReconcileHistoryEntry`](Self::ReconcileHistoryEntry) répond `Read`
-    ///   pour la même raison que `WriteDocument` : elle n'écrit que l'état
-    ///   local. Ce qui la protège est un **refus** à tout
-    ///   [`Actor::Agent`] : elle affirme que l'utilisateur a vérifié le
-    ///   serveur, et un agent qui pourrait l'affirmer ferait taire
-    ///   l'avertissement d'une écriture que personne n'a regardée (I-13).
-    /// * les commandes de déclaration de fournisseur d'IA répondent `Read`,
-    ///   comme [`WriteDocument`](Self::WriteDocument) et pour la même raison :
-    ///   elles n'atteignent aucune base, et une confirmation « base de
-    ///   données » qui ne correspond à rien finit par être cliquée sans être
-    ///   lue. Ce qui les protège n'est pas une approbation mais un **refus** :
-    ///   le `PolicyGate` interdit [`SaveAiProvider`](Self::SaveAiProvider) et
-    ///   [`RemoveAiProvider`](Self::RemoveAiProvider) à un
-    ///   [`Actor::Agent`] — un agent qui déclarerait le point
-    ///   d'accès par lequel il parle disposerait d'un canal d'exfiltration, et
-    ///   c'est la catégorie d'action dont il n'a aucun usage légitime.
+    /// * [`WriteDocument`](Self::WriteDocument) answers
+    ///   [`Read`](StatementIntent::Read). Writing a saved query touches no
+    ///   database; qualifying it as mutating would bring up a "database"
+    ///   approval request where there is only a local file, and a confirmation
+    ///   that matches nothing ends up clicked without being read.
+    /// * the connection management commands answer
+    ///   [`Ddl`](StatementIntent::Ddl). It is not DDL in the SQL sense, but the
+    ///   effect is of the same order: an agent that could create a connection
+    ///   to the host of its choice would have an exfiltration channel. They
+    ///   therefore go through an approval.
+    /// * [`Cancel`](Self::Cancel) answers `Read`: cancelling modifies nothing,
+    ///   and a cancellation that must be approved is not a cancellation.
+    /// * [`ReconcileHistoryEntry`](Self::ReconcileHistoryEntry) answers `Read`
+    ///   for the same reason as `WriteDocument`: it only writes the local
+    ///   state. What protects it is a **refusal** to any [`Actor::Agent`]: it
+    ///   asserts that the user checked the server, and an agent that could
+    ///   assert it would silence the warning of a write nobody looked at
+    ///   (I-13).
+    /// * the AI provider declaration commands answer `Read`, like
+    ///   [`WriteDocument`](Self::WriteDocument) and for the same reason: they
+    ///   reach no database, and a "database" confirmation that matches nothing
+    ///   ends up clicked without being read. What protects them is not an
+    ///   approval but a **refusal**: the `PolicyGate` forbids
+    ///   [`SaveAiProvider`](Self::SaveAiProvider) and
+    ///   [`RemoveAiProvider`](Self::RemoveAiProvider) to an [`Actor::Agent`] —
+    ///   an agent that declared the endpoint it speaks through would have an
+    ///   exfiltration channel, and it is the category of action it has no
+    ///   legitimate use for.
     #[must_use]
     pub fn intent(&self) -> StatementIntent {
         match self {
@@ -628,10 +622,10 @@ impl Command {
         }
     }
 
-    /// La connexion visée, quand il y en a une.
+    /// The target connection, when there is one.
     ///
-    /// C'est ce que le `PolicyGate` utilise pour retrouver le marquage
-    /// d'environnement et le drapeau de lecture seule.
+    /// It is what the `PolicyGate` uses to find the environment marking and the
+    /// read-only flag.
     #[must_use]
     pub fn target_connection(&self) -> Option<ConnectionId> {
         match self {
@@ -666,9 +660,9 @@ impl Command {
             | Self::ReadWorkspacePreferences { .. }
             | Self::WriteWorkspacePreferences { .. }
             | Self::WriteWindowLayout { .. }
-            // Un fournisseur est déclaré **par machine** (ADR-0023) : il n'a
-            // pas de connexion visée, et le niveau de confidentialité qui
-            // gouverne son usage reste celui de la connexion ouverte.
+            // A provider is declared **per machine** (ADR-0023): it has no
+            // target connection, and the privacy tier that governs its use
+            // stays the one of the open connection.
             | Self::ListAiProviders
             | Self::SaveAiProvider { .. }
             | Self::RemoveAiProvider { .. }
@@ -678,7 +672,7 @@ impl Command {
         }
     }
 
-    /// Le risque déclaré, pour les commandes qui en portent un.
+    /// The declared risk, for the commands that carry one.
     #[must_use]
     pub fn mutation_risk(&self) -> MutationRisk {
         match self {
@@ -699,12 +693,12 @@ impl Command {
         }
     }
 
-    /// La commande s'exécute-t-elle **contre le serveur** ?
+    /// Does the command run **against the server**?
     ///
-    /// Distingue ce qui traverse la frontière externe de ce qui reste dans le
-    /// workspace. Le drapeau de lecture seule d'une connexion ne peut protéger
-    /// que la première catégorie — refuser de supprimer du workspace une
-    /// connexion parce qu'elle est en lecture seule n'aurait aucun sens.
+    /// Tells what crosses the external boundary from what stays in the
+    /// workspace. A connection's read-only flag can only protect the first
+    /// category — refusing to remove a connection from the workspace because
+    /// it is read-only would make no sense.
     #[must_use]
     pub const fn touches_database(&self) -> bool {
         matches!(
@@ -723,16 +717,16 @@ impl Command {
         )
     }
 
-    /// La commande peut-elle modifier quelque chose ?
+    /// Can the command modify something?
     ///
-    /// Vrai dès que l'intention est mutante **ou** qu'un risque est signalé.
-    /// Une déclaration incohérente est tranchée du côté prudent.
+    /// True as soon as the intent is mutating **or** a risk is reported. An
+    /// inconsistent declaration is settled on the cautious side.
     #[must_use]
     pub fn is_mutating(&self) -> bool {
         self.intent().is_mutating() || self.mutation_risk().is_some()
     }
 
-    /// Nom stable de la commande, pour le journal d'audit.
+    /// Stable name of the command, for the audit log.
     #[must_use]
     pub const fn name(&self) -> &'static str {
         match self {
@@ -776,10 +770,9 @@ impl Command {
         }
     }
 
-    /// Le texte de l'instruction, pour la prévisualisation d'une approbation.
+    /// The statement text, for an approval preview.
     ///
-    /// N'expose que ce que l'utilisateur a lui-même écrit : jamais les valeurs
-    /// liées (I-03).
+    /// Only exposes what the user wrote themselves: never bound values (I-03).
     #[must_use]
     pub fn statement_text(&self) -> Option<&str> {
         match self {
@@ -817,8 +810,8 @@ mod tests {
             namespace: Some("schema".into()),
             relation: "table\"; DROP TABLE audit; --".into(),
             limit: 200,
-            // Une forme non triviale, pour que l'aller-retour sérialisé porte
-            // vraiment sur elle : un `Default` passerait sans rien prouver.
+            // A non-trivial shape, so that the serialized round trip really
+            // covers it: a `Default` would pass without proving anything.
             shape: crate::preview::PreviewShape {
                 sort: vec![crate::preview::PreviewSort::descending("id")],
                 predicate: Some("note LIKE '100%'".into()),
@@ -893,7 +886,7 @@ mod tests {
     }
 
     #[test]
-    fn un_acteur_se_reconnait() {
+    fn an_actor_is_recognized() {
         assert!(Actor::Human.is_human());
         assert!(!Actor::Human.is_agent());
 
@@ -903,7 +896,7 @@ mod tests {
     }
 
     #[test]
-    fn l_affichage_d_un_acteur_ne_montre_pas_sa_conversation() {
+    fn displaying_an_actor_does_not_show_its_conversation() {
         let session = AgentSessionId::new();
         let agent = Actor::agent(AgentId::new(), session);
         let rendu = agent.to_string();
@@ -912,7 +905,7 @@ mod tests {
     }
 
     #[test]
-    fn execute_relaie_l_intention_declaree_sans_la_deviner() {
+    fn execute_relays_the_declared_intent_without_guessing_it() {
         assert_eq!(
             execute(StatementIntent::Read, MutationRisk::None).intent(),
             StatementIntent::Read
@@ -924,9 +917,9 @@ mod tests {
     }
 
     #[test]
-    fn un_explain_analyze_declare_ecriture_reste_une_ecriture() {
-        // Le texte dit « EXPLAIN », l'effet est une suppression. C'est
-        // l'intention déclarée qui fait foi, jamais le nom de l'instruction.
+    fn an_explain_analyze_declared_as_write_stays_a_write() {
+        // The text says "EXPLAIN", the effect is a deletion. It is the
+        // declared intent that counts, never the statement's name.
         let cmd = Command::Execute {
             connection: ConnectionId::new(),
             session: SessionId::new(),
@@ -941,18 +934,18 @@ mod tests {
     }
 
     #[test]
-    fn une_execution_non_qualifiee_est_mutante() {
+    fn an_unqualified_execution_is_mutating() {
         let cmd = Command::Execute {
             connection: ConnectionId::new(),
             session: SessionId::new(),
             request: Box::new(ExecRequest::new(QueryLanguage::SQL, "CALL faire_le_truc()")),
         };
         assert_eq!(cmd.intent(), StatementIntent::Unknown);
-        assert!(cmd.is_mutating(), "dans le doute, on protège");
+        assert!(cmd.is_mutating(), "when in doubt, we protect");
     }
 
     #[test]
-    fn les_commandes_de_lecture_ne_sont_pas_mutantes() {
+    fn read_commands_are_not_mutating() {
         let c = ConnectionId::new();
         for cmd in [
             Command::Connect { connection: c },
@@ -967,17 +960,13 @@ mod tests {
                 document: DocumentId::new(),
             },
         ] {
-            assert!(
-                !cmd.is_mutating(),
-                "{} devrait être non mutante",
-                cmd.name()
-            );
+            assert!(!cmd.is_mutating(), "{} should be non-mutating", cmd.name());
         }
     }
 
     #[test]
-    fn annuler_n_est_jamais_une_mutation() {
-        // Une annulation qu'il faut faire approuver n'est pas une annulation.
+    fn cancelling_is_never_a_mutation() {
+        // A cancellation that must be approved is not a cancellation.
         let cmd = Command::Cancel {
             connection: ConnectionId::new(),
             statement: StatementHandle::new(),
@@ -987,7 +976,7 @@ mod tests {
     }
 
     #[test]
-    fn la_gestion_des_connexions_est_traitee_comme_du_ddl() {
+    fn connection_management_is_treated_as_ddl() {
         let cfg = ConnectionConfig::new("nouvelle", DriverId::postgres());
         let cmd = Command::CreateConnection {
             config: Box::new(cfg.clone()),
@@ -997,15 +986,15 @@ mod tests {
         assert_eq!(cmd.target_connection(), Some(cfg.id));
         assert!(
             !cmd.touches_database(),
-            "créer une connexion n'atteint aucun serveur"
+            "creating a connection reaches no server"
         );
     }
 
     #[test]
-    fn tester_une_connexion_est_une_lecture_du_serveur_refusee_a_un_agent() {
+    fn testing_a_connection_is_a_server_read_refused_to_an_agent() {
         use crate::{DefaultPolicy, Environment, PolicyGate};
 
-        let config = ConnectionConfig::new("à tester", DriverId::postgres())
+        let config = ConnectionConfig::new("to test", DriverId::postgres())
             .with_secret_ref("keychain://oxyn/essai");
         let cmd = Command::TestConnection {
             config: Box::new(config.clone()),
@@ -1042,7 +1031,7 @@ mod tests {
     }
 
     #[test]
-    fn ecrire_un_document_ne_touche_aucune_base() {
+    fn writing_a_document_touches_no_database() {
         let cmd = Command::WriteDocument {
             workspace: WorkspaceId::new(),
             document: DocumentId::new(),
@@ -1054,9 +1043,9 @@ mod tests {
     }
 
     #[test]
-    fn toute_commande_visant_un_serveur_nomme_sa_connexion() {
-        // Sans cela, le PolicyGate ne pourrait pas retrouver le marquage
-        // d'environnement ni le drapeau de lecture seule.
+    fn every_command_targeting_a_server_names_its_connection() {
+        // Without it, the PolicyGate could not find the environment marking
+        // or the read-only flag.
         let c = ConnectionId::new();
         let commandes = [
             Command::Connect { connection: c },
@@ -1078,14 +1067,14 @@ mod tests {
             assert!(cmd.touches_database(), "{}", cmd.name());
             assert!(
                 cmd.target_connection().is_some(),
-                "{} ne nomme pas sa connexion",
+                "{} does not name its connection",
                 cmd.name()
             );
         }
     }
 
     #[test]
-    fn la_previsualisation_ne_donne_que_le_texte_ecrit() {
+    fn the_preview_only_gives_the_written_text() {
         let cmd = execute(StatementIntent::Read, MutationRisk::None);
         assert_eq!(cmd.statement_text(), Some("SELECT 1"));
         assert_eq!(
@@ -1098,7 +1087,7 @@ mod tests {
     }
 
     #[test]
-    fn le_debug_d_une_commande_ne_montre_pas_les_valeurs_liees() {
+    fn a_command_debug_does_not_show_bound_values() {
         let cmd = Command::Execute {
             connection: ConnectionId::new(),
             session: SessionId::new(),
@@ -1113,30 +1102,30 @@ mod tests {
         let rendu = format!("{cmd:?}");
         assert!(
             !rendu.contains("secret-de-l-utilisateur"),
-            "valeur liée fuitée : {rendu}"
+            "bound value leaked: {rendu}"
         );
 
-        // Le `Debug` n'est qu'un des six canaux. Un fichier de workspace en est
-        // un autre, et une protection qui ne tient que sur le premier serait
-        // défaite par le premier appelant qui persiste une commande.
-        let ecrit = serde_json::to_string(&cmd).expect("commande sérialisable");
+        // The `Debug` is only one of the six channels. A workspace file is
+        // another, and a protection that only holds on the first would be
+        // defeated by the first caller that persists a command.
+        let ecrit = serde_json::to_string(&cmd).expect("serializable command");
         assert!(
             !ecrit.contains("secret-de-l-utilisateur"),
-            "valeur liée écrite dans un fichier : {ecrit}"
+            "bound value written to a file: {ecrit}"
         );
-        let relue: Command = serde_json::from_str(&ecrit).expect("commande relisible");
+        let relue: Command = serde_json::from_str(&ecrit).expect("readable command");
         let Command::Execute { request, .. } = &relue else {
-            panic!("la variante est conservée")
+            panic!("the variant is kept")
         };
         assert!(
             request.params.is_empty(),
-            "une commande relue revient sans ses valeurs, et le serveur la refusera"
+            "a command read back comes back without its values, and the server will refuse it"
         );
         assert_eq!(request.text, "INSERT INTO t VALUES ($1)");
     }
 
     #[test]
-    fn declarer_un_fournisseur_n_atteint_aucune_base_et_reste_refuse_a_un_agent() {
+    fn declaring_a_provider_reaches_no_database_and_stays_refused_to_an_agent() {
         use crate::ai::{AiProviderConfig, AiProviderKind, ProviderId};
         use crate::{DefaultPolicy, Environment, PolicyGate};
 
@@ -1159,15 +1148,15 @@ mod tests {
                 id: config.id.clone(),
             },
         ] {
-            // Un fournisseur se déclare par machine : aucune connexion visée,
-            // aucun serveur atteint (ADR-0023).
+            // A provider is declared per machine: no target connection, no
+            // server reached (ADR-0023).
             assert_eq!(cmd.target_connection(), None, "{}", cmd.name());
             assert!(!cmd.touches_database(), "{}", cmd.name());
             assert!(!cmd.is_mutating(), "{}", cmd.name());
             assert_eq!(cmd.statement_text(), None, "{}", cmd.name());
 
-            // L'humain n'a pas à confirmer un réglage local : une confirmation
-            // qui ne correspond à rien finit par être cliquée sans être lue.
+            // The human does not have to confirm a local setting: a
+            // confirmation that matches nothing ends up clicked without being read.
             assert!(
                 gate.authorize(&Actor::Human, &cmd, Environment::Production)
                     .is_allowed(),
@@ -1175,31 +1164,31 @@ mod tests {
                 cmd.name()
             );
 
-            // L'agent, lui, est refusé sur ce qui **écrit** la déclaration :
-            // le point d'accès par lequel il parle ne se choisit pas lui-même.
+            // The agent, on the other hand, is refused on what **writes** the
+            // declaration: the endpoint it speaks through is not chosen by itself.
             let decision = gate.authorize(&agent, &cmd, Environment::Local);
             if matches!(cmd, Command::ListAiProviders) {
-                assert!(decision.is_allowed(), "lister ne déclare rien");
+                assert!(decision.is_allowed(), "listing declares nothing");
             } else {
                 assert!(decision.is_denied(), "{} : {decision:?}", cmd.name());
                 assert!(
                     !decision.requires_approval(),
-                    "un refus, jamais une confirmation renforcée (I-02)"
+                    "a refusal, never a stronger confirmation (I-02)"
                 );
             }
 
-            let json = serde_json::to_string(&cmd).expect("commande sérialisable");
+            let json = serde_json::to_string(&cmd).expect("serializable command");
             assert_eq!(
-                serde_json::from_str::<Command>(&json).expect("aller-retour typé"),
+                serde_json::from_str::<Command>(&json).expect("typed round trip"),
                 cmd
             );
         }
     }
 
     #[test]
-    fn une_commande_de_fournisseur_ne_transporte_pas_de_cle() {
-        // I-03 : le seul champ prévu pour le trousseau est une référence, et le
-        // `Debug` de la commande ne la rend pas.
+    fn a_provider_command_carries_no_key() {
+        // I-03: the only field meant for the keychain is a reference, and the
+        // command's `Debug` does not render it.
         use crate::ai::{AiProviderConfig, AiProviderKind, ProviderId};
 
         let cmd = Command::SaveAiProvider {
@@ -1217,13 +1206,13 @@ mod tests {
         let rendu = format!("{cmd:?}");
         assert!(
             !rendu.contains("keychain://oxyn/openai"),
-            "référence fuitée : {rendu}"
+            "reference leaked: {rendu}"
         );
         assert!(rendu.contains("api.openai.com"), "{rendu}");
     }
 
     #[test]
-    fn les_noms_d_audit_sont_uniques() {
+    fn audit_names_are_unique() {
         let c = ConnectionId::new();
         let noms = [
             Command::Connect { connection: c }.name(),
@@ -1234,10 +1223,6 @@ mod tests {
         let mut tries: Vec<&str> = noms.to_vec();
         tries.sort_unstable();
         tries.dedup();
-        assert_eq!(
-            tries.len(),
-            noms.len(),
-            "deux commandes portent le même nom"
-        );
+        assert_eq!(tries.len(), noms.len(), "two commands carry the same name");
     }
 }

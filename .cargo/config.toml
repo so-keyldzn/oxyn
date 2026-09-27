@@ -1,23 +1,21 @@
-# Les réglages de compilation qui doivent valoir pour tout le monde, y compris
-# la CI. Ce fichier est le seul endroit où ils vivent : une variable
-# d'environnement exportée dans un shell n'est vraie que pour celui qui l'a
-# exportée, et la trace de plantage qu'un autre reçoit ne ressemble alors pas à
-# la sienne.
+# Build settings that must hold for everyone, CI included. This file is the
+# only place they live: an environment variable exported in a shell is only
+# true for whoever exported it, and the crash trace someone else receives then
+# does not look like theirs.
 
 [build]
-# Le schéma v0 conserve les noms de types dans les symboles, y compris à travers
-# les fermetures. Une trace sans lui est une suite de `{{closure}}::{{closure}}` :
-# le backend est écrit en futurs et en fermetures passées à `spawn` et aux
-# commandes Tauri, donc la trace ne désigne rien. C'est le mode de panne qu'on
-# cherche à lire dans un rapport d'utilisateur, où l'on n'a rien d'autre.
+# The v0 scheme keeps type names in symbols, closures included. A trace without
+# it is a string of `{{closure}}::{{closure}}`: the backend is written in
+# futures and in closures passed to `spawn` and to Tauri commands, so the trace
+# points at nothing. That is the failure mode we try to read in a user report,
+# where we have nothing else.
 rustflags = ["-C", "symbol-mangling-version=v0"]
 
 [env]
-# 13.0 comme `bundle.macOS.minimumSystemVersion` dans
-# `crates/oxyn-desktop/tauri.conf.json`, qui devient le `LSMinimumSystemVersion` :
-# les deux valeurs disent la même chose et doivent bouger ensemble. Sans
-# celle-ci, le binaire est lié pour la version de macOS de la machine qui
-# construit — un paquet assemblé sur une machine récente refuse alors de
-# démarrer sur une machine que le plist déclare pourtant supportée, avec un
-# message système qui n'explique rien.
+# 13.0 like `bundle.macOS.minimumSystemVersion` in
+# `crates/oxyn-desktop/tauri.conf.json`, which becomes `LSMinimumSystemVersion`:
+# both values say the same thing and must move together. Without this one, the
+# binary is linked for the macOS version of the build machine — a bundle built
+# on a recent machine then refuses to start on a machine the plist declares
+# supported, with a system message that explains nothing.
 MACOSX_DEPLOYMENT_TARGET = "13.0"

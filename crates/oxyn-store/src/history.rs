@@ -1,27 +1,27 @@
-//! La table `query_history` : ce que l'utilisateur a exécuté.
+//! The `query_history` table: what the user ran.
 //!
-//! # Ce qui la distingue du journal d'audit
+//! # What sets it apart from the audit journal
 //!
-//! L'historique et le journal ([`crate::journal`]) consignent la même chose,
-//! mais ne répondent pas à la même question, et **seul l'historique est
-//! effaçable** :
+//! The history and the journal ([`crate::journal`]) record the same thing,
+//! but do not answer the same question, and **only the history can be
+//! erased**:
 //!
 //! | | `query_history` | `audit_journal` |
 //! |---|---|---|
-//! | Question | « qu'est-ce que j'ai lancé hier ? » | « qu'est-ce qui a été autorisé, et à qui ? » |
-//! | Contenu | les exécutions | **toutes** les commandes, refus compris |
-//! | Effaçable | oui, [`purge_before`](History::purge_before) et [`clear`](History::clear) | **non** |
+//! | Question | "what did I run yesterday?" | "what was allowed, and to whom?" |
+//! | Content | executions | **all** commands, refusals included |
+//! | Erasable | yes, [`purge_before`](History::purge_before) and [`clear`](History::clear) | **no** |
 //!
-//! Purger l'historique **ne touche pas** au journal. C'est ce qui permet
-//! d'offrir un « effacer mon historique » sans ouvrir un moyen d'effacer la
-//! trace d'un agent — la fonction commode qui, sans cette séparation, finirait
-//! par être le trou dans la piste d'audit.
+//! Purging the history does **not touch** the journal. That is what makes it
+//! possible to offer "clear my history" without opening a way to erase an
+//! agent's trace — the convenient feature that, without this separation, would
+//! end up being the hole in the audit trail.
 //!
-//! # Le nom de connexion est recopié
+//! # The connection name is copied
 //!
-//! La colonne `connection_id` n'a pas de clé étrangère et le nom est
-//! dénormalisé à l'écriture : supprimer une connexion n'efface pas l'historique,
-//! et une ligne dont la connexion n'existe plus reste lisible.
+//! The `connection_id` column has no foreign key and the name is denormalized
+//! on write: deleting a connection does not erase the history, and a row whose
+//! connection no longer exists stays readable.
 
 mod listing;
 pub use listing::{HistoryConnectionPage, HistoryConnectionSummary, HistoryPage, HistorySummary};
@@ -41,24 +41,24 @@ use crate::error::Result;
 use crate::journal::ActorKind;
 use crate::store::Store;
 
-/// Comment une exécution s'est terminée.
+/// How an execution ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 pub enum HistoryStatus {
-    /// Soumise, pas encore terminée.
+    /// Submitted, not finished yet.
     Running,
-    /// Terminée sans erreur.
+    /// Finished without error.
     Succeeded,
-    /// Le serveur ou le driver a rendu une erreur.
+    /// The server or the driver returned an error.
     Failed,
-    /// Interrompue à la demande.
+    /// Interrupted on request.
     Cancelled,
-    /// Refusée par le `PolicyGate` : elle n'a jamais atteint le serveur.
+    /// Refused by the `PolicyGate`: it never reached the server.
     Denied,
 }
 
 impl HistoryStatus {
-    /// Nom stable, celui qui est écrit dans la colonne `status`.
+    /// Stable name, the one written in the `status` column.
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
@@ -70,10 +70,10 @@ impl HistoryStatus {
         }
     }
 
-    /// Relit la colonne `status`.
+    /// Reads back the `status` column.
     ///
-    /// Une valeur inconnue rend [`Failed`](Self::Failed) : une exécution dont
-    /// on ne sait pas dire qu'elle a réussi n'a pas réussi.
+    /// An unknown value returns [`Failed`](Self::Failed): an execution that
+    /// cannot be said to have succeeded did not succeed.
     #[must_use]
     pub fn from_text(raw: &str) -> Self {
         match raw {
@@ -99,57 +99,55 @@ impl std::fmt::Display for HistoryStatus {
     }
 }
 
-/// Une exécution, telle qu'on l'inscrit à l'historique.
+/// An execution, as recorded in the history.
 #[derive(Debug, Clone)]
 pub struct HistoryRecord {
-    /// Quand l'exécution a été soumise.
+    /// When the execution was submitted.
     pub ts: DateTime<Utc>,
-    /// La connexion visée.
+    /// The targeted connection.
     pub connection: Option<ConnectionId>,
-    /// Le **nom** de la connexion, recopié pour survivre à sa suppression.
+    /// The connection's **name**, copied to survive its deletion.
     pub connection_name: Option<String>,
-    /// Humain ou agent.
+    /// Human or agent.
     pub actor_kind: ActorKind,
-    /// Quel agent, le cas échéant.
+    /// Which agent, if any.
     pub actor_id: Option<AgentId>,
-    /// Le langage de la requête, dialecte compris.
+    /// The query's language, dialect included.
     pub language: QueryLanguage,
-    /// Le texte, tel que l'utilisateur ou l'agent l'a écrit — sans les valeurs
-    /// liées (I-03).
+    /// The text, as the user or the agent wrote it — without the bound values
+    /// (I-03).
     pub statement: String,
-    /// L'intention retenue.
+    /// The retained intent.
     pub intent: StatementIntent,
-    /// Durée de l'exécution, quand elle est terminée.
+    /// Execution duration, once finished.
     pub duration: Option<Duration>,
-    /// Lignes produites ou affectées, quand elles sont connues.
+    /// Rows produced or affected, when known.
     pub rows: Option<u64>,
-    /// Comment cela s'est terminé.
+    /// How it ended.
     pub status: HistoryStatus,
-    /// Message d'erreur ou motif de refus.
+    /// Error message or refusal reason.
     pub error: Option<String>,
-    /// La famille de l'erreur, quand il y en a une.
+    /// The error's class, when there is one.
     ///
-    /// Séparée du message à dessein : c'est **elle** qu'un appelant lit pour
-    /// décider s'il peut proposer de relancer, jamais le texte. Un message
-    /// change — il se reformule, il se traduit — et un appelant qui l'analysait
-    /// casse alors en silence ([`ErrorClass`],
-    /// [I-13](../../../CLAUDE.md#i-13)).
+    /// Kept apart from the message on purpose: **it** is what a caller reads
+    /// to decide whether it may offer a rerun, never the text. A message
+    /// changes — it gets reworded, translated — and a caller that parsed it
+    /// then silently breaks ([`ErrorClass`], [I-13](../../../CLAUDE.md#i-13)).
     ///
-    /// [`Ambiguous`](ErrorClass::Ambiguous) est le cas qui compte : le serveur a
-    /// peut-être appliqué l'écriture, et rejouer crée un doublon dans les
-    /// données de l'utilisateur.
+    /// [`Ambiguous`](ErrorClass::Ambiguous) is the case that matters: the
+    /// server may have applied the write, and replaying creates a duplicate in
+    /// the user's data.
     ///
-    /// **`None` a deux sens, et c'est pourquoi on ne le lit pas directement.**
-    /// Sur une ligne réussie, il dit « aucune erreur » ; sur une ligne écrite
-    /// par une version d'Oxyn antérieure à la colonne, il dit « famille
-    /// inconnue » — et ces lignes-là portent précisément les écritures expirées
-    /// qu'il ne faut pas rejouer. Passer par [`Self::is_retryable`] plutôt que
-    /// par ce champ ferme la confusion.
+    /// **`None` has two meanings, which is why it is not read directly.** On a
+    /// successful row, it says "no error"; on a row written by an Oxyn version
+    /// older than the column, it says "unknown class" — and those rows carry
+    /// precisely the expired writes that must not be replayed. Going through
+    /// [`Self::is_retryable`] rather than this field closes the confusion.
     ///
-    /// Sur une ligne [`Denied`](HistoryStatus::Denied), la famille ne décrit
-    /// **pas** un verdict du serveur — rien ne l'a atteint. Elle dit seulement
-    /// que la ligne n'est pas rejouable. Un comptage d'échecs serveur se filtre
-    /// donc sur `status`, pas sur cette colonne seule.
+    /// On a [`Denied`](HistoryStatus::Denied) row, the class does **not**
+    /// describe a server verdict — nothing reached it. It only says the row
+    /// cannot be replayed. A count of server failures therefore filters on
+    /// `status`, not on this column alone.
     pub error_class: Option<ErrorClass>,
     /// A result identity from this application run; it may have expired.
     pub result: Option<oxyn_core::ResultId>,
@@ -166,7 +164,7 @@ impl HistoryRecord {
             && requires_reconciliation(self.intent, self.status, self.error_class)
     }
 
-    /// Construit une entrée d'historique pour une exécution qui démarre.
+    /// Builds a history entry for an execution that starts.
     #[must_use]
     pub fn new(actor: &Actor, language: QueryLanguage, statement: impl Into<String>) -> Self {
         Self {
@@ -191,12 +189,12 @@ impl HistoryRecord {
         }
     }
 
-    /// Construit une entrée à partir d'une commande d'exécution.
+    /// Builds an entry from an execution command.
     ///
-    /// Rend `None` pour toute autre commande : une `Connect` ou un `Export` ne
-    /// sont pas des requêtes, et les faire figurer dans l'historique du
-    /// *requêteur* le rendrait illisible. Elles restent au journal d'audit, qui
-    /// les consigne toutes ([`crate::journal`]).
+    /// Returns `None` for any other command: a `Connect` or an `Export` are
+    /// not queries, and listing them in the *query* history would make it
+    /// unreadable. They stay in the audit journal, which records them all
+    /// ([`crate::journal`]).
     #[must_use]
     pub fn from_command(actor: &Actor, command: &Command) -> Option<Self> {
         match command {
@@ -214,7 +212,7 @@ impl HistoryRecord {
         }
     }
 
-    /// Nomme la connexion visée.
+    /// Names the targeted connection.
     #[must_use]
     pub fn on_connection(mut self, id: ConnectionId, name: impl Into<String>) -> Self {
         self.connection = Some(id);
@@ -222,14 +220,14 @@ impl HistoryRecord {
         self
     }
 
-    /// Déclare l'intention retenue.
+    /// Declares the retained intent.
     #[must_use]
     pub fn with_intent(mut self, intent: StatementIntent) -> Self {
         self.intent = intent;
         self
     }
 
-    /// Marque l'exécution comme réussie.
+    /// Marks the execution as succeeded.
     #[must_use]
     pub fn succeeded(mut self, duration: Duration, rows: Option<u64>) -> Self {
         self.status = HistoryStatus::Succeeded;
@@ -240,22 +238,22 @@ impl HistoryRecord {
         self
     }
 
-    /// Marque l'exécution comme échouée.
+    /// Marks the execution as failed.
     ///
-    /// Une annulation ([`OxynError::Cancelled`]) est classée
-    /// [`Cancelled`](HistoryStatus::Cancelled), pas `Failed` : ce n'est pas une
-    /// panne, c'est une décision de l'utilisateur, et les confondre fausse toute
-    /// lecture du taux d'échec.
+    /// A cancellation ([`OxynError::Cancelled`]) is classified
+    /// [`Cancelled`](HistoryStatus::Cancelled), not `Failed`: it is not a
+    /// failure, it is a user decision, and conflating them skews any reading
+    /// of the failure rate.
     ///
-    /// Un refus de la politique ([`OxynError::PolicyDenied`]) est classé
-    /// [`Denied`](HistoryStatus::Denied), pas `Failed` : rien n'a été soumis au
-    /// serveur, et le présenter comme une panne enverrait l'utilisateur
-    /// chercher un incident qui n'a pas eu lieu. La dernière barrière avant le
-    /// driver rend ce refus sous forme d'erreur ; il doit se lire comme les
-    /// refus rendus plus tôt par le `PolicyGate`.
+    /// A policy refusal ([`OxynError::PolicyDenied`]) is classified
+    /// [`Denied`](HistoryStatus::Denied), not `Failed`: nothing was submitted
+    /// to the server, and presenting it as a failure would send the user
+    /// looking for an incident that did not happen. The last barrier before
+    /// the driver returns this refusal as an error; it must read like the
+    /// refusals returned earlier by the `PolicyGate`.
     ///
-    /// La famille de l'erreur est retenue **à part** dans
-    /// [`error_class`](Self::error_class), jamais fondue dans le message
+    /// The error's class is kept **apart** in
+    /// [`error_class`](Self::error_class), never merged into the message
     /// (I-13).
     #[must_use]
     pub fn failed(mut self, error: &OxynError) -> Self {
@@ -269,12 +267,12 @@ impl HistoryRecord {
         self
     }
 
-    /// Marque l'exécution comme refusée par la politique.
+    /// Marks the execution as refused by the policy.
     ///
-    /// La famille retenue est [`Permanent`](ErrorClass::Permanent) : un refus ne
-    /// se rejoue pas, il se corrige. Toute ligne dont la famille n'est pas
-    /// [`Transient`](ErrorClass::Transient) est hors de portée d'un bouton
-    /// « relancer ».
+    /// The retained class is [`Permanent`](ErrorClass::Permanent): a refusal
+    /// is not replayed, it is corrected. Any row whose class is not
+    /// [`Transient`](ErrorClass::Transient) is out of reach of a "rerun"
+    /// button.
     #[must_use]
     pub fn denied(mut self, reason: impl Into<String>) -> Self {
         self.status = HistoryStatus::Denied;
@@ -283,22 +281,21 @@ impl HistoryRecord {
         self
     }
 
-    /// Cette exécution peut-elle être resoumise telle quelle ?
+    /// Can this execution be resubmitted as is?
     ///
-    /// **Seule** la famille [`Transient`](ErrorClass::Transient) répond `true`.
-    /// Tout le reste répond `false`, y compris l'absence de famille : une ligne
-    /// écrite avant que la colonne n'existe peut être une écriture expirée, et
-    /// la rejouer créerait un doublon silencieux dans les données de
-    /// l'utilisateur ([I-13](../../../CLAUDE.md#i-13)).
+    /// **Only** the [`Transient`](ErrorClass::Transient) class answers `true`.
+    /// Everything else answers `false`, including the absence of a class: a
+    /// row written before the column existed may be an expired write, and
+    /// replaying it would create a silent duplicate in the user's data
+    /// ([I-13](../../../CLAUDE.md#i-13)).
     ///
-    /// C'est la seule question qu'un appelant a besoin de poser : lire
-    /// [`error_class`](Self::error_class) pour y répondre soi-même, c'est
-    /// réintroduire l'interprétation de `None` que cette méthode existe pour
-    /// éviter.
+    /// It is the only question a caller needs to ask: reading
+    /// [`error_class`](Self::error_class) to answer it oneself reintroduces
+    /// the interpretation of `None` this method exists to avoid.
     #[must_use]
     pub fn is_retryable(&self) -> bool {
-        // La règle vit dans `ErrorClass`, pas ici : la recopier ferait diverger
-        // deux définitions de « rejouable » le jour où une famille s'ajoute.
+        // The rule lives in `ErrorClass`, not here: copying it would make two
+        // definitions of "replayable" diverge the day a class is added.
         self.error_class.is_some_and(|class| class.is_retryable())
     }
 }
@@ -315,31 +312,31 @@ pub enum Reconciliation {
     StillRunning,
 }
 
-/// Une entrée relue de l'historique.
+/// A history entry read back.
 #[derive(Debug, Clone)]
 pub struct HistoryEntry {
-    /// Numéro d'ordre.
+    /// Sequence number.
     pub id: i64,
-    /// Le contenu de l'entrée.
+    /// The entry's content.
     pub record: HistoryRecord,
 }
 
-/// Accès typé à la table `query_history`.
+/// Typed access to the `query_history` table.
 #[derive(Debug)]
 pub struct History<'a> {
     store: &'a Store,
 }
 
 impl<'a> History<'a> {
-    /// Rattache l'accesseur à son `Store`.
+    /// Binds the accessor to its `Store`.
     pub(crate) fn new(store: &'a Store) -> Self {
         Self { store }
     }
 
-    /// Inscrit une exécution et rend son numéro d'ordre.
+    /// Records an execution and returns its sequence number.
     ///
-    /// # Erreurs
-    /// [`crate::StoreError::Sqlite`] ou [`crate::StoreError::Json`].
+    /// # Errors
+    /// [`crate::StoreError::Sqlite`] or [`crate::StoreError::Json`].
     pub fn record(&self, record: &HistoryRecord) -> Result<i64> {
         let language = tag_to_json(&record.language)?;
 
@@ -372,24 +369,24 @@ impl<'a> History<'a> {
         })
     }
 
-    /// Complète une entrée inscrite pendant l'exécution : issue, durée, lignes,
-    /// erreur. Rend `true` si la ligne existait.
+    /// Completes an entry recorded during execution: outcome, duration, rows,
+    /// error. Returns `true` if the row existed.
     ///
-    /// L'entrée est d'abord inscrite en [`Running`](HistoryStatus::Running) au
-    /// moment de la soumission — l'utilisateur voit sa requête dans
-    /// l'historique pendant qu'elle tourne —, puis complétée à la fin.
+    /// The entry is first recorded as [`Running`](HistoryStatus::Running) at
+    /// submission time — the user sees their query in the history while it
+    /// runs —, then completed at the end.
     ///
-    /// Le texte, la connexion et l'horodatage ne sont **pas** réécrits : ce qui
-    /// a été soumis ne change pas rétroactivement. C'est aussi la différence
-    /// avec le journal d'audit, où cette méthode n'existe pas et où le fichier
-    /// lui-même la refuserait ([`crate::journal`]).
+    /// The text, the connection and the timestamp are **not** rewritten: what
+    /// was submitted does not change retroactively. It is also the difference
+    /// with the audit journal, where this method does not exist and where the
+    /// file itself would refuse it ([`crate::journal`]).
     ///
-    /// Une réconciliation déclarée pendant que l'exécution tournait est
-    /// effacée : elle portait sur un état du serveur que l'issue vient de
-    /// changer, et une nouvelle issue ambiguë doit de nouveau alerter.
+    /// A reconciliation declared while the execution was running is erased: it
+    /// was about a server state the outcome has just changed, and a new
+    /// ambiguous outcome must alert again.
     ///
-    /// # Erreurs
-    /// [`crate::StoreError::Sqlite`] si l'écriture échoue.
+    /// # Errors
+    /// [`crate::StoreError::Sqlite`] if the write fails.
     pub fn finish(&self, id: i64, record: &HistoryRecord) -> Result<bool> {
         self.store.with_connection(|conn| {
             let touchees = conn.execute(
@@ -474,10 +471,10 @@ impl<'a> History<'a> {
         })
     }
 
-    /// Les `limit` exécutions les plus récentes.
+    /// The `limit` most recent executions.
     ///
-    /// # Erreurs
-    /// [`crate::StoreError::Sqlite`] ou [`crate::StoreError::Corrupted`].
+    /// # Errors
+    /// [`crate::StoreError::Sqlite`] or [`crate::StoreError::Corrupted`].
     pub fn recent(&self, limit: usize) -> Result<Vec<HistoryEntry>> {
         self.store.with_connection(|conn| {
             let mut requete = conn.prepare(&format!(
@@ -489,10 +486,10 @@ impl<'a> History<'a> {
         })
     }
 
-    /// Les `limit` exécutions les plus récentes sur une connexion.
+    /// The `limit` most recent executions on a connection.
     ///
-    /// # Erreurs
-    /// [`crate::StoreError::Sqlite`] ou [`crate::StoreError::Corrupted`].
+    /// # Errors
+    /// [`crate::StoreError::Sqlite`] or [`crate::StoreError::Corrupted`].
     pub fn for_connection(
         &self,
         connection: ConnectionId,
@@ -511,15 +508,14 @@ impl<'a> History<'a> {
         })
     }
 
-    /// Cherche `needle` dans le texte des requêtes, sans tenir compte de la
-    /// casse.
+    /// Searches `needle` in the query text, case-insensitively.
     ///
-    /// Les métacaractères `LIKE` de `needle` sont échappés : chercher `100%`
-    /// trouve `100%`, pas toutes les lignes. Le motif est **lié**, jamais
-    /// concaténé (I-10).
+    /// `needle`'s `LIKE` metacharacters are escaped: searching `100%` finds
+    /// `100%`, not every row. The pattern is **bound**, never concatenated
+    /// (I-10).
     ///
-    /// # Erreurs
-    /// [`crate::StoreError::Sqlite`] ou [`crate::StoreError::Corrupted`].
+    /// # Errors
+    /// [`crate::StoreError::Sqlite`] or [`crate::StoreError::Corrupted`].
     pub fn search(&self, needle: &str, limit: usize) -> Result<Vec<HistoryEntry>> {
         let motif = format!("%{}%", escape_like(needle));
         self.store.with_connection(|conn| {
@@ -533,10 +529,10 @@ impl<'a> History<'a> {
         })
     }
 
-    /// Nombre d'entrées.
+    /// Number of entries.
     ///
-    /// # Erreurs
-    /// [`crate::StoreError::Sqlite`] si la lecture échoue.
+    /// # Errors
+    /// [`crate::StoreError::Sqlite`] if the read fails.
     pub fn count(&self) -> Result<u64> {
         self.store.with_connection(|conn| {
             let total: i64 =
@@ -545,25 +541,25 @@ impl<'a> History<'a> {
         })
     }
 
-    /// Efface les entrées antérieures à `cutoff` et rend leur nombre.
+    /// Erases the entries older than `cutoff` and returns their number.
     ///
-    /// **Ne touche pas au journal d'audit.**
+    /// **Does not touch the audit journal.**
     ///
-    /// # Erreurs
-    /// [`crate::StoreError::Sqlite`] si la suppression échoue.
+    /// # Errors
+    /// [`crate::StoreError::Sqlite`] if the deletion fails.
     pub fn purge_before(&self, cutoff: DateTime<Utc>) -> Result<usize> {
         self.store.with_connection(|conn| {
             Ok(conn.execute("DELETE FROM query_history WHERE ts < ?1", params![cutoff])?)
         })
     }
 
-    /// Efface tout l'historique et rend le nombre d'entrées supprimées.
+    /// Erases the whole history and returns the number of deleted entries.
     ///
-    /// **Ne touche pas au journal d'audit** : c'est précisément la garantie qui
-    /// permet d'offrir cette fonction.
+    /// **Does not touch the audit journal**: that is precisely the guarantee
+    /// that makes it possible to offer this feature.
     ///
-    /// # Erreurs
-    /// [`crate::StoreError::Sqlite`] si la suppression échoue.
+    /// # Errors
+    /// [`crate::StoreError::Sqlite`] if the deletion fails.
     pub fn clear(&self) -> Result<usize> {
         self.store
             .with_connection(|conn| Ok(conn.execute("DELETE FROM query_history", [])?))
@@ -584,12 +580,12 @@ fn requires_reconciliation(
                 || status == HistoryStatus::Failed && error_class.is_none()))
 }
 
-/// La liste de colonnes, partagée par toutes les lectures.
+/// The column list, shared by every read.
 const SELECT_COLONNES: &str = "SELECT id, ts, connection_id, connection_name, actor_kind, \
      actor_id, language, statement, intent, duration_ms, row_count, status, error, error_class, result_id, \
      reconciled_at FROM query_history";
 
-/// Reconstruit une [`HistoryEntry`] à partir d'une ligne.
+/// Rebuilds a [`HistoryEntry`] from a row.
 fn depuis_ligne(row: &Row<'_>) -> Result<HistoryEntry> {
     let actor_kind: String = row.get("actor_kind")?;
     let language: String = row.get("language")?;
@@ -634,105 +630,103 @@ mod tests {
             .with_intent(StatementIntent::Read)
     }
 
-    /// Une erreur ambiguë survit à l'aller-retour **en tant que donnée** (I-13).
+    /// An ambiguous error survives the round trip **as data** (I-13).
     ///
-    /// Le message ne suffit pas : « délai dépassé après 30 s » ne dit pas que le
-    /// serveur a peut-être appliqué l'écriture. Et l'analyser serait exactement
-    /// ce que `rust.md` interdit — un message se reformule, un appelant qui le
-    /// lisait casse alors sans que rien n'échoue. C'est donc la colonne que ce
-    /// test verrouille, pas le texte.
+    /// The message is not enough: "timed out after 30 s" does not say the
+    /// server may have applied the write. And parsing it would be exactly what
+    /// `rust.md` forbids — a message gets reworded, and a caller that read it
+    /// then breaks without anything failing. So this test locks the column,
+    /// not the text.
     #[test]
-    fn la_famille_d_une_erreur_survit_a_la_relecture() {
-        let store = Store::open_in_memory().expect("ouverture");
+    fn an_error_class_survives_reading_back() {
+        let store = Store::open_in_memory().expect("open");
         let expire =
             lecture("INSERT INTO commandes (client) VALUES (1)").failed(&OxynError::Timeout {
                 after: Duration::from_secs(30),
             });
-        let franche = lecture("SELECT * FROM absente")
-            .failed(&OxynError::Query("relation « absente » inexistante".into()));
+        let franche = lecture("SELECT * FROM absente").failed(&OxynError::Query(
+            "relation \"absente\" does not exist".into(),
+        ));
 
-        store.history().record(&franche).expect("écriture");
-        store.history().record(&expire).expect("écriture");
-        let relues = store.history().recent(10).expect("relecture");
+        store.history().record(&franche).expect("write");
+        store.history().record(&expire).expect("write");
+        let relues = store.history().recent(10).expect("read back");
 
         let ambigue = relues
             .iter()
             .find(|entree| entree.record.statement.starts_with("INSERT"))
-            .expect("l'écriture expirée");
+            .expect("the expired write");
         assert_eq!(ambigue.record.error_class, Some(ErrorClass::Ambiguous));
         assert!(
-            !ambigue
-                .record
-                .error_class
-                .expect("une famille")
-                .is_retryable(),
-            "un `INSERT` expiré ne se rejoue pas : le serveur a peut-être appliqué"
+            !ambigue.record.error_class.expect("a family").is_retryable(),
+            "an expired `INSERT` is not replayed: the server may have applied it"
         );
 
         let permanente = relues
             .iter()
             .find(|entree| entree.record.statement.starts_with("SELECT"))
-            .expect("la requête rejetée");
+            .expect("the rejected query");
         assert_eq!(permanente.record.error_class, Some(ErrorClass::Permanent));
 
-        // Le statut ne distingue pas les deux : c'est bien la famille qui porte
-        // l'information, et elle seule.
+        // The status does not tell them apart: the class carries the
+        // information, and it alone.
         assert_eq!(ambigue.record.status, HistoryStatus::Failed);
         assert_eq!(permanente.record.status, HistoryStatus::Failed);
     }
 
-    /// Ne pas savoir, c'est ne pas rejouer — aux deux endroits où l'on peut
-    /// ignorer la famille d'une erreur.
+    /// Not knowing means not replaying — in both places where an error's
+    /// class can be unknown.
     #[test]
-    fn une_famille_inconnue_interdit_la_reprise() {
-        // À la relecture d'une valeur que ce binaire ne connaît pas.
+    fn an_unknown_class_forbids_retry() {
+        // When reading back a value this binary does not know.
         assert_eq!(
             crate::encoding::error_class_from_text("vaporisée"),
             ErrorClass::Ambiguous
         );
 
-        // Et sur une ligne écrite avant que la colonne n'existe : son `None` ne
-        // veut pas dire « aucune erreur », il veut dire « famille inconnue ».
-        // Rejouer l'`INSERT` expiré qu'elle porte peut-être créerait un doublon.
+        // And on a row written before the column existed: its `None` does not
+        // mean "no error", it means "unknown class". Replaying the expired
+        // `INSERT` it may carry would create a duplicate.
         let mut heritee = lecture("INSERT INTO commandes (client) VALUES (1)");
         heritee.status = HistoryStatus::Failed;
-        heritee.error = Some("délai dépassé après 30s".to_owned());
+        heritee.error = Some("timed out after 30s".to_owned());
         assert_eq!(heritee.error_class, None);
         assert!(!heritee.is_retryable());
 
-        // Seule la famille transitoire ouvre la reprise.
-        let coupure = lecture("SELECT 1").failed(&OxynError::Connection("coupure".into()));
+        // Only the transient class opens a retry.
+        let coupure = lecture("SELECT 1").failed(&OxynError::Connection("disconnected".into()));
         assert!(coupure.is_retryable());
         for interdite in [
             lecture("x").failed(&OxynError::Timeout {
                 after: Duration::from_secs(1),
             }),
-            lecture("x").failed(&OxynError::Query("syntaxe".into())),
-            lecture("x").denied("lecture seule"),
+            lecture("x").failed(&OxynError::Query("syntax".into())),
+            lecture("x").denied("read-only"),
             lecture("x").succeeded(Duration::from_millis(1), Some(0)),
         ] {
             assert!(!interdite.is_retryable(), "{:?}", interdite.error_class);
         }
     }
 
-    /// Un refus rendu par la dernière barrière se lit comme un refus.
+    /// A refusal returned by the last barrier reads as a refusal.
     ///
-    /// Cette barrière-là rend une `Err`, là où le `PolicyGate` rend une
-    /// décision. Sans ce classement, deux refus identiques pour l'utilisateur
-    /// apparaîtraient l'un en « refusé », l'autre en « échec » — et le second
-    /// l'enverrait chercher un incident serveur qui n'a pas eu lieu.
+    /// That barrier returns an `Err`, where the `PolicyGate` returns a
+    /// decision. Without this classification, two refusals identical for the
+    /// user would show one as "refused", the other as "failed" — and the
+    /// second would send them looking for a server incident that did not
+    /// happen.
     #[test]
-    fn un_refus_de_politique_n_est_pas_une_panne() {
+    fn a_policy_refusal_is_not_a_failure() {
         let refus = lecture("DELETE FROM clients").failed(&OxynError::PolicyDenied {
-            reason: "lecture seule".to_owned(),
+            reason: "read-only".to_owned(),
         });
         assert_eq!(refus.status, HistoryStatus::Denied);
         assert_eq!(refus.error_class, Some(ErrorClass::Permanent));
     }
 
     #[test]
-    fn aller_retour_d_une_execution() {
-        let store = Store::open_in_memory().expect("ouverture");
+    fn an_execution_round_trips() {
+        let store = Store::open_in_memory().expect("open");
         let connexion = ConnectionId::new();
         let record = HistoryRecord::new(
             &Actor::Human,
@@ -743,8 +737,8 @@ mod tests {
         .with_intent(StatementIntent::Read)
         .succeeded(Duration::from_millis(87), Some(1_204));
 
-        let id = store.history().record(&record).expect("écriture");
-        let relu = store.history().recent(10).expect("relecture").remove(0);
+        let id = store.history().record(&record).expect("write");
+        let relu = store.history().recent(10).expect("read back").remove(0);
 
         assert_eq!(relu.id, id);
         assert_eq!(relu.record.connection, Some(connexion));
@@ -752,7 +746,7 @@ mod tests {
         assert_eq!(
             relu.record.language,
             QueryLanguage::Sql(SqlDialect::Postgres),
-            "le dialecte doit survivre à l'aller-retour"
+            "the dialect must survive the round trip"
         );
         assert_eq!(relu.record.status, HistoryStatus::Succeeded);
         assert_eq!(relu.record.duration, Some(Duration::from_millis(87)));
@@ -761,90 +755,86 @@ mod tests {
     }
 
     #[test]
-    fn une_execution_s_inscrit_en_cours_puis_se_complete() {
-        let store = Store::open_in_memory().expect("ouverture");
+    fn an_execution_is_recorded_running_then_completed() {
+        let store = Store::open_in_memory().expect("open");
         let en_cours = lecture("SELECT count(*) FROM ventes");
         assert_eq!(en_cours.status, HistoryStatus::Running);
 
-        let id = store.history().record(&en_cours).expect("écriture");
+        let id = store.history().record(&en_cours).expect("write");
         assert_eq!(
-            store.history().recent(1).expect("relecture")[0]
+            store.history().recent(1).expect("read back")[0]
                 .record
                 .status,
             HistoryStatus::Running
         );
 
         let terminee = en_cours.succeeded(Duration::from_millis(410), Some(3));
-        assert!(store.history().finish(id, &terminee).expect("achèvement"));
+        assert!(store.history().finish(id, &terminee).expect("completion"));
 
-        let relu = store.history().recent(1).expect("relecture").remove(0);
+        let relu = store.history().recent(1).expect("read back").remove(0);
         assert_eq!(relu.id, id);
         assert_eq!(relu.record.status, HistoryStatus::Succeeded);
         assert_eq!(relu.record.rows, Some(3));
         assert_eq!(relu.record.statement, "SELECT count(*) FROM ventes");
 
-        // Le même geste sur le journal d'audit est impossible : il n'y a pas de
-        // méthode, et le fichier lui-même le refuserait.
+        // The same move on the audit journal is impossible: there is no
+        // method, and the file itself would refuse it.
         assert!(
             !store
                 .history()
                 .finish(id + 1_000, &terminee)
-                .expect("aucune ligne"),
-            "une ligne absente ne se complète pas en silence"
+                .expect("no row"),
+            "a missing row is not silently completed"
         );
     }
 
     #[test]
-    fn une_annulation_n_est_pas_un_echec() {
-        let store = Store::open_in_memory().expect("ouverture");
+    fn a_cancellation_is_not_a_failure() {
+        let store = Store::open_in_memory().expect("open");
         store
             .history()
             .record(&lecture("SELECT pg_sleep(60)").failed(&OxynError::Cancelled))
-            .expect("écriture");
+            .expect("write");
         store
             .history()
-            .record(&lecture("SELECT 1/0").failed(&OxynError::Query("division par zéro".into())))
-            .expect("écriture");
+            .record(&lecture("SELECT 1/0").failed(&OxynError::Query("division by zero".into())))
+            .expect("write");
 
-        let entrees = store.history().recent(10).expect("relecture");
+        let entrees = store.history().recent(10).expect("read back");
         let statuts: Vec<HistoryStatus> = entrees.iter().map(|e| e.record.status).collect();
         assert!(statuts.contains(&HistoryStatus::Cancelled));
         assert!(statuts.contains(&HistoryStatus::Failed));
     }
 
     #[test]
-    fn une_recherche_n_interprete_pas_les_metacaracteres() {
-        let store = Store::open_in_memory().expect("ouverture");
+    fn a_search_does_not_interpret_metacharacters() {
+        let store = Store::open_in_memory().expect("open");
         for texte in [
             "SELECT taux FROM remises WHERE taux = '100%'",
             "SELECT * FROM clients",
             "SELECT a_b FROM t",
         ] {
-            store.history().record(&lecture(texte)).expect("écriture");
+            store.history().record(&lecture(texte)).expect("write");
         }
 
-        let sur_pourcent = store.history().search("100%", 50).expect("recherche");
-        assert_eq!(
-            sur_pourcent.len(),
-            1,
-            "`%` doit être littéral, pas un joker"
-        );
+        let sur_pourcent = store.history().search("100%", 50).expect("search");
+        assert_eq!(sur_pourcent.len(), 1, "`%` must be literal, not a wildcard");
 
-        let sur_souligne = store.history().search("a_b", 50).expect("recherche");
-        assert_eq!(sur_souligne.len(), 1, "`_` doit être littéral");
+        let sur_souligne = store.history().search("a_b", 50).expect("search");
+        assert_eq!(sur_souligne.len(), 1, "`_` must be literal");
 
-        let rien = store.history().search("a%b", 50).expect("recherche");
-        assert!(rien.is_empty(), "`a%b` ne doit rien trouver littéralement");
+        let rien = store.history().search("a%b", 50).expect("search");
+        assert!(rien.is_empty(), "`a%b` must find nothing literally");
     }
 
     #[test]
-    fn purger_l_historique_ne_touche_pas_au_journal() {
-        // C'est la garantie qui permet d'offrir « effacer mon historique »
-        // sans ouvrir un moyen d'effacer la trace d'un agent.
+    fn purging_the_history_does_not_touch_the_journal() {
+        // That is the guarantee that makes it possible to offer "clear my
+        // history" without opening a way to erase an agent's trace.
         use crate::journal::JournalRecord;
         use oxyn_core::Decision;
 
-        let store = Store::open_in_memory().expect("ouverture");
+        let store = Store::open_in_memory().expect("open");
         let connexion = ConnectionId::new();
         let agent = Actor::agent(AgentId::new(), AgentSessionId::new());
         let commande = Command::Execute {
@@ -861,50 +851,48 @@ mod tests {
             .append(&JournalRecord::new(
                 &agent,
                 &commande,
-                &Decision::approval("écriture par un agent", None),
+                &Decision::approval("write by an agent", None),
             ))
             .expect("journal");
         store
             .history()
-            .record(
-                &HistoryRecord::from_command(&agent, &commande).expect("une Execute a un texte"),
-            )
-            .expect("historique");
+            .record(&HistoryRecord::from_command(&agent, &commande).expect("an Execute has a text"))
+            .expect("history");
 
-        assert_eq!(store.history().count().expect("comptage"), 1);
-        assert_eq!(store.journal().count().expect("comptage"), 1);
+        assert_eq!(store.history().count().expect("count"), 1);
+        assert_eq!(store.journal().count().expect("count"), 1);
 
         let efface = store.history().clear().expect("purge");
         assert_eq!(efface, 1);
-        assert_eq!(store.history().count().expect("comptage"), 0);
+        assert_eq!(store.history().count().expect("count"), 0);
         assert_eq!(
-            store.journal().count().expect("comptage"),
+            store.journal().count().expect("count"),
             1,
-            "le journal d'audit ne se purge pas"
+            "the audit journal is not purged"
         );
     }
 
     #[test]
-    fn la_purge_par_date_ne_prend_que_l_anterieur() {
-        let store = Store::open_in_memory().expect("ouverture");
+    fn purging_by_date_only_takes_older_entries() {
+        let store = Store::open_in_memory().expect("open");
         let mut ancienne = lecture("SELECT 'vieux'");
         ancienne.ts = Utc::now() - chrono::Duration::days(30);
-        store.history().record(&ancienne).expect("écriture");
+        store.history().record(&ancienne).expect("write");
         store
             .history()
             .record(&lecture("SELECT 'récent'"))
-            .expect("écriture");
+            .expect("write");
 
         let coupure = Utc::now() - chrono::Duration::days(7);
         assert_eq!(store.history().purge_before(coupure).expect("purge"), 1);
 
-        let restant = store.history().recent(10).expect("relecture");
+        let restant = store.history().recent(10).expect("read back");
         assert_eq!(restant.len(), 1);
         assert_eq!(restant[0].record.statement, "SELECT 'récent'");
     }
 
     #[test]
-    fn seules_les_executions_deviennent_des_entrees_d_historique() {
+    fn only_executions_become_history_entries() {
         let non_executions = [
             Command::Connect {
                 connection: ConnectionId::new(),
@@ -920,15 +908,15 @@ mod tests {
         for commande in &non_executions {
             assert!(
                 HistoryRecord::from_command(&Actor::Human, commande).is_none(),
-                "`{}` n'est pas une requête",
+                "`{}` is not a query",
                 commande.name()
             );
         }
     }
 
     #[test]
-    fn les_valeurs_liees_n_entrent_pas_dans_l_historique() {
-        let store = Store::open_in_memory().expect("ouverture");
+    fn bound_values_do_not_enter_the_history() {
+        let store = Store::open_in_memory().expect("open");
         let commande = Command::Execute {
             connection: ConnectionId::new(),
             session: SessionId::new(),
@@ -940,8 +928,8 @@ mod tests {
         };
         store
             .history()
-            .record(&HistoryRecord::from_command(&Actor::Human, &commande).expect("une Execute"))
-            .expect("écriture");
+            .record(&HistoryRecord::from_command(&Actor::Human, &commande).expect("an Execute"))
+            .expect("write");
 
         let tout: String = store
             .with_connection(|conn| {
@@ -951,27 +939,24 @@ mod tests {
                     |row| row.get(0),
                 )?)
             })
-            .expect("lecture brute");
-        assert!(
-            !tout.contains("hunter2"),
-            "une valeur liée a fuité : {tout}"
-        );
+            .expect("raw read");
+        assert!(!tout.contains("hunter2"), "a bound value leaked: {tout}");
     }
 
     #[test]
-    fn l_historique_survit_a_la_suppression_de_la_connexion() {
-        let store = Store::open_in_memory().expect("ouverture");
+    fn the_history_survives_the_connection_deletion() {
+        let store = Store::open_in_memory().expect("open");
         let connexion = ConnectionId::new();
         store
             .history()
             .record(&lecture("SELECT 1").on_connection(connexion, "base disparue"))
-            .expect("écriture");
+            .expect("write");
 
-        // Aucune clé étrangère : la ligne subsiste et reste lisible.
+        // No foreign key: the row remains and stays readable.
         let relu = store
             .history()
             .for_connection(connexion, 10)
-            .expect("relecture");
+            .expect("read back");
         assert_eq!(relu.len(), 1);
         assert_eq!(
             relu[0].record.connection_name.as_deref(),

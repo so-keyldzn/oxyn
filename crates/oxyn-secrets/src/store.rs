@@ -1,18 +1,16 @@
-//! La référence à un secret, et le contrat que tout trousseau respecte.
+//! The reference to a secret, and the contract every keychain honors.
 //!
-//! Le partage des rôles est celui de
-//! [`SECURITY`](../../../docs/SECURITY.md) et de
-//! [`ARCHITECTURE` §8](../../../docs/ARCHITECTURE.md) :
+//! The division of roles is the one of [`SECURITY`](../../../docs/SECURITY.md)
+//! and of [`ARCHITECTURE` §8](../../../docs/ARCHITECTURE.md):
 //!
-//! * ce qui est **persisté** dans un fichier de workspace est une
-//!   [`SecretRef`] — une chaîne stable, publique, dérivée de l'identifiant de
-//!   connexion ;
-//! * ce qui est **stocké** dans le trousseau du système est la valeur, sous
-//!   cette référence.
+//! * what is **persisted** in a workspace file is a [`SecretRef`] — a stable,
+//!   public string, derived from the connection identifier;
+//! * what is **stored** in the system keychain is the value, under that
+//!   reference.
 //!
-//! La panne évitée est concrète : un fichier de workspace contenant un mot de
-//! passe de production, commité par l'utilisateur dans le dépôt de son équipe
-//! parce que le fichier avait l'air d'être une simple configuration.
+//! The failure avoided is concrete: a workspace file containing a production
+//! password, committed by the user to their team's repository because the file
+//! looked like plain configuration.
 
 use std::fmt;
 use std::str::FromStr;
@@ -25,54 +23,52 @@ use serde::{Deserialize, Serialize};
 use crate::bundle::CredentialBundle;
 use crate::error::{Result, SecretError};
 
-/// Désignation stable d'un secret dans le trousseau du système.
+/// Stable designation of a secret in the system keychain.
 ///
-/// Forme canonique : `oxyn:<genre>:<nom>`, par exemple
-/// `oxyn:conn:018f0000-0000-7000-8000-000000000000`. Le préfixe `oxyn`
-/// cantonne les entrées écrites par Oxyn ; le genre dit à quoi le secret se
-/// rattache ; le nom identifie l'objet.
+/// Canonical form: `oxyn:<kind>:<name>`, for example
+/// `oxyn:conn:018f0000-0000-7000-8000-000000000000`. The `oxyn` prefix confines
+/// the entries written by Oxyn; the kind says what the secret is attached to;
+/// the name identifies the object.
 ///
-/// # Une référence n'est pas un secret
+/// # A reference is not a secret
 ///
-/// Son `Debug` est **complet**, et c'est délibéré : la référence est écrite en
-/// clair dans les fichiers de workspace, elle est faite pour être vue. Masquer
-/// ce qui n'est pas secret dilue le signal des masques qui comptent — ceux de
-/// [`CredentialBundle`] et de
-/// [`oxyn_core::ConnectionConfig`].
+/// Its `Debug` is **complete**, and on purpose: the reference is written in
+/// clear text in workspace files, it is meant to be seen. Masking what is not
+/// secret dilutes the signal of the masks that matter — those of
+/// [`CredentialBundle`] and of [`oxyn_core::ConnectionConfig`].
 ///
-/// # Pourquoi la validation est stricte
+/// # Why validation is strict
 ///
-/// Une référence relue depuis un fichier de workspace devient un **nom de
-/// compte dans le trousseau du système**. Un fichier de workspace est une
-/// entrée non fiable ([`SECURITY`](../../../docs/SECURITY.md), surface
-/// d'entrée n° 3) : il peut avoir été écrit par un tiers. Laisser passer un
-/// octet de contrôle, un espace ou un `:` supplémentaire, c'est laisser une
-/// chaîne étrangère décider de quelle entrée du trousseau Oxyn va lire.
+/// A reference read back from a workspace file becomes an **account name in the
+/// system keychain**. A workspace file is an untrusted input
+/// ([`SECURITY`](../../../docs/SECURITY.md), input surface no. 3): it may have
+/// been written by a third party. Letting through a control byte, a space or an
+/// extra `:` lets a foreign string decide which keychain entry Oxyn will read.
 #[derive(Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(try_from = "String", into = "String")]
 pub struct SecretRef(Arc<str>);
 
 impl SecretRef {
-    /// Préfixe de toutes les entrées écrites par Oxyn.
+    /// Prefix of every entry written by Oxyn.
     pub const SCHEME: &'static str = "oxyn";
-    /// Genre des secrets rattachés à une connexion de base de données.
+    /// Kind of the secrets attached to a database connection.
     pub const KIND_CONNECTION: &'static str = "conn";
-    /// Genre des secrets rattachés à un fournisseur de modèles (phase 2).
+    /// Kind of the secrets attached to a model provider (phase 2).
     pub const KIND_PROVIDER: &'static str = "llm";
 
-    /// Longueur maximale de la référence complète.
+    /// Maximum length of the full reference.
     const MAX_LEN: usize = 160;
-    /// Longueur maximale du segment de genre.
+    /// Maximum length of the kind segment.
     const MAX_KIND_LEN: usize = 16;
-    /// Longueur maximale du segment de nom.
+    /// Maximum length of the name segment.
     const MAX_NAME_LEN: usize = 128;
 
-    /// Référence du secret d'une connexion, dérivée de son identifiant.
+    /// Reference of a connection's secret, derived from its identifier.
     ///
-    /// La dérivation est totale et déterministe : deux appels sur le même
-    /// [`ConnectionId`] rendent la même référence, y compris après
-    /// redémarrage. C'est ce qui permet de retrouver le mot de passe d'une
-    /// connexion dont le fichier n'a jamais porté que l'identifiant.
+    /// The derivation is total and deterministic: two calls on the same
+    /// [`ConnectionId`] return the same reference, including after a restart. That
+    /// is what finds again the password of a connection whose file only ever
+    /// carried the identifier.
     #[must_use]
     pub fn for_connection(id: ConnectionId) -> Self {
         Self(Arc::from(format!(
@@ -82,11 +78,11 @@ impl SecretRef {
         )))
     }
 
-    /// Référence du secret d'un fournisseur de modèles.
+    /// Reference of a model provider's secret.
     ///
-    /// # Erreurs
-    /// Renvoie [`SecretError::InvalidReference`] si le nom du fournisseur ne
-    /// respecte pas les règles de nommage d'un segment.
+    /// # Errors
+    /// Returns [`SecretError::InvalidReference`] if the provider name does not
+    /// follow the naming rules of a segment.
     pub fn for_provider(provider: impl AsRef<str>) -> Result<Self> {
         let provider = provider.as_ref();
         validate_name(provider)?;
@@ -97,18 +93,18 @@ impl SecretRef {
         ))))
     }
 
-    /// Référence à interroger pour une connexion donnée.
+    /// Reference to query for a given connection.
     ///
-    /// Si la configuration porte déjà une
-    /// [`secret_ref`](ConnectionConfig::secret_ref), c'est elle qui fait foi —
-    /// après validation, parce qu'elle vient d'un fichier. Sinon, la référence
-    /// est dérivée de l'identifiant de la connexion.
+    /// If the configuration already carries a
+    /// [`secret_ref`](ConnectionConfig::secret_ref), it is authoritative — after
+    /// validation, because it comes from a file. Otherwise, the reference is
+    /// derived from the connection identifier.
     ///
-    /// # Erreurs
-    /// Renvoie [`SecretError::InvalidReference`] si la référence écrite dans le
-    /// fichier est malformée. On ne se rabat **pas** silencieusement sur la
-    /// référence dérivée dans ce cas : lire un autre secret que celui demandé
-    /// serait pire que ne rien lire.
+    /// # Errors
+    /// Returns [`SecretError::InvalidReference`] if the reference written in the
+    /// file is malformed. There is **no** silent fallback to the derived reference
+    /// in that case: reading another secret than the one requested would be worse
+    /// than reading nothing.
     pub fn for_connection_config(config: &ConnectionConfig) -> Result<Self> {
         match config.secret_ref.as_deref() {
             Some(existing) => Self::parse(existing),
@@ -116,12 +112,12 @@ impl SecretRef {
         }
     }
 
-    /// Analyse une référence relue depuis un fichier de workspace.
+    /// Parses a reference read back from a workspace file.
     ///
-    /// # Erreurs
-    /// Renvoie [`SecretError::InvalidReference`] si la chaîne n'est pas de la
-    /// forme `oxyn:<genre>:<nom>` avec des segments normalisés. Le message ne
-    /// recopie jamais la valeur fautive.
+    /// # Errors
+    /// Returns [`SecretError::InvalidReference`] if the string is not of the form
+    /// `oxyn:<kind>:<name>` with normalized segments. The message never copies the
+    /// offending value.
     pub fn parse(text: &str) -> Result<Self> {
         if text.len() > Self::MAX_LEN {
             return Err(invalid("reference too long"));
@@ -143,45 +139,45 @@ impl SecretRef {
         Ok(Self(Arc::from(text)))
     }
 
-    /// Vue empruntée de la référence complète.
+    /// Borrowed view of the full reference.
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }
 
-    /// Segment de genre (`conn`, `llm`…).
+    /// Kind segment (`conn`, `llm`…).
     #[must_use]
     pub fn kind(&self) -> &str {
         self.segment(1)
     }
 
-    /// Segment de nom : l'identifiant de connexion, le nom de fournisseur…
+    /// Name segment: the connection identifier, the provider name…
     #[must_use]
     pub fn name(&self) -> &str {
         self.segment(2)
     }
 
-    /// La référence désigne-t-elle le secret d'une connexion ?
+    /// Does the reference designate a connection's secret?
     #[must_use]
     pub fn is_connection(&self) -> bool {
         self.kind() == Self::KIND_CONNECTION
     }
 
-    /// Segment d'indice `index`, la forme étant garantie par la construction.
+    /// Segment at index `index`, the form being guaranteed by construction.
     fn segment(&self, index: usize) -> &str {
-        // Toute `SecretRef` a traversé `parse` ou une des fabriques : elle a
-        // donc exactement trois segments. Rendre `""` plutôt que paniquer si
-        // cet invariant venait à être rompu.
+        // Every `SecretRef` went through `parse` or one of the factories: it
+        // therefore has exactly three segments. Return `""` rather than panic if
+        // this invariant were ever broken.
         self.0.split(':').nth(index).unwrap_or_default()
     }
 }
 
-/// Construit une erreur de référence.
+/// Builds a reference error.
 fn invalid(detail: &'static str) -> SecretError {
     SecretError::InvalidReference { detail }
 }
 
-/// Valide un segment de genre : minuscules ASCII, chiffres, `-` et `_`.
+/// Validates a kind segment: ASCII lowercase, digits, `-` and `_`.
 fn validate_kind(kind: &str) -> Result<()> {
     if kind.is_empty() {
         return Err(invalid("the kind is empty"));
@@ -201,11 +197,11 @@ fn validate_kind(kind: &str) -> Result<()> {
     Ok(())
 }
 
-/// Valide un segment de nom.
+/// Validates a name segment.
 ///
-/// Le jeu autorisé est volontairement étroit : ce segment devient un nom de
-/// compte dans le trousseau du système, et il faut qu'il soit impossible d'y
-/// glisser un espace, un octet de contrôle ou un séparateur.
+/// The allowed set is deliberately narrow: this segment becomes an account name
+/// in the system keychain, and it must be impossible to slip a space, a control
+/// byte or a separator into it.
 fn validate_name(name: &str) -> Result<()> {
     if name.is_empty() {
         return Err(invalid("the name is empty"));
@@ -213,9 +209,9 @@ fn validate_name(name: &str) -> Result<()> {
     if name.len() > SecretRef::MAX_NAME_LEN {
         return Err(invalid("name too long"));
     }
-    // Le premier caractère est alphanumérique, ce qui exclut `.` et `..` : une
-    // référence finit un jour dans un nom de fichier de cache, et un nom qui
-    // désigne un répertoire parent y serait une remontée d'arborescence.
+    // The first character is alphanumeric, which excludes `.` and `..`: a
+    // reference ends up one day in a cache file name, and a name designating a
+    // parent directory would be a path traversal there.
     if !name.starts_with(|c: char| c.is_ascii_alphanumeric()) {
         return Err(invalid("the name must start with a letter or a digit"));
     }
@@ -270,71 +266,68 @@ impl From<SecretRef> for String {
     }
 }
 
-/// Ce qu'Oxyn attend d'un trousseau.
+/// What Oxyn expects from a keychain.
 ///
-/// L'API est **synchrone** : un accès au trousseau du système est un appel
-/// local de l'ordre de la milliseconde, et l'envelopper dans `async` ferait
-/// payer un `spawn_blocking` à chaque lecture pour ne rien résoudre. Les
-/// implémentations restent néanmoins `Send + Sync` : elles sont appelées depuis
-/// le runtime Tokio, jamais depuis le thread d'interface (I-05).
+/// The API is **synchronous**: an access to the system keychain is a local call
+/// in the order of a millisecond, and wrapping it in `async` would charge a
+/// `spawn_blocking` on every read to solve nothing. Implementations are still
+/// `Send + Sync`: they are called from the Tokio runtime, never from the
+/// interface thread (I-05).
 ///
-/// # Le `Debug` fait partie du contrat
+/// # `Debug` is part of the contract
 ///
-/// Le trait exige `Debug` pour qu'une structure qui tient un
-/// `Arc<dyn SecretStore>` puisse en dériver un — et il impose du même coup à
-/// chaque implémentation d'écrire un `Debug` qui ne montre **aucune valeur
-/// stockée**. Une implémentation qui imprimerait ses entrées viole I-03.
+/// The trait requires `Debug` so that a structure holding an
+/// `Arc<dyn SecretStore>` can derive one — and it thereby requires every
+/// implementation to write a `Debug` that shows **no stored value**. An
+/// implementation that printed its entries would violate I-03.
 ///
 /// # Idempotence
 ///
-/// [`delete`](Self::delete) réussit lorsque la référence est inconnue :
-/// supprimer ce qui n'existe pas est l'état recherché, pas une panne. C'est ce
-/// qui permet de supprimer une connexion sans savoir si elle avait un mot de
-/// passe.
+/// [`delete`](Self::delete) succeeds when the reference is unknown: deleting
+/// what does not exist is the desired state, not a failure. That is what allows
+/// deleting a connection without knowing whether it had a password.
 pub trait SecretStore: fmt::Debug + Send + Sync {
-    /// Écrit — ou remplace — le secret désigné.
+    /// Writes — or replaces — the designated secret.
     ///
-    /// # Erreurs
-    /// Voir [`SecretError`] : trousseau indisponible, accès refusé, valeur trop
-    /// grande pour la plateforme.
+    /// # Errors
+    /// See [`SecretError`]: keychain unavailable, access denied, value too large
+    /// for the platform.
     fn put(&self, reference: &SecretRef, secret: SecretString) -> Result<()>;
 
-    /// Relit le secret désigné, ou `None` si la référence est inconnue.
+    /// Reads back the designated secret, or `None` if the reference is unknown.
     ///
-    /// Une référence inconnue n'est pas une erreur : une connexion peut n'avoir
-    /// aucun secret (SQLite sur fichier, authentification par socket Unix,
-    /// `~/.pgpass`).
+    /// An unknown reference is not an error: a connection may have no secret
+    /// (SQLite on a file, Unix socket authentication, `~/.pgpass`).
     ///
-    /// # Erreurs
-    /// Voir [`SecretError`]. En particulier
-    /// [`Malformed`](SecretError::Malformed) si le trousseau rend autre chose
-    /// que ce qui y avait été écrit.
+    /// # Errors
+    /// See [`SecretError`]. In particular [`Malformed`](SecretError::Malformed) if
+    /// the keychain returns something other than what was written to it.
     fn get(&self, reference: &SecretRef) -> Result<Option<SecretString>>;
 
-    /// Supprime le secret désigné. Réussit si la référence est déjà inconnue.
+    /// Deletes the designated secret. Succeeds if the reference is already unknown.
     ///
-    /// # Erreurs
-    /// Voir [`SecretError`].
+    /// # Errors
+    /// See [`SecretError`].
     fn delete(&self, reference: &SecretRef) -> Result<()>;
 
-    /// Écrit un jeu d'identifiants complet, encodé en JSON.
+    /// Writes a complete set of credentials, encoded as JSON.
     ///
-    /// C'est **le** chemin d'écriture pour tout ce qui n'est pas un simple mot
-    /// de passe : l'enveloppe JSON vit ici et nulle part ailleurs, pour qu'une
-    /// crate appelante n'invente pas son propre format.
+    /// It is **the** write path for everything that is not a plain password: the
+    /// JSON envelope lives here and nowhere else, so that a calling crate does not
+    /// invent its own format.
     ///
-    /// # Erreurs
-    /// Voir [`SecretError`].
+    /// # Errors
+    /// See [`SecretError`].
     fn put_bundle(&self, reference: &SecretRef, bundle: &CredentialBundle) -> Result<()> {
         self.put(reference, bundle.to_secret_json()?)
     }
 
-    /// Relit un jeu d'identifiants complet.
+    /// Reads back a complete set of credentials.
     ///
-    /// # Erreurs
-    /// [`Malformed`](SecretError::Malformed) si l'entrée du trousseau existe
-    /// mais n'est pas un bundle — typiquement un mot de passe nu écrit par une
-    /// version antérieure, ou par un autre outil sous la même référence.
+    /// # Errors
+    /// [`Malformed`](SecretError::Malformed) if the keychain entry exists but is
+    /// not a bundle — typically a bare password written by an earlier version, or
+    /// by another tool under the same reference.
     fn get_bundle(&self, reference: &SecretRef) -> Result<Option<CredentialBundle>> {
         match self.get(reference)? {
             Some(json) => CredentialBundle::from_secret_json(&json).map(Some),
@@ -350,7 +343,7 @@ mod tests {
     use oxyn_core::DriverId;
 
     #[test]
-    fn la_reference_d_une_connexion_est_stable() {
+    fn a_connection_reference_is_stable() {
         let id = ConnectionId::new();
         assert_eq!(SecretRef::for_connection(id), SecretRef::for_connection(id));
         assert_ne!(
@@ -366,32 +359,32 @@ mod tests {
     }
 
     #[test]
-    fn une_connexion_sans_reference_ecrite_derive_la_sienne() {
-        let cfg = ConnectionConfig::new("base client", DriverId::postgres());
-        let reference = SecretRef::for_connection_config(&cfg).expect("dérivation");
+    fn a_connection_without_written_reference_derives_its_own() {
+        let cfg = ConnectionConfig::new("customer database", DriverId::postgres());
+        let reference = SecretRef::for_connection_config(&cfg).expect("derivation");
         assert_eq!(reference, SecretRef::for_connection(cfg.id));
     }
 
     #[test]
-    fn une_reference_ecrite_fait_foi() {
-        let cfg = ConnectionConfig::new("base client", DriverId::postgres())
-            .with_secret_ref("oxyn:conn:heritee-de-la-v0");
-        let reference = SecretRef::for_connection_config(&cfg).expect("analyse");
-        assert_eq!(reference.name(), "heritee-de-la-v0");
+    fn a_written_reference_is_authoritative() {
+        let cfg = ConnectionConfig::new("customer database", DriverId::postgres())
+            .with_secret_ref("oxyn:conn:inherited-from-v0");
+        let reference = SecretRef::for_connection_config(&cfg).expect("parsing");
+        assert_eq!(reference.name(), "inherited-from-v0");
         assert_ne!(reference, SecretRef::for_connection(cfg.id));
     }
 
     #[test]
-    fn une_reference_ecrite_malformee_est_un_refus_pas_un_repli() {
-        // Se rabattre sur la référence dérivée lirait *un autre* secret que
-        // celui que le fichier désigne. Ne rien lire est moins grave.
-        let cfg = ConnectionConfig::new("base client", DriverId::postgres())
+    fn a_malformed_written_reference_is_a_refusal_not_a_fallback() {
+        // Falling back to the derived reference would read *another* secret than
+        // the one the file designates. Reading nothing is less serious.
+        let cfg = ConnectionConfig::new("customer database", DriverId::postgres())
             .with_secret_ref("oxyn/connexion/prod-eu");
         assert!(SecretRef::for_connection_config(&cfg).is_err());
     }
 
     #[test]
-    fn le_format_canonique_fait_l_aller_retour() {
+    fn the_canonical_format_round_trips() {
         for texte in [
             "oxyn:conn:018f0000-0000-7000-8000-000000000000",
             "oxyn:llm:anthropic",
@@ -407,10 +400,9 @@ mod tests {
     }
 
     #[test]
-    fn une_reference_venue_d_un_fichier_ne_peut_pas_designer_ce_qu_elle_veut() {
-        // Chacune de ces valeurs est plausible dans un fichier de workspace
-        // écrit par un tiers. Toutes doivent être refusées avant d'atteindre le
-        // trousseau du système.
+    fn a_reference_from_a_file_cannot_designate_what_it_wants() {
+        // Each of these values is plausible in a workspace file written by a third
+        // party. All must be refused before reaching the system keychain.
         for texte in [
             "",
             "oxyn",
@@ -419,7 +411,7 @@ mod tests {
             "oxyn::nom",
             "autre:conn:nom",
             "oxyn:conn:nom:supplement",
-            "oxyn:conn:nom avec espace",
+            "oxyn:conn:name with space",
             "oxyn:conn:nom\nligne2",
             "oxyn:conn:nom\u{0}",
             "oxyn:conn:../../autre",
@@ -433,22 +425,21 @@ mod tests {
         ] {
             assert!(
                 SecretRef::parse(texte).is_err(),
-                "{texte:?} aurait dû être refusé"
+                "{texte:?} should have been refused"
             );
         }
         assert!(SecretRef::parse(&format!("oxyn:conn:{}", "a".repeat(129))).is_err());
     }
 
     #[test]
-    fn un_refus_ne_recopie_pas_la_valeur_fautive() {
-        let err =
-            SecretRef::parse("oxyn:conn:base-de-la-banque centrale").expect_err("espace interdit");
+    fn a_refusal_does_not_copy_the_offending_value() {
+        let err = SecretRef::parse("oxyn:conn:central-bank database").expect_err("space forbidden");
         let message = err.to_string();
-        assert!(!message.contains("banque"), "valeur fuitée : {message}");
+        assert!(!message.contains("bank"), "value leaked: {message}");
     }
 
     #[test]
-    fn le_nom_de_fournisseur_est_valide_a_la_construction() {
+    fn the_provider_name_is_validated_at_construction() {
         assert!(SecretRef::for_provider("anthropic").is_ok());
         assert!(SecretRef::for_provider("").is_err());
         assert!(SecretRef::for_provider("open ai").is_err());
@@ -456,64 +447,62 @@ mod tests {
     }
 
     #[test]
-    fn la_reference_traverse_le_json_avec_sa_validation() {
-        let reference = SecretRef::for_provider("ollama").expect("valide");
-        let json = serde_json::to_string(&reference).expect("sérialisation");
+    fn the_reference_crosses_json_with_its_validation() {
+        let reference = SecretRef::for_provider("ollama").expect("valid");
+        let json = serde_json::to_string(&reference).expect("serialization");
         assert_eq!(json, "\"oxyn:llm:ollama\"");
-        let relu: SecretRef = serde_json::from_str(&json).expect("désérialisation");
+        let relu: SecretRef = serde_json::from_str(&json).expect("deserialization");
         assert_eq!(relu, reference);
         assert!(
             serde_json::from_str::<SecretRef>("\"oxyn:llm:oll ama\"").is_err(),
-            "la validation doit s'appliquer aussi à la désérialisation"
+            "validation must apply to deserialization too"
         );
     }
 
     #[test]
-    fn le_debug_d_une_reference_est_complet() {
-        // Une référence est publique : elle est écrite en clair dans les
-        // fichiers de workspace. La masquer n'apporterait rien et brouillerait
-        // le sens des masques qui comptent.
-        let reference = SecretRef::for_provider("anthropic").expect("valide");
+    fn the_debug_of_a_reference_is_complete() {
+        // A reference is public: it is written in clear text in workspace files.
+        // Masking it would bring nothing and would blur the meaning of the masks
+        // that matter.
+        let reference = SecretRef::for_provider("anthropic").expect("valid");
         assert!(format!("{reference:?}").contains("oxyn:llm:anthropic"));
     }
 
     #[test]
-    fn les_methodes_de_bundle_passent_par_l_enveloppe_json() {
+    fn bundle_methods_go_through_the_json_envelope() {
         let store = MemorySecretStore::new();
         let reference = SecretRef::for_connection(ConnectionId::new());
 
-        assert!(store.get_bundle(&reference).expect("lecture").is_none());
+        assert!(store.get_bundle(&reference).expect("read").is_none());
 
         let bundle = CredentialBundle::new()
             .with_password("hunter2")
-            .with_token("sk-témoin");
-        store.put_bundle(&reference, &bundle).expect("écriture");
+            .with_token("sk-witness");
+        store.put_bundle(&reference, &bundle).expect("write");
 
         let relu = store
             .get_bundle(&reference)
-            .expect("lecture")
-            .expect("le bundle vient d'être écrit");
+            .expect("read")
+            .expect("the bundle was just written");
         assert_eq!(relu.password(), Some("hunter2"));
-        assert_eq!(relu.token(), Some("sk-témoin"));
+        assert_eq!(relu.token(), Some("sk-witness"));
     }
 
     #[test]
-    fn un_mot_de_passe_nu_ne_se_relit_pas_comme_un_bundle() {
-        // Cas réel : une entrée écrite par une version antérieure, ou par un
-        // autre outil, sous la même référence.
+    fn a_bare_password_is_not_read_back_as_a_bundle() {
+        // Real case: an entry written by an earlier version, or by another tool,
+        // under the same reference.
         let store = MemorySecretStore::new();
         let reference = SecretRef::for_connection(ConnectionId::new());
         store
             .put(&reference, SecretString::from("hunter2"))
-            .expect("écriture");
+            .expect("write");
 
-        let err = store
-            .get_bundle(&reference)
-            .expect_err("ce n'est pas du JSON");
+        let err = store.get_bundle(&reference).expect_err("this is not JSON");
         assert!(matches!(err, SecretError::Malformed { .. }));
         assert!(
             !err.to_string().contains("hunter2"),
-            "le contenu a fuité dans l'erreur : {err}"
+            "the content leaked into the error: {err}"
         );
     }
 }

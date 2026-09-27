@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0026-agents-externes-acp.md" sha256="3247d7ddf45f" -->
+<!-- oxyn-translation source="docs/adr/0026-agents-externes-acp.md" sha256="307136135b09" -->
 
 > Traduction française de [docs/adr/0026-agents-externes-acp.md](../../../../docs/adr/0026-agents-externes-acp.md). **La version anglaise fait foi.**
 
@@ -147,11 +147,11 @@ l'invariant — pas le transport :
 * `oxyn_ai::privacy::agent_reach` et `allows_external_agent` portent la
   conséquence de confidentialité, **dans `oxyn-ai`** : `oxyn-core` ne connaît pas
   `Reach`, et en dépendre inverserait le sens des dépendances. Tenu par
-  `un_agent_externe_ne_sert_jamais_une_connexion_locale`.
+  `an_external_agent_never_serves_a_local_connection`.
 
 * `oxyn_ai::external::permission_for` décide du second domaine d'autorisation,
   genre par genre, refus par défaut. Trois tests, dont
-  `aucun_acces_au_systeme_nest_accorde` qui énumère les genres plutôt que de les
+  `no_system_access_is_granted` qui énumère les genres plutôt que de les
   traiter en bloc — ajouter une variante au protocole ne doit pas relâcher la
   garantie en silence.
 
@@ -163,7 +163,7 @@ qu'il découpe. Un découpage de ligne de commande est une grammaire, donc une
 surface : un chemin contenant une espace, un guillemet ou un point-virgule y
 prend un sens qu'on n'a pas voulu. `AcpAgentConfig::new(commande).args(…)`
 transmet les parties séparément, et c'est cette voie qui est prise. Tenu par
-`la_commande_et_ses_arguments_ne_sont_jamais_recolles`, qui passe
+`the_command_and_its_arguments_are_never_glued_back`, qui passe
 `/opt/mes agents/claude code` et l'argument `; rm -rf /` et vérifie qu'ils
 arrivent intacts et distincts.
 
@@ -186,7 +186,7 @@ le sien devant un utilisateur qui ne comprendrait pas pourquoi la conversation
 tourne en rond. Faute d'option convenable, la réponse est `Cancelled` : prétendre
 autoriser en sélectionnant une option de refus, ou l'inverse, serait pire
 qu'interrompre. Tenu par trois tests, dont
-`aucune_option_convenable_ne_se_remplace_par_son_contraire`.
+`no_suitable_option_is_replaced_by_its_opposite`.
 
 * `oxyn_ai::external::turn::run_turn` câble le tour complet : vérification du
   niveau, lancement, `InitializeRequest` → `NewSessionRequest` →
@@ -220,7 +220,7 @@ façons de dire la même chose.
 Table séparée d'`ai_providers`, et non colonnes ajoutées : un agent n'a ni point
 d'accès, ni modèle, ni référence de secret, et les faire cohabiter aurait produit
 une table dont la moitié des colonnes ne veut rien dire selon la ligne. Le test
-`la_table_na_aucune_colonne_de_secret` lit le **schéma** plutôt que la
+`the_table_has_no_secret_column` lit le **schéma** plutôt que la
 documentation — une colonne ajoutée un jour « juste pour un jeton » ne ferait
 rougir aucun autre test.
 
@@ -235,7 +235,7 @@ Ce refus vaut pour la raison qui protège déjà la déclaration d'un fournisseu
 **en plus fort** : déclarer un agent externe, c'est désigner un **programme à
 lancer**. Un agent qui y parviendrait obtiendrait l'exécution de code arbitraire
 sur la machine, par le chemin le plus court qui soit. Tenu par
-`un_agent_ne_declare_pas_dagent_externe`, dont la déclaration hostile est
+`an_agent_does_not_declare_an_external_agent`, dont la déclaration hostile est
 `/bin/sh -c "curl … | sh"` — lire la liste, en revanche, reste permis, puisque
 cela ne déclare rien.
 

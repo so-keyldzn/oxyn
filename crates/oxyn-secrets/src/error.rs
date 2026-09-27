@@ -1,115 +1,111 @@
-//! Les erreurs du trousseau.
+//! Keychain errors.
 //!
-//! Cette énumération existe pour une raison précise, et une seule : **aucun
-//! message d'erreur produit ici ne doit pouvoir contenir un secret.**
+//! This enumeration exists for one precise reason, and one only: **no error
+//! message produced here may contain a secret.**
 //!
-//! Le danger n'est pas théorique. Le crate `keyring` transporte les octets
-//! fautifs dans deux de ses variantes (`BadEncoding(Vec<u8>)` et
-//! `BadDataFormat(Vec<u8>, _)`) : recopier une erreur de trousseau dans un
-//! message, ou l'imprimer avec `{:?}`, écrit un mot de passe dans le journal.
-//! C'est exactement le canal « journaux `tracing` » de
-//! [`SECURITY`](../../../docs/SECURITY.md) (I-03).
+//! The danger is not theoretical. The `keyring` crate carries the offending
+//! bytes in two of its variants (`BadEncoding(Vec<u8>)` and
+//! `BadDataFormat(Vec<u8>, _)`): copying a keychain error into a message, or
+//! printing it with `{:?}`, writes a password into the log. It is exactly the
+//! "`tracing` logs" channel of [`SECURITY`](../../../docs/SECURITY.md) (I-03).
 //!
-//! La contre-mesure est dans les types : les variantes qui décrivent un contenu
-//! illisible ne portent qu'un `&'static str`. Un `&'static str` ne peut pas
-//! transporter de donnée d'exécution — donc pas de secret. Les variantes qui
-//! portent une `String` ne sont construites qu'à partir d'un diagnostic de
-//! plateforme (code d'erreur du système), jamais à partir du contenu stocké.
+//! The countermeasure is in the types: the variants that describe unreadable
+//! content carry only a `&'static str`. A `&'static str` cannot carry runtime
+//! data — hence no secret. The variants that carry a `String` are built only
+//! from a platform diagnostic (a system error code), never from the stored
+//! content.
 
 use oxyn_core::OxynError;
 
-/// Alias de résultat de cette crate.
+/// Result alias of this crate.
 pub type Result<T> = std::result::Result<T, SecretError>;
 
-/// Ce qui peut échouer entre Oxyn et le trousseau du système.
+/// What can fail between Oxyn and the system keychain.
 ///
-/// L'énumération est ouverte : un système de stockage supplémentaire (le
-/// chiffrement par phrase de passe prévu en phase 4, par exemple) ajoutera ses
-/// cas sans rupture majeure.
+/// The enumeration is open: an additional storage system (the passphrase
+/// encryption planned for phase 4, for instance) will add its cases without a
+/// major break.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum SecretError {
-    /// Aucun trousseau n'est utilisable sur cette machine : plateforme non
-    /// gérée, service Secret Service absent sur Linux, session graphique
-    /// fermée.
+    /// No keychain is usable on this machine: unsupported platform, Secret Service
+    /// missing on Linux, graphical session closed.
     ///
-    /// Ce n'est pas une panne d'Oxyn ; c'est une capacité absente de
-    /// l'environnement, et l'interface doit le dire ainsi.
+    /// It is not an Oxyn failure; it is a capability missing from the
+    /// environment, and the interface must say so.
     #[error("keychain unavailable: {detail}")]
     Unavailable {
-        /// Diagnostic de la plateforme, sans contenu stocké.
+        /// Platform diagnostic, without stored content.
         detail: String,
     },
 
-    /// Le trousseau existe mais a refusé l'opération : trousseau verrouillé,
-    /// utilisateur qui refuse l'invite, application non autorisée.
+    /// The keychain exists but refused the operation: locked keychain, user
+    /// declining the prompt, application not authorized.
     ///
-    /// Ce n'est **pas** une erreur à retenter en boucle : c'est l'utilisateur
-    /// qui doit agir.
+    /// It is **not** an error to retry in a loop: the user is the one who must
+    /// act.
     #[error("keychain access denied: {detail}")]
     AccessDenied {
-        /// Diagnostic de la plateforme, sans contenu stocké.
+        /// Platform diagnostic, without stored content.
         detail: String,
     },
 
-    /// Le trousseau a échoué pour une raison qui lui est propre.
+    /// The keychain failed for a reason of its own.
     #[error("keychain failure: {detail}")]
     Backend {
-        /// Diagnostic de la plateforme, sans contenu stocké.
+        /// Platform diagnostic, without stored content.
         detail: String,
     },
 
-    /// Ce qui a été relu n'est pas ce qui avait été écrit : octets non UTF-8,
-    /// JSON invalide, structure inattendue.
+    /// What was read back is not what had been written: non-UTF-8 bytes, invalid
+    /// JSON, unexpected structure.
     ///
-    /// Le détail est un `&'static str` **par construction** : il ne peut donc
-    /// citer ni le contenu fautif, ni la position de l'erreur d'analyse. Une
-    /// erreur `serde_json` recopie volontiers un fragment de son entrée ; on ne
-    /// la propage pas.
+    /// The detail is a `&'static str` **by construction**: it can therefore quote
+    /// neither the offending content nor the position of the parse error. A
+    /// `serde_json` error readily copies a fragment of its input; it is not
+    /// propagated.
     #[error("unreadable secret: {detail}")]
     Malformed {
-        /// Nature du défaut, choisie parmi un ensemble fini de constantes.
+        /// Nature of the defect, chosen from a finite set of constants.
         detail: &'static str,
     },
 
-    /// Le trousseau impose une limite de taille que la valeur dépasse.
+    /// The keychain imposes a size limit that the value exceeds.
     ///
-    /// Cas réel : une clé privée SSH de 8 Ko face à une limite de plateforme.
+    /// Real case: an 8 KB SSH private key against a platform limit.
     #[error("`{attribute}` exceeds the keychain limit of {limit} characters")]
     TooLarge {
-        /// Nom de l'attribut refusé, tel que la plateforme le nomme.
+        /// Name of the refused attribute, as the platform names it.
         attribute: String,
-        /// Limite annoncée par la plateforme.
+        /// Limit announced by the platform.
         limit: u32,
     },
 
-    /// La référence de secret est malformée.
+    /// The secret reference is malformed.
     ///
-    /// Elle vient d'un fichier de workspace, et un fichier de workspace n'est
-    /// pas une entrée fiable ([`SECURITY`](../../../docs/SECURITY.md), surface
-    /// d'entrée n° 3).
+    /// It comes from a workspace file, and a workspace file is not a trusted
+    /// input ([`SECURITY`](../../../docs/SECURITY.md), input surface no. 3).
     #[error("invalid secret reference: {detail}")]
     InvalidReference {
-        /// Raison du rejet, sans recopier la valeur fautive.
+        /// Reason for the rejection, without copying the offending value.
         detail: &'static str,
     },
 }
 
 impl SecretError {
-    /// Détail employé quand le contenu relu n'est pas un bundle JSON.
+    /// Detail used when the content read back is not a JSON bundle.
     pub(crate) const NOT_A_BUNDLE: &'static str = "not a JSON credentials bundle";
-    /// Détail employé quand le bundle n'a pas pu être encodé.
+    /// Detail used when the bundle could not be encoded.
     pub(crate) const NOT_ENCODABLE: &'static str = "the bundle could not be encoded as JSON";
-    /// Détail employé quand la plateforme rend des octets non textuels.
+    /// Detail used when the platform returns non-textual bytes.
     pub(crate) const NOT_UTF8: &'static str = "the keychain returned non-textual bytes";
 }
 
 impl From<SecretError> for OxynError {
-    /// Traduit vers le vocabulaire du domaine, en conservant le registre
-    /// d'affichage : un trousseau verrouillé est une erreur d'usage (l'action
-    /// suivante appartient à l'utilisateur), une panne de plateforme est une
-    /// entrée-sortie locale, un contenu illisible est un problème de
-    /// sérialisation.
+    /// Translates into the domain vocabulary, keeping the display register: a
+    /// locked keychain is a usage error (the next action belongs to the user), a
+    /// platform failure is a local input-output, unreadable content is a
+    /// serialization problem.
     fn from(err: SecretError) -> Self {
         match err {
             SecretError::Unavailable { detail } => Self::NotSupported {
@@ -132,15 +128,15 @@ impl From<SecretError> for OxynError {
 mod tests {
     use super::*;
 
-    /// Le mot de passe fictif employé partout dans les tests de fuite. Il n'a
-    /// aucune chance d'apparaître par accident dans un message.
+    /// The dummy password used everywhere in the leak tests. It has no chance of
+    /// appearing in a message by accident.
     const SECRET_TEMOIN: &str = "correct-horse-battery-staple";
 
     #[test]
-    fn un_contenu_illisible_ne_peut_pas_transporter_de_secret() {
-        // Le type interdit la faute : `detail` est un `&'static str`, donc rien
-        // qui vienne de l'exécution ne peut y entrer. Ce test documente
-        // l'intention ; c'est le compilateur qui la fait respecter.
+    fn unreadable_content_cannot_carry_a_secret() {
+        // The type forbids the mistake: `detail` is a `&'static str`, so nothing that
+        // comes from runtime can enter it. This test documents the intent; the
+        // compiler is what enforces it.
         let err = SecretError::Malformed {
             detail: SecretError::NOT_A_BUNDLE,
         };
@@ -149,18 +145,18 @@ mod tests {
     }
 
     #[test]
-    fn la_traduction_vers_le_domaine_conserve_le_registre() {
+    fn translation_to_the_domain_keeps_the_register() {
         let verrouille = SecretError::AccessDenied {
             detail: "keychain locked".into(),
         };
         let domaine = OxynError::from(verrouille);
         assert!(
             domaine.is_user_error(),
-            "un trousseau verrouillé se résout par une action de l'utilisateur"
+            "a locked keychain is resolved by a user action"
         );
         assert!(
             !domaine.is_retryable(),
-            "rejouer sans que l'utilisateur déverrouille ne sert à rien"
+            "replaying without the user unlocking is pointless"
         );
 
         let absent = SecretError::Unavailable {
@@ -186,16 +182,15 @@ mod tests {
     }
 
     #[test]
-    fn aucune_traduction_ne_recopie_le_contenu_stocke() {
-        // Toutes les variantes, traduites, puis relues : le secret témoin ne
-        // peut apparaître nulle part, parce qu'aucune variante n'a de champ où
-        // il aurait pu entrer.
+    fn no_translation_copies_the_stored_content() {
+        // Every variant, translated, then read back: the witness secret cannot
+        // appear anywhere, because no variant has a field it could have entered.
         let cas = [
             SecretError::Unavailable {
-                detail: "plateforme non gérée".into(),
+                detail: "unsupported platform".into(),
             },
             SecretError::AccessDenied {
-                detail: "refus utilisateur".into(),
+                detail: "user refusal".into(),
             },
             SecretError::Backend {
                 detail: "OSStatus -25300".into(),
@@ -208,7 +203,7 @@ mod tests {
                 limit: 2560,
             },
             SecretError::InvalidReference {
-                detail: "segment vide",
+                detail: "empty segment",
             },
         ];
         for erreur in cas {

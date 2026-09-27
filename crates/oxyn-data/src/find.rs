@@ -1,72 +1,71 @@
-//! `Find in loaded results…` : où sont les correspondances, et ce qui n'a pas
-//! été regardé.
+//! `Find in loaded results…`: where the matches are, and what was not looked
+//! at.
 //!
-//! # Trouver n'est pas filtrer
+//! # Finding is not filtering
 //!
-//! La maquette `191:1521` écrit **`Find`**, et sa grille montre les dix lignes
-//! du résultat sous le champ de recherche — aucune n'est cachée, aucun compteur
-//! de correspondances ne s'affiche. Ce module rend donc **où regarder**, pas
-//! quoi montrer : la grille révèle et souligne, elle ne retranche rien.
+//! Mockup `191:1521` writes **`Find`**, and its grid shows the ten rows of the
+//! result under the search field — none is hidden, no match counter is
+//! displayed. This module therefore returns **where to look**, not what to
+//! show: the grid reveals and highlights, it removes nothing.
 //!
-//! La distinction n'est pas cosmétique. Un filtre d'affichage rendrait fausse
-//! la règle « [ce qui est exporté est ce qui est
-//! affiché](../../../docs/UX-SPEC.md) », puisque l'export porte le tampon et non
-//! la vue. Une recherche qui révèle laisse cette règle intacte.
+//! The distinction is not cosmetic. A display filter would make the rule
+//! "[what is exported is what is
+//! displayed](../../../docs/UX-SPEC.md)" false, since the export carries the
+//! buffer and not the view. A search that reveals leaves that rule intact.
 //!
-//! # Ce qui est parcouru, et ce qui ne l'est pas
+//! # What is scanned, and what is not
 //!
-//! **Les lots résidents seulement.** Un [`ResultBuffer`] déborde sur disque
-//! au-delà de son budget, et `batch` « peut lire le disque » : l'appeler ici
-//! ferait une entrée-sortie sur le fil d'interface
-//! ([I-05](../../../CLAUDE.md#i-05)). Le libellé de la maquette dit lui-même
-//! « in **loaded** results ».
+//! **Resident batches only.** A [`ResultBuffer`] spills to disk beyond its
+//! budget, and `batch` "may read the disk": calling it here would do I/O on
+//! the UI thread ([I-05](../../../CLAUDE.md#i-05)). The mockup's label itself
+//! says "in **loaded** results".
 //!
-//! Le compte des lots sautés voyage donc avec le résultat. Une recherche qui
-//! tait ce qu'elle n'a pas lu ment par omission : « aucune correspondance »
-//! voudrait alors dire « aucune correspondance dans ce que j'ai bien voulu
-//! regarder », et l'utilisateur conclurait que la valeur n'est pas là.
+//! The count of skipped batches therefore travels with the result. A search
+//! that keeps quiet about what it did not read lies by omission: "no match"
+//! would then mean "no match in what I cared to look at", and the user would
+//! conclude the value is not there.
 
 use crate::buffer::{BatchIndex, ResultBuffer};
 use crate::cell::{CellValue, FormatOptions, format_cell};
 
-/// Combien de correspondances sont conservées au plus.
+/// How many matches are kept at most.
 ///
-/// Sans plafond, `rows` croît avec les données du serveur : sur un résultat
-/// d'une colonne étroite, le budget résident tient des dizaines de millions de
-/// lignes, et une aiguille peu sélective — un chiffre, une lettre — les fait
-/// presque toutes correspondre. Le `Vec` d'indices dépasserait alors le budget
-/// que tout le reste du code respecte ([I-06](../../../CLAUDE.md#i-06)).
+/// Without a ceiling, `rows` grows with the server's data: on a result with a
+/// narrow column, the resident budget holds tens of millions of rows, and an
+/// unselective needle — a digit, a letter — makes almost all of them match.
+/// The `Vec` of indices would then exceed the budget that all the rest of the
+/// code respects ([I-06](../../../CLAUDE.md#i-06)).
 ///
-/// 50 000 est très au-delà de ce qu'une navigation « correspondance suivante »
-/// peut servir, et borne l'allocation à quelques centaines de kilooctets.
+/// 50,000 is far beyond what a "next match" navigation can serve, and bounds
+/// the allocation to a few hundred kilobytes.
 pub const MATCH_LIMIT: usize = 50_000;
 
-/// Ce qu'une recherche a trouvé, et ce qu'elle n'a pas pu lire.
+/// What a search found, and what it could not read.
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 #[non_exhaustive]
 pub struct FindOutcome {
-    /// Indices de ligne, absolus dans le tampon, en ordre croissant.
+    /// Row indices, absolute in the buffer, in increasing order.
     ///
-    /// Croissant parce que « correspondance suivante » n'a de sens que sur une
-    /// suite ordonnée, et parce que la recherche parcourt les lots dans l'ordre.
+    /// Increasing because "next match" only makes sense on an ordered
+    /// sequence, and because the search walks the batches in order.
     pub rows: Vec<usize>,
-    /// Lots non parcourus parce qu'ils avaient débordé sur disque.
+    /// Batches not scanned because they had spilled to disk.
     ///
-    /// Non nul, il doit être **dit à l'écran** : voir le module.
+    /// When non-zero, it must be **said on screen**: see the module.
     pub skipped_batches: usize,
-    /// Le parcours s'est arrêté à [`MATCH_LIMIT`] correspondances.
+    /// The scan stopped at [`MATCH_LIMIT`] matches.
     ///
-    /// À dire à l'écran pour la même raison que `skipped_batches` : sans cela,
-    /// « 50 000 correspondances » se lit comme un compte exact.
+    /// To be said on screen for the same reason as `skipped_batches`: without
+    /// it, "50,000 matches" reads as an exact count.
     pub capped: bool,
 }
 
 impl FindOutcome {
-    /// La première correspondance au niveau ou après `row`.
+    /// The first match at or after `row`.
     ///
-    /// Rend la première de toutes quand il n'y en a plus après : une recherche
-    /// qui s'arrête au bas du résultat oblige à remonter à la main, ce qu'aucun
-    /// éditeur ne fait.
+    /// Returns the very first one when there are none after: a search that
+    /// stops at the bottom of the result forces scrolling back up by hand,
+    /// which no editor does.
     #[must_use]
     pub fn next_from(&self, row: usize) -> Option<usize> {
         self.rows
@@ -76,7 +75,7 @@ impl FindOutcome {
             .or_else(|| self.rows.first().copied())
     }
 
-    /// La dernière correspondance strictement avant `row`, en rebouclant.
+    /// The last match strictly before `row`, wrapping around.
     #[must_use]
     pub fn previous_from(&self, row: usize) -> Option<usize> {
         self.rows
@@ -88,26 +87,25 @@ impl FindOutcome {
     }
 }
 
-/// Les lignes des lots **résidents** qui contiennent `needle`.
+/// The rows of **resident** batches that contain `needle`.
 ///
-/// La comparaison est insensible à la casse et porte sur la valeur **entière**,
-/// pas sur son affichage : la grille coupe à 512 caractères, et une recherche
-/// qui s'arrêterait là rendrait « aucune correspondance » pour un identifiant
-/// présent plus loin dans une valeur `jsonb`. Un `NULL` ne correspond jamais —
-/// chercher « null » trouverait sinon toutes les absences de valeur, ce que
-/// personne ne demande en tapant ce mot.
+/// The comparison is case-insensitive and applies to the **whole** value, not
+/// its display: the grid cuts at 512 characters, and a search that stopped
+/// there would return "no match" for an identifier present further in a
+/// `jsonb` value. A `NULL` never matches — searching "null" would otherwise
+/// find every absent value, which nobody asks for when typing that word.
 ///
-/// Au-delà de [`MATCH_LIMIT`] correspondances le parcours cesse d'en retenir,
-/// et `capped` le dit. Les lots restants sont tout de même visités : c'est ce
-/// qui garde `skipped_batches` exact, et ce compte-là ne doit pas dépendre du
-/// moment où le plafond est atteint.
+/// Beyond [`MATCH_LIMIT`] matches the scan stops keeping them, and `capped`
+/// says so. The remaining batches are visited all the same: that is what keeps
+/// `skipped_batches` exact, and that count must not depend on when the
+/// ceiling is reached.
 ///
-/// Une aiguille vide ne rend aucune correspondance : elle en rendrait toutes,
-/// ce qui revient à ne pas chercher.
+/// An empty needle returns no match: it would return all of them, which
+/// amounts to not searching.
 ///
-/// **Ne lit jamais le disque** ([I-05](../../../CLAUDE.md#i-05)) : à appeler
-/// malgré tout hors du fil d'interface, parce que le coût croît avec le nombre
-/// de cellules résidentes.
+/// **Never reads the disk** ([I-05](../../../CLAUDE.md#i-05)): to be called
+/// off the UI thread nonetheless, because the cost grows with the number of
+/// resident cells.
 #[must_use]
 pub fn find_rows(buffer: &ResultBuffer, needle: &str, options: &FormatOptions) -> FindOutcome {
     let aiguille = needle.trim();
@@ -116,10 +114,10 @@ pub fn find_rows(buffer: &ResultBuffer, needle: &str, options: &FormatOptions) -
     }
     let aiguille = aiguille.to_lowercase();
 
-    // La recherche porte sur la valeur **entière**, pas sur son affichage coupé
-    // à 512 caractères : une valeur `jsonb` dont l'identifiant recherché tombe
-    // au-delà de la coupe donnerait « aucune correspondance », et l'utilisateur
-    // en conclurait que la valeur n'est pas dans son résultat.
+    // The search applies to the **whole** value, not its display cut at 512
+    // characters: a `jsonb` value whose searched identifier falls beyond the
+    // cut would give "no match", and the user would conclude that the value
+    // is not in their result.
     let entier = options.clone().with_max_len(0);
 
     let mut trouvees = Vec::new();
@@ -133,9 +131,9 @@ pub fn find_rows(buffer: &ResultBuffer, needle: &str, options: &FormatOptions) -
         }
         let (Some(lot), Some(depart)) = (buffer.cached_batch(index), buffer.batch_start(index))
         else {
-            // Résident à l'instant du test, absent à celui de la lecture : le
-            // tampon a pu déborder entre les deux. Compté comme sauté plutôt
-            // qu'ignoré, sinon le total mentirait sur ce qui a été lu.
+            // Resident when tested, absent when read: the buffer may have
+            // spilled in between. Counted as skipped rather than ignored,
+            // otherwise the total would lie about what was read.
             sautes += 1;
             continue;
         };
@@ -148,9 +146,9 @@ pub fn find_rows(buffer: &ResultBuffer, needle: &str, options: &FormatOptions) -
                 match format_cell(&lot, ligne, colonne, &entier) {
                     CellValue::Text(texte) => texte.to_lowercase().contains(&aiguille),
                     CellValue::Truncated { text, .. } => text.to_lowercase().contains(&aiguille),
-                    // `Null` et `Unrenderable` ne correspondent à rien : voir
-                    // le `///`. Une variante inconnue non plus — inventer une
-                    // correspondance serait pire que d'en manquer une.
+                    // `Null` and `Unrenderable` match nothing: see the `///`.
+                    // An unknown variant neither — inventing a match would be
+                    // worse than missing one.
                     _ => false,
                 }
             });

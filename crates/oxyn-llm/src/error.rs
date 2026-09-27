@@ -1,44 +1,44 @@
-//! La frontière d'erreur des fournisseurs de modèles.
+//! The error boundary of model providers.
 //!
-//! [`LlmError`] est l'énumération de cette frontière, au sens de
-//! [`.claude/rules/rust.md`](../../../.claude/rules/rust.md) : l'appelant doit
-//! pouvoir distinguer « le réseau a lâché » de « la clé est refusée » sans
-//! analyser une chaîne de caractères.
+//! [`LlmError`] is the enumeration of this boundary, in the sense of
+//! [`.claude/rules/rust.md`](../../../.claude/rules/rust.md): the caller must
+//! be able to tell "the network gave out" from "the key is refused" without
+//! parsing a string.
 //!
-//! Elle se convertit en [`OxynError`] à la sortie de la crate, parce que
-//! l'ordonnanceur et l'interface ne connaissent qu'un seul type d'erreur. La
-//! conversion **préserve la famille** ([`ErrorClass`]) : c'est elle, et non le
-//! message, qui décide d'une reprise.
+//! It converts into [`OxynError`] at the crate's exit, because the scheduler
+//! and the interface only know one error type. The conversion **preserves the
+//! family** ([`ErrorClass`]): it is the family, not the message, that decides
+//! a retry.
 //!
-//! Deux règles gouvernent ce module :
+//! Two rules govern this module:
 //!
-//! 1. **Aucun corps de réponse n'arrive brut dans une erreur.** Il est tronqué
-//!    et débarrassé de toute occurrence littérale de la clé (I-03) : certains
-//!    fournisseurs recopient la clé reçue dans leur message.
-//! 2. **Seul ce qui n'est jamais parti est transitoire.** La frontière est
-//!    dans le type, pas dans le message :
+//! 1. **No response body arrives raw in an error.** It is truncated and rid of
+//!    any literal occurrence of the key (I-03): some providers copy the
+//!    received key into their message.
+//! 2. **Only what never went out is transient.** The boundary is in the type,
+//!    not in the message:
 //!
-//!    | Variante | Ce qui s'est passé | Famille |
+//!    | Variant | What happened | Family |
 //!    |---|---|---|
-//!    | [`LlmError::Transport`] | la connexion n'a pas été établie — résolution, refus, poignée de main TLS, **délai de connexion** : rien n'est parti | transitoire |
-//!    | [`LlmError::ResponseTimeout`] | la requête est partie, le **délai de réponse** a expiré | ambiguë |
-//!    | [`LlmError::ConnectionLost`] | la requête est partie, la connexion a lâché avant la réponse | ambiguë |
+//!    | [`LlmError::Transport`] | the connection was not established — resolution, refusal, TLS handshake, **connection timeout**: nothing went out | transient |
+//!    | [`LlmError::ResponseTimeout`] | the request went out, the **response timeout** expired | ambiguous |
+//!    | [`LlmError::ConnectionLost`] | the request went out, the connection gave out before the response | ambiguous |
 //!
-//!    Un fournisseur facturé au jeton peut avoir produit — et facturé — la
-//!    réponse qu'on n'a pas reçue : rejouer paie deux fois (I-13).
+//!    A provider billed per token may have produced — and billed — the
+//!    response that was not received: replaying pays twice (I-13).
 //!
-//!    Les deux variantes ambiguës **restent ambiguës dans le domaine** :
-//!    [`LlmError::ResponseTimeout`] devient [`OxynError::Timeout`], avec le
-//!    délai réellement configuré ; [`LlmError::ConnectionLost`] devient
+//!    The two ambiguous variants **stay ambiguous in the domain**:
+//!    [`LlmError::ResponseTimeout`] becomes [`OxynError::Timeout`], with the
+//!    timeout actually configured; [`LlmError::ConnectionLost`] becomes
 //!    [`OxynError::OutcomeUnknown`].
 //!
-//!    Aujourd'hui seul un délai de **connexion** est configuré. Un délai
-//!    expiré après l'envoi sans délai de réponse connu ne peut donc pas dire
-//!    combien de temps il a attendu : il devient `ConnectionLost`, ambigu lui
-//!    aussi, plutôt qu'un `ResponseTimeout` à la durée inventée.
-//! 3. **Aucun message de la pile réseau n'entre dans une erreur de
-//!    transport.** Celui de reqwest reprend l'URL, qui peut porter un hôte
-//!    interne ou un paramètre sensible (I-03). Le texte décrit le fait.
+//!    Today only a **connection** timeout is configured. A timeout expired
+//!    after sending with no known response timeout therefore cannot say how
+//!    long it waited: it becomes `ConnectionLost`, ambiguous as well, rather
+//!    than a `ResponseTimeout` with an invented duration.
+//! 3. **No message from the network stack enters a transport error.**
+//!    reqwest's message repeats the URL, which can carry an internal host or a
+//!    sensitive parameter (I-03). The text describes the fact.
 
 use std::time::Duration;
 
@@ -47,134 +47,132 @@ use oxyn_core::{ErrorClass, OxynError};
 use crate::provider::ProviderId;
 use crate::secret::{ApiKey, redact_key};
 
-/// Longueur maximale d'un corps de réponse repris dans un message d'erreur.
+/// Maximum length of a response body quoted in an error message.
 ///
-/// Un fournisseur peut répondre une page HTML de plusieurs kilo-octets — celle
-/// d'un portail captif ou d'un proxy d'entreprise, typiquement. La recopier
-/// entière dans un message d'erreur remplit le journal et n'aide personne.
+/// A provider can answer an HTML page of several kilobytes — that of a captive
+/// portal or of a corporate proxy, typically. Copying it whole into an error
+/// message fills the log and helps no one.
 const MAX_MESSAGE_LEN: usize = 512;
 
-/// Échec d'un échange avec un fournisseur de modèles.
+/// Failure of an exchange with a model provider.
 #[derive(Debug, thiserror::Error)]
 #[non_exhaustive]
 pub enum LlmError {
-    /// La connexion au fournisseur n'a pas été établie : **rien n'est parti**.
-    /// Famille transitoire.
+    /// The connection to the provider was not established: **nothing went
+    /// out**. Transient family.
     ///
-    /// Un délai de connexion dépassé est ici, et seulement lui : un délai
-    /// dépassé après l'envoi est [`ResponseTimeout`](Self::ResponseTimeout).
-    /// Une coupure pendant un flux déjà ouvert n'est pas une erreur du tout :
-    /// elle termine le flux par `StopReason::Interrupted`.
+    /// An exceeded connection timeout is here, and only it: a timeout exceeded
+    /// after sending is [`ResponseTimeout`](Self::ResponseTimeout). A cut during
+    /// an already open stream is not an error at all: it ends the stream with
+    /// `StopReason::Interrupted`.
     #[error("cannot reach provider `{provider}`: {detail}")]
     Transport {
-        /// Fournisseur visé.
+        /// Target provider.
         provider: ProviderId,
-        /// Ce que la couche transport rapporte, sans corps de réponse.
+        /// What the transport layer reports, without a response body.
         detail: String,
     },
 
-    /// La requête est partie, et le délai de réponse a expiré. Famille
-    /// **ambiguë** : le fournisseur a peut-être traité, et facturé, la requête.
+    /// The request went out, and the response timeout expired. **Ambiguous**
+    /// family: the provider may have processed, and billed, the request.
     #[error(
         "provider `{provider}` did not answer within {after:?}; the request was sent and may have been processed"
     )]
     ResponseTimeout {
-        /// Fournisseur visé.
+        /// Target provider.
         provider: ProviderId,
-        /// Le délai de réponse **configuré** sur le client, jamais une durée
-        /// mesurée ou reconstruite.
+        /// The response timeout **configured** on the client, never a measured
+        /// or reconstructed duration.
         after: Duration,
     },
 
-    /// La requête est partie, et la connexion a lâché avant la réponse.
-    /// Famille **ambiguë**, pour la même raison.
+    /// The request went out, and the connection gave out before the response.
+    /// **Ambiguous** family, for the same reason.
     #[error(
         "lost the connection to provider `{provider}` after sending the request, which may have been processed: {detail}"
     )]
     ConnectionLost {
-        /// Fournisseur visé.
+        /// Target provider.
         provider: ProviderId,
-        /// Le fait constaté, en une phrase fixe : jamais le message de la pile
-        /// réseau, qui reprend l'URL.
+        /// The observed fact, in a fixed sentence: never the network stack's
+        /// message, which repeats the URL.
         detail: &'static str,
     },
 
-    /// Le fournisseur a répondu, avec un code d'échec.
+    /// The provider answered, with a failure code.
     #[error("provider `{provider}` returned HTTP {status}: {message}")]
     Http {
-        /// Fournisseur visé.
+        /// Target provider.
         provider: ProviderId,
-        /// Code de statut HTTP tel que reçu.
+        /// HTTP status code as received.
         status: u16,
-        /// Corps de la réponse, tronqué et expurgé de la clé.
+        /// Body of the response, truncated and scrubbed of the key.
         message: String,
     },
 
-    /// La réponse est arrivée mais ne se lit pas : JSON malformé, événement
-    /// SSE tronqué, ligne démesurée.
+    /// The response arrived but cannot be read: malformed JSON, truncated SSE
+    /// event, outsized line.
     #[error("unreadable response from provider `{provider}`: {detail}")]
     Decode {
-        /// Fournisseur visé.
+        /// Target provider.
         provider: ProviderId,
-        /// Nature du défaut de décodage, jamais la donnée fautive.
+        /// Nature of the decoding defect, never the faulty data.
         detail: String,
     },
 
-    /// Le fournisseur exige une clé et n'en a pas reçu.
+    /// The provider requires a key and received none.
     ///
-    /// Distinct d'un `401` : ici la faute est locale, et le message doit
-    /// envoyer l'utilisateur vers la configuration plutôt que vers le
-    /// fournisseur.
+    /// Distinct from a `401`: here the fault is local, and the message must
+    /// send the user to the configuration rather than to the provider.
     #[error("no API key configured for provider `{provider}`")]
     MissingApiKey {
-        /// Fournisseur visé.
+        /// Target provider.
         provider: ProviderId,
     },
 
-    /// La configuration du fournisseur est invalide : URL de base illisible,
-    /// nom de déploiement contenant un séparateur de chemin, modèle absent de
-    /// la requête.
+    /// The provider's configuration is invalid: unreadable base URL,
+    /// deployment name containing a path separator, model missing from the
+    /// request.
     #[error("invalid configuration for provider `{provider}`: {detail}")]
     Config {
-        /// Fournisseur visé.
+        /// Target provider.
         provider: ProviderId,
-        /// Ce qui manque ou ce qui est mal formé.
+        /// What is missing or malformed.
         detail: String,
     },
 
-    /// Le fournisseur ne sait pas faire ce qu'on lui demande.
+    /// The provider cannot do what it is asked.
     ///
-    /// « Ne pas savoir faire est une réponse acceptable ; laisser croire ne
-    /// l'est pas. »
+    /// "Not being able to do something is an acceptable answer; letting people
+    /// believe otherwise is not."
     #[error("provider `{provider}` does not support {capability}")]
     Unsupported {
-        /// Fournisseur visé.
+        /// Target provider.
         provider: ProviderId,
-        /// Ce qui n'est pas disponible.
+        /// What is not available.
         capability: String,
     },
 
-    /// Le protocole est déclaré dans Oxyn, mais cet échange n'y est pas encore
-    /// écrit.
+    /// The protocol is declared in Oxyn, but this exchange is not written
+    /// there yet.
     ///
-    /// Distincte d'[`Unsupported`](Self::Unsupported), qui dit que le
-    /// **fournisseur** ne sait pas faire : ici c'est Oxyn qui ne sait pas
-    /// encore, et la nuance est ce qui évite qu'un utilisateur aille chercher
-    /// le défaut chez son fournisseur.
+    /// Distinct from [`Unsupported`](Self::Unsupported), which says the
+    /// **provider** cannot do it: here it is Oxyn that cannot yet, and the
+    /// nuance is what keeps a user from looking for the defect at their
+    /// provider.
     ///
-    /// Elle existe pour qu'un chemin inachevé **refuse** au lieu de paniquer :
-    /// un `todo!()` sur une méthode de trait publique est une panique garantie
-    /// le jour où quelqu'un branche le fournisseur
-    /// ([I-09](../../../CLAUDE.md#i-09)).
+    /// It exists so that an unfinished path **refuses** instead of panicking: a
+    /// `todo!()` on a public trait method is a guaranteed panic the day someone
+    /// plugs in the provider ([I-09](../../../CLAUDE.md#i-09)).
     #[error("Oxyn does not implement this exchange for provider `{provider}` yet: {operation}")]
     NotImplemented {
-        /// Fournisseur visé.
+        /// Target provider.
         provider: ProviderId,
-        /// L'échange qui manque, nommé du point de vue de l'appelant.
+        /// The missing exchange, named from the caller's point of view.
         operation: String,
     },
 
-    /// L'échange a été interrompu à la demande, via le [`CancelToken`].
+    /// The exchange was interrupted on request, through the [`CancelToken`].
     ///
     /// [`CancelToken`]: oxyn_core::CancelToken
     #[error("model exchange cancelled")]
@@ -182,14 +180,13 @@ pub enum LlmError {
 }
 
 impl LlmError {
-    /// Construit une erreur HTTP à partir d'un statut et d'un corps brut.
+    /// Builds an HTTP error from a status and a raw body.
     ///
-    /// Le corps est **tronqué** à `MAX_MESSAGE_LEN` — nommé et non lié : la
-    /// constante est privée, et un lecteur de l'API publique ne pourrait pas la
-    /// suivre. Il est aussi expurgé de toute
-    /// occurrence littérale de la clé. C'est le seul constructeur à utiliser
-    /// pour une réponse d'échec : appeler la variante directement, c'est
-    /// contourner l'expurgation.
+    /// The body is **truncated** to `MAX_MESSAGE_LEN` — named and not linked:
+    /// the constant is private, and a reader of the public API could not follow
+    /// it. It is also scrubbed of any literal occurrence of the key. It is the
+    /// only constructor to use for a failure response: calling the variant
+    /// directly bypasses the scrubbing.
     #[must_use]
     pub fn from_response(
         provider: ProviderId,
@@ -204,12 +201,12 @@ impl LlmError {
         }
     }
 
-    /// Construit l'erreur d'une redirection refusée.
+    /// Builds the error of a refused redirection.
     ///
-    /// Aucune redirection n'est suivie (voir `http`) : le message dit quoi
-    /// corriger plutôt que de recopier `Location`, qui peut nommer un hôte
-    /// interne. Le statut `3xx` tombe dans la famille permanente : retenter
-    /// redirigerait de nouveau, c'est la configuration qui doit changer.
+    /// No redirection is followed (see `http`): the message says what to fix
+    /// rather than copying `Location`, which can name an internal host. The
+    /// `3xx` status falls into the permanent family: retrying would redirect
+    /// again, it is the configuration that must change.
     #[must_use]
     pub fn redirect_refused(provider: ProviderId, status: u16) -> Self {
         Self::Http {
@@ -221,31 +218,30 @@ impl LlmError {
         }
     }
 
-    /// Famille de l'erreur, au sens de `DRIVER-CONTRACT` §4.
+    /// Family of the error, in the sense of `DRIVER-CONTRACT` §4.
     ///
-    /// La table des statuts est la seule règle de reprise de cette crate, et
-    /// elle est testée :
+    /// The status table is the only retry rule of this crate, and it is
+    /// tested:
     ///
-    /// | Statut | Famille | Pourquoi |
+    /// | Status | Family | Why |
     /// |---|---|---|
-    /// | `408`, `429`, `500`, `502`, `503`, `529` | transitoire | surcharge ou incident passager |
-    /// | `504` | **ambiguë** | le traitement avait commencé : la réponse a pu être produite et facturée |
-    /// | `401`, `403`, `404`, autres `4xx` | permanente | reconfigurer, pas retenter |
-    /// | reste des `5xx` | permanente | le fournisseur a refusé, pas flanché |
+    /// | `408`, `429`, `500`, `502`, `503`, `529` | transient | overload or passing incident |
+    /// | `504` | **ambiguous** | processing had started: the response may have been produced and billed |
+    /// | `401`, `403`, `404`, other `4xx` | permanent | reconfigure, not retry |
+    /// | other `5xx` | permanent | the provider refused, it did not falter |
     ///
-    /// Sources et dates dans RESEARCH-NOTES § « Rejouer un `500`, `502` ou
-    /// `504` » : `500` est documenté rejouable par Anthropic et OpenAI ; `502`
-    /// ne l'est nulle part et garde son classement **sans vérification** ;
-    /// `504` est, chez Anthropic, un délai dépassé « while processing ».
+    /// Sources and dates in RESEARCH-NOTES § "Replaying a `500`, `502` or
+    /// `504`": `500` is documented as retryable by Anthropic and OpenAI; `502`
+    /// is so nowhere and keeps its classification **without verification**;
+    /// `504` is, at Anthropic, a timeout exceeded "while processing".
     ///
-    /// `529` n'est pas un statut standard : Anthropic l'emploie pour une
-    /// surcharge passagère de son service (`overloaded_error`), vérifié le
-    /// 2026-09-16. Sans cette ligne il tombait dans « reste des `5xx` », donc
-    /// permanent — et l'interface proposait « reconfigurer » là où « réessayer »
-    /// est la seule action utile.
+    /// `529` is not a standard status: Anthropic uses it for a passing overload
+    /// of its service (`overloaded_error`), checked on 2026-09-16. Without this
+    /// line it fell into "other `5xx`", hence permanent — and the interface
+    /// offered "reconfigure" where "retry" is the only useful action.
     ///
-    /// Hors statut HTTP : voir le tableau des erreurs de transport en tête de
-    /// module.
+    /// Outside HTTP statuses: see the table of transport errors at the head of
+    /// the module.
     #[must_use]
     pub fn class(&self) -> ErrorClass {
         match self {
@@ -260,37 +256,37 @@ impl LlmError {
             | Self::MissingApiKey { .. }
             | Self::Config { .. }
             | Self::Unsupported { .. }
-            // Permanente, et c'est le point : retenter n'écrira pas le code
-            // manquant. Le message doit envoyer vers un autre fournisseur.
+            // Permanent, and that is the point: retrying will not write the
+            // missing code. The message must send to another provider.
             | Self::NotImplemented { .. }
             | Self::Cancelled => ErrorClass::Permanent,
         }
     }
 
-    /// L'échange peut-il être rejoué tel quel ?
+    /// Can the exchange be replayed as is?
     ///
-    /// Seule la famille transitoire répond `true` — et cette crate ne rejoue
-    /// jamais d'elle-même : la politique de reprise appartient à l'appelant,
-    /// qui seul sait si l'utilisateur attend encore.
+    /// Only the transient family answers `true` — and this crate never replays
+    /// on its own: the retry policy belongs to the caller, which alone knows
+    /// whether the user is still waiting.
     #[must_use]
     pub fn is_retryable(&self) -> bool {
         self.class().is_retryable()
     }
 
-    /// Classe une erreur de la pile HTTP levée **avant** la réception des
-    /// en-têtes de réponse.
+    /// Classifies an HTTP stack error raised **before** the response headers
+    /// were received.
     ///
-    /// `response_timeout` est le délai de réponse configuré sur le client qui a
-    /// produit l'erreur, `None` s'il n'y en a pas.
+    /// `response_timeout` is the response timeout configured on the client
+    /// that produced the error, `None` if there is none.
     ///
-    /// L'ordre des tests est la règle : reqwest marque un délai de connexion à
-    /// la fois `is_connect()` et `is_timeout()` — le délai est posé dans le
-    /// connecteur, que hyper-util classe `Connect` (vérifié dans les sources de
-    /// reqwest 0.13.4, `src/connect.rs`). Tester le délai d'abord classerait
-    /// ambigu ce qui n'est jamais parti.
+    /// The order of the tests is the rule: reqwest marks a connection timeout
+    /// both `is_connect()` and `is_timeout()` — the timeout is set in the
+    /// connector, which hyper-util classifies `Connect` (checked in the sources
+    /// of reqwest 0.13.4, `src/connect.rs`). Testing the timeout first would
+    /// classify as ambiguous what never went out.
     ///
-    /// Tout ce qui n'est ni une connexion manquée ni une requête impossible à
-    /// construire est ambigu : **dans le doute, la requête est partie**.
+    /// Everything that is neither a missed connection nor a request impossible
+    /// to build is ambiguous: **when in doubt, the request went out**.
     pub(crate) fn from_transport(
         provider: ProviderId,
         err: &reqwest::Error,
@@ -331,14 +327,13 @@ impl LlmError {
     }
 }
 
-/// Étiquette la nature d'une erreur d'analyse JSON, **sans** reprendre la
-/// donnée fautive.
+/// Labels the nature of a JSON parse error, **without** copying the faulty
+/// data.
 ///
-/// C'est le seul détail d'un défaut d'analyse qu'on accepte de montrer : le
-/// texte fautif est une sortie de modèle ou une réponse d'un tiers, et il peut
-/// recopier ce qu'on a envoyé (I-03). Partagée par les fournisseurs : ils
-/// analysent tous du JSON venu du réseau, et une deuxième table de libellés
-/// divergerait.
+/// It is the only detail of a parse defect we accept to show: the faulty text
+/// is a model output or a third party's response, and it can copy what was
+/// sent (I-03). Shared by the providers: they all parse JSON coming from the
+/// network, and a second table of labels would diverge.
 pub(crate) fn classify_json_error(err: &serde_json::Error) -> &'static str {
     match err.classify() {
         serde_json::error::Category::Io => "I/O error",
@@ -348,10 +343,10 @@ pub(crate) fn classify_json_error(err: &serde_json::Error) -> &'static str {
     }
 }
 
-/// Tronque et expurge un corps de réponse avant qu'il ne devienne un message.
+/// Truncates and scrubs a response body before it becomes a message.
 ///
-/// La troncature respecte les frontières de caractères : couper au milieu d'un
-/// codet UTF-8 paniquerait, et le corps vient du réseau (I-09).
+/// The truncation respects character boundaries: cutting in the middle of a
+/// UTF-8 code unit would panic, and the body comes from the network (I-09).
 pub(crate) fn sanitize(body: &str, key: Option<&ApiKey>) -> String {
     let expurge = redact_key(body.trim(), key);
     if expurge.len() <= MAX_MESSAGE_LEN {
@@ -361,44 +356,43 @@ pub(crate) fn sanitize(body: &str, key: Option<&ApiKey>) -> String {
     while fin > 0 && !expurge.is_char_boundary(fin) {
         fin -= 1;
     }
-    // `get` et non `[..fin]` : le corps vient du réseau, et aucune indexation de
-    // tranche ne doit survivre sur ce chemin (I-09).
+    // `get` and not `[..end]`: the body comes from the network, and no slice
+    // indexing must survive on this path (I-09).
     let mut tronque = expurge.get(..fin).unwrap_or_default().to_owned();
     tronque.push_str(" […]");
     tronque
 }
 
 impl From<LlmError> for OxynError {
-    /// Projette l'erreur de fournisseur sur le vocabulaire du domaine.
+    /// Projects the provider error onto the domain's vocabulary.
     ///
-    /// La projection est choisie pour **conserver la famille** : `429` et `503`
-    /// deviennent [`OxynError::Connection`], seule variante transitoire dont
-    /// dispose le domaine, plutôt que [`OxynError::Query`] qui les rendrait
-    /// définitifs. Le libellé « connexion impossible » est alors un peu large,
-    /// et c'est le prix : c'est la décision de reprise qui doit rester juste,
-    /// pas la formulation.
+    /// The projection is chosen to **keep the family**: `429` and `503` become
+    /// [`OxynError::Connection`], the only transient variant the domain has,
+    /// rather than [`OxynError::Query`] which would make them final. The
+    /// "connection impossible" label is then a little broad, and that is the
+    /// price: it is the retry decision that must stay right, not the wording.
     fn from(err: LlmError) -> Self {
         match err {
             LlmError::Cancelled => Self::Cancelled,
             LlmError::Transport { .. } => Self::Connection(err.to_string()),
-            // Ambiguës des deux côtés de la frontière : voir la note du module.
+            // Ambiguous on both sides of the boundary: see the module note.
             LlmError::ResponseTimeout { after, .. } => Self::Timeout { after },
             LlmError::ConnectionLost { .. } => Self::OutcomeUnknown(err.to_string()),
             LlmError::MissingApiKey { .. } => Self::Authentication(err.to_string()),
             LlmError::Config { .. } => Self::Config(err.to_string()),
             LlmError::Decode { .. } => Self::Serialization(err.to_string()),
             LlmError::Unsupported { capability, .. } => Self::NotSupported { capability },
-            // `NotSupported` et non `Internal` : pour l'appelant, le fait est
-            // le même — la capacité n'est pas là —, et le message dit déjà où
-            // est la limite.
+            // `NotSupported` and not `Internal`: for the caller, the fact is
+            // the same — the capability is not there —, and the message already
+            // says where the limit is.
             LlmError::NotImplemented { .. } => Self::NotSupported {
                 capability: err.to_string(),
             },
             LlmError::Http { status, .. } => match status {
                 401 | 403 => Self::Authentication(err.to_string()),
-                // Lu sur la famille et non sur le statut : la table de `class`
-                // reste la seule règle, et la projection ne peut pas la
-                // contredire.
+                // Read on the family and not on the status: the `class` table
+                // remains the only rule, and the projection cannot contradict
+                // it.
                 _ if err.class() == ErrorClass::Ambiguous => Self::OutcomeUnknown(err.to_string()),
                 _ if err.is_retryable() => Self::Connection(err.to_string()),
                 _ => Self::Query(err.to_string()),
@@ -416,22 +410,22 @@ mod tests {
     }
 
     #[test]
-    fn la_surcharge_est_transitoire_le_refus_ne_l_est_pas() {
+    fn overload_is_transient_refusal_is_not() {
         // `502` y figure sans source : voir RESEARCH-NOTES.
         for statut in [408, 429, 500, 502, 503, 529] {
             let err = LlmError::from_response(fournisseur(), statut, "busy", None);
-            assert!(err.is_retryable(), "HTTP {statut} devrait être transitoire");
+            assert!(err.is_retryable(), "HTTP {statut} should be transient");
         }
         for statut in [400, 401, 403, 404, 413, 422, 501] {
             let err = LlmError::from_response(fournisseur(), statut, "nope", None);
-            assert!(!err.is_retryable(), "HTTP {statut} ne doit pas se retenter");
+            assert!(!err.is_retryable(), "HTTP {statut} must not be retried");
         }
     }
 
     #[test]
-    fn une_surcharge_529_reste_retentable_apres_conversion() {
-        // Statut non standard, propre à Anthropic. Le classer permanent
-        // enverrait l'utilisateur reconfigurer un fournisseur qui fonctionne.
+    fn a_529_overload_remains_retryable_after_conversion() {
+        // Non-standard status, specific to Anthropic. Classifying it permanent
+        // would send the user to reconfigure a provider that works.
         let err: OxynError =
             LlmError::from_response(fournisseur(), 529, r#"{"type":"overloaded_error"}"#, None)
                 .into();
@@ -439,9 +433,9 @@ mod tests {
     }
 
     #[test]
-    fn une_invite_trop_longue_ne_se_retente_pas() {
-        // `413 request_too_large` : rejouer la même requête donnera la même
-        // réponse, et l'utilisateur doit réduire son contexte.
+    fn a_prompt_too_long_is_not_retried() {
+        // `413 request_too_large`: replaying the same request will give the
+        // same response, and the user must reduce their context.
         let err = LlmError::from_response(fournisseur(), 413, "request too large", None);
         assert!(!err.is_retryable());
         let projetee: OxynError = err.into();
@@ -449,12 +443,12 @@ mod tests {
     }
 
     #[test]
-    fn la_famille_survit_a_la_conversion_vers_le_domaine() {
+    fn the_family_survives_the_conversion_to_the_domain() {
         let transitoire: OxynError =
             LlmError::from_response(fournisseur(), 429, "rate limited", None).into();
         assert!(
             transitoire.is_retryable(),
-            "un 429 converti doit rester retentable : {transitoire}"
+            "a converted 429 must remain retryable: {transitoire}"
         );
 
         let permanent: OxynError =
@@ -463,7 +457,7 @@ mod tests {
     }
 
     #[test]
-    fn un_refus_d_authentification_devient_une_erreur_d_authentification() {
+    fn an_authentication_refusal_becomes_an_authentication_error() {
         let err: OxynError =
             LlmError::from_response(fournisseur(), 401, "invalid key", None).into();
         assert!(matches!(err, OxynError::Authentication(_)), "{err}");
@@ -477,14 +471,14 @@ mod tests {
     }
 
     #[test]
-    fn une_annulation_reste_une_annulation() {
+    fn a_cancellation_remains_a_cancellation() {
         let err: OxynError = LlmError::Cancelled.into();
         assert!(err.is_cancelled());
         assert!(!err.is_retryable());
     }
 
     #[test]
-    fn le_corps_de_reponse_est_expurge_de_la_cle() {
+    fn the_response_body_is_scrubbed_of_the_key() {
         let cle = ApiKey::new("sk-tres-secret");
         let err = LlmError::from_response(
             fournisseur(),
@@ -498,12 +492,12 @@ mod tests {
     }
 
     #[test]
-    fn un_corps_demesure_est_tronque_sans_paniquer_sur_l_utf8() {
-        // Le piège : couper à 512 octets au milieu d'un caractère multi-octets.
+    fn an_outsized_body_is_truncated_without_panicking_on_utf8() {
+        // The trap: cutting at 512 bytes in the middle of a multi-byte character.
         let corps = "é".repeat(600);
         let err = LlmError::from_response(fournisseur(), 502, &corps, None);
         let LlmError::Http { message, .. } = &err else {
-            panic!("variante inattendue");
+            panic!("unexpected variant");
         };
         assert!(message.len() <= MAX_MESSAGE_LEN + 8, "{}", message.len());
         assert!(message.ends_with(" […]"));
@@ -515,15 +509,15 @@ mod tests {
     }
 
     #[test]
-    fn un_corps_court_passe_intact() {
+    fn a_short_body_goes_through_intact() {
         let err = LlmError::from_response(fournisseur(), 404, "  model not found  ", None);
         assert!(err.to_string().contains("model not found"));
     }
 
     #[test]
-    fn seul_ce_qui_n_est_jamais_parti_se_retente() {
-        // I-13 : un délai de réponse ou une coupure après l'envoi laissent le
-        // sort de la requête inconnu — et elle est peut-être facturée.
+    fn only_what_never_went_out_is_retried() {
+        // I-13: a response timeout or a cut after sending leave the fate of the
+        // request unknown — and it may be billed.
         let jamais_partie = LlmError::Transport {
             provider: fournisseur(),
             detail: "connection timed out".to_owned(),
@@ -549,20 +543,20 @@ mod tests {
                 "{partie}"
             );
             let projetee: OxynError = partie.into();
-            // La famille, pas seulement l'absence de reprise : une projection
-            // vers `Io` serait non retentable, et perdrait pourtant l'ambiguïté.
+            // The family, not only the absence of retry: a projection to `Io`
+            // would be non-retryable, and would still lose the ambiguity.
             assert_eq!(
                 projetee.class(),
                 ErrorClass::Ambiguous,
-                "l'ambiguïté doit survivre à la frontière : {projetee}"
+                "the ambiguity must survive the boundary: {projetee}"
             );
         }
     }
 
     #[test]
-    fn un_504_est_ambigu_des_deux_cotes_de_la_frontiere() {
-        // Anthropic : `timeout_error`, « timed out while processing ». La
-        // réponse a pu être produite et facturée : la rejouer paie deux fois.
+    fn a_504_is_ambiguous_on_both_sides_of_the_boundary() {
+        // Anthropic: `timeout_error`, "timed out while processing". The
+        // response may have been produced and billed: replaying it pays twice.
         let err = LlmError::from_response(
             fournisseur(),
             504,
@@ -576,12 +570,12 @@ mod tests {
         assert_eq!(projetee.class(), ErrorClass::Ambiguous, "{projetee}");
         assert!(
             matches!(projetee, OxynError::OutcomeUnknown(_)),
-            "même projection qu'une réponse perdue sans durée connue : {projetee:?}"
+            "same projection as a response lost with no known duration: {projetee:?}"
         );
     }
 
     #[test]
-    fn un_500_ou_un_502_projete_reste_retentable() {
+    fn a_projected_500_or_502_remains_retryable() {
         for statut in [500, 502] {
             let projetee: OxynError =
                 LlmError::from_response(fournisseur(), statut, "oops", None).into();
@@ -593,7 +587,7 @@ mod tests {
     }
 
     #[test]
-    fn un_delai_de_reponse_garde_la_duree_configuree() {
+    fn a_response_timeout_keeps_the_configured_duration() {
         let projetee: OxynError = LlmError::ResponseTimeout {
             provider: fournisseur(),
             after: Duration::from_secs(90),
@@ -606,7 +600,7 @@ mod tests {
     }
 
     #[test]
-    fn une_connexion_perdue_apres_l_envoi_a_un_effet_inconnu() {
+    fn a_connection_lost_after_sending_has_an_unknown_effect() {
         let projetee: OxynError = LlmError::ConnectionLost {
             provider: fournisseur(),
             detail: "the connection closed before the response arrived",
@@ -618,62 +612,62 @@ mod tests {
         );
     }
 
-    /// Les prédicats de reqwest, éprouvés sur de vraies erreurs locales.
+    /// reqwest's predicates, tested on real local errors.
     ///
-    /// Aucun réseau : un port fermé sur la boucle locale refuse la connexion,
-    /// et un auditeur local qui accepte puis se tait fait expirer la réponse.
+    /// No network: a closed port on the loopback refuses the connection, and a
+    /// local listener that accepts then stays silent makes the response expire.
     #[tokio::test]
-    async fn la_pile_http_classe_la_connexion_manquee_et_le_delai_de_reponse() {
-        // Port fermé : on réserve un port, puis on le libère.
-        let libre = std::net::TcpListener::bind("127.0.0.1:0").expect("port local");
-        let adresse = libre.local_addr().expect("adresse locale");
+    async fn the_http_stack_classifies_the_missed_connection_and_the_response_timeout() {
+        // Closed port: a port is reserved, then released.
+        let libre = std::net::TcpListener::bind("127.0.0.1:0").expect("local port");
+        let adresse = libre.local_addr().expect("local address");
         drop(libre);
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(2))
             .build()
-            .expect("client de test");
+            .expect("test client");
         let refus = client
             .post(format!("http://{adresse}/v1/messages"))
             .send()
             .await
-            .expect_err("rien n'écoute sur ce port");
+            .expect_err("nothing listens on this port");
         let classee = LlmError::from_transport(fournisseur(), &refus, None);
         assert!(matches!(classee, LlmError::Transport { .. }), "{classee:?}");
         assert!(
             !classee.to_string().contains("127.0.0.1"),
-            "le message de la pile réseau ne doit pas entrer : {classee}"
+            "the network stack message must not get in: {classee}"
         );
 
-        // Auditeur qui accepte et ne répond jamais, client avec délai de réponse.
+        // Listener that accepts and never answers, client with a response timeout.
         let muet = tokio::net::TcpListener::bind("127.0.0.1:0")
             .await
-            .expect("auditeur local");
-        let adresse = muet.local_addr().expect("adresse locale");
+            .expect("local listener");
+        let adresse = muet.local_addr().expect("local address");
         let garde = tokio::spawn(async move {
-            let (_connexion, _) = muet.accept().await.expect("connexion acceptée");
+            let (_connexion, _) = muet.accept().await.expect("connection accepted");
             tokio::time::sleep(Duration::from_secs(5)).await;
         });
         let client = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(2))
             .timeout(Duration::from_millis(200))
             .build()
-            .expect("client de test");
+            .expect("test client");
         let expiree = client
             .post(format!("http://{adresse}/v1/messages"))
             .body("{}")
             .send()
             .await
-            .expect_err("l'auditeur ne répond pas");
+            .expect_err("the listener does not answer");
         garde.abort();
         let classee =
             LlmError::from_transport(fournisseur(), &expiree, Some(Duration::from_millis(200)));
         assert!(
             matches!(classee, LlmError::ResponseTimeout { after, .. } if after == Duration::from_millis(200)),
-            "un délai après l'envoi doit être ambigu, avec sa durée configurée : {classee:?}"
+            "a timeout after sending must be ambiguous, with its configured duration: {classee:?}"
         );
         assert!(!classee.to_string().contains("127.0.0.1"), "{classee}");
 
-        // Sans délai configuré connu, la durée ne s'invente pas.
+        // Without a known configured timeout, the duration is not invented.
         let sans_duree = LlmError::from_transport(fournisseur(), &expiree, None);
         assert!(
             matches!(sans_duree, LlmError::ConnectionLost { .. }),
@@ -683,7 +677,7 @@ mod tests {
     }
 
     #[test]
-    fn une_capacite_absente_garde_son_nom_dans_le_domaine() {
+    fn a_missing_capability_keeps_its_name_in_the_domain() {
         let err: OxynError = LlmError::Unsupported {
             provider: fournisseur(),
             capability: "tool_calls".to_owned(),

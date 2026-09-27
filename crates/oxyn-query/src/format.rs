@@ -1,25 +1,24 @@
-//! Reformatage d'un texte SQL.
+//! Reformatting of a SQL text.
 //!
-//! Le reformatage passe par le `Display` de l'AST de `sqlparser` : le texte est
-//! lu, puis réécrit depuis l'arbre. C'est ce qui donne une mise en forme
-//! cohérente sans écrire de moteur de rendu.
+//! Reformatting goes through the `Display` of the `sqlparser` AST: the text is
+//! parsed, then rewritten from the tree. That is what gives a consistent layout
+//! without writing a rendering engine.
 //!
-//! # Deux refus délibérés
+//! # Two deliberate refusals
 //!
-//! **Ce qui ne se lit pas n'est pas touché.** Une instruction que l'analyseur
-//! refuse est rendue telle quelle. Un reformatage ne renvoie jamais du SQL
-//! abîmé : l'utilisateur perdrait son travail sans s'en apercevoir, et il
-//! l'exécuterait.
+//! **What does not parse is not touched.** A statement the parser refuses is
+//! rendered as is. A reformatting never returns damaged SQL: the user would
+//! lose their work without noticing, and would run it.
 //!
-//! **Un texte qui porte des commentaires n'est pas reformaté du tout.** Le
-//! `Display` de l'AST ne les conserve pas ; les supprimer en silence serait la
-//! même perte, en plus discrète. Le rapport le dit
-//! ([`declined_for_comments`](FormatReport::declined_for_comments)) pour que
-//! l'interface puisse l'expliquer plutôt que de paraître inerte.
+//! **A text that carries comments is not reformatted at all.** The AST's
+//! `Display` does not keep them; dropping them silently would be the same
+//! loss, only quieter. The report says so
+//! ([`declined_for_comments`](FormatReport::declined_for_comments)) so that the
+//! interface can explain it rather than look inert.
 //!
-// TODO(phase 2) : un reformatage qui replace les commentaires demande de
-// suivre les positions de source (`sqlparser` les expose via `Span`). C'est un
-// vrai composant, pas une retouche.
+// TODO(phase 2): a reformatting that puts comments back requires tracking
+// source positions (`sqlparser` exposes them through `Span`). It is a real
+// component, not a touch-up.
 
 use oxyn_core::SqlDialect;
 use sqlparser::parser::Parser;
@@ -27,27 +26,28 @@ use sqlparser::parser::Parser;
 use crate::dialect::parser_dialect;
 use crate::split;
 
-/// Ce qu'un reformatage a réellement fait.
+/// What a reformatting actually did.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct FormatReport {
-    /// Le texte à afficher. Toujours du SQL valide au sens où il vaut au pire
-    /// le texte d'origine.
+    /// The text to display. Always valid SQL in the sense that at worst it is
+    /// the original text.
     pub text: String,
-    /// Nombre d'instructions réécrites depuis leur arbre.
+    /// Number of statements rewritten from their tree.
     pub reformatted: usize,
-    /// Nombre d'instructions rendues telles quelles, faute d'avoir pu les lire.
+    /// Number of statements rendered as is, for want of being able to parse
+    /// them.
     pub kept_verbatim: usize,
-    /// Le texte diffère-t-il de l'entrée ?
+    /// Does the text differ from the input?
     pub changed: bool,
-    /// Le reformatage a été abandonné en bloc : le texte porte des
-    /// commentaires, que le rendu de l'AST perdrait.
+    /// The reformatting was abandoned as a whole: the text carries comments,
+    /// which rendering the AST would lose.
     pub declined_for_comments: bool,
 }
 
-/// Reformate un texte SQL.
+/// Reformats a SQL text.
 ///
-/// Ne renvoie jamais d'erreur et ne perd jamais de contenu : au pire, le texte
-/// d'origine.
+/// Never returns an error and never loses content: at worst, the original
+/// text.
 ///
 /// ```
 /// use oxyn_core::SqlDialect;
@@ -55,11 +55,11 @@ pub struct FormatReport {
 ///
 /// assert_eq!(format("select   1", SqlDialect::Postgres), "SELECT 1");
 ///
-/// // Illisible : rendu tel quel plutôt qu'abîmé.
+/// // Unparsable: rendered as is rather than damaged.
 /// assert_eq!(format("SELEKT 1", SqlDialect::Postgres), "SELEKT 1");
 ///
-/// // Un commentaire suspend le reformatage : le perdre serait une perte de
-/// // travail silencieuse.
+/// // A comment suspends reformatting: losing it would be a silent loss of
+/// // work.
 /// assert_eq!(
 ///     format("select   1 -- garder", SqlDialect::Postgres),
 ///     "select   1 -- garder"
@@ -70,7 +70,7 @@ pub fn format(sql: &str, dialect: SqlDialect) -> String {
     format_report(sql, dialect).text
 }
 
-/// Reformate, et dit ce qui a été fait.
+/// Reformats, and says what was done.
 #[must_use]
 pub fn format_report(sql: &str, dialect: SqlDialect) -> FormatReport {
     let fragments = split::split(sql, dialect);
@@ -96,9 +96,9 @@ pub fn format_report(sql: &str, dialect: SqlDialect) -> FormatReport {
     }
 
     let grammar = parser_dialect(dialect);
-    // Dans un lot, chaque instruction est terminée : sans point-virgule, le
-    // texte rendu ne s'exécuterait plus. Une instruction seule garde en
-    // revanche la ponctuation que l'utilisateur a écrite.
+    // In a batch, every statement is terminated: without a semicolon, the
+    // rendered text would no longer run. A single statement, on the other
+    // hand, keeps the punctuation the user wrote.
     let terminate_all = fragments.len() > 1;
 
     let mut text = String::with_capacity(sql.len());
@@ -136,11 +136,10 @@ pub fn format_report(sql: &str, dialect: SqlDialect) -> FormatReport {
     }
 }
 
-/// Réécrit une instruction depuis son arbre, ou `None` si elle ne se lit pas.
+/// Rewrites a statement from its tree, or `None` if it does not parse.
 ///
-/// Un fragment doit donner exactement une instruction. Autre chose signifie que
-/// le découpage et l'analyseur ne sont pas d'accord — auquel cas on ne réécrit
-/// rien.
+/// A fragment must give exactly one statement. Anything else means the
+/// splitter and the parser disagree — in which case nothing is rewritten.
 fn render(grammar: &dyn sqlparser::dialect::Dialect, text: &str) -> Option<String> {
     let statements = Parser::parse_sql(grammar, text).ok()?;
     match statements.as_slice() {
@@ -154,7 +153,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn une_instruction_se_normalise() {
+    fn a_statement_is_normalized() {
         assert_eq!(format("select   1", SqlDialect::Postgres), "SELECT 1");
         assert_eq!(
             format("select a,b from t where x=1", SqlDialect::Postgres),
@@ -163,20 +162,20 @@ mod tests {
     }
 
     #[test]
-    fn un_lot_est_reponctue() {
+    fn a_batch_is_repunctuated() {
         let rendu = format("select 1; select 2", SqlDialect::Postgres);
         assert_eq!(rendu, "SELECT 1;\nSELECT 2;");
     }
 
     #[test]
-    fn une_instruction_seule_garde_sa_ponctuation() {
+    fn a_single_statement_keeps_its_punctuation() {
         assert_eq!(format("select 1", SqlDialect::Postgres), "SELECT 1");
         assert_eq!(format("select 1;", SqlDialect::Postgres), "SELECT 1;");
     }
 
-    /// La garantie centrale : jamais de SQL abîmé.
+    /// The central guarantee: never damaged SQL.
     #[test]
-    fn un_texte_illisible_est_rendu_tel_quel() {
+    fn an_unparsable_text_is_rendered_as_is() {
         let source = "SELEKT * FORM t";
         let rapport = format_report(source, SqlDialect::Postgres);
         assert_eq!(rapport.text, source);
@@ -186,7 +185,7 @@ mod tests {
     }
 
     #[test]
-    fn une_instruction_illisible_n_empeche_pas_les_autres() {
+    fn an_unparsable_statement_does_not_block_the_others() {
         let rapport = format_report("select 1; SELEKT 2", SqlDialect::Postgres);
         assert_eq!(rapport.reformatted, 1);
         assert_eq!(rapport.kept_verbatim, 1);
@@ -194,7 +193,7 @@ mod tests {
     }
 
     #[test]
-    fn un_commentaire_suspend_le_reformatage() {
+    fn a_comment_suspends_reformatting() {
         for source in [
             "select   1 -- note",
             "select   1 /* note */",
@@ -209,14 +208,14 @@ mod tests {
     }
 
     #[test]
-    fn un_faux_commentaire_dans_une_chaine_ne_suspend_rien() {
+    fn a_fake_comment_inside_a_string_suspends_nothing() {
         let rapport = format_report("select   '-- pas un commentaire'", SqlDialect::Postgres);
         assert!(!rapport.declined_for_comments);
         assert_eq!(rapport.text, "SELECT '-- pas un commentaire'");
     }
 
     #[test]
-    fn un_texte_vide_reste_vide() {
+    fn an_empty_text_stays_empty() {
         for source in ["", "   ", ";"] {
             let rapport = format_report(source, SqlDialect::Postgres);
             assert_eq!(rapport.text, source, "{source:?}");
@@ -224,10 +223,10 @@ mod tests {
         }
     }
 
-    /// Le reformatage n'a pas le droit de changer le sens : ce qui sort doit
-    /// se classer comme ce qui entrait.
+    /// Reformatting has no right to change the meaning: what comes out must
+    /// classify like what went in.
     #[test]
-    fn le_reformatage_preserve_l_intention() {
+    fn reformatting_preserves_the_intent() {
         for source in [
             "delete from t",
             "update t set a=1 where id=2",
@@ -244,10 +243,9 @@ mod tests {
     }
 
     #[test]
-    fn la_citation_du_dialecte_est_conservee() {
-        // Les accents graves de MySQL doivent ressortir tels quels : un
-        // reformatage qui les remplacerait par des guillemets produirait du SQL
-        // que MySQL ne lit plus.
+    fn the_dialect_quoting_is_kept() {
+        // MySQL backticks must come out as is: a reformatting that replaced
+        // them with double quotes would produce SQL MySQL no longer reads.
         assert_eq!(
             format("select `a` from `t`", SqlDialect::MySql),
             "SELECT `a` FROM `t`"

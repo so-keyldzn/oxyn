@@ -1,5 +1,5 @@
 // Dragging a relation from the catalog into the SQL editor
-// (UX-SPEC « Souris et glisser »): its name is inserted where it is dropped,
+// (UX-SPEC « Mouse and drag »): its name is inserted where it is dropped,
 // and nothing runs. The name is **quoted by the backend** (`qualifiedName`,
 // from `relation_facets`), never joined here: a table called
 // `"users"; DROP TABLE audit; --` is legal, and a name glued from its

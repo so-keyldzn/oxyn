@@ -111,7 +111,7 @@ export const SQLite: Story = {
 /**
  * A `.sqlite` file dropped on the window: its path is in the form, and that is
  * all — the connection starts as production like any other, and nothing is
- * sent until Connect (UX-SPEC « Souris et glisser »).
+ * sent until Connect (UX-SPEC « Mouse and drag »).
  */
 export const PrefilledFromADroppedFile: Story = {
   args: {

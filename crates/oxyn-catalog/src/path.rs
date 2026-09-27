@@ -1,10 +1,10 @@
-//! Chemin qualifié dans la hiérarchie du catalogue.
+//! Qualified path in the catalog hierarchy.
 //!
-//! La hiérarchie d'ARCHITECTURE §6 compte cinq paliers, dont **trois** portent
-//! un nom : `Catalog`, `Namespace`, `Relation`. Chacun peut manquer, et pas
-//! seulement les derniers :
+//! The hierarchy of ARCHITECTURE §6 has five levels, **three** of which carry
+//! a name: `Catalog`, `Namespace`, `Relation`. Each one can be missing, and
+//! not only the last ones:
 //!
-//! | Système | Catalogue | Espace de noms | Relation | Rendu |
+//! | System | Catalog | Namespace | Relation | Rendering |
 //! |---|---|---|---|---|
 //! | PostgreSQL | `base` | `schema` | `table` | `base.schema.table` |
 //! | MySQL | — | `base` | `table` | `base.table` |
@@ -12,28 +12,28 @@
 //! | Elasticsearch | — | — | `index` | `index` |
 //! | Neo4j | `base` | — | `label` | `base..label` |
 //!
-//! # La convention qui rend le rendu réversible
+//! # The convention that makes the rendering reversible
 //!
-//! Un chemin se lit **par la droite** : le dernier segment est toujours la
-//! relation, l'avant-dernier l'espace de noms, le premier le catalogue. Un
-//! segment vide dénote un palier absent. C'est ce qui permet à
-//! [`Display`](fmt::Display) et [`FromStr`] d'être exactement inverses l'un de
-//! l'autre — y compris pour un trou au milieu (`base..label`) et pour un chemin
-//! qui s'arrête avant la relation (`base.schema.`).
+//! A path is read **from the right**: the last segment is always the
+//! relation, the one before the namespace, the first the catalog. An empty
+//! segment denotes a missing level. That is what lets
+//! [`Display`](fmt::Display) and [`FromStr`] be exact inverses of each other —
+//! including for a hole in the middle (`base..label`) and for a path that
+//! stops before the relation (`base.schema.`).
 //!
-//! Sans cette convention, `base.label` serait relu comme
-//! `espace_de_noms.relation` et le palier catalogue de Neo4j disparaîtrait en
-//! silence à chaque aller-retour par le disque.
+//! Without this convention, `base.label` would be read back as
+//! `namespace.relation` and Neo4j's catalog level would silently vanish on
+//! every round trip through disk.
 //!
-//! # Citation
+//! # Quoting
 //!
-//! Un nom de table peut contenir un point, un guillemet, un point-virgule.
-//! `"users"; DROP TABLE audit; --` est un nom de table légal dans PostgreSQL.
-//! [`CatalogPath::qualify`] est donc **la seule** façon de composer un
-//! identifiant qualifié pour une requête ([I-10] et
-//! [`DRIVER-CONTRACT` §6](../../../docs/DRIVER-CONTRACT.md)) : elle cite chaque
-//! segment selon le dialecte visé. Concaténer `format!("{path}")` dans du SQL
-//! est le défaut que cet invariant interdit.
+//! A table name can contain a dot, a double quote, a semicolon.
+//! `"users"; DROP TABLE audit; --` is a legal table name in PostgreSQL.
+//! [`CatalogPath::qualify`] is therefore **the only** way to compose a
+//! qualified identifier for a query ([I-10] and
+//! [`DRIVER-CONTRACT` §6](../../../docs/DRIVER-CONTRACT.md)): it quotes each
+//! segment according to the target dialect. Concatenating `format!("{path}")`
+//! into SQL is the defect this invariant forbids.
 //!
 //! [I-10]: ../../../CLAUDE.md
 
@@ -44,15 +44,15 @@ use std::str::FromStr;
 use oxyn_core::query::SqlDialect;
 use serde::{Deserialize, Serialize};
 
-/// Nombre de paliers nommables dans un chemin.
+/// Number of nameable levels in a path.
 const PALIERS: usize = 3;
 
-/// Échec d'analyse ou de construction d'un chemin de catalogue.
+/// Failure to parse or build a catalog path.
 ///
-/// Le texte fautif n'est **jamais** repris dans le message, par cohérence avec
-/// [`IdParseError`](oxyn_core::IdParseError) : un nom d'objet peut contenir des
-/// séquences d'échappement de terminal, et un message d'erreur finit dans un
-/// journal ([SECURITY, surface d'entrée §2](../../../docs/SECURITY.md)).
+/// The faulty text is **never** repeated in the message, for consistency with
+/// [`IdParseError`](oxyn_core::IdParseError): an object name can contain
+/// terminal escape sequences, and an error message ends up in a log
+/// ([SECURITY, input surface §2](../../../docs/SECURITY.md)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, thiserror::Error)]
 #[error("invalid catalog path: {detail}")]
 pub struct CatalogPathError {
@@ -60,13 +60,13 @@ pub struct CatalogPathError {
 }
 
 impl CatalogPathError {
-    /// Construit une erreur d'analyse.
+    /// Builds a parse error.
     #[must_use]
     pub const fn new(detail: &'static str) -> Self {
         Self { detail }
     }
 
-    /// Raison du rejet, sans reprendre la valeur fautive.
+    /// Reason for the rejection, without repeating the faulty value.
     #[must_use]
     pub const fn detail(&self) -> &'static str {
         self.detail
@@ -79,19 +79,19 @@ impl From<CatalogPathError> for oxyn_core::OxynError {
     }
 }
 
-/// Vérifie qu'un nom de palier est utilisable.
+/// Checks that a level name is usable.
 ///
-/// Deux refus, et seulement deux :
+/// Two refusals, and only two:
 ///
-/// * la chaîne vide, parce qu'elle dénote l'absence de palier dans le rendu
-///   comme dans les clés du cache ;
-/// * les caractères de contrôle, parce qu'un nom d'objet est une entrée hostile
-///   ([SECURITY, surface d'entrée §2](../../../docs/SECURITY.md)) et qu'une
-///   séquence d'échappement ANSI dans un nom de table repeint le terminal ou la
-///   ligne de journal qui l'affiche.
+/// * the empty string, because it denotes a missing level in the rendering as
+///   in the cache keys;
+/// * control characters, because an object name is hostile input
+///   ([SECURITY, input surface §2](../../../docs/SECURITY.md)) and an ANSI
+///   escape sequence in a table name repaints the terminal or the log line
+///   that displays it.
 ///
-/// Les points, guillemets, espaces et points-virgules sont **acceptés** : ce
-/// sont des noms légaux, et [`CatalogPath::qualify`] sait les citer.
+/// Dots, double quotes, spaces and semicolons are **accepted**: they are legal
+/// names, and [`CatalogPath::qualify`] knows how to quote them.
 pub(crate) fn validate_segment(name: &str) -> Result<(), CatalogPathError> {
     if name.is_empty() {
         return Err(CatalogPathError::new("a named level cannot be empty"));
@@ -104,60 +104,58 @@ pub(crate) fn validate_segment(name: &str) -> Result<(), CatalogPathError> {
     Ok(())
 }
 
-/// Style de citation d'un identifiant.
+/// Quoting style of an identifier.
 ///
-/// Le style n'est pas un détail cosmétique : c'est ce qui sépare un aperçu de
-/// table d'une exécution de `DROP TABLE audit` ([I-10]).
+/// The style is not a cosmetic detail: it is what separates a table preview
+/// from running `DROP TABLE audit` ([I-10]).
 ///
 /// [I-10]: ../../../CLAUDE.md
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum QuoteStyle {
-    /// Guillemets doubles ANSI : `"nom"`, guillemet interne doublé. Défaut, et
-    /// repli sûr pour tout dialecte inconnu.
+    /// ANSI double quotes: `"name"`, inner double quote doubled. Default, and
+    /// safe fallback for any unknown dialect.
     #[default]
     Double,
-    /// Accents graves (MySQL, BigQuery) : `` `nom` ``, accent interne doublé.
+    /// Backticks (MySQL, BigQuery): `` `name` ``, inner backtick doubled.
     Backtick,
-    /// Crochets (T-SQL) : `[nom]`, crochet fermant doublé.
+    /// Square brackets (T-SQL): `[name]`, closing bracket doubled.
     Bracket,
-    /// **Aucune citation.**
+    /// **No quoting.**
     ///
-    /// Réservé aux sources qui ne composent pas de texte de requête à partir
-    /// d'un nom d'objet — MongoDB, Redis, Elasticsearch, où le nom est un champ
-    /// de document ou un segment d'URL, pas un fragment de langage. L'employer
-    /// pour composer du SQL viole [I-10] ; utiliser
-    /// [`CatalogPath::qualify_sql`], qui ne le choisit jamais.
+    /// Reserved for sources that do not compose query text from an object
+    /// name — MongoDB, Redis, Elasticsearch, where the name is a document field
+    /// or a URL segment, not a fragment of a language. Using it to compose SQL
+    /// violates [I-10]; use [`CatalogPath::qualify_sql`], which never picks it.
     ///
     /// [I-10]: ../../../CLAUDE.md
     Bare,
 }
 
 impl QuoteStyle {
-    /// Le style de citation d'un dialecte SQL.
+    /// The quoting style of a SQL dialect.
     ///
-    /// Un dialecte non reconnu retombe sur [`Double`](Self::Double) : le repli
-    /// d'un modèle de citation est un autre modèle de citation, jamais
+    /// An unrecognized dialect falls back on [`Double`](Self::Double): the
+    /// fallback of a quoting model is another quoting model, never
     /// [`Bare`](Self::Bare).
     #[must_use]
     pub const fn for_dialect(dialect: SqlDialect) -> Self {
         match dialect {
             SqlDialect::MySql | SqlDialect::BigQuery => Self::Backtick,
             SqlDialect::SqlServer => Self::Bracket,
-            // `SqlDialect` est `#[non_exhaustive]` : le bras générique est
-            // imposé par le langage, et il vaut mieux ici que l'énumération des
-            // dialectes ANSI, qui se périmerait en silence.
+            // `SqlDialect` is `#[non_exhaustive]`: the wildcard arm is imposed
+            // by the language, and it is better here than listing the ANSI
+            // dialects, which would silently go stale.
             _ => Self::Double,
         }
     }
 }
 
-/// Cite un identifiant selon un style.
+/// Quotes an identifier according to a style.
 ///
-/// Ne valide rien : un nom vide ou porteur de caractères de contrôle ressort
-/// cité tel quel. La validation est faite à la construction d'un
-/// [`CatalogPath`].
+/// Validates nothing: an empty name or one carrying control characters comes
+/// out quoted as is. Validation happens when a [`CatalogPath`] is built.
 #[must_use]
 pub fn quote_identifier(name: &str, style: QuoteStyle) -> String {
     let (ouvrant, fermant) = match style {
@@ -169,8 +167,8 @@ pub fn quote_identifier(name: &str, style: QuoteStyle) -> String {
     let mut sortie = String::with_capacity(name.len() + 2);
     sortie.push(ouvrant);
     for c in name.chars() {
-        // Dans les trois styles, seul le caractère fermant a besoin d'être
-        // doublé — c'est le seul qui peut clore la citation par surprise.
+        // In all three styles, only the closing character needs doubling — it
+        // is the only one that can close the quoting by surprise.
         if c == fermant {
             sortie.push(c);
         }
@@ -180,22 +178,22 @@ pub fn quote_identifier(name: &str, style: QuoteStyle) -> String {
     sortie
 }
 
-/// Le palier le plus profond qu'un chemin désigne.
+/// The deepest level a path designates.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CatalogLevel {
-    /// Chemin vide : le serveur lui-même.
+    /// Empty path: the server itself.
     Server,
-    /// Le chemin s'arrête au catalogue.
+    /// The path stops at the catalog.
     Catalog,
-    /// Le chemin s'arrête à l'espace de noms.
+    /// The path stops at the namespace.
     Namespace,
-    /// Le chemin désigne une relation.
+    /// The path designates a relation.
     Relation,
 }
 
 impl CatalogLevel {
-    /// Nom stable, pour l'audit et l'interface.
+    /// Stable name, for the audit and the interface.
     #[must_use]
     pub const fn as_str(&self) -> &'static str {
         match self {
@@ -213,15 +211,14 @@ impl fmt::Display for CatalogLevel {
     }
 }
 
-/// Chemin qualifié, tolérant aux paliers absents.
+/// Qualified path, tolerant of missing levels.
 ///
-/// Les trois paliers sont indépendants : un chemin peut avoir un catalogue et
-/// une relation sans espace de noms (Neo4j), ou seulement une relation
-/// (Elasticsearch).
+/// The three levels are independent: a path can have a catalog and a relation
+/// without a namespace (Neo4j), or only a relation (Elasticsearch).
 ///
-/// Sérialisé sous forme de **chaîne** — le rendu de [`Display`](fmt::Display) —
-/// et non d'objet à trois champs : un fichier de workspace lisible sans Oxyn est
-/// un invariant du produit (I-11), et l'aller-retour est exact.
+/// Serialized as a **string** — the [`Display`](fmt::Display) rendering — and
+/// not as a three-field object: a workspace file readable without Oxyn is a
+/// product invariant (I-11), and the round trip is exact.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Default, Serialize, Deserialize)]
 #[serde(into = "String", try_from = "String")]
 pub struct CatalogPath {
@@ -231,7 +228,7 @@ pub struct CatalogPath {
 }
 
 impl CatalogPath {
-    /// Le chemin vide : le serveur lui-même.
+    /// The empty path: the server itself.
     #[must_use]
     pub const fn empty() -> Self {
         Self {
@@ -241,11 +238,11 @@ impl CatalogPath {
         }
     }
 
-    /// Construit un chemin à partir de ses trois paliers.
+    /// Builds a path from its three levels.
     ///
-    /// # Erreurs
-    /// Renvoie [`CatalogPathError`] si un palier présent est vide ou contient un
-    /// caractère de contrôle.
+    /// # Errors
+    /// Returns [`CatalogPathError`] if a present level is empty or contains a
+    /// control character.
     pub fn from_levels(
         catalog: Option<String>,
         namespace: Option<String>,
@@ -261,12 +258,12 @@ impl CatalogPath {
         })
     }
 
-    /// Construit un chemin à partir de paliers **déjà validés**.
+    /// Builds a path from **already validated** levels.
     ///
-    /// Réservé à la crate : les références du modèle ([`RelationRef`] et ses
-    /// voisines) valident leur nom à la construction, et reconstruire leur
-    /// chemin ne peut donc pas échouer. Une fonction faillible ici obligerait
-    /// chaque appelant à traiter une erreur impossible.
+    /// Reserved to the crate: the model's references ([`RelationRef`] and its
+    /// neighbors) validate their name at construction, so rebuilding their path
+    /// cannot fail. A fallible function here would force every caller to handle
+    /// an impossible error.
     ///
     /// [`RelationRef`]: crate::model::RelationRef
     pub(crate) fn from_validated(
@@ -281,20 +278,20 @@ impl CatalogPath {
         }
     }
 
-    /// Chemin désignant un catalogue.
+    /// Path designating a catalog.
     ///
-    /// # Erreurs
-    /// Renvoie [`CatalogPathError`] si le nom est vide ou contient un caractère
-    /// de contrôle.
+    /// # Errors
+    /// Returns [`CatalogPathError`] if the name is empty or contains a control
+    /// character.
     pub fn for_catalog(name: impl Into<String>) -> Result<Self, CatalogPathError> {
         Self::from_levels(Some(name.into()), None, None)
     }
 
-    /// Chemin désignant un espace de noms, sous un catalogue éventuel.
+    /// Path designating a namespace, under an optional catalog.
     ///
-    /// # Erreurs
-    /// Renvoie [`CatalogPathError`] si un nom est vide ou contient un caractère
-    /// de contrôle.
+    /// # Errors
+    /// Returns [`CatalogPathError`] if a name is empty or contains a control
+    /// character.
     pub fn for_namespace(
         catalog: Option<&str>,
         name: impl Into<String>,
@@ -302,12 +299,11 @@ impl CatalogPath {
         Self::from_levels(catalog.map(str::to_owned), Some(name.into()), None)
     }
 
-    /// Chemin désignant une relation, sous les paliers éventuels qui la
-    /// contiennent.
+    /// Path designating a relation, under the optional levels that contain it.
     ///
-    /// # Erreurs
-    /// Renvoie [`CatalogPathError`] si un nom est vide ou contient un caractère
-    /// de contrôle.
+    /// # Errors
+    /// Returns [`CatalogPathError`] if a name is empty or contains a control
+    /// character.
     pub fn for_relation(
         catalog: Option<&str>,
         namespace: Option<&str>,
@@ -320,25 +316,25 @@ impl CatalogPath {
         )
     }
 
-    /// Le palier catalogue, s'il est présent.
+    /// The catalog level, if present.
     #[must_use]
     pub fn catalog(&self) -> Option<&str> {
         self.catalog.as_deref()
     }
 
-    /// Le palier espace de noms, s'il est présent.
+    /// The namespace level, if present.
     #[must_use]
     pub fn namespace(&self) -> Option<&str> {
         self.namespace.as_deref()
     }
 
-    /// Le palier relation, s'il est présent.
+    /// The relation level, if present.
     #[must_use]
     pub fn relation(&self) -> Option<&str> {
         self.relation.as_deref()
     }
 
-    /// Le nom du palier le plus profond présent.
+    /// The name of the deepest present level.
     #[must_use]
     pub fn leaf(&self) -> Option<&str> {
         self.relation()
@@ -346,7 +342,7 @@ impl CatalogPath {
             .or_else(|| self.catalog())
     }
 
-    /// Le palier le plus profond présent.
+    /// The deepest present level.
     #[must_use]
     pub fn level(&self) -> CatalogLevel {
         if self.relation.is_some() {
@@ -360,13 +356,13 @@ impl CatalogPath {
         }
     }
 
-    /// Le chemin ne désigne-t-il aucun palier ?
+    /// Does the path designate no level?
     #[must_use]
     pub const fn is_empty(&self) -> bool {
         self.catalog.is_none() && self.namespace.is_none() && self.relation.is_none()
     }
 
-    /// Nombre de paliers présents. Un trou ne compte pas.
+    /// Number of present levels. A hole does not count.
     #[must_use]
     pub fn depth(&self) -> usize {
         usize::from(self.catalog.is_some())
@@ -374,16 +370,16 @@ impl CatalogPath {
             + usize::from(self.relation.is_some())
     }
 
-    /// Les paliers présents, du plus général au plus précis.
+    /// The present levels, from the most general to the most precise.
     pub fn segments(&self) -> impl Iterator<Item = &str> + '_ {
         [self.catalog(), self.namespace(), self.relation()]
             .into_iter()
             .flatten()
     }
 
-    /// Le chemin obtenu en retirant le palier le plus profond.
+    /// The path obtained by removing the deepest level.
     ///
-    /// Rend `None` pour le chemin vide.
+    /// Returns `None` for the empty path.
     #[must_use]
     pub fn parent(&self) -> Option<Self> {
         let mut parent = self.clone();
@@ -396,10 +392,10 @@ impl CatalogPath {
         Some(parent)
     }
 
-    /// Le même chemin, complété d'un palier espace de noms.
+    /// The same path, completed with a namespace level.
     ///
-    /// # Erreurs
-    /// Renvoie [`CatalogPathError`] si le nom est invalide.
+    /// # Errors
+    /// Returns [`CatalogPathError`] if the name is invalid.
     pub fn with_namespace(&self, name: impl Into<String>) -> Result<Self, CatalogPathError> {
         let name = name.into();
         validate_segment(&name)?;
@@ -410,10 +406,10 @@ impl CatalogPath {
         })
     }
 
-    /// Le même chemin, complété d'un palier relation.
+    /// The same path, completed with a relation level.
     ///
-    /// # Erreurs
-    /// Renvoie [`CatalogPathError`] si le nom est invalide.
+    /// # Errors
+    /// Returns [`CatalogPathError`] if the name is invalid.
     pub fn with_relation(&self, name: impl Into<String>) -> Result<Self, CatalogPathError> {
         let name = name.into();
         validate_segment(&name)?;
@@ -424,7 +420,7 @@ impl CatalogPath {
         })
     }
 
-    /// Le même chemin, complété d'un palier relation **déjà validé**.
+    /// The same path, completed with an **already validated** relation level.
     pub(crate) fn with_validated_relation(&self, name: &str) -> Self {
         Self {
             catalog: self.catalog.clone(),
@@ -433,17 +429,18 @@ impl CatalogPath {
         }
     }
 
-    /// Rend l'identifiant qualifié, chaque palier présent cité selon `quote`.
+    /// Returns the qualified identifier, each present level quoted according to
+    /// `quote`.
     ///
-    /// C'est **la** façon de composer un identifiant dans une requête produite
-    /// par Oxyn ([I-10]). Les paliers absents ne laissent pas de point vide : le
-    /// résultat est du texte de requête, pas un rendu réversible.
+    /// It is **the** way to compose an identifier in a query produced by Oxyn
+    /// ([I-10]). Missing levels leave no empty dot: the result is query text,
+    /// not a reversible rendering.
     ///
     /// ```
     /// use oxyn_catalog::path::{CatalogPath, QuoteStyle};
     ///
     /// let chemin = CatalogPath::for_relation(None, Some("public"), r#"users"; DROP TABLE audit; --"#)
-    ///     .expect("le nom est légal, seulement hostile");
+    ///     .expect("the name is legal, only hostile");
     /// assert_eq!(
     ///     chemin.qualify(QuoteStyle::Double),
     ///     r#""public"."users""; DROP TABLE audit; --""#
@@ -463,19 +460,19 @@ impl CatalogPath {
         sortie
     }
 
-    /// Rend l'identifiant qualifié pour un dialecte SQL.
+    /// Returns the qualified identifier for a SQL dialect.
     ///
-    /// Ne choisit jamais [`QuoteStyle::Bare`] : un dialecte inconnu est cité en
-    /// ANSI plutôt que laissé nu.
+    /// Never picks [`QuoteStyle::Bare`]: an unknown dialect is quoted ANSI-style
+    /// rather than left bare.
     #[must_use]
     pub fn qualify_sql(&self, dialect: SqlDialect) -> String {
         self.qualify(QuoteStyle::for_dialect(dialect))
     }
 
-    /// Ce chemin est-il situé sous `prefix` ?
+    /// Is this path located under `prefix`?
     ///
-    /// Un palier absent dans `prefix` n'impose rien ; un palier présent doit
-    /// correspondre exactement. Le chemin vide contient tout.
+    /// A level missing in `prefix` imposes nothing; a present level must match
+    /// exactly. The empty path contains everything.
     #[must_use]
     pub fn starts_with(&self, prefix: &Self) -> bool {
         let correspond = |exige: Option<&str>, reel: Option<&str>| match exige {
@@ -488,7 +485,8 @@ impl CatalogPath {
     }
 }
 
-/// Écrit un segment, cité si — et seulement si — le rendu resterait ambigu.
+/// Writes a segment, quoted if — and only if — the rendering would stay
+/// ambiguous.
 fn ecrire_segment(f: &mut fmt::Formatter<'_>, nom: &str) -> fmt::Result {
     if !nom.contains('.') && !nom.contains('"') {
         return f.write_str(nom);
@@ -504,12 +502,12 @@ fn ecrire_segment(f: &mut fmt::Formatter<'_>, nom: &str) -> fmt::Result {
 }
 
 impl fmt::Display for CatalogPath {
-    /// Rend le chemin sous une forme relisible par [`FromStr`].
+    /// Renders the path in a form [`FromStr`] can read back.
     ///
-    /// Les paliers absents **entre** le premier palier présent et la relation
-    /// laissent un segment vide (`base..label`), et un chemin qui s'arrête avant
-    /// la relation garde ses points de fin (`base.schema.`). C'est ce qui rend
-    /// l'aller-retour exact ; voir la documentation du module.
+    /// Levels missing **between** the first present level and the relation
+    /// leave an empty segment (`base..label`), and a path that stops before the
+    /// relation keeps its trailing dots (`base.schema.`). That is what makes
+    /// the round trip exact; see the module documentation.
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let paliers = [self.catalog(), self.namespace(), self.relation()];
         let Some(premier) = paliers.iter().position(Option::is_some) else {
@@ -527,19 +525,19 @@ impl fmt::Display for CatalogPath {
     }
 }
 
-/// État de l'analyseur de segments.
+/// State of the segment parser.
 enum EtatLecture {
-    /// Hors citation.
+    /// Outside a quote.
     Normal,
-    /// À l'intérieur d'une citation.
+    /// Inside a quote.
     Cite,
-    /// Juste après une citation fermée : seul un séparateur est acceptable.
+    /// Right after a closed quote: only a separator is acceptable.
     ApresCitation,
 }
 
-/// Découpe une chaîne en segments, en respectant les citations `"…"`.
+/// Splits a string into segments, honoring `"…"` quotes.
 ///
-/// Rend `None` pour un segment vide, c'est-à-dire un palier absent.
+/// Returns `None` for an empty segment, that is a missing level.
 fn decouper(entree: &str) -> Result<Vec<Option<String>>, CatalogPathError> {
     let mut segments = Vec::with_capacity(PALIERS);
     let mut courant = String::new();
@@ -595,7 +593,7 @@ fn decouper(entree: &str) -> Result<Vec<Option<String>>, CatalogPathError> {
     }
 }
 
-/// Clôt le segment en cours.
+/// Closes the current segment.
 fn cloturer(courant: &mut String, etait_cite: bool) -> Result<Option<String>, CatalogPathError> {
     let valeur = std::mem::take(courant);
     if valeur.is_empty() {
@@ -611,12 +609,12 @@ fn cloturer(courant: &mut String, etait_cite: bool) -> Result<Option<String>, Ca
 impl FromStr for CatalogPath {
     type Err = CatalogPathError;
 
-    /// Analyse un chemin en alignant les segments **par la droite** : le dernier
-    /// segment est la relation.
+    /// Parses a path by aligning the segments **from the right**: the last
+    /// segment is the relation.
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         let segments = decouper(s)?;
         if segments.len() > PALIERS {
-            return Err(CatalogPathError::new("plus de trois paliers"));
+            return Err(CatalogPathError::new("more than three levels"));
         }
         let mut paliers: [Option<String>; PALIERS] = [None, None, None];
         let decalage = PALIERS - segments.len();
@@ -652,42 +650,42 @@ impl From<CatalogPath> for String {
 mod tests {
     use super::*;
 
-    /// Le nom de table de [I-10] : légal dans PostgreSQL, et une suppression de
-    /// table si on le concatène.
+    /// The table name of [I-10]: legal in PostgreSQL, and a table drop if it
+    /// is concatenated.
     const NOM_HOSTILE: &str = r#"users"; DROP TABLE audit; --"#;
 
     #[test]
-    fn les_paliers_absents_sont_tolerés() {
+    fn missing_levels_are_tolerated() {
         let postgres = CatalogPath::for_relation(Some("caisse"), Some("public"), "clients")
-            .expect("chemin valide");
+            .expect("valid path");
         assert_eq!(postgres.depth(), 3);
 
-        let mysql = CatalogPath::for_relation(None, Some("caisse"), "clients").expect("valide");
+        let mysql = CatalogPath::for_relation(None, Some("caisse"), "clients").expect("valid");
         assert_eq!(mysql.depth(), 2);
         assert_eq!(mysql.catalog(), None);
 
-        let elasticsearch = CatalogPath::for_relation(None, None, "journaux").expect("valide");
+        let elasticsearch = CatalogPath::for_relation(None, None, "journaux").expect("valid");
         assert_eq!(elasticsearch.depth(), 1);
         assert_eq!(elasticsearch.level(), CatalogLevel::Relation);
     }
 
     #[test]
-    fn le_rendu_est_naturel_pour_les_cas_courants() {
+    fn the_rendering_is_natural_for_common_cases() {
         assert_eq!(
             CatalogPath::for_relation(Some("caisse"), Some("public"), "clients")
-                .expect("valide")
+                .expect("valid")
                 .to_string(),
             "caisse.public.clients"
         );
         assert_eq!(
             CatalogPath::for_relation(None, Some("caisse"), "clients")
-                .expect("valide")
+                .expect("valid")
                 .to_string(),
             "caisse.clients"
         );
         assert_eq!(
             CatalogPath::for_relation(None, None, "journaux")
-                .expect("valide")
+                .expect("valid")
                 .to_string(),
             "journaux"
         );
@@ -695,48 +693,54 @@ mod tests {
     }
 
     #[test]
-    fn un_trou_au_milieu_se_rend_et_se_relit() {
-        // Neo4j : une base et un label de nœud, sans palier intermédiaire.
-        let neo4j = CatalogPath::for_relation(Some("graphe"), None, "Personne").expect("valide");
+    fn a_hole_in_the_middle_renders_and_reads_back() {
+        // Neo4j: a database and a node label, without an intermediate level.
+        let neo4j = CatalogPath::for_relation(Some("graphe"), None, "Personne").expect("valid");
         assert_eq!(neo4j.to_string(), "graphe..Personne");
 
-        let relu: CatalogPath = "graphe..Personne".parse().expect("relisible");
+        let relu: CatalogPath = "graphe..Personne".parse().expect("readable");
         assert_eq!(relu, neo4j);
         assert_eq!(relu.catalog(), Some("graphe"));
         assert_eq!(relu.namespace(), None);
     }
 
     #[test]
-    fn un_chemin_prefixe_garde_son_palier() {
-        // Le cas qui casse sans les points de fin : `caisse` seul serait relu
-        // comme une relation, et le palier catalogue disparaîtrait.
-        let catalogue = CatalogPath::for_catalog("caisse").expect("valide");
+    fn a_prefix_path_keeps_its_level() {
+        // The case that breaks without the trailing dots: `caisse` alone would
+        // be read back as a relation, and the catalog level would vanish.
+        let catalogue = CatalogPath::for_catalog("caisse").expect("valid");
         assert_eq!(catalogue.to_string(), "caisse..");
         assert_eq!(
-            catalogue.to_string().parse::<CatalogPath>().expect("relu"),
+            catalogue
+                .to_string()
+                .parse::<CatalogPath>()
+                .expect("read back"),
             catalogue
         );
 
-        let espace = CatalogPath::for_namespace(Some("caisse"), "public").expect("valide");
+        let espace = CatalogPath::for_namespace(Some("caisse"), "public").expect("valid");
         assert_eq!(espace.to_string(), "caisse.public.");
         assert_eq!(
-            espace.to_string().parse::<CatalogPath>().expect("relu"),
+            espace
+                .to_string()
+                .parse::<CatalogPath>()
+                .expect("read back"),
             espace
         );
 
-        let espace_seul = CatalogPath::for_namespace(None, "public").expect("valide");
+        let espace_seul = CatalogPath::for_namespace(None, "public").expect("valid");
         assert_eq!(espace_seul.to_string(), "public.");
         assert_eq!(
             espace_seul
                 .to_string()
                 .parse::<CatalogPath>()
-                .expect("relu"),
+                .expect("read back"),
             espace_seul
         );
     }
 
     #[test]
-    fn aller_retour_sur_tous_les_agencements_de_paliers() {
+    fn round_trip_over_every_level_arrangement() {
         for catalogue in [None, Some("c")] {
             for espace in [None, Some("n")] {
                 for relation in [None, Some("r")] {
@@ -745,42 +749,41 @@ mod tests {
                         espace.map(str::to_owned),
                         relation.map(str::to_owned),
                     )
-                    .expect("valide");
+                    .expect("valid");
                     let rendu = chemin.to_string();
-                    let relu: CatalogPath = rendu.parse().expect("relisible");
-                    assert_eq!(relu, chemin, "aller-retour cassé pour {rendu:?}");
+                    let relu: CatalogPath = rendu.parse().expect("readable");
+                    assert_eq!(relu, chemin, "round trip broken for {rendu:?}");
                 }
             }
         }
     }
 
     #[test]
-    fn un_nom_contenant_un_point_se_cite_au_rendu() {
-        let chemin =
-            CatalogPath::for_relation(None, Some("public"), "ventes.2026").expect("valide");
+    fn a_name_containing_a_dot_is_quoted_when_rendered() {
+        let chemin = CatalogPath::for_relation(None, Some("public"), "ventes.2026").expect("valid");
         assert_eq!(chemin.to_string(), r#"public."ventes.2026""#);
-        let relu: CatalogPath = chemin.to_string().parse().expect("relisible");
+        let relu: CatalogPath = chemin.to_string().parse().expect("readable");
         assert_eq!(relu, chemin);
         assert_eq!(relu.relation(), Some("ventes.2026"));
     }
 
     #[test]
-    fn un_nom_contenant_un_guillemet_se_cite_au_rendu() {
-        let chemin = CatalogPath::for_relation(None, None, NOM_HOSTILE).expect("valide");
-        let relu: CatalogPath = chemin.to_string().parse().expect("relisible");
+    fn a_name_containing_a_double_quote_is_quoted_when_rendered() {
+        let chemin = CatalogPath::for_relation(None, None, NOM_HOSTILE).expect("valid");
+        let relu: CatalogPath = chemin.to_string().parse().expect("readable");
         assert_eq!(relu, chemin);
         assert_eq!(relu.relation(), Some(NOM_HOSTILE));
     }
 
     #[test]
-    fn qualify_cite_un_nom_hostile() {
-        // I-10 : le SQL composé par Oxyn ne concatène jamais un identifiant reçu.
-        let chemin = CatalogPath::for_relation(None, Some("public"), NOM_HOSTILE).expect("valide");
+    fn qualify_quotes_a_hostile_name() {
+        // I-10: SQL composed by Oxyn never concatenates a received identifier.
+        let chemin = CatalogPath::for_relation(None, Some("public"), NOM_HOSTILE).expect("valid");
 
         let ansi = chemin.qualify(QuoteStyle::Double);
         assert_eq!(ansi, r#""public"."users""; DROP TABLE audit; --""#);
-        // Le point-virgule reste à l'intérieur de la citation : compté en
-        // guillemets, l'identifiant est entier.
+        // The semicolon stays inside the quoting: counted in double quotes, the
+        // identifier is whole.
         assert_eq!(ansi.matches('"').count() % 2, 0);
 
         let mysql = chemin.qualify(QuoteStyle::Backtick);
@@ -791,7 +794,7 @@ mod tests {
     }
 
     #[test]
-    fn qualify_double_le_caractere_fermant() {
+    fn qualify_doubles_the_closing_character() {
         assert_eq!(quote_identifier(r#"a"b"#, QuoteStyle::Double), r#""a""b""#);
         assert_eq!(quote_identifier("a`b", QuoteStyle::Backtick), "`a``b`");
         assert_eq!(quote_identifier("a]b", QuoteStyle::Bracket), "[a]]b]");
@@ -799,16 +802,16 @@ mod tests {
     }
 
     #[test]
-    fn qualify_ignore_les_paliers_absents() {
-        let neo4j = CatalogPath::for_relation(Some("graphe"), None, "Personne").expect("valide");
-        // Pas de `.` vide dans du texte de requête : ce serait une erreur de
-        // syntaxe, là où le rendu réversible en a besoin.
+    fn qualify_ignores_missing_levels() {
+        let neo4j = CatalogPath::for_relation(Some("graphe"), None, "Personne").expect("valid");
+        // No empty `.` in query text: it would be a syntax error, where the
+        // reversible rendering needs it.
         assert_eq!(neo4j.qualify(QuoteStyle::Double), r#""graphe"."Personne""#);
     }
 
     #[test]
-    fn qualify_sql_ne_laisse_jamais_un_nom_nu() {
-        let chemin = CatalogPath::for_relation(None, None, NOM_HOSTILE).expect("valide");
+    fn qualify_sql_never_leaves_a_bare_name() {
+        let chemin = CatalogPath::for_relation(None, None, NOM_HOSTILE).expect("valid");
         for dialecte in [
             SqlDialect::Ansi,
             SqlDialect::Postgres,
@@ -823,17 +826,17 @@ mod tests {
             SqlDialect::Redshift,
         ] {
             let rendu = chemin.qualify_sql(dialecte);
-            assert_ne!(rendu, NOM_HOSTILE, "{dialecte} laisse le nom nu");
-            let premier = rendu.chars().next().expect("rendu non vide");
+            assert_ne!(rendu, NOM_HOSTILE, "{dialecte} leaves the name bare");
+            let premier = rendu.chars().next().expect("non-empty rendering");
             assert!(
                 matches!(premier, '"' | '`' | '['),
-                "{dialecte} : {rendu} ne commence pas par une citation"
+                "{dialecte}: {rendu} does not start with a quote"
             );
         }
     }
 
     #[test]
-    fn un_palier_vide_ou_de_controle_est_refuse() {
+    fn an_empty_or_control_level_is_refused() {
         assert!(CatalogPath::for_relation(None, None, "").is_err());
         assert!(CatalogPath::for_relation(None, None, "a\u{1b}[31mb").is_err());
         assert!(CatalogPath::for_relation(None, None, "a\nb").is_err());
@@ -841,15 +844,15 @@ mod tests {
     }
 
     #[test]
-    fn une_erreur_ne_recopie_pas_la_valeur() {
+    fn an_error_does_not_copy_the_value() {
         let err = "a\u{1b}[2Jb"
             .parse::<CatalogPath>()
-            .expect_err("caractère de contrôle");
-        assert!(!err.to_string().contains('\u{1b}'), "la valeur a fuité");
+            .expect_err("control character");
+        assert!(!err.to_string().contains('\u{1b}'), "the value leaked");
     }
 
     #[test]
-    fn les_chemins_malformes_sont_refuses() {
+    fn malformed_paths_are_refused() {
         assert!("a.b.c.d".parse::<CatalogPath>().is_err());
         assert!(r#""non fermé"#.parse::<CatalogPath>().is_err());
         assert!(r#"a"b""#.parse::<CatalogPath>().is_err());
@@ -858,31 +861,31 @@ mod tests {
     }
 
     #[test]
-    fn parent_remonte_palier_par_palier() {
-        let relation = CatalogPath::for_relation(Some("c"), Some("n"), "r").expect("valide");
-        let espace = relation.parent().expect("une relation a un parent");
+    fn parent_climbs_level_by_level() {
+        let relation = CatalogPath::for_relation(Some("c"), Some("n"), "r").expect("valid");
+        let espace = relation.parent().expect("a relation has a parent");
         assert_eq!(espace.level(), CatalogLevel::Namespace);
-        let catalogue = espace.parent().expect("un espace a un parent");
+        let catalogue = espace.parent().expect("a namespace has a parent");
         assert_eq!(catalogue.level(), CatalogLevel::Catalog);
-        let serveur = catalogue.parent().expect("un catalogue a un parent");
+        let serveur = catalogue.parent().expect("a catalog has a parent");
         assert!(serveur.is_empty());
         assert_eq!(serveur.parent(), None);
     }
 
     #[test]
-    fn starts_with_ignore_les_paliers_non_exiges() {
-        let relation = CatalogPath::for_relation(Some("c"), Some("n"), "r").expect("valide");
+    fn starts_with_ignores_unrequired_levels() {
+        let relation = CatalogPath::for_relation(Some("c"), Some("n"), "r").expect("valid");
         assert!(relation.starts_with(&CatalogPath::empty()));
-        assert!(relation.starts_with(&CatalogPath::for_catalog("c").expect("valide")));
-        assert!(relation.starts_with(&CatalogPath::for_namespace(Some("c"), "n").expect("valide")));
-        assert!(!relation.starts_with(&CatalogPath::for_catalog("autre").expect("valide")));
+        assert!(relation.starts_with(&CatalogPath::for_catalog("c").expect("valid")));
+        assert!(relation.starts_with(&CatalogPath::for_namespace(Some("c"), "n").expect("valid")));
+        assert!(!relation.starts_with(&CatalogPath::for_catalog("autre").expect("valid")));
     }
 
     #[test]
-    fn le_segment_absent_ne_peut_pas_etre_un_nom() {
-        // La chaîne vide sert de clé « palier absent » dans le cache
-        // (`crate::cache`) : elle ne doit jamais pouvoir désigner un objet réel,
-        // sinon une table nommée `""` écraserait le nœud « palier absent ».
+    fn the_missing_segment_cannot_be_a_name() {
+        // The empty string serves as the "missing level" key in the cache
+        // (`crate::cache`): it must never be able to designate a real object,
+        // otherwise a table named `""` would overwrite the "missing level" node.
         assert!(validate_segment("").is_err());
     }
 }

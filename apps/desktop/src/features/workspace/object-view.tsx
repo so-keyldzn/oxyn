@@ -69,9 +69,9 @@ export type ObjectViewHandle = {
  * relations and definition, each loaded when its tab is opened.
  *
  * The preview has its own grid and its own cancellation; it replaces neither
- * the SQL draft nor the console's result (docs/UX-SPEC.md, « Données d'une
- * table sélectionnée »). It is kept once read: coming back to this object
- * shows it again without a new read. Nothing here runs SQL the user did not
+ * the SQL draft nor the console's result (docs/UX-SPEC.md, « Data of a selected
+ * table »). It is kept once read: coming back to this object shows it again
+ * without a new read. Nothing here runs SQL the user did not
  * write: the definition and the related-row query open in a console, where
  * the policy applies to whatever is run.
  */

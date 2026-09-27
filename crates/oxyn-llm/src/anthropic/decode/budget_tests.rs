@@ -1,5 +1,5 @@
-//! Chaque budget d'une génération, dépassé par une suite de trames dont
-//! aucune, seule, n'approche de la borne d'une trame SSE.
+//! Each budget of a generation, exceeded by a sequence of frames none of
+//! which, alone, comes close to the bound of an SSE frame.
 
 use serde_json::json;
 
@@ -29,8 +29,8 @@ fn jouer(trames: impl IntoIterator<Item = String>) -> (Vec<ChatEvent>, bool) {
     (sorties, decodeur.finished())
 }
 
-/// Une erreur qui nomme la limite, une coupure et non une fin, aucun appel
-/// d'outil proposé.
+/// An error that names the limit, a cut and not an end, no tool call
+/// proposed.
 fn arrete(sorties: &[ChatEvent], termine: bool, limite: usize) {
     assert!(termine, "the decoder stops at the first overrun");
     let erreur = sorties
@@ -88,7 +88,7 @@ fn arguments_past_their_budget_stop_the_call_before_its_close() {
             &json!({ "type": "input_json_delta", "partial_json": morceau }),
         )
     }));
-    // La fermeture arrive trop tard : l'appel est déjà jeté.
+    // The closing arrives too late: the call is already thrown away.
     trames.push(json!({ "type": "content_block_stop", "index": 0 }).to_string());
     let (sorties, termine) = jouer(trames);
     arrete(&sorties, termine, MAX_TOOL_ARGUMENTS_BYTES);

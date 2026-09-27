@@ -1,64 +1,64 @@
-//! Ce qu'un agent externe reçoit, et la seule porte qui sait le fabriquer.
+//! What an external agent receives, and the only gate that can make it.
 //!
-//! Autorité : [ADR-0027](../../../../docs/adr/0027-porte-unique-pour-les-deux-destinations.md).
+//! Authority: [ADR-0027](../../../../docs/adr/0027-porte-unique-pour-les-deux-destinations.md).
 //!
-//! # Le défaut que ce module ferme
+//! # The defect this module closes
 //!
-//! [`run_turn`](super::turn::run_turn) prenait son invite en `&str`. Le niveau
-//! de la connexion y gouvernait le **lancement** de l'agent — refus avant que le
-//! processus ne démarre — mais pas **l'assemblage de ce qui lui est envoyé**,
-//! puisqu'il n'y avait rien à assembler.
+//! [`run_turn`](super::turn::run_turn) took its prompt as a `&str`. The
+//! connection's tier governed the agent's **launch** there — refusal before
+//! the process starts — but not **the assembly of what is sent to it**, since
+//! there was nothing to assemble.
 //!
-//! Rien ne fuyait : l'unique appelant ne transmettait que la question tapée par
-//! l'utilisateur. Ce qui manquait n'était pas une protection, c'était la
-//! **garantie** — pour un fournisseur, « qu'est-ce qui est sorti ? » se répond en
-//! relisant une fonction ; pour un agent, il aurait fallu relire tous les
-//! appelants, présents et à venir. C'est exactement la propriété
-//! qu'[I-04](../../../../CLAUDE.md#i-04) existe pour supprimer.
+//! Nothing leaked: the only caller only passed the question typed by the user.
+//! What was missing was not a protection, it was the **guarantee** — for a
+//! provider, "what left?" is answered by rereading one function; for an agent,
+//! one would have had to reread every caller, present and future. It is exactly
+//! the property [I-04](../../../../CLAUDE.md#i-04) exists to remove.
 //!
-//! `.claude/rules/ia.md` nomme le raccourci qui la détruit : « juste pour le
-//! schéma, c'est du `Metadata` de toute façon ». Il se serait écrit ici en un
-//! `format!`, sans qu'aucun type ni aucun test ne rougisse.
+//! `.claude/rules/ia.md` names the shortcut that destroys it: "just for the
+//! schema, it's `Metadata` anyway". It would have been written here as a
+//! `format!`, without any type or test turning red.
 //!
-//! # Pourquoi un type mince, et non l'`AgentContext` du chemin fournisseur
+//! # Why a thin type, and not the provider path's `AgentContext`
 //!
-//! Un agent externe reçoit un texte, et c'est tout : il n'a l'usage ni d'un
-//! message système, ni d'une session de conversation à outils. Lui imposer
-//! l'`AgentSession` du chemin fournisseur serait l'abstraction pour un seul
-//! appelant que [CLAUDE.md](../../../../CLAUDE.md#code-organization)
-//! déconseille. Ce type porte donc le texte — et, quand un schéma l'accompagne,
-//! l'[`AgentContext`] qui l'a rendu, pour que l'appelant dise ce qui est parti.
+//! An external agent receives a text, and that is all: it has no use for a
+//! system message, nor for a tool conversation session. Imposing on it the
+//! provider path's `AgentSession` would be the abstraction for a single caller
+//! that [CLAUDE.md](../../../../CLAUDE.md#code-organization) advises against.
+//! This type therefore carries the text — and, when a schema comes with it,
+//! the [`AgentContext`] that rendered it, so that the caller can say what left.
 //!
-//! Ce module prend l'option **B** d'ADR-0027 : un type qui ne porte que ce qui
-//! part, dont les constructeurs exigent le niveau de la connexion.
+//! This module takes option **B** of ADR-0027: a type that only carries what
+//! leaves, whose constructors require the connection's tier.
 //!
-//! # Le schéma, et par quelle porte il entre
+//! # The schema, and through which gate it comes in
 //!
-//! Un agent externe qui ne reçoit que la question ne connaît pas la base : il
-//! lance `SELECT name FROM sqlite_master`, reçoit « 11 rows » — l'outil rend la
-//! forme, jamais les valeurs (ADR-0030 § 4) — et finit par proposer
-//! `SELECT * FROM your_table`. C'est ce qu'a constaté l'utilisateur le
+//! An external agent that only receives the question does not know the
+//! database: it runs `SELECT name FROM sqlite_master`, receives "11 rows" — the
+//! tool returns the shape, never the values (ADR-0030 § 4) — and ends up
+//! proposing `SELECT * FROM your_table`. That is what the user observed on
 //! 2026-09-23.
 //!
-//! [`AgentPrompt::with_schema`] y répond **sans écrire de seconde porte** : le
-//! schéma est rendu par [`ContextBuilder::build`], le point de passage d'I-04,
-//! le même code, sous le même niveau, avec le même budget que pour l'assistant
-//! interne. Ce module ne rend rien lui-même ; il place un bloc déjà rendu.
+//! [`AgentPrompt::with_schema`] answers it **without writing a second gate**:
+//! the schema is rendered by [`ContextBuilder::build`], the gateway of I-04, the
+//! same code, under the same tier, with the same budget as for the internal
+//! assistant. This module renders nothing itself; it places an already rendered
+//! block.
 //!
-//! # L'échantillon approuvé, et par la même porte
+//! # The approved sample, and through the same gate
 //!
-//! Un échantillon que l'utilisateur a approuvé colonne par colonne entre dans
-//! l'invite par le **même** appel : [`AgentPrompt::with_schema`] le passe à
-//! [`ContextBuilder::with_samples`], qui l'écarte sous tout niveau autre que
-//! `Sampled`. Ce module ne rend aucune valeur lui-même
+//! A sample the user approved column by column comes into the prompt through
+//! the **same** call: [`AgentPrompt::with_schema`] passes it to
+//! [`ContextBuilder::with_samples`], which drops it under any tier other than
+//! `Sampled`. This module renders no value itself
 //! ([ADR-0034](../../../../docs/adr/0034-echantillon-pour-toute-destination.md)).
 //!
-//! La mémoire de l'agent n'est pas l'affaire de ce type, et c'est pourquoi
-//! [`AgentPrompt::from_user`] ne prend pas d'échantillon : une invite qui
-//! **continue** une session parle à un processus qui se souvient, et une valeur
-//! montrée là y resterait. L'appelant qui joint un échantillon ouvre une session
-//! neuve — `with_schema` est le constructeur d'ouverture — et la relâche après
-//! l'échange, qui ne laisse aucune mémoire.
+//! The agent's memory is not this type's business, and that is why
+//! [`AgentPrompt::from_user`] takes no sample: a prompt that **continues** a
+//! session talks to a process that remembers, and a value shown there would
+//! stay there. The caller that attaches a sample opens a new session —
+//! `with_schema` is the opening constructor — and releases it after the
+//! exchange, which leaves no memory.
 
 use std::fmt;
 
@@ -69,13 +69,14 @@ use crate::context::{AgentContext, ContextBuilder, Mention, QUESTION_HEADER, Row
 use crate::privacy::PrivacyTier;
 use crate::untrusted;
 
-/// Ce qui précède le schéma : d'où il vient, et ce qu'on peut en attendre.
+/// What precedes the schema: where it comes from, and what can be expected of
+/// it.
 ///
-/// En anglais, parce qu'il part vers un modèle. Il dit aussi ce que l'outil
-/// **ne** rend pas : un agent qui attend des lignes de `execute_query` conclut
-/// qu'il ne peut pas lire la base, et c'est la panne constatée. Composé à
-/// l'appel : les noms d'outils et du serveur viennent de leurs constantes, pas
-/// d'une copie.
+/// In English, because it goes to a model. It also says what the tool does
+/// **not** return: an agent that expects rows from `execute_query` concludes it
+/// cannot read the database, and that is the failure observed. Composed at the
+/// call: the names of the tools and of the server come from their constants,
+/// not from a copy.
 fn schema_intro() -> String {
     format!(
         "You are working inside Oxyn, a database workspace. The structure of the database the \
@@ -92,17 +93,17 @@ fn schema_intro() -> String {
     )
 }
 
-/// Ce qui part vers un agent externe, une fois le niveau appliqué.
+/// What leaves for an external agent, once the tier is applied.
 ///
-/// **Aucun constructeur public naïf.** Les seules façons d'en obtenir un sont
-/// [`AgentPrompt::from_user`] et [`AgentPrompt::with_schema`], qui exigent le
-/// niveau de la connexion. Un `From<String>` ou un `new(&str)` rouvrirait
-/// exactement le trou que ce type ferme — c'est la discipline à maintenir, et la
-/// seule.
+/// **No naive public constructor.** The only ways to get one are
+/// [`AgentPrompt::from_user`] and [`AgentPrompt::with_schema`], which require
+/// the connection's tier. A `From<String>` or a `new(&str)` would reopen
+/// exactly the hole this type closes — it is the discipline to maintain, and
+/// the only one.
 ///
-/// Le `Debug` est écrit à la main : le texte porte des noms de tables et de
-/// colonnes de la base de l'utilisateur, qu'un `tracing::debug!("{prompt:?}")`
-/// écrirait dans un journal.
+/// The `Debug` is written by hand: the text carries table and column names of
+/// the user's database, which a `tracing::debug!("{prompt:?}")` would write to
+/// a log.
 #[derive(Clone, PartialEq)]
 pub struct AgentPrompt {
     text: String,
@@ -122,27 +123,26 @@ impl fmt::Debug for AgentPrompt {
 }
 
 impl AgentPrompt {
-    /// Compose l'invite à partir de ce que **l'utilisateur a tapé**, et de rien
-    /// d'autre.
+    /// Composes the prompt from what **the user typed**, and nothing else.
     ///
-    /// # Ce que cette porte garantit, et ce qu'elle ne garantit pas
+    /// # What this gate guarantees, and what it does not
     ///
-    /// Elle garantit qu'une invite d'agent externe ne peut naître que d'une
-    /// saisie utilisateur, sous un niveau qui admet cette destination. Elle ne
-    /// prétend pas filtrer le contenu de la saisie : ce que l'utilisateur écrit
-    /// lui appartient, et [ADR-0006](../../../../docs/adr/0006-ai-privacy-tiers.md)
-    /// n'a jamais eu pour objet de censurer sa propre question.
+    /// It guarantees that an external agent prompt can only be born from user
+    /// input, under a tier that admits this destination. It does not claim to
+    /// filter the content of the input: what the user writes belongs to them,
+    /// and [ADR-0006](../../../../docs/adr/0006-ai-privacy-tiers.md) was never
+    /// meant to censor their own question.
     ///
-    /// Du contexte ne rejoint cette invite que par [`AgentPrompt::with_schema`],
-    /// qui le fait rendre par [`ContextBuilder::build`].
+    /// Context only reaches this prompt through [`AgentPrompt::with_schema`],
+    /// which has it rendered by [`ContextBuilder::build`].
     ///
-    /// # Erreurs
+    /// # Errors
     ///
-    /// [`OxynError::Config`] si le niveau ferme les agents externes, ou si la
-    /// question est vide. Le message ne recopie jamais la saisie.
+    /// [`OxynError::Config`] if the tier closes external agents, or if the
+    /// question is empty. The message never copies the input.
     pub fn from_user(tier: PrivacyTier, question: &str) -> Result<Self, OxynError> {
-        // Le même refus que `run_turn`, mais **avant** qu'une invite n'existe :
-        // sous un niveau qui ferme les agents, il n'y a rien à composer.
+        // The same refusal as `run_turn`, but **before** a prompt exists: under
+        // a tier that closes agents, there is nothing to compose.
         if !tier.allows_remote_provider() {
             return Err(OxynError::Config(
                 "this connection is marked local-only, and Oxyn cannot see where an external \
@@ -160,30 +160,30 @@ impl AgentPrompt {
         })
     }
 
-    /// Compose l'invite qui ouvre une session d'agent : la structure de la base,
-    /// puis la question.
+    /// Composes the prompt that opens an agent session: the structure of the
+    /// database, then the question.
     ///
-    /// Le schéma est rendu par [`ContextBuilder::build`] sous `tier` — le point
-    /// de passage d'[I-04](../../../../CLAUDE.md#i-04), avec son budget, sa
-    /// sélection orientée par la question et son encadré `untrusted`. Le
-    /// préambule qui dit ce qu'est un encadré vient **avant** l'encadré, comme
-    /// dans le message système de l'assistant interne : un modèle qui lit la
-    /// consigne après les données a déjà lu les données.
+    /// The schema is rendered by [`ContextBuilder::build`] under `tier` — the
+    /// gateway of [I-04](../../../../CLAUDE.md#i-04), with its budget, its
+    /// question-driven selection and its `untrusted` fence. The preamble that
+    /// says what a fence is comes **before** the fence, as in the internal
+    /// assistant's system message: a model that reads the instruction after the
+    /// data has already read the data.
     ///
-    /// `samples` sont les échantillons que l'utilisateur a approuvés pour
-    /// **cette** question. Ils entrent par [`ContextBuilder::with_samples`], et
-    /// n'en sortent que sous `Sampled` : sous tout autre niveau ils sont
-    /// écartés, et [`AgentContext::dropped_samples`] le dit. L'appelant qui en
-    /// joint ouvre une session neuve et la relâche après l'échange (voir
-    /// l'en-tête du module).
+    /// `samples` are the samples the user approved for **this** question. They
+    /// come in through [`ContextBuilder::with_samples`], and only leave under
+    /// `Sampled`: under any other tier they are dropped, and
+    /// [`AgentContext::dropped_samples`] says so. The caller that attaches some
+    /// opens a new session and releases it after the exchange (see the module
+    /// header).
     ///
-    /// `mentions` sont les objets que l'utilisateur a nommés d'un `@` : décrits
-    /// en tête par [`ContextBuilder::with_mentions`], sous le même budget.
+    /// `mentions` are the objects the user named with an `@`: described first
+    /// by [`ContextBuilder::with_mentions`], under the same budget.
     ///
-    /// # Erreurs
+    /// # Errors
     ///
-    /// Celles de [`AgentPrompt::from_user`], vérifiées **avant** que le moindre
-    /// schéma ne soit rendu.
+    /// Those of [`AgentPrompt::from_user`], checked **before** any schema is
+    /// rendered.
     pub fn with_schema(
         tier: PrivacyTier,
         question: &str,
@@ -212,20 +212,20 @@ impl AgentPrompt {
         })
     }
 
-    /// Compose l'invite d'une question qui **suit** une session déjà ouverte.
+    /// Composes the prompt of a question that **follows** an already open
+    /// session.
     ///
-    /// Sans mention, c'est [`AgentPrompt::from_user`] : la session connaît le
-    /// schéma depuis son ouverture. Avec des mentions, les objets nommés
-    /// précèdent la question, rendus par [`ContextBuilder::build`] en mode
-    /// [`ContextBuilder::mentioned_only`] — la même porte, le même niveau, le
-    /// même budget qu'à l'ouverture ; seule la recherche n'y ajoute rien,
-    /// puisque le reste a déjà été dit. Aucun échantillon : une invite qui
-    /// continue parle à un processus qui se souvient (voir l'en-tête du
-    /// module).
+    /// Without mentions, it is [`AgentPrompt::from_user`]: the session knows
+    /// the schema since its opening. With mentions, the named objects precede
+    /// the question, rendered by [`ContextBuilder::build`] in
+    /// [`ContextBuilder::mentioned_only`] mode — the same gate, the same tier,
+    /// the same budget as at the opening; only the search adds nothing, since
+    /// the rest has already been said. No sample: a prompt that continues talks
+    /// to a process that remembers (see the module header).
     ///
-    /// # Erreurs
+    /// # Errors
     ///
-    /// Celles de [`AgentPrompt::from_user`], vérifiées avant tout rendu.
+    /// Those of [`AgentPrompt::from_user`], checked before any rendering.
     pub fn following(
         tier: PrivacyTier,
         question: &str,
@@ -248,17 +248,17 @@ impl AgentPrompt {
         })
     }
 
-    /// Le texte qui part sur le protocole.
+    /// The text that leaves on the protocol.
     ///
-    /// Emprunté et non rendu : ce type n'existe que pour être consommé par
+    /// Borrowed and not returned: this type only exists to be consumed by
     /// [`run_turn`](super::turn::run_turn).
     #[must_use]
     pub fn as_str(&self) -> &str {
         &self.text
     }
 
-    /// Le contexte joint, s'il y en a un — pour dire à l'utilisateur ce qui
-    /// est parti : combien de relations, combien écartées, quel coût.
+    /// The attached context, if there is one — to tell the user what left: how
+    /// many relations, how many dropped, what cost.
     #[must_use]
     pub const fn context(&self) -> Option<&AgentContext> {
         self.context.as_ref()

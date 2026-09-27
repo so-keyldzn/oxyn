@@ -1,35 +1,35 @@
-//! Le cache d'introspection : un arbre en mémoire, alimentable par morceaux.
+//! The introspection cache: an in-memory tree, fed piece by piece.
 //!
-//! C'est ce qui rend l'exploration possible sans aller-retour serveur, et ce
-//! qui rend le workspace IA viable : le contexte d'un agent se construit à partir du
-//! catalogue local, pas d'un aller-retour serveur à chaque question
+//! It is what makes exploration possible without a server round trip, and
+//! what makes the AI workspace viable: an agent's context is built from the
+//! local catalog, not from a server round trip for every question
 //! (ARCHITECTURE §6).
 //!
-//! # Trois décisions qui gouvernent ce module
+//! # Three decisions that govern this module
 //!
-//! **Un palier jamais lu n'est pas périmé : il est absent.**
-//! [`CatalogCache::stale`] ne rend que des nœuds lus au moins une fois. Sans
-//! cette règle, un rafraîchissement de fond décrirait les 20 000 relations d'un
-//! schéma que personne n'a ouvertes — exactement ce que la paresse du
-//! [`CatalogProvider`](crate::provider::CatalogProvider) évite.
+//! **A level never read is not stale: it is absent.**
+//! [`CatalogCache::stale`] only returns nodes read at least once. Without this
+//! rule, a background refresh would describe the 20,000 relations of a schema
+//! nobody opened — exactly what the laziness of the
+//! [`CatalogProvider`](crate::provider::CatalogProvider) avoids.
 //!
-//! **Invalider n'est pas oublier.** [`CatalogCache::invalidate`] marque un
-//! sous-arbre à relire mais **garde ses données** : l'arbre reste consultable
-//! pendant le rafraîchissement ou après sa panne, et vider l'arborescence au premier `ALTER TABLE` la
-//! ferait clignoter. [`CatalogCache::forget`] existe pour ce qui a réellement
-//! disparu.
+//! **Invalidating is not forgetting.** [`CatalogCache::invalidate`] marks a
+//! subtree for rereading but **keeps its data**: the tree stays readable
+//! during the refresh or after it fails, and emptying the tree at the first
+//! `ALTER TABLE` would make it flicker. [`CatalogCache::forget`] exists for what
+//! has really disappeared.
 //!
-//! **L'horloge est celle du mur.** Le cache est sérialisable, et un `Instant`
-//! monotone ne se sérialise pas. Un recul
-//! de l'horloge rend donc un nœud « pas encore périmé » plutôt que périmé — le
-//! sens prudent, puisque l'autre inviterait à réintrospecter en boucle.
+//! **The clock is the wall clock.** The cache is serializable, and a monotonic
+//! `Instant` does not serialize. A clock going backwards therefore makes a node
+//! "not stale yet" rather than stale — the cautious direction, since the other
+//! would invite re-introspecting in a loop.
 //!
-//! # Concurrence
+//! # Concurrency
 //!
-//! [`CatalogCache`] n'a pas de verrou interne : le partage est le choix de
-//! l'appelant, et [`SharedCatalog`] en donne la forme habituelle — le thread
-//! d'interface lit, la tâche de rafraîchissement écrit. La section critique se
-//! limite à des métadonnées en mémoire, jamais à une entrée-sortie (I-05).
+//! [`CatalogCache`] has no internal lock: sharing is the caller's choice, and
+//! [`SharedCatalog`] gives its usual form — the interface thread reads, the
+//! refresh task writes. The critical section is limited to in-memory metadata,
+//! never to I/O (I-05).
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -48,18 +48,18 @@ use crate::path::{CatalogLevel, CatalogPath};
 
 mod listing;
 
-/// Clé de nœud d'un palier absent.
+/// Node key of a missing level.
 ///
-/// La chaîne vide ne peut pas nommer un objet — `crate::path::validate_segment`
-/// la refuse —, donc elle n'entre jamais en collision avec un nom réel. C'est ce
-/// qui permet à MySQL (« pas de palier catalogue ») et à une base PostgreSQL
-/// réellement nommée d'occuper le même arbre sans se marcher dessus.
+/// The empty string cannot name an object — `crate::path::validate_segment`
+/// refuses it —, so it never collides with a real name. That is what lets
+/// MySQL ("no catalog level") and a really named PostgreSQL database occupy the
+/// same tree without stepping on each other.
 const PALIER_ABSENT: &str = "";
 
 const MAX_DEFINITIONS: usize = 16;
 const MAX_DEFINITION_BYTES: usize = 16 * 1024 * 1024;
 
-/// La clé de nœud correspondant à un nom de palier éventuel.
+/// The node key matching an optional level name.
 fn cle(nom: Option<&str>) -> &str {
     nom.unwrap_or(PALIER_ABSENT)
 }
@@ -73,7 +73,7 @@ fn definition_bytes(definition: &RelationDefinition) -> usize {
         })
 }
 
-/// Le nom de palier correspondant à une clé de nœud.
+/// The level name matching a node key.
 fn depuis_cle(valeur: &str) -> Option<String> {
     if valeur.is_empty() {
         None
@@ -82,28 +82,28 @@ fn depuis_cle(valeur: &str) -> Option<String> {
     }
 }
 
-/// Un partage habituel du cache : lecture par l'interface, écriture par la
-/// tâche de rafraîchissement.
+/// The usual sharing of the cache: read by the interface, written by the
+/// refresh task.
 pub type SharedCatalog = Arc<RwLock<CatalogCache>>;
 
-/// Le cache d'une connexion, remis à qui a obtenu le droit de le lire.
+/// The cache of a connection, handed to whoever got the right to read it.
 ///
-/// Existe pour traverser les rapports d'exécution — qui se comparent et se
-/// journalisent — sans copier le cache : deux poignées sont égales quand elles
-/// désignent **le même** cache, et le `Debug` ne dit rien de son contenu, qui
-/// porte les noms d'objets de la base de l'utilisateur.
+/// Exists to go through execution reports — which are compared and logged —
+/// without copying the cache: two handles are equal when they designate **the
+/// same** cache, and `Debug` says nothing of its content, which carries the
+/// object names of the user's database.
 #[derive(Clone)]
 pub struct CatalogHandle(SharedCatalog);
 
 impl CatalogHandle {
-    /// Enveloppe un cache partagé.
+    /// Wraps a shared cache.
     #[must_use]
     pub const fn new(catalog: SharedCatalog) -> Self {
         Self(catalog)
     }
 
-    /// Le cache désigné. La lecture prend le verrou du cache : ne pas la
-    /// garder au-delà d'un rendu.
+    /// The designated cache. Reading takes the cache's lock: do not hold it
+    /// beyond a render.
     #[must_use]
     pub const fn catalog(&self) -> &SharedCatalog {
         &self.0
@@ -124,25 +124,25 @@ impl std::fmt::Debug for CatalogHandle {
     }
 }
 
-/// Ce qu'une opération sur le cache peut refuser.
+/// What an operation on the cache can refuse.
 ///
-/// Ces refus dénoncent un **bug d'appel**, pas une panne : passer un chemin
-/// d'espace de noms là où une relation est attendue, ou attacher des index à une
-/// relation dont le cache n'a jamais entendu parler. D'où la conversion vers
+/// These refusals denounce a **calling bug**, not a failure: passing a
+/// namespace path where a relation is expected, or attaching indexes to a
+/// relation the cache never heard of. Hence the conversion to
 /// [`OxynError::Internal`](oxyn_core::OxynError::Internal).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, thiserror::Error)]
 #[non_exhaustive]
 pub enum CacheError {
-    /// Le chemin ne désigne pas une relation.
+    /// The path does not designate a relation.
     #[error("the path does not name a relation")]
     NotARelation,
-    /// Le chemin descend plus bas que le palier espace de noms.
+    /// The path goes lower than the namespace level.
     #[error("the path does not name a namespace")]
     NotANamespace,
-    /// La relation visée n'est pas dans le cache.
+    /// The target relation is not in the cache.
     ///
-    /// Attacher des index à une relation inconnue en inventerait une, avec une
-    /// nature devinée. Lister ou décrire la relation d'abord.
+    /// Attaching indexes to an unknown relation would invent one, with a
+    /// guessed kind. List or describe the relation first.
     #[error("the relation is not in the cache")]
     UnknownRelation,
 }
@@ -153,40 +153,39 @@ impl From<CacheError> for oxyn_core::OxynError {
     }
 }
 
-/// L'état de fraîcheur d'un nœud du cache.
+/// The freshness state of a cache node.
 ///
-/// Trois états, et pas deux : « jamais lu » et « lu puis invalidé » se
-/// ressemblent — ni l'un ni l'autre n'a de donnée à jour — mais appellent des
-/// conduites opposées. Le premier attend qu'on le demande ; le second doit être
-/// relu tout de suite.
+/// Three states, not two: "never read" and "read then invalidated" look alike
+/// — neither has up-to-date data — but call for opposite conduct. The first
+/// waits to be asked for; the second must be reread right away.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Freshness {
-    /// Jamais lu. **N'est pas périmé** : il est absent, et son chargement est
-    /// une expansion paresseuse déclenchée par l'utilisateur.
+    /// Never read. **Is not stale**: it is absent, and loading it is a lazy
+    /// expansion triggered by the user.
     #[default]
     Never,
-    /// Lu à cet instant.
+    /// Read at this instant.
     Fetched(DateTime<Utc>),
-    /// Lu, puis invalidé — typiquement après un DDL émis depuis Oxyn. Périmé
-    /// quel que soit le délai.
+    /// Read, then invalidated — typically after a DDL issued from Oxyn. Stale
+    /// whatever the delay.
     Invalidated,
 }
 
 impl Freshness {
-    /// Marque une lecture qui vient d'avoir lieu.
+    /// Marks a read that just happened.
     #[must_use]
     pub fn now() -> Self {
         Self::Fetched(Utc::now())
     }
 
-    /// Ce nœud a-t-il déjà été lu ?
+    /// Has this node already been read?
     #[must_use]
     pub const fn is_known(&self) -> bool {
         !matches!(self, Self::Never)
     }
 
-    /// Instant de la dernière lecture, s'il y en a eu une.
+    /// Instant of the last read, if there was one.
     #[must_use]
     pub const fn fetched_at(&self) -> Option<DateTime<Utc>> {
         match self {
@@ -195,8 +194,7 @@ impl Freshness {
         }
     }
 
-    /// Ce nœud doit-il être relu, à l'instant `now` et pour une durée de vie
-    /// `ttl` ?
+    /// Must this node be reread, at instant `now` and for a lifetime `ttl`?
     #[must_use]
     pub fn is_stale_at(&self, now: DateTime<Utc>, ttl: Duration) -> bool {
         match self {
@@ -204,17 +202,17 @@ impl Freshness {
             Self::Invalidated => true,
             Self::Fetched(instant) => match TimeDelta::from_std(ttl) {
                 Ok(limite) => now.signed_duration_since(*instant) > limite,
-                // Une durée de vie hors des bornes de `chrono` (plus de ~584
-                // millénaires) ne périme rien. Le sens inverse ferait
-                // réintrospecter en boucle sur une valeur aberrante.
+                // A lifetime beyond `chrono`'s bounds (more than ~584
+                // millennia) makes nothing stale. The other direction would
+                // re-introspect in a loop on an aberrant value.
                 Err(_) => false,
             },
         }
     }
 
-    /// Passe à [`Invalidated`](Self::Invalidated), sauf si le nœud n'a jamais
-    /// été lu — invalider ce qui n'a jamais existé le ferait apparaître dans
-    /// [`CatalogCache::stale`] sans que personne ne l'ait demandé.
+    /// Goes to [`Invalidated`](Self::Invalidated), unless the node was never
+    /// read — invalidating what never existed would make it appear in
+    /// [`CatalogCache::stale`] without anyone asking for it.
     fn invalidate(&mut self) {
         if self.is_known() {
             *self = Self::Invalidated;
@@ -222,7 +220,7 @@ impl Freshness {
     }
 }
 
-/// Une valeur du cache et sa fraîcheur.
+/// A cache value and its freshness.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct Cached<T> {
     freshness: Freshness,
@@ -239,25 +237,25 @@ impl<T: Default> Default for Cached<T> {
 }
 
 impl<T> Cached<T> {
-    /// Remplace la valeur et la marque lue maintenant.
+    /// Replaces the value and marks it read now.
     fn set(&mut self, value: T) {
         self.value = value;
         self.freshness = Freshness::now();
     }
 }
 
-/// Un catalogue et ses espaces de noms.
+/// A catalog and its namespaces.
 ///
-/// `info` vaut `None` pour le nœud qui porte un **palier absent** : MySQL n'a
-/// pas de catalogue, et lui en inventer un au nom vide le ferait apparaître dans
-/// l'arborescence.
+/// `info` is `None` for the node that carries a **missing level**: MySQL has
+/// no catalog, and inventing one with an empty name would make it appear in
+/// the tree.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct CatalogNode {
     info: Option<CatalogRef>,
     namespaces: Cached<IndexMap<String, NamespaceNode>>,
 }
 
-/// Un espace de noms et ses relations. `info` suit la même règle que
+/// A namespace and its relations. `info` follows the same rule as
 /// [`CatalogNode::info`].
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct NamespaceNode {
@@ -265,7 +263,7 @@ struct NamespaceNode {
     relations: Cached<IndexMap<String, RelationNode>>,
 }
 
-/// Une relation : son résumé, et les trois détails qui se demandent séparément.
+/// A relation: its summary, and the three details requested separately.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 struct RelationNode {
     summary: RelationRef,
@@ -309,21 +307,21 @@ impl RelationNode {
     }
 }
 
-/// Le sous-arbre visé par une invalidation ou un rafraîchissement.
+/// The subtree targeted by an invalidation or a refresh.
 ///
-/// Un scope désigne un nœud **et tout ce qui est dessous** : rafraîchir
-/// [`Server`](Self::Server) relit l'arbre entier, rafraîchir
-/// [`Relation`](Self::Relation) ne relit qu'une table.
+/// A scope designates a node **and everything below**: refreshing
+/// [`Server`](Self::Server) rereads the whole tree, refreshing
+/// [`Relation`](Self::Relation) rereads only one table.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CatalogScope {
-    /// Tout le serveur.
+    /// The whole server.
     Server,
-    /// Un catalogue et son contenu.
+    /// A catalog and its content.
     Catalog(CatalogPath),
-    /// Un espace de noms et ses relations.
+    /// A namespace and its relations.
     Namespace(CatalogPath),
-    /// Une relation : sa description, ses index, ses clés étrangères.
+    /// A relation: its description, its indexes, its foreign keys.
     Relation(CatalogPath),
     /// Only the constraints of a relation.
     Constraints(CatalogPath),
@@ -334,10 +332,9 @@ pub enum CatalogScope {
 }
 
 impl CatalogScope {
-    /// Le scope correspondant au palier le plus profond d'un chemin.
+    /// The scope matching the deepest level of a path.
     ///
-    /// Ne peut pas se tromper de variante, contrairement à une construction
-    /// directe.
+    /// Cannot pick the wrong variant, unlike a direct construction.
     #[must_use]
     pub fn of(path: &CatalogPath) -> Self {
         match path.level() {
@@ -348,7 +345,7 @@ impl CatalogScope {
         }
     }
 
-    /// Le chemin visé, hors [`Server`](Self::Server) qui n'en a pas.
+    /// The targeted path, except for [`Server`](Self::Server) which has none.
     #[must_use]
     pub const fn path(&self) -> Option<&CatalogPath> {
         match self {
@@ -362,7 +359,7 @@ impl CatalogScope {
         }
     }
 
-    /// Le palier visé.
+    /// The targeted level.
     #[must_use]
     pub const fn level(&self) -> CatalogLevel {
         match self {
@@ -376,10 +373,10 @@ impl CatalogScope {
         }
     }
 
-    /// Ce scope couvre-t-il `other` ?
+    /// Does this scope cover `other`?
     ///
-    /// Sert à ne pas rafraîchir deux fois : rafraîchir un espace de noms couvre
-    /// déjà chacune de ses relations. Un scope se couvre lui-même.
+    /// Serves to avoid refreshing twice: refreshing a namespace already covers
+    /// each of its relations. A scope covers itself.
     #[must_use]
     pub fn contains(&self, other: &Self) -> bool {
         if matches!(
@@ -410,15 +407,15 @@ impl std::fmt::Display for CatalogScope {
     }
 }
 
-/// L'arbre de métadonnées d'**une** connexion.
+/// The metadata tree of **one** connection.
 ///
-/// Alimentable par morceaux : décrire une relation ne demande pas d'avoir
-/// d'abord listé son espace de noms. Les paliers manquants sont créés au
-/// passage, avec une fraîcheur [`Freshness::Never`] — ils sont là pour porter
-/// leur enfant, ils ne prétendent pas avoir été lus.
+/// Fed piece by piece: describing a relation does not require listing its
+/// namespace first. Missing levels are created on the way, with a
+/// [`Freshness::Never`] freshness — they are there to carry their child, they
+/// do not claim to have been read.
 ///
-/// Sérialisable de bout en bout, en un format lisible sans Oxyn (I-11). Il
-/// n'est pas persisté : une persistance future passera par un ADR
+/// Serializable end to end, in a format readable without Oxyn (I-11). It is
+/// not persisted: a future persistence will go through an ADR
 /// (ARCHITECTURE §6).
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct CatalogCache {
@@ -427,32 +424,32 @@ pub struct CatalogCache {
 }
 
 impl CatalogCache {
-    /// Un cache vide.
+    /// An empty cache.
     #[must_use]
     pub fn new() -> Self {
         Self::default()
     }
 
-    // ── Écriture ────────────────────────────────────────────────────────────
+    // ── Writing ─────────────────────────────────────────────────────────────
 
-    /// Enregistre l'identité du serveur et les capacités de la session.
+    /// Records the server identity and the session capabilities.
     pub fn set_server_info(&mut self, info: ServerInfo) {
         self.server.set(Some(info));
     }
 
-    /// Enregistre la liste des catalogues.
+    /// Records the list of catalogs.
     ///
-    /// Les catalogues absents de la liste sont **retirés** : un listing frais
-    /// fait autorité sur son palier. Ceux qui subsistent gardent leur
-    /// sous-arbre, donc leur fraîcheur.
+    /// Catalogs missing from the list are **removed**: a fresh listing is
+    /// authoritative on its level. Those that remain keep their subtree, hence
+    /// their freshness.
     pub fn set_catalogs(&mut self, catalogs: Vec<CatalogRef>) {
         let mut ancien = std::mem::take(&mut self.catalogs.value);
         let mut nouveau = IndexMap::with_capacity(catalogs.len());
         for info in catalogs {
             let cle_noeud = info.name().to_owned();
-            // `swap_remove` et non `shift_remove` : la carte d'origine est
-            // jetée, et un retrait ordonné coûterait un parcours par élément —
-            // quadratique sur un serveur à mille bases.
+            // `swap_remove` and not `shift_remove`: the original map is thrown
+            // away, and an ordered removal would cost one walk per element —
+            // quadratic on a server with a thousand databases.
             let noeud = match ancien.swap_remove(&cle_noeud) {
                 Some(mut existant) => {
                     existant.info = Some(info);
@@ -468,12 +465,12 @@ impl CatalogCache {
         self.catalogs.set(nouveau);
     }
 
-    /// Enregistre les espaces de noms d'un catalogue, ou du serveur quand
-    /// `catalog` vaut `None`.
+    /// Records the namespaces of a catalog, or of the server when `catalog` is
+    /// `None`.
     ///
-    /// Le catalogue est créé s'il manque. Chaque référence est réattachée au
-    /// parent donné : le chemin d'un [`NamespaceRef`] et sa position dans
-    /// l'arbre ne peuvent donc pas diverger.
+    /// The catalog is created if missing. Each reference is reattached to the
+    /// given parent: the path of a [`NamespaceRef`] and its position in the
+    /// tree therefore cannot diverge.
     pub fn set_namespaces(&mut self, catalog: Option<&str>, namespaces: Vec<NamespaceRef>) {
         let parent = CatalogPath::from_validated(catalog.map(str::to_owned), None, None);
         let noeud = self.catalog_node_mut(catalog);
@@ -497,13 +494,13 @@ impl CatalogCache {
         noeud.namespaces.set(nouveau);
     }
 
-    /// Enregistre les relations d'un espace de noms.
+    /// Records the relations of a namespace.
     ///
-    /// Les détails déjà connus des relations qui subsistent sont conservés :
-    /// relister un schéma ne doit pas obliger à redécrire chaque table ouverte.
+    /// The details already known of the relations that remain are kept:
+    /// relisting a schema must not force redescribing every open table.
     ///
-    /// # Erreurs
-    /// [`CacheError::NotANamespace`] si `namespace` désigne une relation.
+    /// # Errors
+    /// [`CacheError::NotANamespace`] if `namespace` designates a relation.
     pub fn set_relations(
         &mut self,
         namespace: &CatalogPath,
@@ -532,19 +529,19 @@ impl CatalogCache {
         Ok(())
     }
 
-    /// Enregistre la description complète d'une relation.
+    /// Records the full description of a relation.
     ///
-    /// Les paliers manquants sont créés, et la relation elle-même si le listing
-    /// n'a pas encore eu lieu : décrire une table trouvée par la recherche ne
-    /// doit pas exiger d'avoir d'abord listé son schéma. La nature du nœud créé
-    /// vient de [`Relation::kind`], jamais d'une valeur par défaut.
+    /// Missing levels are created, and the relation itself if the listing has
+    /// not happened yet: describing a table found by the search must not require
+    /// listing its schema first. The kind of the created node comes from
+    /// [`Relation::kind`], never from a default value.
     ///
-    /// Les types imbriqués au-delà de
-    /// [`MAX_TYPE_DEPTH`](crate::nesting::MAX_TYPE_DEPTH) sont coupés : un
-    /// document inféré sans fin ferait déborder la pile au premier `Drop`.
+    /// Types nested beyond [`MAX_TYPE_DEPTH`](crate::nesting::MAX_TYPE_DEPTH)
+    /// are cut: an endlessly inferred document would overflow the stack at the
+    /// first `Drop`.
     ///
-    /// # Erreurs
-    /// [`CacheError::NotARelation`] si `path` ne nomme pas de relation.
+    /// # Errors
+    /// [`CacheError::NotARelation`] if `path` does not name a relation.
     pub fn set_relation(
         &mut self,
         path: &CatalogPath,
@@ -557,12 +554,12 @@ impl CatalogCache {
         Ok(())
     }
 
-    /// Enregistre les index d'une relation.
+    /// Records the indexes of a relation.
     ///
-    /// # Erreurs
-    /// [`CacheError::NotARelation`] si `path` ne nomme pas de relation,
-    /// [`CacheError::UnknownRelation`] si la relation n'a été ni listée ni
-    /// décrite : la créer ici obligerait à deviner sa nature.
+    /// # Errors
+    /// [`CacheError::NotARelation`] if `path` does not name a relation,
+    /// [`CacheError::UnknownRelation`] if the relation was neither listed nor
+    /// described: creating it here would force guessing its kind.
     pub fn set_indexes(
         &mut self,
         path: &CatalogPath,
@@ -574,10 +571,10 @@ impl CatalogCache {
         Ok(())
     }
 
-    /// Enregistre les clés étrangères d'une relation.
+    /// Records the foreign keys of a relation.
     ///
-    /// # Erreurs
-    /// Les mêmes que [`Self::set_indexes`].
+    /// # Errors
+    /// The same as [`Self::set_indexes`].
     pub fn set_foreign_keys(
         &mut self,
         path: &CatalogPath,
@@ -690,18 +687,18 @@ impl CatalogCache {
         }
     }
 
-    // ── Lecture ─────────────────────────────────────────────────────────────
+    // ── Reading ─────────────────────────────────────────────────────────────
 
-    /// L'identité du serveur, si elle a été lue.
+    /// The server identity, if it was read.
     #[must_use]
     pub fn server_info(&self) -> Option<&ServerInfo> {
         self.server.value.as_ref()
     }
 
-    /// Les catalogues connus, dans l'ordre où le serveur les a donnés.
+    /// The known catalogs, in the order the server gave them.
     ///
-    /// Le nœud « palier absent » n'y figure pas : une source sans catalogue rend
-    /// un itérateur vide, ce qui est la vérité.
+    /// The "missing level" node is not among them: a source without a catalog
+    /// returns an empty iterator, which is the truth.
     pub fn catalogs(&self) -> impl Iterator<Item = &CatalogRef> + '_ {
         self.catalogs
             .value
@@ -709,9 +706,9 @@ impl CatalogCache {
             .filter_map(|noeud| noeud.info.as_ref())
     }
 
-    /// Les espaces de noms d'un catalogue. Itérateur vide si le catalogue est
-    /// inconnu — l'absence d'information n'est pas une erreur ici, c'est l'état
-    /// normal d'un arbre paresseux.
+    /// The namespaces of a catalog. Empty iterator if the catalog is unknown —
+    /// the absence of information is not an error here, it is the normal state
+    /// of a lazy tree.
     pub fn namespaces(&self, catalog: Option<&str>) -> impl Iterator<Item = &NamespaceRef> + '_ {
         self.catalogs
             .value
@@ -722,8 +719,8 @@ impl CatalogCache {
             .filter_map(|noeud| noeud.info.as_ref())
     }
 
-    /// Les relations d'un espace de noms. Itérateur vide si l'espace de noms est
-    /// inconnu.
+    /// The relations of a namespace. Empty iterator if the namespace is
+    /// unknown.
     pub fn relations(&self, namespace: &CatalogPath) -> impl Iterator<Item = &RelationRef> + '_ {
         self.namespace_node(namespace)
             .map(|noeud| noeud.relations.value.values())
@@ -732,41 +729,40 @@ impl CatalogCache {
             .map(|noeud| &noeud.summary)
     }
 
-    /// Le résumé d'une relation.
+    /// The summary of a relation.
     #[must_use]
     pub fn relation_summary(&self, path: &CatalogPath) -> Option<&RelationRef> {
         self.relation_node(path).map(|noeud| &noeud.summary)
     }
 
-    /// La description d'une relation, si elle a été demandée.
+    /// The description of a relation, if it was requested.
     #[must_use]
     pub fn relation(&self, path: &CatalogPath) -> Option<&Relation> {
         self.relation_node(path)?.detail.value.as_ref()
     }
 
-    /// Les index d'une relation, s'ils ont été demandés.
+    /// The indexes of a relation, if they were requested.
     ///
-    /// `None` signifie « pas lu », pas « aucun index » : c'est le tranchant du
-    /// modèle de capacités, et la tranche vide dit bien, elle, « aucun ».
+    /// `None` means "not read", not "no index": it is the cutting edge of the
+    /// capability model, and the empty slice, for its part, does say "none".
     #[must_use]
     pub fn indexes(&self, path: &CatalogPath) -> Option<&[Index]> {
         self.relation_node(path)?.indexes.value.as_deref()
     }
 
-    /// Les clés étrangères d'une relation, si elles ont été demandées. Même
-    /// distinction que pour [`Self::indexes`].
+    /// The foreign keys of a relation, if they were requested. Same
+    /// distinction as for [`Self::indexes`].
     #[must_use]
     pub fn foreign_keys(&self, path: &CatalogPath) -> Option<&[ForeignKey]> {
         self.relation_node(path)?.foreign_keys.value.as_deref()
     }
 
-    /// Toutes les relations connues, avec leur description quand elle a été
-    /// demandée.
+    /// Every known relation, with its description when it was requested.
     ///
-    /// C'est le parcours qu'emploie [`fn@crate::search`]. Aucun chemin n'est
-    /// construit ici : chaque [`RelationRef`] porte déjà le sien, et allouer
-    /// trois chaînes par relation à chaque frappe dans une barre de recherche
-    /// serait un défaut de conception, pas une optimisation à faire plus tard.
+    /// It is the walk [`fn@crate::search`] uses. No path is built here: each
+    /// [`RelationRef`] already carries its own, and allocating three strings
+    /// per relation on every keystroke in a search bar would be a design
+    /// defect, not an optimization to do later.
     pub fn iter_relations(&self) -> impl Iterator<Item = (&RelationRef, Option<&Relation>)> + '_ {
         self.catalogs
             .value
@@ -776,22 +772,22 @@ impl CatalogCache {
             .map(|relation| (&relation.summary, relation.detail.value.as_ref()))
     }
 
-    /// Nombre de relations connues, tous paliers confondus.
+    /// Number of known relations, all levels together.
     #[must_use]
     pub fn relation_count(&self) -> usize {
         self.iter_relations().count()
     }
 
-    /// Le cache ne contient-il rien du tout ?
+    /// Does the cache contain nothing at all?
     #[must_use]
     pub fn is_empty(&self) -> bool {
         self.server.value.is_none() && self.catalogs.value.is_empty()
     }
 
-    /// La fraîcheur d'un sous-arbre, telle que son nœud racine la porte.
+    /// The freshness of a subtree, as its root node carries it.
     ///
-    /// Rend [`Freshness::Never`] pour un nœud inconnu : ne pas connaître un nœud
-    /// et ne l'avoir jamais lu sont la même chose.
+    /// Returns [`Freshness::Never`] for an unknown node: not knowing a node and
+    /// never having read it are the same thing.
     #[must_use]
     pub fn freshness(&self, scope: &CatalogScope) -> Freshness {
         match scope {
@@ -819,23 +815,23 @@ impl CatalogCache {
         }
     }
 
-    // ── Péremption ──────────────────────────────────────────────────────────
+    // ── Staleness ───────────────────────────────────────────────────────────
 
-    /// Les sous-arbres à relire, pour une durée de vie donnée.
+    /// The subtrees to reread, for a given lifetime.
     ///
-    /// Rend un ensemble **minimal** : aucun scope rendu n'en couvre un autre,
-    /// puisque rafraîchir un parent rafraîchit ses enfants. Un rafraîchissement
-    /// de fond peut donc parcourir la liste sans dédoublonner.
+    /// Returns a **minimal** set: no returned scope covers another, since
+    /// refreshing a parent refreshes its children. A background refresh can
+    /// therefore walk the list without deduplicating.
     ///
-    /// Un nœud jamais lu n'y figure pas : il est absent, pas périmé. Voir la
-    /// documentation du module.
+    /// A node never read is not in it: it is absent, not stale. See the module
+    /// documentation.
     #[must_use]
     pub fn stale(&self, ttl: Duration) -> Vec<CatalogScope> {
         self.stale_at(Utc::now(), ttl)
     }
 
-    /// [`Self::stale`], avec l'instant courant fourni. Rend les tests
-    /// déterministes ; c'est la seule raison de son existence.
+    /// [`Self::stale`], with the current instant supplied. Makes tests
+    /// deterministic; it is the only reason it exists.
     #[must_use]
     pub fn stale_at(&self, now: DateTime<Utc>, ttl: Duration) -> Vec<CatalogScope> {
         if self.server.freshness.is_stale_at(now, ttl)
@@ -884,13 +880,12 @@ impl CatalogCache {
 
     // ── Invalidation ────────────────────────────────────────────────────────
 
-    /// Marque un sous-arbre à relire, **sans effacer ses données**.
+    /// Marks a subtree for rereading, **without erasing its data**.
     ///
-    /// À appeler immédiatement après tout DDL émis depuis Oxyn (ARCHITECTURE
-    /// §6). Le scope à viser est celui de l'objet touché : un `ALTER TABLE`
-    /// invalide la relation ; un `CREATE TABLE` ou un `DROP TABLE` invalide
-    /// l'**espace de noms**, parce que c'est son listing qui vient de devenir
-    /// faux.
+    /// To call immediately after any DDL issued from Oxyn (ARCHITECTURE §6).
+    /// The scope to target is that of the touched object: an `ALTER TABLE`
+    /// invalidates the relation; a `CREATE TABLE` or a `DROP TABLE` invalidates
+    /// the **namespace**, because it is its listing that just became wrong.
     pub fn invalidate(&mut self, scope: &CatalogScope) {
         tracing::debug!(scope = %scope, "catalog cache invalidated");
         match scope {
@@ -934,17 +929,16 @@ impl CatalogCache {
         }
     }
 
-    /// Marque tout le cache à relire.
+    /// Marks the whole cache for rereading.
     pub fn invalidate_all(&mut self) {
         self.invalidate(&CatalogScope::Server);
     }
 
-    /// Retire un sous-arbre du cache.
+    /// Removes a subtree from the cache.
     ///
-    /// Pour ce qui a réellement disparu — un `DROP` dont Oxyn est l'auteur. Le
-    /// listing du parent est invalidé au passage : il vient de devenir faux, et
-    /// le laisser frais ferait réapparaître l'objet au prochain
-    /// rafraîchissement.
+    /// For what has really disappeared — a `DROP` Oxyn authored. The parent's
+    /// listing is invalidated on the way: it just became wrong, and leaving it
+    /// fresh would make the object reappear at the next refresh.
     pub fn forget(&mut self, scope: &CatalogScope) {
         tracing::debug!(scope = %scope, "catalog cache entry removed");
         match scope {
@@ -1048,7 +1042,7 @@ impl CatalogCache {
         }
     }
 
-    // ── Navigation interne ──────────────────────────────────────────────────
+    // ── Internal navigation ─────────────────────────────────────────────────
 
     fn invalidate_catalog(catalogue: &mut CatalogNode) {
         catalogue.namespaces.freshness.invalidate();
@@ -1095,7 +1089,7 @@ impl CatalogCache {
             .get_mut(nom_relation.as_str())
     }
 
-    /// Le nœud d'une relation **déjà connue**.
+    /// The node of an **already known** relation.
     fn relation_node_existing_mut(
         &mut self,
         path: &CatalogPath,
@@ -1107,11 +1101,11 @@ impl CatalogCache {
             .ok_or(CacheError::UnknownRelation)
     }
 
-    /// Le nœud de catalogue, créé s'il manque.
+    /// The catalog node, created if missing.
     ///
-    /// Le nœud créé porte une fraîcheur [`Freshness::Never`] : il existe pour
-    /// porter un enfant, il ne prétend pas avoir été listé. Son `info` reste
-    /// `None` quand le palier est absent.
+    /// The created node carries a [`Freshness::Never`] freshness: it exists to
+    /// carry a child, it does not claim to have been listed. Its `info` stays
+    /// `None` when the level is missing.
     fn catalog_node_mut(&mut self, catalog: Option<&str>) -> &mut CatalogNode {
         let info = catalog.map(|nom| CatalogRef::validated(nom.to_owned()));
         self.catalogs
@@ -1123,7 +1117,7 @@ impl CatalogCache {
             })
     }
 
-    /// Le nœud d'espace de noms, avec ses parents, créés s'ils manquent.
+    /// The namespace node, with its parents, created if missing.
     fn namespace_node_mut(&mut self, path: &CatalogPath) -> &mut NamespaceNode {
         let parent = CatalogPath::from_validated(path.catalog().map(str::to_owned), None, None);
         let info = path
@@ -1140,10 +1134,10 @@ impl CatalogCache {
             })
     }
 
-    /// Le nœud de relation, avec ses parents, créés s'ils manquent.
+    /// The relation node, with its parents, created if missing.
     ///
-    /// `kind` ne sert qu'à la création : le résumé d'une relation déjà listée
-    /// fait autorité sur sa nature.
+    /// `kind` only serves at creation: the summary of an already listed
+    /// relation is authoritative on its kind.
     fn relation_node_or_create(
         &mut self,
         path: &CatalogPath,
@@ -1178,11 +1172,11 @@ mod tests {
     const HEURE: Duration = Duration::from_secs(3600);
 
     fn chemin(catalogue: Option<&str>, espace: Option<&str>, relation: &str) -> CatalogPath {
-        CatalogPath::for_relation(catalogue, espace, relation).expect("chemin valide")
+        CatalogPath::for_relation(catalogue, espace, relation).expect("valid path")
     }
 
     fn espace_public() -> CatalogPath {
-        CatalogPath::for_namespace(Some("caisse"), "public").expect("chemin valide")
+        CatalogPath::for_namespace(Some("caisse"), "public").expect("valid path")
     }
 
     fn cache_postgres() -> CatalogCache {
@@ -1192,15 +1186,12 @@ mod tests {
             "17.2",
             Capabilities::SQL | Capabilities::SCHEMAS,
         ));
-        cache.set_catalogs(vec![CatalogRef::new("caisse").expect("valide")]);
+        cache.set_catalogs(vec![CatalogRef::new("caisse").expect("valid")]);
         cache.set_namespaces(
             Some("caisse"),
             vec![
-                NamespaceRef::new(
-                    CatalogPath::for_catalog("caisse").expect("valide"),
-                    "public",
-                )
-                .expect("valide"),
+                NamespaceRef::new(CatalogPath::for_catalog("caisse").expect("valid"), "public")
+                    .expect("valid"),
             ],
         );
         let espace = espace_public();
@@ -1209,12 +1200,12 @@ mod tests {
                 &espace,
                 vec![
                     RelationRef::new(espace.clone(), "clients", RelationKind::Table)
-                        .expect("valide"),
+                        .expect("valid"),
                     RelationRef::new(espace.clone(), "commandes", RelationKind::Table)
-                        .expect("valide"),
+                        .expect("valid"),
                 ],
             )
-            .expect("un espace de noms est bien un espace de noms");
+            .expect("a namespace is indeed a namespace");
         cache
     }
 
@@ -1247,7 +1238,7 @@ mod tests {
             Freshness::Never
         );
 
-        let catalogue = CatalogPath::for_catalog("caisse").expect("valide");
+        let catalogue = CatalogPath::for_catalog("caisse").expect("valid");
         cache.evict(&CatalogScope::Catalog(catalogue));
         assert_eq!(cache.namespaces(Some("caisse")).count(), 0);
         assert_eq!(cache.catalogs().count(), 1);
@@ -1350,18 +1341,18 @@ mod tests {
     }
 
     #[test]
-    fn un_cache_neuf_est_vide_et_ne_perime_rien() {
+    fn a_new_cache_is_empty_and_makes_nothing_stale() {
         let cache = CatalogCache::new();
         assert!(cache.is_empty());
         assert_eq!(cache.server_info(), None);
         assert!(
             cache.stale(HEURE).is_empty(),
-            "un palier jamais lu est absent, pas périmé"
+            "a level never read is absent, not stale"
         );
     }
 
     #[test]
-    fn l_arbre_se_remplit_palier_par_palier() {
+    fn the_tree_fills_level_by_level() {
         let cache = cache_postgres();
         assert_eq!(cache.catalogs().count(), 1);
         assert_eq!(cache.namespaces(Some("caisse")).count(), 1);
@@ -1374,10 +1365,10 @@ mod tests {
     }
 
     #[test]
-    fn interroger_un_noeud_inconnu_rend_du_vide_pas_une_erreur() {
+    fn querying_an_unknown_node_returns_empty_not_an_error() {
         let cache = cache_postgres();
         assert_eq!(cache.namespaces(Some("inexistant")).count(), 0);
-        let ailleurs = CatalogPath::for_namespace(Some("caisse"), "inexistant").expect("valide");
+        let ailleurs = CatalogPath::for_namespace(Some("caisse"), "inexistant").expect("valid");
         assert_eq!(cache.relations(&ailleurs).count(), 0);
         assert!(
             cache
@@ -1387,27 +1378,27 @@ mod tests {
     }
 
     #[test]
-    fn une_insertion_partielle_cree_ses_parents() {
-        // Le cas de la recherche : on décrit une table sans avoir listé son
-        // schéma.
+    fn a_partial_insertion_creates_its_parents() {
+        // The search case: a table is described without its schema being
+        // listed.
         let mut cache = CatalogCache::new();
         let table = chemin(Some("caisse"), Some("public"), "clients");
         cache
             .set_relation(&table, Relation::new("clients", RelationKind::Table))
-            .expect("le chemin nomme une relation");
+            .expect("the path names a relation");
 
         assert!(cache.relation(&table).is_some());
         assert_eq!(cache.relation_count(), 1);
         assert!(
             cache.stale(HEURE).is_empty(),
-            "les parents créés au passage n'ont jamais été lus : ils ne sont pas périmés"
+            "the parents created on the way were never read: they are not stale"
         );
     }
 
     #[test]
-    fn une_relation_creee_au_passage_garde_sa_nature() {
-        // La nature vient de la description, jamais d'un défaut : une collection
-        // MongoDB affichée comme une table serait une surface d'interface fausse.
+    fn a_relation_created_on_the_way_keeps_its_kind() {
+        // The kind comes from the description, never from a default: a MongoDB
+        // collection displayed as a table would be a wrong interface surface.
         let mut cache = CatalogCache::new();
         let collection = chemin(None, Some("boutique"), "commandes");
         cache
@@ -1415,7 +1406,7 @@ mod tests {
                 &collection,
                 Relation::new("commandes", RelationKind::Collection),
             )
-            .expect("valide");
+            .expect("valid");
         assert_eq!(
             cache.relation_summary(&collection).map(|r| r.kind),
             Some(RelationKind::Collection)
@@ -1423,40 +1414,40 @@ mod tests {
     }
 
     #[test]
-    fn un_chemin_du_mauvais_palier_est_un_bug_d_appel() {
+    fn a_path_at_the_wrong_level_is_a_calling_bug() {
         let mut cache = CatalogCache::new();
         let err = cache
             .set_relation(
                 &espace_public(),
                 Relation::new("clients", RelationKind::Table),
             )
-            .expect_err("un espace de noms n'est pas une relation");
+            .expect_err("a namespace is not a relation");
         assert_eq!(err, CacheError::NotARelation);
 
         let table = chemin(Some("caisse"), Some("public"), "clients");
         assert_eq!(
             cache
                 .set_relations(&table, Vec::new())
-                .expect_err("une relation n'est pas un espace de noms"),
+                .expect_err("a relation is not a namespace"),
             CacheError::NotANamespace
         );
     }
 
     #[test]
-    fn attacher_des_index_a_une_relation_inconnue_est_refuse() {
-        // La créer ici obligerait à deviner sa nature.
+    fn attaching_indexes_to_an_unknown_relation_is_refused() {
+        // Creating it here would force guessing its kind.
         let mut cache = CatalogCache::new();
         let table = chemin(Some("caisse"), Some("public"), "clients");
         assert_eq!(
             cache
                 .set_indexes(&table, Vec::new())
-                .expect_err("relation jamais vue"),
+                .expect_err("relation never seen"),
             CacheError::UnknownRelation
         );
     }
 
     #[test]
-    fn relister_conserve_les_details_des_relations_qui_subsistent() {
+    fn relisting_keeps_the_details_of_remaining_relations() {
         let mut cache = cache_postgres();
         let table = chemin(Some("caisse"), Some("public"), "clients");
         cache
@@ -1469,7 +1460,7 @@ mod tests {
                     "int8",
                 )]),
             )
-            .expect("valide");
+            .expect("valid");
 
         let espace = espace_public();
         cache
@@ -1477,64 +1468,64 @@ mod tests {
                 &espace,
                 vec![
                     RelationRef::new(espace.clone(), "clients", RelationKind::Table)
-                        .expect("valide"),
+                        .expect("valid"),
                 ],
             )
-            .expect("valide");
+            .expect("valid");
 
         assert!(
             cache.relation(&table).is_some(),
-            "relister un schéma ne doit pas obliger à redécrire chaque table ouverte"
+            "relisting a schema must not force redescribing every open table"
         );
         assert!(
             cache
                 .relation(&chemin(Some("caisse"), Some("public"), "commandes"))
                 .is_none(),
-            "une relation absente du listing frais disparaît"
+            "a relation missing from the fresh listing disappears"
         );
         assert_eq!(cache.relation_count(), 1);
     }
 
     #[test]
-    fn les_paliers_absents_ne_se_confondent_pas() {
-        // MySQL n'a pas de palier catalogue. Le nœud « palier absent » ne doit
-        // pas entrer en collision avec un catalogue réellement nommé.
+    fn missing_levels_do_not_get_confused() {
+        // MySQL has no catalog level. The "missing level" node must not
+        // collide with a really named catalog.
         let mut cache = CatalogCache::new();
-        let espace_mysql = CatalogPath::for_namespace(None, "caisse").expect("valide");
+        let espace_mysql = CatalogPath::for_namespace(None, "caisse").expect("valid");
         cache
             .set_relations(
                 &espace_mysql,
                 vec![
                     RelationRef::new(espace_mysql.clone(), "clients", RelationKind::Table)
-                        .expect("valide"),
+                        .expect("valid"),
                 ],
             )
-            .expect("valide");
+            .expect("valid");
 
         assert_eq!(cache.relations(&espace_mysql).count(), 1);
-        let sous_catalogue = CatalogPath::for_namespace(Some("caisse"), "caisse").expect("valide");
+        let sous_catalogue = CatalogPath::for_namespace(Some("caisse"), "caisse").expect("valid");
         assert_eq!(cache.relations(&sous_catalogue).count(), 0);
         assert_eq!(
             cache.catalogs().count(),
             0,
-            "un palier absent ne s'affiche pas comme un catalogue anonyme"
+            "a missing level is not displayed as an anonymous catalog"
         );
     }
 
     #[test]
-    fn un_trou_intermediaire_se_navigue() {
-        // Neo4j : catalogue + relation, sans espace de noms.
+    fn an_intermediate_hole_can_be_navigated() {
+        // Neo4j: catalog + relation, without a namespace.
         let mut cache = CatalogCache::new();
-        let base = CatalogPath::for_catalog("graphe").expect("valide");
+        let base = CatalogPath::for_catalog("graphe").expect("valid");
         cache
             .set_relations(
                 &base,
                 vec![
                     RelationRef::new(base.clone(), "Personne", RelationKind::NodeLabel)
-                        .expect("valide"),
+                        .expect("valid"),
                 ],
             )
-            .expect("un catalogue est un parent acceptable");
+            .expect("a catalog is an acceptable parent");
 
         let label = chemin(Some("graphe"), None, "Personne");
         assert!(cache.relation_summary(&label).is_some());
@@ -1546,71 +1537,68 @@ mod tests {
     }
 
     #[test]
-    fn ce_qui_n_a_pas_ete_lu_se_distingue_de_ce_qui_est_vide() {
+    fn what_was_not_read_differs_from_what_is_empty() {
         let mut cache = cache_postgres();
         let table = chemin(Some("caisse"), Some("public"), "clients");
         assert!(
             cache.indexes(&table).is_none(),
-            "« pas lu » n'est pas « aucun index »"
+            "\"not read\" is not \"no index\""
         );
 
-        cache.set_indexes(&table, Vec::new()).expect("valide");
-        let index = cache.indexes(&table).expect("les index ont été lus");
-        assert!(
-            index.is_empty(),
-            "une tranche vide dit bien « aucun index »"
-        );
+        cache.set_indexes(&table, Vec::new()).expect("valid");
+        let index = cache.indexes(&table).expect("the indexes were read");
+        assert!(index.is_empty(), "an empty slice does say \"no index\"");
     }
 
     #[test]
-    fn la_peremption_suit_la_duree_de_vie() {
+    fn staleness_follows_the_lifetime() {
         let cache = cache_postgres();
         assert!(
             cache.stale(HEURE).is_empty(),
-            "les listings viennent d'être écrits"
+            "the listings were just written"
         );
         let perimes = cache.stale_at(Utc::now() + TimeDelta::hours(2), HEURE);
         assert_eq!(
             perimes,
             vec![CatalogScope::Server],
-            "le scope rendu est minimal"
+            "the returned scope is minimal"
         );
     }
 
     #[test]
-    fn la_peremption_rend_un_ensemble_minimal() {
+    fn staleness_returns_a_minimal_set() {
         let mut cache = cache_postgres();
         let table = chemin(Some("caisse"), Some("public"), "clients");
         cache
             .set_relation(&table, Relation::new("clients", RelationKind::Table))
-            .expect("valide");
+            .expect("valid");
 
         cache.invalidate(&CatalogScope::Relation(table.clone()));
         assert_eq!(
             cache.stale(HEURE),
             vec![CatalogScope::Relation(table)],
-            "seule la relation invalidée est à relire"
+            "only the invalidated relation is to be reread"
         );
 
-        // Invalider l'espace de noms au-dessus absorbe la relation : rafraîchir
-        // le parent rafraîchit l'enfant.
+        // Invalidating the namespace above absorbs the relation: refreshing the
+        // parent refreshes the child.
         let espace = espace_public();
         cache.invalidate(&CatalogScope::Namespace(espace.clone()));
         assert_eq!(cache.stale(HEURE), vec![CatalogScope::Namespace(espace)]);
     }
 
     #[test]
-    fn une_invalidation_ne_perd_pas_les_donnees() {
-        // L'arbre reste consultable pendant la relecture : le vider au
-        // premier ALTER TABLE la ferait clignoter.
+    fn an_invalidation_does_not_lose_the_data() {
+        // The tree stays readable during the reread: emptying it at the first
+        // ALTER TABLE would make it flicker.
         let mut cache = cache_postgres();
         let table = chemin(Some("caisse"), Some("public"), "clients");
         cache
             .set_relation(&table, Relation::new("clients", RelationKind::Table))
-            .expect("valide");
+            .expect("valid");
 
         cache.invalidate(&CatalogScope::Relation(table.clone()));
-        assert!(cache.relation(&table).is_some(), "la donnée reste lisible");
+        assert!(cache.relation(&table).is_some(), "the data stays readable");
         assert_eq!(
             cache.freshness(&CatalogScope::Relation(table.clone())),
             Freshness::Invalidated
@@ -1619,38 +1607,38 @@ mod tests {
     }
 
     #[test]
-    fn une_invalidation_descend_dans_le_sous_arbre() {
+    fn an_invalidation_descends_into_the_subtree() {
         let mut cache = cache_postgres();
         let table = chemin(Some("caisse"), Some("public"), "clients");
         cache
             .set_relation(&table, Relation::new("clients", RelationKind::Table))
-            .expect("valide");
+            .expect("valid");
 
         cache.invalidate_all();
         assert_eq!(
             cache.freshness(&CatalogScope::Relation(table)),
             Freshness::Invalidated,
-            "l'invalidation du serveur atteint les feuilles"
+            "the server invalidation reaches the leaves"
         );
         assert_eq!(cache.stale(HEURE), vec![CatalogScope::Server]);
     }
 
     #[test]
-    fn invalider_ce_qui_n_a_jamais_ete_lu_ne_le_fait_pas_apparaitre() {
+    fn invalidating_what_was_never_read_does_not_make_it_appear() {
         let mut cache = cache_postgres();
-        // La relation figure au listing, mais n'a jamais été décrite.
+        // The relation is in the listing, but was never described.
         let table = chemin(Some("caisse"), Some("public"), "clients");
         cache.invalidate(&CatalogScope::Relation(table));
         assert!(
             cache.stale(HEURE).is_empty(),
-            "invalider une description jamais demandée ne la met pas au travail"
+            "invalidating a description never requested does not put it to work"
         );
     }
 
     #[test]
-    fn oublier_invalide_le_listing_du_parent() {
-        // Après un DROP TABLE, le listing du schéma est devenu faux : le laisser
-        // frais ferait réapparaître la table au prochain rafraîchissement.
+    fn forgetting_invalidates_the_parent_listing() {
+        // After a DROP TABLE, the schema's listing became wrong: leaving it
+        // fresh would make the table reappear at the next refresh.
         let mut cache = cache_postgres();
         let table = chemin(Some("caisse"), Some("public"), "clients");
         cache.forget(&CatalogScope::Relation(table.clone()));
@@ -1666,17 +1654,17 @@ mod tests {
     }
 
     #[test]
-    fn oublier_le_serveur_vide_le_cache() {
+    fn forgetting_the_server_empties_the_cache() {
         let mut cache = cache_postgres();
         cache.forget(&CatalogScope::Server);
         assert!(cache.is_empty());
     }
 
     #[test]
-    fn un_scope_couvre_ses_descendants() {
+    fn a_scope_covers_its_descendants() {
         let table = chemin(Some("caisse"), Some("public"), "clients");
         let espace = espace_public();
-        let catalogue = CatalogPath::for_catalog("caisse").expect("valide");
+        let catalogue = CatalogPath::for_catalog("caisse").expect("valid");
 
         assert!(CatalogScope::Server.contains(&CatalogScope::Relation(table.clone())));
         assert!(
@@ -1693,14 +1681,14 @@ mod tests {
     }
 
     #[test]
-    fn un_scope_ne_couvre_pas_un_frere() {
+    fn a_scope_does_not_cover_a_sibling() {
         let a = CatalogScope::Namespace(espace_public());
         let b = CatalogScope::Relation(chemin(Some("caisse"), Some("archives"), "clients"));
         assert!(!a.contains(&b));
     }
 
     #[test]
-    fn le_scope_se_deduit_du_chemin() {
+    fn the_scope_is_deduced_from_the_path() {
         assert_eq!(
             CatalogScope::of(&CatalogPath::empty()),
             CatalogScope::Server
@@ -1712,18 +1700,18 @@ mod tests {
     }
 
     #[test]
-    fn une_horloge_qui_recule_ne_perime_rien() {
+    fn a_clock_going_backwards_makes_nothing_stale() {
         let cache = cache_postgres();
         assert!(
             cache
                 .stale_at(Utc::now() - TimeDelta::hours(48), HEURE)
                 .is_empty(),
-            "un instant antérieur à la lecture ne rend pas le nœud périmé"
+            "an instant before the read does not make the node stale"
         );
     }
 
     #[test]
-    fn le_rendu_d_un_scope_nomme_le_palier() {
+    fn the_rendering_of_a_scope_names_the_level() {
         let scope = CatalogScope::Relation(chemin(Some("caisse"), Some("public"), "clients"));
         assert_eq!(scope.to_string(), "relation caisse.public.clients");
         assert_eq!(CatalogScope::Server.to_string(), "server");

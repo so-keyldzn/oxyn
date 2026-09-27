@@ -1,58 +1,54 @@
-//! De la trame SSE aux événements du domaine, côté Anthropic.
+//! From the SSE frame to domain events, Anthropic side.
 //!
-//! Ce module tient l'état d'un flux de génération. Il est **pur** : aucune
-//! entrée-sortie, aucun réseau. C'est ce qui permet de l'éprouver sur les
-//! séquences réelles du fournisseur, y compris leurs bizarreries, sans en
-//! appeler un.
+//! This module holds the state of a generation stream. It is **pure**: no
+//! input-output, no network. That is what allows testing it on the provider's
+//! real sequences, quirks included, without calling one.
 //!
-//! # Ce protocole nomme ses blocs, et c'est toute la différence
+//! # This protocol names its blocks, and that is the whole difference
 //!
-//! Là où un flux compatible OpenAI recolle des fragments reliés par un `index`
-//! de tableau, celui-ci ouvre et ferme explicitement chaque bloc de contenu :
-//! `content_block_start`, des `content_block_delta`, `content_block_stop`. Le
-//! type du bloc est donné à l'ouverture, et les deltas qui suivent en
-//! dépendent — un `input_json_delta` n'a de sens que dans un bloc `tool_use`.
+//! Where an OpenAI-compatible stream reassembles fragments linked by an array
+//! `index`, this one explicitly opens and closes each content block:
+//! `content_block_start`, `content_block_delta`s, `content_block_stop`. The
+//! block's type is given at opening, and the deltas that follow depend on it —
+//! an `input_json_delta` only makes sense in a `tool_use` block.
 //!
-//! On en tire deux règles :
+//! Two rules follow:
 //!
-//! 1. **L'état d'un bloc est tenu à l'index qu'annonce le serveur**, jamais
-//!    déduit de l'ordre d'arrivée ;
-//! 2. **un delta dont le bloc est inconnu est ignoré**, pas deviné. Le seul
-//!    autre choix serait d'inventer un bloc, donc d'inventer son type.
+//! 1. **The state of a block is kept at the index the server announces**,
+//!    never inferred from the order of arrival;
+//! 2. **a delta whose block is unknown is ignored**, not guessed. The only
+//!    other choice would be to invent a block, hence to invent its type.
 //!
-//! # Quand `Done` est émis
+//! # When `Done` is emitted
 //!
-//! `message_delta` porte la raison d'arrêt mais **ne termine pas** le flux :
-//! `message_stop` suit, et la consommation cumulée arrive avec le
-//! `message_delta`. On mémorise donc la raison et on n'émet `Done` qu'au
-//! `message_stop`, à la fermeture du flux, ou sur une erreur. Exactement une
-//! fois.
+//! `message_delta` carries the stop reason but **does not end** the stream:
+//! `message_stop` follows, and the cumulative usage arrives with the
+//! `message_delta`. So the reason is recorded and `Done` is only emitted at
+//! `message_stop`, when the stream closes, or on an error. Exactly once.
 //!
-//! # Une fin constatée n'est pas une fin annoncée
+//! # An observed end is not an announced end
 //!
-//! Le protocole conclut tout message par `message_stop`, et tout bloc par
-//! `content_block_stop`. Leur absence est donc une **information** : un
-//! mandataire ou un répartiteur de charge qui ferme proprement la connexion en
-//! pleine génération ne produit aucune erreur de transport, seulement un flux
-//! qui s'arrête.
+//! The protocol concludes every message with `message_stop`, and every block
+//! with `content_block_stop`. Their absence is therefore **information**: a
+//! proxy or a load balancer that cleanly closes the connection in the middle
+//! of a generation produces no transport error, only a stream that stops.
 //!
-//! D'où deux règles, qui valent quelle que soit la façon dont le flux s'est
-//! fermé :
+//! Hence two rules, which hold whatever the way the stream closed:
 //!
-//! 1. **un flux sans `message_stop` est [`StopReason::Interrupted`]** — même si
-//!    un `message_delta` avait annoncé une raison : le serveur a peut-être
-//!    produit, et facturé, davantage que ce qui a été reçu (I-13) ;
-//! 2. **seul `content_block_stop` clôt un bloc.** Un appel d'outil dont le JSON
-//!    se lit par chance n'est pas un appel que le modèle a fini d'écrire : il
-//!    est jeté, jamais proposé.
+//! 1. **a stream without `message_stop` is [`StopReason::Interrupted`]** — even
+//!    if a `message_delta` had announced a reason: the server may have
+//!    produced, and billed, more than what was received (I-13);
+//! 2. **only `content_block_stop` closes a block.** A tool call whose JSON
+//!    happens to parse is not a call the model finished writing: it is thrown
+//!    away, never proposed.
 //!
-//! # Tout ce qui s'accumule est compté
+//! # Everything that accumulates is counted
 //!
-//! Chaque bloc ouvert, chaque fragment de texte, de raisonnement, de
-//! signature ou d'arguments passe par un [`GenerationBudget`] **avant** d'être
-//! retenu ou émis. Un bloc ouvert sans jamais être fermé coûte lui aussi : il
-//! porte un état jusqu'à sa fermeture. Au premier dépassement, la génération
-//! s'arrête : voir [`crate::budget`].
+//! Each open block, each fragment of text, reasoning, signature or arguments
+//! goes through a [`GenerationBudget`] **before** being kept or emitted. A
+//! block opened without ever being closed costs too: it carries a state until
+//! it closes. At the first overrun, the generation stops: see
+//! [`crate::budget`].
 
 use std::collections::BTreeMap;
 
@@ -64,16 +60,16 @@ use crate::sse::SseFrame;
 use crate::stream::EventDecoder;
 use crate::types::{ChatEvent, StopReason, ToolCall};
 
-/// Nombre de trames illisibles tolérées avant d'abandonner le flux.
+/// Number of unreadable frames tolerated before giving up the stream.
 ///
-/// Une trame illisible isolée arrive ; une série signifie qu'on ne parle pas le
-/// même protocole, et continuer ne ferait qu'inonder l'interface d'erreurs.
+/// An isolated unreadable frame happens; a series means we do not speak the
+/// same protocol, and continuing would only flood the interface with errors.
 pub(crate) const MAX_DECODE_ERRORS: usize = 8;
 
-/// Ce qu'un bloc de contenu accumule, selon son type.
+/// What a content block accumulates, according to its type.
 #[derive(Debug)]
 enum PartialBlock {
-    /// Bloc de texte : rien à accumuler, les fragments sont émis au vol.
+    /// Text block: nothing to accumulate, the fragments are emitted on the fly.
     Text,
     /// Appel d'outil en cours de reconstruction.
     ToolUse {
@@ -86,17 +82,17 @@ enum PartialBlock {
         text: String,
         signature: Option<String>,
     },
-    /// Raisonnement chiffré : complet dès son ouverture.
+    /// Encrypted reasoning: complete as soon as it opens.
     RedactedThinking { data: String },
-    /// Bloc d'un type que cette version ne connaît pas.
+    /// Block of a type this version does not know.
     ///
-    /// Il est **suivi** plutôt qu'ignoré : sans lui, les deltas qui le visent
-    /// seraient comptés comme visant un bloc inconnu, et une trame parfaitement
-    /// valide passerait pour une anomalie.
+    /// It is **tracked** rather than ignored: without it, the deltas targeting
+    /// it would be counted as targeting an unknown block, and a perfectly valid
+    /// frame would pass for an anomaly.
     Unknown,
 }
 
-/// État d'un flux de génération Anthropic.
+/// State of an Anthropic generation stream.
 #[derive(Debug, Default)]
 pub(crate) struct MessageDecoder {
     blocks: BTreeMap<u32, PartialBlock>,
@@ -107,17 +103,17 @@ pub(crate) struct MessageDecoder {
 }
 
 impl MessageDecoder {
-    /// Décodeur pour un flux neuf.
+    /// Decoder for a fresh stream.
     pub(crate) fn new() -> Self {
         Self::default()
     }
 
-    /// Le flux est-il terminé ?
+    /// Is the stream finished?
     pub(crate) fn finished(&self) -> bool {
         self.done
     }
 
-    /// Consomme le champ `data` d'une trame SSE.
+    /// Consumes the `data` field of an SSE frame.
     pub(crate) fn on_data(&mut self, data: &str, out: &mut Vec<ChatEvent>) {
         if self.done {
             return;
@@ -130,8 +126,8 @@ impl MessageDecoder {
         let trame: Envelope = match serde_json::from_str(data) {
             Ok(trame) => trame,
             Err(err) => {
-                // La trame fautive n'est pas recopiée : on ne sait pas ce qu'un
-                // mandataire y met.
+                // The faulty frame is not copied: we do not know what a proxy
+                // puts in it.
                 self.errors += 1;
                 out.push(ChatEvent::Error(format!(
                     "unreadable stream frame ({}, line {}, column {})",
@@ -159,22 +155,22 @@ impl MessageDecoder {
 
         match trame.r#type.as_deref() {
             Some("message_start") => self.on_message_start(&trame, out),
-            // Traités au-dessus, où leur coût est compté.
+            // Handled above, where their cost is counted.
             Some("content_block_start" | "content_block_delta") => {}
             Some("content_block_stop") => self.on_block_stop(&trame, out),
             Some("message_delta") => self.on_message_delta(&trame, out),
             Some("message_stop") => self.on_message_stop(out),
             Some("error") => self.on_error(trame.error.as_ref(), out),
-            // `ping` est un maintien de connexion : il n'a rien à dire.
+            // `ping` is a connection keep-alive: it has nothing to say.
             Some("ping") => {}
-            // La documentation annonce que de nouveaux types d'événements
-            // peuvent apparaître. Un type inconnu s'ignore : le refuser
-            // casserait le flux à la première évolution du protocole.
+            // The documentation announces that new event types can appear. An
+            // unknown type is ignored: refusing it would break the stream at
+            // the protocol's first evolution.
             _ => {}
         }
     }
 
-    /// `message_start` : la consommation d'entrée est déjà connue.
+    /// `message_start`: the input usage is already known.
     fn on_message_start(&mut self, trame: &Envelope, out: &mut Vec<ChatEvent>) {
         let Some(usage) = trame.message.as_ref().and_then(|m| m.usage.as_ref()) else {
             return;
@@ -182,24 +178,24 @@ impl MessageDecoder {
         if usage.is_empty() {
             return;
         }
-        // Les jetons de cache ne sont annoncés qu'ici : le `message_delta`
-        // final ne les répète pas toujours. Les taire attendrait une trame qui
-        // ne viendra peut-être pas.
+        // Cache tokens are only announced here: the final `message_delta`
+        // does not always repeat them. Withholding them would wait for a frame
+        // that may never come.
         out.push(ChatEvent::Usage {
             prompt_tokens: usage.input(),
             completion_tokens: usage.output(),
             cache_write_tokens: usage.cache_write(),
             cache_read_tokens: usage.cache_read(),
-            // Ce protocole ne facture pas le raisonnement à part : il est
-            // compté dans la sortie. Déclarer `Some(0)` serait faux.
+            // This protocol does not bill reasoning separately: it is counted
+            // in the output. Declaring `Some(0)` would be wrong.
             reasoning_tokens: None,
         });
     }
 
-    /// `content_block_start` : un bloc s'ouvre, son type est donné.
+    /// `content_block_start`: a block opens, its type is given.
     ///
-    /// # Erreurs
-    /// Le budget que ce bloc dépasserait ; il n'est alors pas ouvert.
+    /// # Errors
+    /// The budget this block would exceed; it is then not opened.
     fn on_block_start(
         &mut self,
         trame: &Envelope,
@@ -251,8 +247,8 @@ impl MessageDecoder {
             Some("redacted_thinking") => PartialBlock::RedactedThinking {
                 data: bloc.data.clone().unwrap_or_default(),
             },
-            // `server_tool_use`, résultats de recherche web, blocs à venir : ils
-            // existent, Oxyn n'en propose aucun, et ils ne produisent rien ici.
+            // `server_tool_use`, web search results, blocks to come: they
+            // exist, Oxyn offers none of them, and they produce nothing here.
             _ => PartialBlock::Unknown,
         };
         self.blocks.insert(index, partiel);
@@ -260,17 +256,17 @@ impl MessageDecoder {
         Ok(())
     }
 
-    /// Accepte sans rien faire un bloc dont on n'exploite pas les champs.
+    /// Accepts without doing anything a block whose fields are not used.
     ///
-    /// Sert uniquement à rendre l'intention explicite au lecteur : tous les
-    /// champs de [`ContentBlock`] sont lus au-dessus, et celui qui ne l'est pas
-    /// l'est délibérément.
+    /// Only serves to make the intent explicit to the reader: all the fields
+    /// of [`ContentBlock`] are read above, and the one that is not is left
+    /// deliberately.
     const fn note_unused(_bloc: &ContentBlock) {}
 
-    /// `content_block_delta` : un fragment arrive pour un bloc ouvert.
+    /// `content_block_delta`: a fragment arrives for an open block.
     ///
-    /// # Erreurs
-    /// Le budget que ce fragment dépasserait ; rien n'en est alors retenu.
+    /// # Errors
+    /// The budget this fragment would exceed; nothing of it is kept then.
     fn on_block_delta(
         &mut self,
         trame: &Envelope,
@@ -279,8 +275,9 @@ impl MessageDecoder {
         let (Some(index), Some(delta)) = (trame.index, trame.delta.as_ref()) else {
             return Ok(());
         };
-        // Un delta qui vise un bloc jamais ouvert s'ignore : inventer le bloc
-        // reviendrait à inventer son type, donc le sens de ce qu'on accumule.
+        // A delta targeting a block never opened is ignored: inventing the
+        // block would amount to inventing its type, hence the meaning of what
+        // is accumulated.
         let Some(bloc) = self.blocks.get_mut(&index) else {
             return Ok(());
         };
@@ -320,22 +317,22 @@ impl MessageDecoder {
                 }
             }
             (Some("signature_delta"), PartialBlock::Thinking { signature, .. }) => {
-                // La signature arrive en une fois, juste avant la fermeture du
-                // bloc. Elle ne s'émet pas : elle n'a de sens qu'au tour
-                // suivant, et elle ne s'affiche jamais.
+                // The signature arrives in one go, just before the block
+                // closes. It is not emitted: it only makes sense at the next
+                // turn, and it is never displayed.
                 if let Some(valeur) = delta.signature.clone() {
                     budget.charge(valeur.len())?;
                     *signature = Some(valeur);
                 }
             }
-            // Un delta dont le type ne correspond pas à celui du bloc est une
-            // incohérence du serveur, pas une donnée à sauver.
+            // A delta whose type does not match the block's is an
+            // inconsistency of the server, not data to save.
             _ => {}
         }
         Ok(())
     }
 
-    /// `content_block_stop` : le bloc est complet.
+    /// `content_block_stop`: the block is complete.
     fn on_block_stop(&mut self, trame: &Envelope, out: &mut Vec<ChatEvent>) {
         let Some(index) = trame.index else {
             return;
@@ -346,7 +343,7 @@ impl MessageDecoder {
         Self::close_block(index, bloc, out);
     }
 
-    /// Clôt un bloc et émet ce qu'il produit.
+    /// Closes a block and emits what it produces.
     fn close_block(index: u32, bloc: PartialBlock, out: &mut Vec<ChatEvent>) {
         match bloc {
             PartialBlock::Text | PartialBlock::Unknown => {}
@@ -381,10 +378,10 @@ impl MessageDecoder {
         }
     }
 
-    /// `message_delta` : la raison d'arrêt et la consommation cumulée.
+    /// `message_delta`: the stop reason and the cumulative usage.
     fn on_message_delta(&mut self, trame: &Envelope, out: &mut Vec<ChatEvent>) {
         if let Some(raison) = trame.delta.as_ref().and_then(|d| d.stop_reason.as_deref()) {
-            // La génération est finie ; le flux, pas encore.
+            // The generation is finished; the stream, not yet.
             self.stop = Some(stop_reason(raison));
         }
         if let Some(usage) = trame.usage.as_ref()
@@ -400,35 +397,34 @@ impl MessageDecoder {
         }
     }
 
-    /// `message_stop` : fin du flux, annoncée par le serveur.
+    /// `message_stop`: end of the stream, announced by the server.
     ///
-    /// Un bloc encore ouvert ici est une incohérence du serveur : il est jeté
-    /// comme à la fermeture du flux, et la raison annoncée est conservée.
+    /// A block still open here is an inconsistency of the server: it is thrown
+    /// away as when the stream closes, and the announced reason is kept.
     fn on_message_stop(&mut self, out: &mut Vec<ChatEvent>) {
         self.discard_open_blocks(out);
         self.emit_done(out);
     }
 
-    /// Une erreur arrivée **dans** le flux, après un statut `200`.
+    /// An error arrived **in** the stream, after a `200` status.
     fn on_error(&mut self, erreur: Option<&WireError>, out: &mut Vec<ChatEvent>) {
         let message = erreur.map_or_else(
             || "no details given".to_owned(),
             super::wire::WireError::describe,
         );
         out.push(ChatEvent::Error(message));
-        // Les blocs en cours sont **jetés**, pas clos : après une erreur, un
-        // appel d'outil à moitié reçu n'est pas une proposition d'action.
+        // The blocks in progress are **thrown away**, not closed: after an
+        // error, a half-received tool call is not a proposed action.
         self.blocks.clear();
         self.stop = Some(StopReason::ProviderError);
         self.emit_done(out);
     }
 
-    /// Arrête la génération sur un budget dépassé.
+    /// Stops the generation on an exceeded budget.
     ///
-    /// L'erreur nomme la limite ; les blocs ouverts sont **jetés** — un appel
-    /// d'outil coupé n'est pas une proposition d'action — et la fin est une
-    /// coupure : le fournisseur a peut-être continué, et facturé, ce qu'on a
-    /// cessé de lire (I-13).
+    /// The error names the limit; the open blocks are **thrown away** — a cut
+    /// tool call is not a proposed action — and the end is a cut: the provider
+    /// may have continued, and billed, what we stopped reading (I-13).
     fn exceed(&mut self, limite: BudgetExceeded, out: &mut Vec<ChatEvent>) {
         out.push(ChatEvent::Error(limite.to_string()));
         self.discard_open_blocks(out);
@@ -436,15 +432,15 @@ impl MessageDecoder {
         self.emit_done(out);
     }
 
-    /// Jette les blocs qui n'ont pas reçu leur `content_block_stop`.
+    /// Throws away the blocks that did not receive their `content_block_stop`.
     ///
-    /// Ils ne sont **pas** clos : un bloc que le serveur n'a pas fermé a été
-    /// coupé. Des arguments d'outil qui se trouvent former un JSON valide ne
-    /// disent pas que le modèle avait fini de les écrire, et un raisonnement
-    /// sans sa signature serait refusé au tour suivant.
+    /// They are **not** closed: a block the server did not close was cut. Tool
+    /// arguments that happen to form valid JSON do not say the model had
+    /// finished writing them, and a reasoning without its signature would be
+    /// refused at the next turn.
     ///
-    /// Le texte déjà émis ne peut pas être repris ; un appel d'outil ou un
-    /// raisonnement jeté est signalé, pour que sa disparition se voie.
+    /// The text already emitted cannot be taken back; a thrown away tool call
+    /// or reasoning is reported, so that its disappearance shows.
     fn discard_open_blocks(&mut self, out: &mut Vec<ChatEvent>) {
         for (index, bloc) in std::mem::take(&mut self.blocks) {
             match bloc {
@@ -461,7 +457,7 @@ impl MessageDecoder {
         }
     }
 
-    /// Émet `Done` une seule et unique fois.
+    /// Emits `Done` once and only once.
     fn emit_done(&mut self, out: &mut Vec<ChatEvent>) {
         if self.done {
             return;
@@ -474,9 +470,9 @@ impl MessageDecoder {
 }
 
 impl EventDecoder for MessageDecoder {
-    /// Le nom de l'événement SSE est **ignoré** au profit du champ `type` de la
-    /// charge : les deux sont redondants dans ce protocole, et la charge est ce
-    /// qu'un mandataire a le moins de raisons d'altérer.
+    /// The name of the SSE event is **ignored** in favor of the payload's
+    /// `type` field: both are redundant in this protocol, and the payload is
+    /// what a proxy has the least reason to alter.
     fn on_frame(&mut self, frame: &SseFrame, out: &mut Vec<ChatEvent>) {
         self.on_data(&frame.data, out);
     }
@@ -485,11 +481,11 @@ impl EventDecoder for MessageDecoder {
         self.finished()
     }
 
-    /// Le serveur a fermé le flux **sans** `message_stop`.
+    /// The server closed the stream **without** `message_stop`.
     ///
-    /// Sinon le décodeur serait déjà terminé et le pilote ne l'appellerait
-    /// pas ; la garde couvre un appel direct. Fermeture propre ou non, c'est une
-    /// coupure : voir la note du module.
+    /// Otherwise the decoder would already be finished and the driver would
+    /// not call it; the guard covers a direct call. Clean close or not, it is a
+    /// cut: see the module note.
     fn finish(&mut self, out: &mut Vec<ChatEvent>) {
         if self.done {
             return;
@@ -502,11 +498,11 @@ impl EventDecoder for MessageDecoder {
         self.emit_done(out);
     }
 
-    /// Les blocs en cours sont **jetés**.
+    /// The blocks in progress are **thrown away**.
     ///
-    /// Des arguments tronqués ne sont pas des arguments, et un raisonnement
-    /// sans sa signature serait refusé au tour suivant : proposer l'un ou
-    /// l'autre serait pire que de ne rien proposer.
+    /// Truncated arguments are not arguments, and a reasoning without its
+    /// signature would be refused at the next turn: proposing either would be
+    /// worse than proposing nothing.
     fn cancel(&mut self, out: &mut Vec<ChatEvent>) {
         self.blocks.clear();
         self.stop = Some(StopReason::Cancelled);
@@ -524,14 +520,14 @@ impl EventDecoder for MessageDecoder {
     }
 }
 
-/// Traduit le `stop_reason` du protocole d'Anthropic.
+/// Translates the `stop_reason` of Anthropic's protocol.
 ///
-/// Vérifié le 2026-09-16, source dans
-/// [`RESEARCH-NOTES`](../../../../docs/RESEARCH-NOTES.md) (I-12). Fonction de ce
-/// module et non méthode de [`StopReason`] : le type vit dans `oxyn-core`, qui
-/// ne connaît aucun protocole. Une valeur inconnue se **conserve** : la
-/// documentation annonce que cette liste peut grandir, et rabattre l'inconnu
-/// sur `EndTurn` ferait passer une réponse incomplète pour une réponse finie.
+/// Checked on 2026-09-16, source in
+/// [`RESEARCH-NOTES`](../../../../docs/RESEARCH-NOTES.md) (I-12). A function of
+/// this module and not a method of [`StopReason`]: the type lives in
+/// `oxyn-core`, which knows no protocol. An unknown value is **kept**: the
+/// documentation announces this list can grow, and folding the unknown into
+/// `EndTurn` would pass an incomplete response off as a finished one.
 pub(crate) fn stop_reason(raw: &str) -> StopReason {
     match raw {
         "end_turn" => StopReason::EndTurn,
@@ -545,21 +541,21 @@ pub(crate) fn stop_reason(raw: &str) -> StopReason {
     }
 }
 
-/// Fabrique un identifiant d'appel quand le serveur n'en donne pas.
+/// Makes up a call identifier when the server gives none.
 fn synthetic_id(index: u32) -> String {
     format!("toolu_{index}")
 }
 
-/// Reconstruit un appel d'outil complet à partir de ses fragments.
+/// Rebuilds a complete tool call from its fragments.
 ///
-/// # Erreurs
-/// Rend le message d'erreur d'analyse — **sans** la chaîne d'arguments, qui est
-/// une sortie de modèle et peut recopier ce qu'on lui a donné.
+/// # Errors
+/// Returns the parse error message — **without** the arguments string, which
+/// is a model output and can copy what it was given.
 fn build_tool_call(id: String, name: String, arguments: &str) -> Result<ToolCall, String> {
     let brut = arguments.trim();
     if brut.is_empty() {
-        // Un outil sans paramètre : le bloc s'ouvre avec `input: {}` et aucun
-        // delta ne suit.
+        // A tool without parameters: the block opens with `input: {}` and no
+        // delta follows.
         return Ok(ToolCall::new(id, name, serde_json::json!({})));
     }
     match serde_json::from_str::<serde_json::Value>(brut) {
@@ -578,7 +574,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn les_raisons_d_arret_d_anthropic_sont_traduites() {
+    fn anthropic_stop_reasons_are_translated() {
         for (brut, attendu) in [
             ("end_turn", StopReason::EndTurn),
             ("max_tokens", StopReason::MaxTokens),
@@ -600,7 +596,7 @@ mod tests {
         );
     }
 
-    /// Joue une suite de champs `data` et rend tous les événements produits.
+    /// Plays a sequence of `data` fields and returns all the events produced.
     fn jouer(trames: &[&str]) -> Vec<ChatEvent> {
         let mut decodeur = MessageDecoder::new();
         let mut sorties = Vec::new();
@@ -654,7 +650,7 @@ mod tests {
     }
 
     #[test]
-    fn un_flux_de_texte_se_recolle_dans_l_ordre() {
+    fn a_text_stream_is_reassembled_in_order() {
         let evenements = jouer(&[
             r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":25,"output_tokens":1}}}"#,
             r#"{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}"#,
@@ -676,7 +672,7 @@ mod tests {
     }
 
     #[test]
-    fn un_maintien_de_connexion_ne_produit_rien() {
+    fn a_keep_alive_produces_nothing() {
         let evenements = jouer(&[
             r#"{"type":"ping"}"#,
             r#"{"type":"ping"}"#,
@@ -691,7 +687,7 @@ mod tests {
     }
 
     #[test]
-    fn done_est_emis_exactement_une_fois() {
+    fn done_is_emitted_exactly_once() {
         let mut decodeur = MessageDecoder::new();
         let mut sorties = Vec::new();
         decodeur.on_data(
@@ -699,13 +695,13 @@ mod tests {
             &mut sorties,
         );
         decodeur.on_data(r#"{"type":"message_stop"}"#, &mut sorties);
-        // Le serveur ferme après `message_stop` : `finish` ne doit rien ajouter.
+        // The server closes after `message_stop`: `finish` must add nothing.
         decodeur.finish(&mut sorties);
         assert_eq!(sorties.iter().filter(|e| e.is_terminal()).count(), 1);
     }
 
     #[test]
-    fn la_consommation_de_cache_est_rapportee_dans_les_deux_sens() {
+    fn cache_usage_is_reported_both_ways() {
         let evenements = jouer(&[
             r#"{"type":"message_start","message":{"usage":{"input_tokens":50,"output_tokens":1,"cache_creation_input_tokens":148,"cache_read_input_tokens":2000}}}"#,
             r#"{"type":"message_stop"}"#,
@@ -723,7 +719,7 @@ mod tests {
     }
 
     #[test]
-    fn une_consommation_non_declaree_ne_s_invente_pas() {
+    fn an_undeclared_usage_is_not_invented() {
         let evenements = jouer(&[
             r#"{"type":"message_start","message":{"usage":{"input_tokens":10,"output_tokens":1}}}"#,
             r#"{"type":"message_stop"}"#,
@@ -736,14 +732,14 @@ mod tests {
             .iter()
             .find(|e| matches!(e, ChatEvent::Usage { .. }))
         else {
-            panic!("aucune consommation : {evenements:?}");
+            panic!("no usage: {evenements:?}");
         };
         assert_eq!(*cache_write_tokens, None);
         assert_eq!(*cache_read_tokens, None);
     }
 
     #[test]
-    fn un_appel_d_outil_fragmente_se_recolle() {
+    fn a_fragmented_tool_call_is_reassembled() {
         let evenements = jouer(&[
             r#"{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"toolu_01","name":"execute_query","input":{}}}"#,
             r#"{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":""}}"#,
@@ -774,9 +770,9 @@ mod tests {
     }
 
     #[test]
-    fn deux_blocs_d_outils_ne_se_melangent_pas() {
-        // Ce protocole ferme un bloc avant d'en ouvrir un autre, mais rien ne
-        // l'y oblige : l'état est tenu par index, pas par ordre d'arrivée.
+    fn two_tool_blocks_do_not_mix() {
+        // This protocol closes a block before opening another, but nothing
+        // forces it to: the state is kept by index, not by order of arrival.
         let evenements = jouer(&[
             r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"a","name":"lire"}}"#,
             r#"{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"b","name":"ecrire"}}"#,
@@ -794,7 +790,7 @@ mod tests {
     }
 
     #[test]
-    fn un_outil_sans_argument_recoit_un_objet_vide() {
+    fn a_tool_without_arguments_receives_an_empty_object() {
         let evenements = jouer(&[
             r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"c","name":"lister","input":{}}}"#,
             r#"{"type":"content_block_stop","index":0}"#,
@@ -804,9 +800,9 @@ mod tests {
     }
 
     #[test]
-    fn des_arguments_invalides_produisent_une_erreur_et_pas_un_appel() {
-        // Le flux à granularité fine n'est pas validé par le serveur : la
-        // chaîne accumulée peut ne pas être du JSON.
+    fn invalid_arguments_produce_an_error_and_not_a_call() {
+        // The fine-grained stream is not validated by the server: the
+        // accumulated string may not be JSON.
         let evenements = jouer(&[
             r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"c","name":"execute"}}"#,
             r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"sql\": \"SELECT secret"}}"#,
@@ -820,16 +816,16 @@ mod tests {
                 ChatEvent::Error(m) => Some(m.as_str()),
                 _ => None,
             })
-            .expect("une erreur doit être signalée");
+            .expect("an error must be reported");
         assert!(erreur.contains("execute"), "{erreur}");
         assert!(
             !erreur.contains("secret"),
-            "la sortie du modèle ne doit pas être recopiée : {erreur}"
+            "the model output must not be copied: {erreur}"
         );
     }
 
     #[test]
-    fn un_bloc_de_raisonnement_se_recolle_avec_sa_signature() {
+    fn a_reasoning_block_is_reassembled_with_its_signature() {
         let evenements = jouer(&[
             r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}"#,
             r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"je pose 1071 = 2 × 462 + 147"}}"#,
@@ -855,10 +851,10 @@ mod tests {
     }
 
     #[test]
-    fn un_raisonnement_masque_reste_transportable() {
-        // Le défaut de plusieurs modèles : le bloc arrive sans texte, mais
-        // avec sa signature. Il doit quand même être rendu, sans quoi le tour
-        // suivant est refusé.
+    fn a_masked_reasoning_remains_transportable() {
+        // The default of several models: the block arrives without text, but
+        // with its signature. It must still be rendered, otherwise the next
+        // turn is refused.
         let evenements = jouer(&[
             r#"{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"","signature":""}}"#,
             r#"{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":""}}"#,
@@ -867,14 +863,14 @@ mod tests {
             r#"{"type":"message_stop"}"#,
         ]);
 
-        assert_eq!(raisonnement(&evenements), "", "rien à afficher");
+        assert_eq!(raisonnement(&evenements), "", "nothing to display");
         let blocs = blocs(&evenements);
-        assert_eq!(blocs.len(), 1, "le bloc doit exister quand même");
+        assert_eq!(blocs.len(), 1, "the block must exist all the same");
         assert_eq!(blocs[0].display_text(), None);
     }
 
     #[test]
-    fn un_raisonnement_chiffre_ne_produit_aucun_texte() {
+    fn an_encrypted_reasoning_produces_no_text() {
         let evenements = jouer(&[
             r#"{"type":"content_block_start","index":0,"content_block":{"type":"redacted_thinking","data":"EvwBCoYBGAIiQL"}}"#,
             r#"{"type":"content_block_stop","index":0}"#,
@@ -889,9 +885,9 @@ mod tests {
     }
 
     #[test]
-    fn une_annulation_au_milieu_d_un_raisonnement_ne_rend_pas_de_bloc_incomplet() {
-        // Un bloc sans sa signature serait refusé au tour suivant : le rendre
-        // ferait échouer la requête d'après, loin d'ici.
+    fn a_cancellation_in_the_middle_of_a_reasoning_returns_no_incomplete_block() {
+        // A block without its signature would be refused at the next turn:
+        // rendering it would make the following request fail, far from here.
         let mut decodeur = MessageDecoder::new();
         let mut sorties = Vec::new();
         decodeur.on_data(
@@ -914,7 +910,7 @@ mod tests {
     }
 
     #[test]
-    fn une_annulation_au_milieu_d_un_appel_d_outil_ne_propose_rien() {
+    fn a_cancellation_in_the_middle_of_a_tool_call_proposes_nothing() {
         let mut decodeur = MessageDecoder::new();
         let mut sorties = Vec::new();
         decodeur.on_data(
@@ -929,7 +925,7 @@ mod tests {
 
         assert!(
             appels(&sorties).is_empty(),
-            "un appel tronqué ne devient jamais une proposition d'action : {sorties:?}"
+            "a truncated call never becomes a proposed action: {sorties:?}"
         );
         assert_eq!(
             sorties.last(),
@@ -940,7 +936,7 @@ mod tests {
     }
 
     #[test]
-    fn un_refus_se_distingue_d_une_fin_de_tour() {
+    fn a_refusal_is_distinct_from_an_end_of_turn() {
         let evenements = jouer(&[
             r#"{"type":"message_delta","delta":{"stop_reason":"refusal"}}"#,
             r#"{"type":"message_stop"}"#,
@@ -954,7 +950,7 @@ mod tests {
     }
 
     #[test]
-    fn une_pause_de_tour_se_signale_comme_incomplete() {
+    fn a_turn_pause_reports_itself_as_incomplete() {
         let evenements = jouer(&[
             r#"{"type":"message_delta","delta":{"stop_reason":"pause_turn"}}"#,
             r#"{"type":"message_stop"}"#,
@@ -967,7 +963,7 @@ mod tests {
     }
 
     #[test]
-    fn une_erreur_dans_le_flux_est_terminale() {
+    fn an_error_in_the_stream_is_terminal() {
         let evenements = jouer(&[
             r#"{"type":"content_block_start","index":0,"content_block":{"type":"text"}}"#,
             r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"a"}}"#,
@@ -987,30 +983,30 @@ mod tests {
     }
 
     #[test]
-    fn un_flux_ferme_proprement_sans_message_stop_est_interrompu() {
-        // Un répartiteur de charge qui coupe à sa limite de durée ferme la
-        // connexion proprement : aucune erreur de transport, seulement un flux
-        // qui s'arrête. Présenter ce texte comme complet serait mentir.
+    fn a_stream_closed_cleanly_without_message_stop_is_interrupted() {
+        // A load balancer that cuts at its duration limit closes the
+        // connection cleanly: no transport error, only a stream that stops.
+        // Presenting this text as complete would be lying.
         let evenements = jouer(&[
             r#"{"type":"content_block_start","index":0,"content_block":{"type":"text"}}"#,
             r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"a"}}"#,
         ]);
         assert_eq!(textes(&evenements), "a");
         let Some(ChatEvent::Done { stop_reason }) = evenements.last() else {
-            panic!("le flux doit se terminer : {evenements:?}");
+            panic!("the stream must end: {evenements:?}");
         };
         assert_eq!(*stop_reason, StopReason::Interrupted);
         assert!(stop_reason.is_truncated() && stop_reason.is_ambiguous());
         assert!(
             evenements.iter().any(|e| matches!(e, ChatEvent::Error(_))),
-            "la coupure doit se voir : {evenements:?}"
+            "the cut must show: {evenements:?}"
         );
     }
 
     #[test]
-    fn une_raison_annoncee_sans_message_stop_reste_une_coupure() {
-        // `message_delta` annonce la fin de la génération, pas celle du
-        // message : ce qui suivait n'a pas été reçu.
+    fn an_announced_reason_without_message_stop_remains_a_cut() {
+        // `message_delta` announces the end of the generation, not that of the
+        // message: what followed was not received.
         let evenements = jouer(&[
             r#"{"type":"content_block_start","index":0,"content_block":{"type":"text"}}"#,
             r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"a"}}"#,
@@ -1026,10 +1022,10 @@ mod tests {
     }
 
     #[test]
-    fn un_appel_d_outil_lisible_mais_non_clos_n_est_jamais_propose() {
-        // Le piège : le JSON reçu jusque-là se trouve être complet. Le modèle
-        // n'avait peut-être pas fini — `{"sql":"DELETE FROM t"}` peut être le
-        // début de `{"sql":"DELETE FROM t", "where": …}`.
+    fn a_readable_but_unclosed_tool_call_is_never_proposed() {
+        // The trap: the JSON received so far happens to be complete. The model
+        // may not have finished — `{"sql":"DELETE FROM t"}` can be the start
+        // of `{"sql":"DELETE FROM t", "where": …}`.
         let evenements = jouer(&[
             r#"{"type":"message_start","message":{"usage":{"input_tokens":10}}}"#,
             r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"execute","input":{}}}"#,
@@ -1056,8 +1052,8 @@ mod tests {
     }
 
     #[test]
-    fn un_bloc_non_clos_avant_message_stop_est_jete() {
-        // Incohérence du serveur : le message se dit fini, le bloc ne l'est pas.
+    fn a_block_not_closed_before_message_stop_is_thrown_away() {
+        // Server inconsistency: the message says it is finished, the block is not.
         let evenements = jouer(&[
             r#"{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"toolu_1","name":"execute","input":{}}}"#,
             r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{}"}}"#,
@@ -1079,8 +1075,8 @@ mod tests {
     }
 
     #[test]
-    fn un_evenement_inconnu_ne_casse_pas_le_flux() {
-        // La documentation annonce que de nouveaux types peuvent apparaître.
+    fn an_unknown_event_does_not_break_the_stream() {
+        // The documentation announces that new types can appear.
         let evenements = jouer(&[
             r#"{"type":"content_block_start","index":0,"content_block":{"type":"text"}}"#,
             r#"{"type":"un_evenement_futur","charge":{"quoi":"que ce soit"}}"#,
@@ -1095,7 +1091,7 @@ mod tests {
     }
 
     #[test]
-    fn un_bloc_de_type_inconnu_ne_produit_rien_mais_absorbe_ses_deltas() {
+    fn a_block_of_unknown_type_produces_nothing_but_absorbs_its_deltas() {
         let evenements = jouer(&[
             r#"{"type":"content_block_start","index":0,"content_block":{"type":"server_tool_use","id":"srvtoolu_1","name":"web_search"}}"#,
             r#"{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"query\":\"x\"}"}}"#,
@@ -1110,7 +1106,7 @@ mod tests {
     }
 
     #[test]
-    fn un_delta_sans_bloc_ouvert_est_ignore() {
+    fn a_delta_without_an_open_block_is_ignored() {
         let evenements = jouer(&[
             r#"{"type":"content_block_delta","index":7,"delta":{"type":"text_delta","text":"fantome"}}"#,
             r#"{"type":"message_stop"}"#,
@@ -1119,7 +1115,7 @@ mod tests {
     }
 
     #[test]
-    fn une_trame_illisible_isolee_ne_tue_pas_le_flux() {
+    fn an_isolated_unreadable_frame_does_not_kill_the_stream() {
         let evenements = jouer(&[
             r#"{"type":"content_block_start","index":0,"content_block":{"type":"text"}}"#,
             "{ceci n'est pas du json",
@@ -1131,7 +1127,7 @@ mod tests {
     }
 
     #[test]
-    fn une_serie_de_trames_illisibles_abandonne_le_flux() {
+    fn a_series_of_unreadable_frames_gives_up_the_stream() {
         let mut decodeur = MessageDecoder::new();
         let mut sorties = Vec::new();
         for _ in 0..MAX_DECODE_ERRORS {
@@ -1141,8 +1137,8 @@ mod tests {
         assert!(sorties.last().is_some_and(ChatEvent::is_terminal));
     }
 
-    /// Une trace SSE réelle, telle que la documentation la publie : noms
-    /// d'événements, `ping` intercalé, blocs ouverts et fermés.
+    /// A real SSE trace, as the documentation publishes it: event names,
+    /// interleaved `ping`, blocks opened and closed.
     const TRACE: &str = concat!(
         "event: message_start\n",
         r#"data: {"type":"message_start","message":{"id":"msg_1","type":"message","role":"assistant","content":[],"model":"claude-modele","stop_reason":null,"usage":{"input_tokens":472,"output_tokens":2}}}"#,
@@ -1179,7 +1175,7 @@ mod tests {
         "\n\n",
     );
 
-    /// Rejoue une trace à travers le vrai chemin SSE, avec un découpage donné.
+    /// Replays a trace through the real SSE path, with a given split.
     fn rejouer(morceaux: Vec<bytes::Bytes>) -> Vec<ChatEvent> {
         use futures::stream::StreamExt as _;
 
@@ -1197,7 +1193,7 @@ mod tests {
     }
 
     #[test]
-    fn une_trace_reelle_se_decode_d_un_bloc() {
+    fn a_real_trace_decodes_in_one_block() {
         let evenements = rejouer(vec![bytes::Bytes::from_static(TRACE.as_bytes())]);
 
         assert_eq!(textes(&evenements), "Je vérifie le café");
@@ -1214,10 +1210,10 @@ mod tests {
     }
 
     #[test]
-    fn la_meme_trace_decoupee_a_chaque_octet_donne_le_meme_resultat() {
-        // Le réseau ne respecte pas les frontières de trame, et la trace
-        // contient des caractères multi-octets (« é », « ç ») : le seul
-        // découpage qui couvre tous les cas est celui qui n'en respecte aucun.
+    fn the_same_trace_split_at_every_byte_gives_the_same_result() {
+        // The network does not respect frame boundaries, and the trace
+        // contains multi-byte characters ("é", "ç"): the only split that
+        // covers every case is the one that respects none.
         let par_octet: Vec<bytes::Bytes> = TRACE
             .as_bytes()
             .iter()
@@ -1227,16 +1223,16 @@ mod tests {
         assert_eq!(
             rejouer(par_octet),
             rejouer(vec![bytes::Bytes::from_static(TRACE.as_bytes())]),
-            "le découpage du réseau ne doit rien changer"
+            "the network split must change nothing"
         );
     }
 
     #[test]
-    fn un_flux_coupe_au_milieu_d_un_tour_est_tronque_et_ambigu() {
-        // Le cas qui coûte de l'argent, et qui ne se voit ni à la compilation
-        // ni en revue : la connexion tombe alors que le modèle a commencé à
-        // répondre. Le serveur a peut-être terminé — et facturé — le tour.
-        // Rejouer paierait deux fois (I-13).
+    fn a_stream_cut_mid_turn_is_truncated_and_ambiguous() {
+        // The case that costs money, and that shows neither at compile time
+        // nor in review: the connection drops while the model has started to
+        // answer. The server may have finished — and billed — the turn.
+        // Replaying would pay twice (I-13).
         let coupee: Vec<std::result::Result<bytes::Bytes, String>> = vec![
             Ok(bytes::Bytes::from_static(
                 concat!(
@@ -1264,21 +1260,21 @@ mod tests {
             futures::executor::block_on(flux.collect::<Vec<_>>())
         };
 
-        // Ce qui a été reçu reste montré : l'utilisateur voit où ça s'est
-        // arrêté plutôt que de perdre le début.
+        // What was received stays shown: the user sees where it stopped rather
+        // than losing the beginning.
         assert_eq!(textes(&evenements), "la table clients ");
 
         let Some(ChatEvent::Done { stop_reason }) = evenements.last() else {
-            panic!("le flux doit se terminer : {evenements:?}");
+            panic!("the stream must end: {evenements:?}");
         };
         assert_eq!(*stop_reason, StopReason::Interrupted);
         assert!(
             stop_reason.is_truncated(),
-            "une réponse tranchée en plein milieu qui se dit complète est une réponse fausse"
+            "a response cut in the middle that claims to be complete is a false response"
         );
         assert!(
             stop_reason.is_ambiguous(),
-            "le serveur a peut-être produit la suite : rejouer paierait deux fois (I-13)"
+            "the server may have produced the rest: replaying would pay twice (I-13)"
         );
         assert_eq!(
             evenements.iter().filter(|e| e.is_terminal()).count(),
@@ -1288,9 +1284,9 @@ mod tests {
     }
 
     #[test]
-    fn un_appel_d_outil_coupe_par_le_transport_n_est_jamais_propose() {
-        // La coupure tombe au milieu des arguments. Les proposer reviendrait à
-        // soumettre une action dont personne ne connaît la portée.
+    fn a_tool_call_cut_by_the_transport_is_never_proposed() {
+        // The cut falls in the middle of the arguments. Proposing them would
+        // amount to submitting an action whose reach no one knows.
         let coupee: Vec<std::result::Result<bytes::Bytes, String>> = vec![
             Ok(bytes::Bytes::from_static(
                 concat!(
@@ -1317,10 +1313,10 @@ mod tests {
 
         assert!(
             appels(&evenements).is_empty(),
-            "des arguments tronqués ne sont pas des arguments : {evenements:?}"
+            "truncated arguments are not arguments: {evenements:?}"
         );
-        // Et le SQL partiel ne doit pas ressortir dans un message d'erreur : ce
-        // qu'un modèle écrit peut recopier ce qu'on lui a donné.
+        // And the partial SQL must not come out in an error message: what a
+        // model writes can copy what it was given.
         for evenement in &evenements {
             if let ChatEvent::Error(message) = evenement {
                 assert!(!message.contains("DELETE FROM"), "{message}");
@@ -1335,7 +1331,7 @@ mod tests {
     }
 
     #[test]
-    fn rien_n_est_decode_apres_la_fin() {
+    fn nothing_is_decoded_after_the_end() {
         let mut decodeur = MessageDecoder::new();
         let mut sorties = Vec::new();
         decodeur.on_data(r#"{"type":"message_stop"}"#, &mut sorties);
