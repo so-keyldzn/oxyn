@@ -1,301 +1,301 @@
-# Budgets de performance
+# Performance budgets
 
-> **Autorité** : les seuils chiffrés au-delà desquels un comportement est un
-> défaut, et non une lenteur acceptable.
+> **Authority**: the numeric thresholds beyond which a behavior is a
+> defect, and not an acceptable slowness.
 
-Invariants concernés : [I-05](../CLAUDE.md#i-05), [I-06](../CLAUDE.md#i-06).
-Dérive de [ADR-0002](adr/0002-arrow-result-model.md) pour tout ce qui touche aux
-résultats.
+Invariants involved: [I-05](../CLAUDE.md#i-05), [I-06](../CLAUDE.md#i-06).
+Derives from [ADR-0002](adr/0002-arrow-result-model.md) for everything that concerns
+results.
 
-> **Statut des chiffres.** Les valeurs ci-dessous restent des **budgets
-> décidés**, dérivés des seuils de perception humaine. Une première campagne de
-> mesure a eu lieu le **2026-09-10** ; elle est consignée
-> [plus bas](#campagne-de-mesure-du-2026-09-10) et n'a amendé aucun budget. Elle
-> ne couvre que le code pur : la conversion ligne-à-lot du driver SQLite et
-> l'analyse des requêtes. Une seconde campagne, le **2026-09-11**, a mesuré le
-> démarrage à froid, le nœud de catalogue en cache et la mémoire au repos — ses
-> chiffres sont dans [IMPLEMENTATION-PLAN](IMPLEMENTATION-PLAN.md) et reportés
-> dans le tableau ci-dessous. **Le budget de trame, le démarrage à froid et
-> l'application au repos ont été mesurés sur l'interface GPUI, retirée le
-> 2026-09-18 ([ADR-0029](adr/0029-interface-tauri-shadcn.md)) : ils ne disent
-> rien de la webview Tauri, qui n'a pas encore été mesurée** — voir
-> [Confrontation aux budgets](#confrontation-aux-budgets). Une troisième mesure, le
-> **2026-09-15**, a confronté le budget de mémoire à la mémoire du **processus**
-> et non plus à la seule comptabilité du tampon ; elle est consignée
-> [plus bas](#mesure-de-mémoire-du-2026-09-15). Un budget
-> contredit par une mesure s'amende **par un ADR** — jamais en l'ajustant en
-> silence pour faire passer un test.
+> **Status of the numbers.** The values below remain **decided
+> budgets**, derived from the thresholds of human perception. A first measurement
+> campaign took place on **2026-09-10**; it is recorded
+> [further down](#measurement-campaign-of-2026-09-10) and amended no budget. It
+> only covers pure code: the row-to-batch conversion of the SQLite driver and
+> query analysis. A second campaign, on **2026-09-11**, measured
+> cold start, the cached catalog node and idle memory — its
+> numbers are in [IMPLEMENTATION-PLAN](IMPLEMENTATION-PLAN.md) and carried over
+> into the table below. **The frame budget, cold start and
+> the idle application were measured on the GPUI interface, removed on
+> 2026-09-18 ([ADR-0029](adr/0029-interface-tauri-shadcn.md)): they say
+> nothing about the Tauri webview, which has not been measured yet** — see
+> [Comparison with the budgets](#comparison-with-the-budgets). A third measurement, on
+> **2026-09-15**, compared the memory budget with the memory of the **process**
+> and no longer with the buffer's accounting alone; it is recorded
+> [further down](#memory-measurement-of-2026-09-15). A budget
+> contradicted by a measurement is amended **through an ADR** — never by adjusting it
+> silently to make a test pass.
 
-## Pourquoi des budgets et pas des « bonnes pratiques »
+## Why budgets and not "best practices"
 
-« La latence perçue est une fonctionnalité » ([VISION](VISION.md)) ne veut rien
-dire tant qu'aucun nombre ne permet de dire qu'on l'a ratée. Une régression de
-performance qui n'a pas de seuil ne se détecte jamais : elle s'accumule par
-tranches de 15 ms que personne ne remarque, jusqu'à ce que le produit soit
-devenu lent sans qu'aucun commit ne soit coupable.
+"Perceived latency is a feature" ([VISION](VISION.md)) means nothing
+as long as no number lets us say we missed it. A performance regression
+without a threshold is never detected: it accumulates in
+15 ms slices nobody notices, until the product has
+become slow without any commit being to blame.
 
-## Budgets d'interaction
+## Interaction budgets
 
-Les seuils viennent de la perception : ~16 ms est la trame à 60 Hz, ~100 ms est
-la limite de la réaction « instantanée », ~1 s est celle où l'attention décroche.
+The thresholds come from perception: ~16 ms is the frame at 60 Hz, ~100 ms is
+the limit of the "instant" reaction, ~1 s is where attention drops off.
 
-| Interaction | Budget | Ce qui se passe au-delà |
+| Interaction | Budget | What happens beyond it |
 |---|---|---|
-| Trame d'interface pendant une interaction continue (défilement, saisie, redimensionnement) | **8 ms** p99 | saccade visible ; c'est le symptôme n° 1 d'une violation de [I-05](../CLAUDE.md#i-05) |
-| Retour visible après un clic ou une frappe | **100 ms** | l'utilisateur re-clique, croyant avoir raté |
-| Premières lignes affichées après lancement d'une requête | **300 ms** après la première réponse du serveur | passé ce délai, l'utilisateur ne fait plus le lien entre son action et le résultat |
-| Ouverture de la fenêtre au démarrage à froid | **1 s** | un client natif qui démarre plus lentement qu'un client web perd son argument principal |
-| Développement d'un nœud du catalogue déjà en cache | **50 ms** | la navigation dans l'arborescence doit être ressentie comme locale |
+| Interface frame during a continuous interaction (scrolling, typing, resizing) | **8 ms** p99 | visible stutter; it is the number-one symptom of a violation of [I-05](../CLAUDE.md#i-05) |
+| Visible feedback after a click or a keystroke | **100 ms** | the user clicks again, thinking they missed |
+| First rows displayed after launching a query | **300 ms** after the server's first response | past this delay, the user no longer connects their action with the result |
+| Window opening on cold start | **1 s** | a native client that starts more slowly than a web client loses its main argument |
+| Expanding an already cached catalog node | **50 ms** | navigating the tree must feel local |
 
-Une opération qui ne peut pas tenir son budget ne le rate pas en silence : elle
-affiche une progression et reste annulable. **Une opération longue et annulable
-est acceptable ; une opération longue et figée ne l'est pas.**
+An operation that cannot hold its budget does not miss it silently: it
+shows progress and remains cancellable. **A long, cancellable operation
+is acceptable; a long, frozen operation is not.**
 
-## Budgets de mémoire
+## Memory budgets
 
-| Situation | Budget | Mode de panne |
+| Situation | Budget | Failure mode |
 |---|---|---|
-| `ResultBuffer` en mémoire, par résultat | **256 Mo** par défaut, configurable ([ADR-0002](adr/0002-arrow-result-model.md)) ; au-delà, débordement en Arrow IPC relu hors thread UI ([ADR-0012](adr/0012-lecture-pages-resultats.md)) | [I-06](../CLAUDE.md#i-06) : `SELECT *` sur une grande table déclenche l'OOM killer, le processus meurt sans trace, l'utilisateur perd son travail |
-| Défilement au-delà du budget mémoire | **une lecture de page disque**, jamais une nouvelle exécution | relancer la requête est doublement faux : le coût est arbitraire, et un `SELECT` peut ne pas être idempotent |
-| Résultats conservés sans lecteur | 16 résultats, 256 Mio de lots résidents/cache et 1 Gio d'IPC cumulés ; contrôle après exécution et périodique ([ADR-0017](adr/0017-retention-resultats.md)) | accumulation de résultats inutilisés |
-| Cache de catalogue par connexion | 1 024 scopes et 50 000 objets de métadonnées ; éviction du scope publié le moins récemment ([ARCHITECTURE](ARCHITECTURE.md)) | dix connexions sur des bases à dizaines de milliers d'objets font grossir la RSS sans plafond |
-| Conversations de l'assistant, relecture | **16 tours par page** : au pire 21 Mio lus du disque et 36,3 Mio décodés par appel, quel que soit le fil ; aucune lecture d'un fil d'un seul tenant. Détail du calcul sur `MAX_TURN_PAGE` (`oxyn-store`, 2026-09-16) | [I-06](../CLAUDE.md#i-06) : un fil relu en bloc et envoyé à l'interface alloue jusqu'à 1 Gio ; un fichier écrit par un tiers sans borne rendait l'allocation arbitraire |
-| Conversations de l'assistant, relecture d'une branche | **16 échanges par page** : au pire 16,0 Mio lus du disque et 16,0 Mio décodés par appel — la question borne le calcul à elle seule (1 Mio), le reste de l'échange tient en 410 octets lus et 546 décodés. Une branche compte au plus 256 échanges, et les versions d'un échange se listent sans question ni réponse. Détail du calcul sur `MAX_EXCHANGE_PAGE` (`oxyn-store`, 2026-09-18) | [I-06](../CLAUDE.md#i-06) : un fil arborescent relu d'un seul tenant croît avec le nombre de régénérations, que rien ne borne côté appelant |
-| Conversations de l'assistant, sur disque | 200 fils, 90 jours d'inactivité et 32 Mio de transcript par workspace, appliqués par `Conversations::prune` ; 512 tours par fil et `stop_reason` ≤ 256 octets tenus par le fichier. Mesure : un fil de 12 échanges pèse 64 Kio de transcript, 72 Kio de fichier (2026-09-16) | un historique d'assistant qui grossit sans fin sur une session de plusieurs mois |
-| Définitions DDL en cache par connexion | 16 définitions et 16 Mio de SQL + notes ; éviction des anciennes valeurs, y compris invalidées ([ADR-0018](adr/0018-apercu-ddl.md)) | accumulation de scripts volumineux lors de la navigation |
-| Application au repos, une connexion ouverte, aucune requête | stable dans le temps | une croissance au repos est une fuite ; elle se voit sur une session de plusieurs heures, pas dans les tests |
+| In-memory `ResultBuffer`, per result | **256 MB** by default, configurable ([ADR-0002](adr/0002-arrow-result-model.md)); beyond, spill to Arrow IPC read back off the UI thread ([ADR-0012](adr/0012-lecture-pages-resultats.md)) | [I-06](../CLAUDE.md#i-06): `SELECT *` on a large table triggers the OOM killer, the process dies without a trace, the user loses their work |
+| Scrolling beyond the memory budget | **one disk page read**, never a new execution | re-running the query is doubly wrong: the cost is arbitrary, and a `SELECT` may not be idempotent |
+| Results kept without a reader | 16 results, 256 MiB of resident/cached batches and 1 GiB of IPC cumulated; check after execution and periodically ([ADR-0017](adr/0017-retention-resultats.md)) | accumulation of unused results |
+| Catalog cache per connection | 1,024 scopes and 50,000 metadata objects; eviction of the least recently published scope ([ARCHITECTURE](ARCHITECTURE.md)) | ten connections on databases with tens of thousands of objects make the RSS grow without a ceiling |
+| Assistant conversations, reading back | **16 turns per page**: at worst 21 MiB read from disk and 36.3 MiB decoded per call, whatever the thread; no thread is read in one piece. Calculation detail on `MAX_TURN_PAGE` (`oxyn-store`, 2026-09-16) | [I-06](../CLAUDE.md#i-06): a thread read back in bulk and sent to the interface allocates up to 1 GiB; a file written by a third party without a bound made the allocation arbitrary |
+| Assistant conversations, reading back a branch | **16 exchanges per page**: at worst 16.0 MiB read from disk and 16.0 MiB decoded per call — the question alone bounds the calculation (1 MiB), the rest of the exchange fits in 410 bytes read and 546 decoded. A branch holds at most 256 exchanges, and the versions of an exchange are listed without question or answer. Calculation detail on `MAX_EXCHANGE_PAGE` (`oxyn-store`, 2026-09-18) | [I-06](../CLAUDE.md#i-06): a tree-shaped thread read back in one piece grows with the number of regenerations, which nothing bounds on the caller side |
+| Assistant conversations, on disk | 200 threads, 90 days of inactivity and 32 MiB of transcript per workspace, applied by `Conversations::prune`; 512 turns per thread and `stop_reason` ≤ 256 bytes held by the file. Measurement: a 12-exchange thread weighs 64 KiB of transcript, 72 KiB of file (2026-09-16) | an assistant history that grows endlessly over a session of several months |
+| Cached DDL definitions per connection | 16 definitions and 16 MiB of SQL + notes; eviction of old values, including invalidated ones ([ADR-0018](adr/0018-apercu-ddl.md)) | accumulation of large scripts while navigating |
+| Idle application, one open connection, no query | stable over time | growth at rest is a leak; it shows over a session of several hours, not in tests |
 
-La rétention des lots initiaux et des pages décodées partage le budget du
-résultat selon [ADR-0012](adr/0012-lecture-pages-resultats.md). L'index des lots,
-les temporaires de décodage et les références tenues par des lecteurs doivent
-être comptés dans les mesures du processus ; une assertion sur le cache ne
-prouve pas la stabilité RSS.
+The retention of initial batches and decoded pages shares the result's
+budget according to [ADR-0012](adr/0012-lecture-pages-resultats.md). The batch index,
+decoding temporaries and references held by readers must
+be counted in process measurements; an assertion on the cache does not
+prove RSS stability.
 
-## Ce qui se mesure, et comment
+## What is measured, and how
 
-- **`criterion`** pour les bancs d'essai de code pur : analyse, formatage,
-  conversion vers `RecordBatch`, diff de schéma. Ce sont les seules mesures
-  reproductibles sur une machine de développement.
-- **La conversion ligne-à-lot est un point chaud attendu**, pas une évidence :
-  les drivers construits sur des pilotes ligne-à-ligne y passent par chaque
-  valeur de chaque ligne ([DRIVER-CONTRACT](DRIVER-CONTRACT.md#3-il-produit-des-recordbatch-arrow-en-flux)).
-  C'est le premier endroit à mesurer, et le dernier à optimiser sans mesure.
-- **Les instruments du système** (Instruments, `perf`) pour le rendu et
-  l'interface. Un banc `criterion` ne voit pas le rendu de la webview : il ne
-  mesure rien d'utile sur l'interface.
-- **Aucune mesure de latence contre une base réelle n'est un banc d'essai** : le
-  réseau et l'état du serveur dominent le signal. Ce qui se mesure, c'est le
-  temps passé **dans Oxyn**, pas le temps d'aller-retour.
+- **`criterion`** for pure-code benchmarks: parsing, formatting,
+  conversion to `RecordBatch`, schema diff. They are the only reproducible
+  measurements on a development machine.
+- **The row-to-batch conversion is an expected hot spot**, not a given:
+  drivers built on row-by-row clients go through every
+  value of every row there ([DRIVER-CONTRACT](DRIVER-CONTRACT.md#3-it-produces-arrow-recordbatches-streamed)).
+  It is the first place to measure, and the last to optimize without measurement.
+- **System instruments** (Instruments, `perf`) for rendering and
+  the interface. A `criterion` benchmark does not see the webview's rendering: it
+  measures nothing useful about the interface.
+- **No latency measurement against a real database is a benchmark**: the
+  network and the server's state dominate the signal. What is measured is the
+  time spent **in Oxyn**, not the round-trip time.
 
-Le protocole complet est dans [`/benchmark`](../.claude/commands/benchmark.md).
+The full protocol is in [`/benchmark`](../.claude/commands/benchmark.md).
 
-## Campagne de mesure du 2026-09-10
+## Measurement campaign of 2026-09-10
 
-> Cette section consigne **ce qui a été mesuré, et ce qui ne l'a pas été**. Elle
-> ne modifie aucun budget : aucun des budgets confrontés n'a été contredit.
+> This section records **what was measured, and what was not**. It
+> changes no budget: none of the budgets compared was contradicted.
 
 ### Conditions
 
 | | |
 |---|---|
-| Machine | Apple M1 Max, 10 cœurs, 64 Gio, macOS 26.2 (25C56) |
-| Chaîne | `rustc 1.98.1`, profil `bench` (`lto = "thin"`, `codegen-units = 1`) |
-| Instrument | `criterion 0.8.2`, 50 échantillons, échantillonnage plat, 2 s de chauffe |
-| Charge | aucune compilation concurrente — ni `rustc` ni `cargo` — et 55 à 71 % de temps CPU libre pendant la mesure |
-| Reproductibilité | deux campagnes successives ; écart des médianes ≤ 4 % |
+| Machine | Apple M1 Max, 10 cores, 64 GiB, macOS 26.2 (25C56) |
+| Toolchain | `rustc 1.98.1`, `bench` profile (`lto = "thin"`, `codegen-units = 1`) |
+| Instrument | `criterion 0.8.2`, 50 samples, flat sampling, 2 s warm-up |
+| Load | no concurrent compilation — neither `rustc` nor `cargo` — and 55 to 71 % idle CPU time during the measurement |
+| Reproducibility | two successive campaigns; deviation of medians ≤ 4 % |
 
-La **charge moyenne** de cette machine est structurellement au-dessus de 20
-(session graphique nombreuse) sans que les cœurs soient pris : elle n'est pas un
-indicateur exploitable ici, et c'est le temps CPU libre qui a servi de critère.
-Il en résulte que **les chiffres valent à ±5 %**. C'est assez pour confronter des
-budgets qui se comptent en millisecondes ; ce ne le serait pas pour arbitrer une
-optimisation qui promettrait 3 %.
+The **load average** of this machine is structurally above 20
+(busy graphical session) without the cores being taken: it is not a
+usable indicator here, and idle CPU time served as the criterion.
+As a result, **the numbers are valid to ±5 %**. That is enough to compare
+budgets counted in milliseconds; it would not be to settle an
+optimization promising 3 %.
 
-### Banc 1 — conversion ligne-à-lot, driver SQLite
+### Bench 1 — row-to-batch conversion, SQLite driver
 
-`drivers/oxyn-driver-sqlite/benches/row_to_batch.rs`. Base **en mémoire**, table
-à six colonnes (entier, flottant, texte court, texte long, BLOB de 64 octets,
-entier à un `NULL` sur sept), remplie par une CTE récursive donc identique d'une
-exécution à l'autre.
+`drivers/oxyn-driver-sqlite/benches/row_to_batch.rs`. **In-memory** database, table
+with six columns (integer, float, short text, long text, 64-byte BLOB,
+integer with one `NULL` in seven), filled by a recursive CTE hence identical from one
+run to the next.
 
-`ColumnBuilder` est `pub(crate)` et n'a **pas** été rendu public pour le banc.
-Le coût de conversion est obtenu par **soustraction** entre deux parcours des
-mêmes lignes : `oxyn` par l'API publique du driver, `rusqlite` sur une connexion
-brute qui touche chaque valeur sans construire d'Arrow. **La différence est une
-estimation, pas une mesure directe** ; elle contient aussi les allers-retours du
-canal vers le thread porteur — un par lot, soit ~31 pour 250 000 lignes, donc
-négligeable.
+`ColumnBuilder` is `pub(crate)` and was **not** made public for the bench.
+The conversion cost is obtained by **subtraction** between two passes over the
+same rows: `oxyn` through the driver's public API, `rusqlite` on a raw
+connection that touches every value without building Arrow. **The difference is an
+estimate, not a direct measurement**; it also contains the round trips of the
+channel to the carrier thread — one per batch, i.e. ~31 for 250,000 rows, hence
+negligible.
 
-| Table | Lignes | Arrow produit | `oxyn` | `rusqlite` | Écart | Écart / valeur |
+| Table | Rows | Arrow produced | `oxyn` | `rusqlite` | Difference | Difference / value |
 |---|---|---|---|---|---|---|
-| mixte, 6 colonnes | 250 000 | 48,4 Mio | 54,7 ms | 34,6 ms | 20,1 ms | 13,4 ns |
-| mixte, 6 colonnes | 1 000 000 | 186,7 Mio | 211,3 ms | 139,1 ms | 72,3 ms | 12,0 ns |
-| `INTEGER` | 250 000 | 1,9 Mio | 14,0 ms | 8,7 ms | 5,3 ms | 21,1 ns |
-| `REAL` | 250 000 | 1,9 Mio | 16,7 ms | 9,3 ms | 7,3 ms | 29,3 ns |
-| `TEXT` court (~11 o) | 250 000 | 4,4 Mio | 17,3 ms | 10,1 ms | 7,2 ms | 29,0 ns |
-| `TEXT` long (~80 o) | 250 000 | 20,8 Mio | 18,3 ms | 11,1 ms | 7,2 ms | 28,6 ns |
-| `BLOB` 64 o | 250 000 | 17,4 Mio | 18,8 ms | 11,2 ms | 7,6 ms | 30,5 ns |
-| `INTEGER` à `NULL` | 250 000 | 2,0 Mio | 14,2 ms | 9,2 ms | 5,0 ms | 20,0 ns |
+| mixed, 6 columns | 250,000 | 48.4 MiB | 54.7 ms | 34.6 ms | 20.1 ms | 13.4 ns |
+| mixed, 6 columns | 1,000,000 | 186.7 MiB | 211.3 ms | 139.1 ms | 72.3 ms | 12.0 ns |
+| `INTEGER` | 250,000 | 1.9 MiB | 14.0 ms | 8.7 ms | 5.3 ms | 21.1 ns |
+| `REAL` | 250,000 | 1.9 MiB | 16.7 ms | 9.3 ms | 7.3 ms | 29.3 ns |
+| short `TEXT` (~11 B) | 250,000 | 4.4 MiB | 17.3 ms | 10.1 ms | 7.2 ms | 29.0 ns |
+| long `TEXT` (~80 B) | 250,000 | 20.8 MiB | 18.3 ms | 11.1 ms | 7.2 ms | 28.6 ns |
+| `BLOB` 64 B | 250,000 | 17.4 MiB | 18.8 ms | 11.2 ms | 7.6 ms | 30.5 ns |
+| `INTEGER` with `NULL` | 250,000 | 2.0 MiB | 14.2 ms | 9.2 ms | 5.0 ms | 20.0 ns |
 
-Médianes. Les tables à une colonne sont une **décomposition indicative** : leur
-empreinte est plus petite, et leur coût par valeur porte tout le coût fixe par
-ligne au lieu de le partager entre six colonnes.
+Medians. The single-column tables are an **indicative breakdown**: their
+footprint is smaller, and their per-value cost carries the whole fixed per-row
+cost instead of sharing it among six columns.
 
-Ce que ces chiffres établissent :
+What these numbers establish:
 
-- **211 ns par ligne de six colonnes**, soit **4,7 millions de lignes par
-  seconde** et environ 880 Mio/s de tampons Arrow produits ;
-- **le coût par ligne est identique à 250 000 et à 1 000 000 de lignes**
-  (219 ns contre 211 ns). Le banc mesure donc l'algorithme et non le cache — à
-  186,7 Mio, la table dépasse largement les 24 Mio de cache de niveau système de
-  la machine ;
-- **la conversion pèse 34 % du temps total du driver**, le reste étant
-  l'itération de SQLite elle-même. La couche Oxyn coûte **1,5 fois** le
-  parcours brut des mêmes lignes. C'est un point chaud réel, et ce n'est pas une
-  pathologie ;
-- le coût par valeur ne dépend presque pas de la longueur du texte (29,0 ns à
-  11 octets, 28,6 ns à 80) : il est dominé par le travail **par valeur**, pas
-  par la copie d'octets.
+- **211 ns per six-column row**, i.e. **4.7 million rows per
+  second** and about 880 MiB/s of Arrow buffers produced;
+- **the per-row cost is identical at 250,000 and at 1,000,000 rows**
+  (219 ns versus 211 ns). The bench therefore measures the algorithm and not the cache — at
+  186.7 MiB, the table far exceeds the machine's 24 MiB of system-level
+  cache;
+- **the conversion weighs 34 % of the driver's total time**, the rest being
+  SQLite's own iteration. The Oxyn layer costs **1.5 times** the
+  raw pass over the same rows. It is a real hot spot, and it is not a
+  pathology;
+- the per-value cost hardly depends on the text length (29.0 ns at
+  11 bytes, 28.6 ns at 80): it is dominated by the **per-value** work, not
+  by copying bytes.
 
-### Banc 2 — premier lot
+### Bench 2 — first batch
 
-Même fichier, groupe `first_batch` : le temps entre `execute` et le premier
-`RecordBatch` disponible, c'est-à-dire ce qu'attend la grille avant de pouvoir
-peindre. Le premier lot est le plus coûteux, puisque c'est celui pendant lequel
-le driver résout le type des colonnes par une passe de sonde.
+Same file, `first_batch` group: the time between `execute` and the first
+available `RecordBatch`, i.e. what the grid waits for before it can
+paint. The first batch is the most expensive, since it is the one during which
+the driver resolves column types with a probe pass.
 
-| Table | Lignes du premier lot | Mesure |
+| Table | Rows in the first batch | Measurement |
 |---|---|---|
-| mixte, 250 000 lignes | 8 192 | **2,60 ms** |
-| mixte, 1 000 000 lignes | 8 192 | **2,57 ms** |
+| mixed, 250,000 rows | 8,192 | **2.60 ms** |
+| mixed, 1,000,000 rows | 8,192 | **2.57 ms** |
 
-Le résultat ne dépend pas de la taille de la table : c'est ce que le flux
-promet ([I-06](../CLAUDE.md#i-06)), et le banc le constate.
+The result does not depend on the table size: that is what streaming
+promises ([I-06](../CLAUDE.md#i-06)), and the bench observes it.
 
-### Banc 3 — analyse des requêtes
+### Bench 3 — query analysis
 
-`crates/oxyn-query/benches/analysis.rs`, dialecte PostgreSQL. Le texte est un
-bloc réaliste — commentaires, identifiant cité, chaîne contenant un
-point-virgule, corps `$body$`, une écriture — répété 1, 10 et 50 fois.
+`crates/oxyn-query/benches/analysis.rs`, PostgreSQL dialect. The text is a
+realistic block — comments, quoted identifier, string containing a
+semicolon, `$body$` body, a write — repeated 1, 10 and 50 times.
 
-| Fonction | 4 instructions (820 o) | 40 instructions (8,2 Kio) | 200 instructions (41 Kio) |
+| Function | 4 statements (820 B) | 40 statements (8.2 KiB) | 200 statements (41 KiB) |
 |---|---|---|---|
-| `split` | 1,13 µs | 11,5 µs | 55,4 µs |
-| `words` | 1,71 µs | 14,6 µs | 66,5 µs |
-| `current_statement` (curseur en fin de texte) | 1,44 µs | 11,5 µs | 56,4 µs |
-| `format` | 2,23 µs | 22,0 µs | 108,7 µs |
-| `classify` | 52,6 µs | 525,7 µs | 2,67 ms |
+| `split` | 1.13 µs | 11.5 µs | 55.4 µs |
+| `words` | 1.71 µs | 14.6 µs | 66.5 µs |
+| `current_statement` (cursor at end of text) | 1.44 µs | 11.5 µs | 56.4 µs |
+| `format` | 2.23 µs | 22.0 µs | 108.7 µs |
+| `classify` | 52.6 µs | 525.7 µs | 2.67 ms |
 
-Tout est **linéaire** en taille de texte : aucun scanner quadratique. `classify`
-coûte ~13 µs par instruction, deux ordres de grandeur au-dessus du découpage —
-c'est l'analyse syntaxique de `sqlparser`, et c'est attendu.
+Everything is **linear** in text size: no quadratic scanner. `classify`
+costs ~13 µs per statement, two orders of magnitude above splitting —
+it is `sqlparser`'s parsing, and it is expected.
 
-> **Contrôle de non-régression du 2026-09-15.** Les trois bancs ont été rejoués
-> après les correctifs de cette session — neuf défauts de code, dont plusieurs
-> dans `oxyn-app` et `oxyn-core`. Les chiffres concordent avec ceux consignés
-> ci-dessus : nœud de catalogue à 10 000 relations **6,55 µs** (contre 6,70),
-> relecture d'un lot débordé de 8 192 lignes **35,7 µs** (contre 37,3),
-> `classify` sur 200 instructions **2,69 ms** (contre 2,67). Les écarts sont
-> ceux d'un `--quick` contre une campagne complète, pas un déplacement.
+> **Non-regression check of 2026-09-15.** The three benches were rerun
+> after this session's fixes — nine code defects, several of them
+> in `oxyn-app` and `oxyn-core`. The numbers agree with those recorded
+> above: catalog node at 10,000 relations **6.55 µs** (versus 6.70),
+> read back of a spilled 8,192-row batch **35.7 µs** (versus 37.3),
+> `classify` on 200 statements **2.69 ms** (versus 2.67). The differences are
+> those of a `--quick` run versus a full campaign, not a shift.
 >
-> Ce contrôle ne remplace aucune mesure ouverte : il dit seulement qu'aucun de
-> ces trois chemins n'a régressé.
+> This check replaces no open measurement: it only says that none of
+> these three paths regressed.
 
-### Confrontation aux budgets
+### Comparison with the budgets
 
-> **Trois verdicts portent sur l'interface retirée.** La trame, l'ouverture de
-> fenêtre à froid et l'application au repos ont été mesurées le 2026-09-11 sur
-> l'interface GPUI, retirée le 2026-09-18
-> ([ADR-0029](adr/0029-interface-tauri-shadcn.md)). Ils ne disent rien de la
-> webview Tauri, qui n'a pas encore été mesurée
-> ([plan](IMPLEMENTATION-PLAN.md#migration-vers-linterface-tauri)). Les autres
-> lignes mesurent le cœur, que le changement d'interface n'a pas touché.
+> **Three verdicts concern the removed interface.** The frame, cold window
+> opening and the idle application were measured on 2026-09-11 on
+> the GPUI interface, removed on 2026-09-18
+> ([ADR-0029](adr/0029-interface-tauri-shadcn.md)). They say nothing about the
+> Tauri webview, which has not been measured yet
+> ([plan](IMPLEMENTATION-PLAN.md#migration-to-the-tauri-interface)). The other
+> rows measure the core, which the interface change did not touch.
 
-| Budget | Verdict | Sur quoi |
+| Budget | Verdict | Based on |
 |---|---|---|
-| Premières lignes affichées — **300 ms** | **confirmé** pour SQLite | 2,6 ms pour le premier lot, quelle que soit la taille de la table : 0,9 % du budget |
-| Retour visible après une frappe — **100 ms** | **confirmé pour la part `oxyn-query`** | 56 µs pour l'instruction courante sur un script de 200 instructions. La part interface n'est pas mesurée |
-| Trame pendant une interaction — **8 ms** p99 | **tenu** (2026-09-11) : 0 à-coup au repos et à la saisie, 1 sous redimensionnement continu. La saisie en produisait 17 dont un de 50 ms avant [ADR-0024](adr/0024-autosauvegarde-au-repos-de-frappe.md) | un banc `criterion` sur l'interface ne mesure rien : il faut `xcrun xctrace record --template "Animation Hitches" --attach <pid>`, qui s'utilise sans interface graphique. La saisie **a** été couverte depuis, et c'est elle qui a révélé le dépassement corrigé par ADR-0024 : la phrase qui la disait « à couvrir » précédait la mesure. Ce qui reste non couvert est le **défilement d'une grille peuplée** — la relecture d'un lot débordé y coûte 4,5 µs (ligne suivante), mais l'enchaînement complet défilement + rendu n'a pas été observé sous instrument |
-| Ouverture de fenêtre à froid — **1 s** | **235–274 ms** (2026-09-11, profil `dev`, trois lancements) | mesurée en horodatant entre le lancement du processus et le `window ready` du journal — aucun instrument spécialisé nécessaire |
-| Nœud de catalogue en cache — **50 ms** | **6,70 µs** à 10 000 relations (2026-09-11) | `cargo bench -p oxyn-catalog --bench cached_node` ; la lecture du cache consomme six millionièmes du budget, le goulot d'un nœud lent est donc ailleurs |
-| `ResultBuffer` — **256 Mo** puis débordement | **confirmé sur la RSS, à sa valeur réelle** (2026-09-15) : **2 Gio** poussés dans un tampon au budget par défaut de **256 Mo** font croître la RSS de **195 Mio** — sous le budget —, **1,84 Gio** partant sur disque | [mesure détaillée plus bas](#mesure-de-mémoire-du-2026-09-15). La mesure reste **manuelle** — l'automatiser demanderait une exception à [I-03](../CLAUDE.md#i-03) ou à `unsafe_code = "deny"`, arbitrage non tranché |
-| Défilement = une lecture de page | **tenu** : **4,5 µs** pour un lot de 512 lignes, **37,3 µs** pour 8 192 (2026-09-14) | Deux moitiés, prouvées séparément. **Que ce soit une lecture** : `page_read_is_local_audited_and_scoped_for_both_actors` relit un lot débordé avec **aucun driver enregistré** — aucune réexécution ne peut s'y glisser. **Ce qu'elle coûte** : `cargo bench -p oxyn-data --bench spilled_page`, soit 0,06 % du budget de trame sur un lot ordinaire. *Réserve* : le fichier de débordement vient d'être écrit, donc le cache de pages du système le sert chaud. C'est le cas réel d'un défilement de va-et-vient ; une relecture après éviction coûterait davantage, et n'est pas mesurée ici |
-| Application au repos, stable dans le temps | **82 Mio, stable sur une minute** (2026-09-11) | un signal, pas une preuve : une fuite lente se voit sur une session de plusieurs heures. L'ordre de grandeur, lui, est désormais connu |
+| First rows displayed — **300 ms** | **confirmed** for SQLite | 2.6 ms for the first batch, whatever the table size: 0.9 % of the budget |
+| Visible feedback after a keystroke — **100 ms** | **confirmed for the `oxyn-query` part** | 56 µs for the current statement on a 200-statement script. The interface part is not measured |
+| Frame during an interaction — **8 ms** p99 | **held** (2026-09-11): 0 hitch at rest and while typing, 1 under continuous resizing. Typing produced 17, one of them 50 ms, before [ADR-0024](adr/0024-autosauvegarde-au-repos-de-frappe.md) | a `criterion` bench on the interface measures nothing: it takes `xcrun xctrace record --template "Animation Hitches" --attach <pid>`, which works without a graphical interface. Typing **has** been covered since, and it is what revealed the overrun fixed by ADR-0024: the sentence that called it "to be covered" came before the measurement. What remains uncovered is **scrolling a populated grid** — reading back a spilled batch costs 4.5 µs there (next row), but the full scroll + render sequence has not been observed under an instrument |
+| Cold window opening — **1 s** | **235–274 ms** (2026-09-11, `dev` profile, three launches) | measured by timestamping between the process launch and the log's `window ready` — no specialized instrument needed |
+| Cached catalog node — **50 ms** | **6.70 µs** at 10,000 relations (2026-09-11) | `cargo bench -p oxyn-catalog --bench cached_node`; reading the cache consumes six millionths of the budget, so the bottleneck of a slow node is elsewhere |
+| `ResultBuffer` — **256 MB** then spill | **confirmed on the RSS, at its real value** (2026-09-15): **2 GiB** pushed into a buffer at the default budget of **256 MB** make the RSS grow by **195 MiB** — below the budget —, **1.84 GiB** going to disk | [detailed measurement below](#memory-measurement-of-2026-09-15). The measurement remains **manual** — automating it would require an exception to [I-03](../CLAUDE.md#i-03) or to `unsafe_code = "deny"`, an unsettled trade-off |
+| Scrolling = one page read | **held**: **4.5 µs** for a 512-row batch, **37.3 µs** for 8,192 (2026-09-14) | Two halves, proven separately. **That it is a read**: `page_read_is_local_audited_and_scoped_for_both_actors` reads back a spilled batch with **no driver registered** — no re-execution can slip in. **What it costs**: `cargo bench -p oxyn-data --bench spilled_page`, i.e. 0.06 % of the frame budget on an ordinary batch. *Caveat*: the spill file has just been written, so the system's page cache serves it hot. That is the real case of back-and-forth scrolling; a read back after eviction would cost more, and is not measured here |
+| Idle application, stable over time | **82 MiB, stable over one minute** (2026-09-11) | a signal, not a proof: a slow leak shows over a session of several hours. The order of magnitude, however, is now known |
 
-**Aucun budget n'a été contredit. Aucun budget n'a été modifié.**
+**No budget was contradicted. No budget was changed.**
 
-## Mesure de mémoire du 2026-09-15
+## Memory measurement of 2026-09-15
 
-Jusqu'ici le budget de mémoire n'était vérifié que par la **comptabilité interne
-du tampon** — `resident_bytes()` — jamais contre la mémoire réellement tenue par
-le processus. Une comptabilité peut être juste et le processus grossir quand
-même : c'est exactement le mode de panne que [I-06](../CLAUDE.md#i-06) nomme.
+Until then the memory budget was only checked through the **internal accounting
+of the buffer** — `resident_bytes()` — never against the memory actually held by
+the process. Accounting can be right and the process still grow:
+that is exactly the failure mode [I-06](../CLAUDE.md#i-06) names.
 
 ### Conditions
 
-`ResultBuffer` borné à un budget mémoire de **4 Mio**, `max_rows` levé,
-débordement disque autorisé. **800 lots de 65 536 entiers `i64`** poussés, soit
-**400 Mio** de données produites. Le budget est délibérément petit : ce qui est
-éprouvé est le **mécanisme** de débordement, pas la valeur 256 Mo.
+`ResultBuffer` bounded to a memory budget of **4 MiB**, `max_rows` lifted,
+disk spill allowed. **800 batches of 65,536 `i64` integers** pushed, i.e.
+**400 MiB** of data produced. The budget is deliberately small: what is
+tested is the spill **mechanism**, not the 256 MB value.
 
-### Résultat
+### Result
 
-| Grandeur | Mesure |
+| Quantity | Measurement |
 |---|---|
-| Croissance de la RSS du processus | **4,25 Mio** (4 456 448 octets) |
-| Volume effectivement débordé sur disque | **404 Mio** (423 582 360 octets) |
-| `resident_bytes()` en fin de course | sous le budget |
+| Growth of the process RSS | **4.25 MiB** (4,456,448 bytes) |
+| Volume actually spilled to disk | **404 MiB** (423,582,360 bytes) |
+| `resident_bytes()` at the end of the run | below the budget |
 
-**Contrôle de sensibilité.** Le même scénario, avec un budget de 400 Mio au lieu
-de 4 Mio, fait grimper la RSS de **317 Mio** et échouer l'assertion. La mesure
-discrimine donc d'un facteur ~75 : elle n'est pas un test qui passe quoi qu'il
-arrive.
+**Sensitivity check.** The same scenario, with a budget of 400 MiB instead
+of 4 MiB, makes the RSS climb by **317 MiB** and the assertion fail. The measurement
+therefore discriminates by a factor of ~75: it is not a test that passes no matter
+what.
 
-**Ce que cela établit :** [I-06](../CLAUDE.md#i-06) tient sur la mémoire du
-**processus**, et pas seulement sur la comptabilité du tampon. 400 Mio traversent
-un tampon de 4 Mio sans que le processus grossisse de plus que son budget.
+**What this establishes:** [I-06](../CLAUDE.md#i-06) holds on the memory of the
+**process**, and not only on the buffer's accounting. 400 MiB go through
+a 4 MiB buffer without the process growing by more than its budget.
 
-### La même mesure au budget réel
+### The same measurement at the real budget
 
-Le petit budget éprouve le mécanisme ; il ne dit rien de la valeur que le produit
-emploie. La mesure a donc été refaite **au budget par défaut**, celui que ce
-document pose :
+The small budget tests the mechanism; it says nothing of the value the product
+uses. The measurement was therefore redone **at the default budget**, the one this
+document sets:
 
-| Grandeur | Mesure |
+| Quantity | Measurement |
 |---|---|
-| Budget du tampon | **256 Mo** (`DEFAULT_MEMORY_BUDGET`, 268 435 456 octets) |
-| Données poussées | **2 Gio** (4 096 lots de 65 536 `i64`, 2 147 483 648 octets) |
-| Croissance de la RSS du processus | **195 Mio** (204 324 864 octets) — **sous le budget** |
-| Volume effectivement débordé sur disque | **1,84 Gio** (1 978 316 104 octets) |
-| Durée | 2,1 s |
+| Buffer budget | **256 MB** (`DEFAULT_MEMORY_BUDGET`, 268,435,456 bytes) |
+| Data pushed | **2 GiB** (4,096 batches of 65,536 `i64`, 2,147,483,648 bytes) |
+| Growth of the process RSS | **195 MiB** (204,324,864 bytes) — **below the budget** |
+| Volume actually spilled to disk | **1.84 GiB** (1,978,316,104 bytes) |
+| Duration | 2.1 s |
 
-Huit fois le budget traverse le tampon, et le processus croît de **9,1 %** de ce
-qui l'a traversé — moins que le budget lui-même. Le chiffre de 256 Mo n'est donc
-plus seulement un budget déclaré : il est **tenu, et mesuré comme tel**.
+Eight times the budget goes through the buffer, and the process grows by **9.1 %** of
+what went through it — less than the budget itself. The 256 MB figure is therefore
+no longer only a declared budget: it is **held, and measured as such**.
 
-### Pourquoi ce n'est pas un test permanent
+### Why it is not a permanent test
 
-Honnêtement : parce que l'automatiser demanderait une exception à une règle posée
-pour un invariant.
+Honestly: because automating it would require an exception to a rule set
+for an invariant.
 
-- Lire la RSS demande `ps`, donc `std::process::Command::new`, que `clippy.toml`
-  interdit au nom de [I-03](../CLAUDE.md#i-03) — un processus enfant hérite de
-  l'environnement du parent, secrets compris.
-- L'alternative, un allocateur instrumenté, demande `unsafe`, que le workspace
-  refuse (`unsafe_code = "deny"`).
+- Reading the RSS requires `ps`, hence `std::process::Command::new`, which `clippy.toml`
+  forbids in the name of [I-03](../CLAUDE.md#i-03) — a child process inherits
+  the parent's environment, secrets included.
+- The alternative, an instrumented allocator, requires `unsafe`, which the workspace
+  refuses (`unsafe_code = "deny"`).
 
-**Arbitrage non tranché.** Faut-il une exception étroite à l'un des deux pour
-gagner une vérification permanente de [I-06](../CLAUDE.md#i-06), ou la mesure
-manuelle et datée suffit-elle ? Ce document ne tranche pas : une exception à une
-règle d'invariant se décide par un ADR, pas dans un tableau de mesures.
+**Unsettled trade-off.** Is a narrow exception to one of the two worth it to
+gain a permanent check of [I-06](../CLAUDE.md#i-06), or is the manual, dated
+measurement enough? This document does not settle it: an exception to an
+invariant rule is decided by an ADR, not in a table of measurements.
 
-## La règle qui empêche l'optimisation gratuite
+## The rule that prevents gratuitous optimization
 
-**On ne remplace pas du code clair par du code rapide sans la mesure qui montre
-que ça valait la peine.** Un banc d'essai avant, un banc d'essai après, le
-chiffre dans le message de commit. Sans ça, la complexité est payée d'avance et
-le gain est supposé.
+**Clear code is not replaced by fast code without the measurement showing
+it was worth it.** A benchmark before, a benchmark after, the
+number in the commit message. Without that, the complexity is paid up front and
+the gain is assumed.
 
-Le corollaire vaut aussi dans l'autre sens : un `.clone()` sur un chemin appelé
-une fois par ouverture de fenêtre n'est pas un problème de performance, et le
-transformer en emprunt qui contamine cinq signatures est une perte nette.
+The corollary also holds the other way: a `.clone()` on a path called
+once per window opening is not a performance problem, and
+turning it into a borrow that contaminates five signatures is a net loss.

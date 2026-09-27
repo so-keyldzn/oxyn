@@ -1,106 +1,103 @@
-# Marque Oxyn
+# Oxyn brand
 
-> **Autorité** : la géométrie du symbole, les jetons de couleur et le fichier à
-> employer selon le contexte. Toute production d'un visuel Oxyn passe par ce
-> document ; aucun symbole n'est redessiné à la main.
+> **Authority**: the geometry of the symbol, the color tokens and the file to
+> use depending on the context. Every Oxyn visual goes through this document;
+> no symbol is redrawn by hand.
 
-## Le symbole
+## The symbol
 
-**Binôme — une masse, une coupe.** Un bloc plein à courbure continue, entaillé
-d'un seul trait de scie vertical qui ne traverse pas : la masse reste **une**
-pièce, et le fragment à droite de l'entaille porte l'accent. L'utilisateur et
-l'agent, même matière, côte à côte — ce que promet
-[VISION](../../docs/VISION.md) : les agents travaillent *aux côtés* de
-l'utilisateur, jamais à sa place.
+**Pair — one mass, one cut.** A solid block with continuous curvature, notched
+by a single vertical saw cut that does not go through: the mass stays **one**
+piece, and the fragment to the right of the notch carries the accent. The user
+and the agent, same material, side by side — what
+[VISION](../../docs/VISION.md) promises: agents work *alongside* the user,
+never in their place.
 
-La coupe ne traverse jamais. Une fente traversante produit deux panneaux
-juxtaposés, c'est-à-dire le glyphe système `sidebar.trailing` (bouton
-« afficher l'inspecteur », Split View) : à 32 et 16 px, le dessin est le même.
-Le pont de matière sous l'entaille est ce qui distingue la marque d'un
-contrôle d'interface.
+The cut never goes through. A through slot produces two juxtaposed panels,
+that is the system glyph `sidebar.trailing` ("show inspector" button, Split
+View): at 32 and 16 px, the drawing is the same. The bridge of material under
+the notch is what distinguishes the mark from an interface control.
 
-## Géométrie
+## Geometry
 
-Canevas 1024, vue frontale, aucune rotation.
+Canvas 1024, front view, no rotation.
 
-| Paramètre | Valeur |
+| Parameter | Value |
 |---|---|
-| Masse | 672 centrée (176–848), soit 65,6 % du côté |
-| Rayon extérieur | 168, raccord G1 sur les angles |
-| Fente | largeur 64, à x 576–640 |
-| Coupe | depuis le haut, arrêt à y 704 (79 % de la hauteur) |
-| Fond de fente | demi-cercle r 32 |
-| Congés d'embouchure | 44 |
-| Pont | 144 (21 % de la hauteur) |
-| Pièces | 400 / 208, soit 1,92 : 1 |
+| Mass | 672 centered (176–848), i.e. 65.6% of the side |
+| Outer radius | 168, G1 blend on the corners |
+| Slot | width 64, at x 576–640 |
+| Cut | from the top, stopping at y 704 (79% of the height) |
+| Slot bottom | half-circle r 32 |
+| Mouth fillets | 44 |
+| Bridge | 144 (21% of the height) |
+| Pieces | 400 / 208, i.e. 1.92 : 1 |
 
-La fente est calée sur la grille de 64 pour tomber sur une colonne entière :
-1 px à 16 px, 2 px à 32 px, 4 px à 64 px. **Ne pas déplacer la fente** : tout
-décalage recrée des colonnes grises en dessous de 64 px.
+The slot is aligned on the 64 grid to fall on a whole column:
+1 px at 16 px, 2 px at 32 px, 4 px at 64 px. **Do not move the slot**: any
+offset recreates gray columns below 64 px.
 
-Matière minimale 144, fente 64, tous rayons ≥ 32 — au-dessus des seuils que
-demande macOS 26 pour le rendu en couches.
+Minimum material 144, slot 64, all radii ≥ 32 — above the thresholds macOS 26
+requires for layered rendering.
 
-## Couleurs
+## Colors
 
-| Jeton | Valeur | Emploi |
+| Token | Value | Use |
 |---|---|---|
-| Ardoise | `#172E33` → `#0D2125` | tuile, mode light ; marque sur fond clair |
-| Ardoise profonde | `#102428` → `#061519` | tuile, mode dark |
-| Givre | `#E8F3F2` → `#D6E7E5` | glyphe sur tuile sombre ; tuile B |
-| Patine | `#007467` → `#005B53` | tuile de la palette D |
-| Patine profonde | `#005B53` | glyphe sur tuile claire |
-| **Accent** | **`#1C8D7A`** | le fragment, partout — le vert-de-gris |
+| Slate | `#172E33` → `#0D2125` | tile, light mode; mark on a light background |
+| Deep slate | `#102428` → `#061519` | tile, dark mode |
+| Frost | `#E8F3F2` → `#D6E7E5` | glyph on a dark tile; tile B |
+| Patina | `#007467` → `#005B53` | tile of palette D |
+| Deep patina | `#005B53` | glyph on a light tile |
+| **Accent** | **`#1C8D7A`** | the fragment, everywhere — verdigris |
 
-Un seul accent pour tout le système. Il tient le rapport de contraste de 3:1
-sur chaque tuile : 3,49 sur le haut de l'ardoise light, 4,07 en bas, 3,96 et
-4,56 en dark, 3,18 sur le bas de la tuile givre, et 3,58 contre le glyphe
-givre, ce qui garde les deux pièces distinctes.
+A single accent for the whole system. It holds the 3:1 contrast ratio on every
+tile: 3.49 on the top of the light slate, 4.07 at the bottom, 3.96 and 4.56 in
+dark, 3.18 on the bottom of the frost tile, and 3.58 against the frost glyph,
+which keeps the two pieces distinct.
 
-La palette est celle de l'interface (`apps/desktop/src/styles.css`) : l'accent
-est le vert-de-gris des actions — la patine du cuivre —, l'ardoise celle des
-surfaces sombres. Elle remplace
-depuis le 2026-09-23 le graphite, l'os et l'oxyde orangé (`#BF4C22`) de la
-première version ; seules les couleurs ont changé, les tracés sont restés
-identiques à l'octet près.
+The palette is the interface's (`apps/desktop/src/styles.css`): the accent is
+the verdigris of actions — the patina of copper —, the slate that of dark
+surfaces. It replaces, since 2026-09-23, the graphite, bone and orange oxide
+(`#BF4C22`) of the first version; only the colors changed, the paths stayed
+identical to the byte.
 
-L'avant-dernier accent `#9A3B1E` ne tenait que 2,22:1 sur la tuile light, le mode
-le plus courant : le binôme ne se lisait pas là où l'icône est le plus vue.
+The accent before last, `#9A3B1E`, only held 2.22:1 on the light tile, the
+most common mode: the pair could not be read where the icon is seen most.
 
-## Quel fichier employer
+## Which file to use
 
-| Contexte | Fichier |
+| Context | File |
 |---|---|
-| Icône d'application macOS | `Oxyn.icns`, ou `svg/oxyn-appicon-light.svg` |
-| Dock, App Store, vitrine | `svg/oxyn-appicon-D.svg` — mono, une seule matière |
-| Mode Tinted de macOS 26 | `svg/oxyn-appicon-tinted.svg` |
-| 16 et 32 px | `svg/oxyn-appicon-{16,32}.svg` — redessinés sur la grille pixel |
-| Sur fond clair | `svg/oxyn-mark.svg` |
-| Sur fond sombre | `svg/oxyn-mark-white.svg` |
-| Site, documentation | `svg/oxyn-mark-accent.svg` |
+| macOS application icon | `Oxyn.icns`, or `svg/oxyn-appicon-light.svg` |
+| Dock, App Store, showcase | `svg/oxyn-appicon-D.svg` — mono, a single material |
+| macOS 26 Tinted mode | `svg/oxyn-appicon-tinted.svg` |
+| 16 and 32 px | `svg/oxyn-appicon-{16,32}.svg` — redrawn on the pixel grid |
+| On a light background | `svg/oxyn-mark.svg` |
+| On a dark background | `svg/oxyn-mark-white.svg` |
+| Website, documentation | `svg/oxyn-mark-accent.svg` |
 | Favicon | `favicon.svg` |
 
-Les tailles 16 et 32 px ne sont **pas** des réductions du 1024 : elles sont
-redessinées sur la grille pixel. Une réduction du 1024 laisse une frange grise
-d'un pixel sur le bord de la masse.
+The 16 and 32 px sizes are **not** reductions of the 1024: they are redrawn on
+the pixel grid. A reduction of the 1024 leaves a one-pixel gray fringe on the
+edge of the mass.
 
-## Ce qui n'est jamais fait
+## What is never done
 
-La géométrie ne change pas : le `<path id="glyph">` est identique, à l'octet
-près, dans les huit fichiers 1024 ; seules les couleurs varient. Le symbole
-n'est ni incliné, ni déformé, ni posé sur une plaque à l'intérieur de la tuile.
-Aucun effet n'est cuit dans le tracé — ombre, biseau, flou : macOS 26 les
-fournit par couche.
+The geometry does not change: the `<path id="glyph">` is identical, to the
+byte, in the eight 1024 files; only the colors vary. The symbol is never
+tilted, distorted, or placed on a plate inside the tile. No effect is baked
+into the path — shadow, bevel, blur: macOS 26 provides them per layer.
 
-## Régénérer
+## Regenerating
 
-Les rendus dérivent des SVG de `svg/`. Toute reprise part de là, jamais d'un
-PNG.
+The renders derive from the SVGs of `svg/`. Any rework starts from there,
+never from a PNG.
 
 ```bash
 rsvg-convert -w 1024 -h 1024 svg/oxyn-appicon-light.svg -o png/oxyn-appicon-light-1024.png
 iconutil -c icns Oxyn.iconset -o Oxyn.icns
 ```
 
-`oxyn-sheet-corrige.png` est la planche de contrôle : les cinq tuiles, les
-trois marques, les tailles réelles et les deux bandes Dock.
+`oxyn-sheet-corrige.png` is the control sheet: the five tiles, the three
+marks, the actual sizes and the two Dock strips.

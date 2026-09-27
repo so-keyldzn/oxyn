@@ -1,117 +1,112 @@
-# ADR-0024 — Le brouillon s'écrit quand la frappe s'arrête, pas à chaque touche
+# ADR-0024 — The draft is written when typing stops, not on every keystroke
 
-**Statut :** proposé · **Date :** 2026-09-11
+**Status:** proposed · **Date:** 2026-09-11
 
-**Précise :** [ADR-0016](0016-autosauvegarde-bornee.md), sur le moment où un
-brouillon quitte le fil d'interface.
+**Clarifies:** [ADR-0016](0016-autosauvegarde-bornee.md), on the moment a
+draft leaves the interface thread.
 
-## Contexte
+## Context
 
-Une mesure du 2026-09-11 a trouvé le seul dépassement de budget de tout le
-produit. `xcrun xctrace`, gabarit `Animation Hitches`, attaché au processus :
+A measurement on 2026-09-11 found the only budget overrun of the whole
+product. `xcrun xctrace`, `Animation Hitches` template, attached to the process:
 
-| Condition | À-coups en ~14 s | Pire |
+| Condition | Hitches in ~14 s | Worst |
 |---|---|---|
-| Au repos | 0 | — |
-| Redimensionnement continu | 1 | 10 ms |
-| **Saisie continue** | **17** | **50 ms** |
+| Idle | 0 | — |
+| Continuous resizing | 1 | 10 ms |
+| **Continuous typing** | **17** | **50 ms** |
 
-Le budget de [PERFORMANCE](../PERFORMANCE.md#budgets-dinteraction) est de **8 ms
-p99** pendant une interaction continue, et la saisie est nommément l'une des
-trois interactions visées. Cinquante millisecondes, c'est six fois le budget, sur
-le geste le plus fréquent du produit.
+The budget of [PERFORMANCE](../PERFORMANCE.md#interaction-budgets) is **8 ms
+p99** during a continuous interaction, and typing is explicitly one of the
+three interactions targeted. Fifty milliseconds is six times the budget, on
+the most frequent action of the product.
 
-La cause est dans le code, pas dans le rendu. À chaque `EditorEvent::Changed`,
-`QueryConsole::document_changed` :
+The cause is in the code, not in rendering. On every `EditorEvent::Changed`,
+`QueryConsole::document_changed`:
 
-1. appelle `editor.text()`, qui est un `self.lines.join("\n")` — donc une
-   **copie complète du document** ;
-2. construit un `QueryDocumentUpdate` entier, texte compris ;
-3. le valide ;
-4. l'inscrit dans la file d'écriture.
+1. calls `editor.text()`, which is a `self.lines.join("\n")` — hence a
+   **full copy of the document**;
+2. builds a whole `QueryDocumentUpdate`, text included;
+3. validates it;
+4. enqueues it in the write queue.
 
-Les trois premières étapes sont sur le fil d'interface. `MAX_QUERY_DOCUMENT_BYTES`
-vaut 1 Mio : à la borne, **chaque caractère tapé recopie un mégaoctet** avant que
-la file n'ait quoi que ce soit à faire.
+The first three steps are on the interface thread. `MAX_QUERY_DOCUMENT_BYTES`
+is 1 MiB: at the bound, **every typed character copies a megabyte** before the
+queue has anything to do.
 
-Ce qui n'est **pas** en cause, et qu'il fallait écarter : le rendu de l'éditeur
-est virtualisé par `uniform_list` et ne dessine que les lignes visibles ;
-`oxyn_query::current_statement` tient en 55 µs et n'est appelé qu'à la
-soumission. ADR-0016 a bien borné la **file** — une opération active, au plus un
-brouillon en attente — mais n'a rien dit du coût payé **avant** d'y entrer.
+What is **not** at fault, and had to be ruled out: the editor's rendering is
+virtualized by `uniform_list` and only draws the visible lines;
+`oxyn_query::current_statement` takes 55 µs and is only called on submit.
+ADR-0016 did bound the **queue** — one active operation, at most one pending
+draft — but said nothing about the cost paid **before** entering it.
 
-## Décision
+## Decision
 
-**Une frappe marque le brouillon sale ; elle ne le copie pas.** La copie, la
-validation et l'envoi n'ont lieu qu'après **250 ms sans frappe**, ou
-immédiatement quand la console perd le focus, se ferme, ou qu'une exécution est
-lancée.
+**A keystroke marks the draft dirty; it does not copy it.** The copy, the
+validation and the send only happen after **250 ms without typing**, or
+immediately when the console loses focus, closes, or an execution is
+launched.
 
-Le délai est relancé à chaque touche : une frappe continue n'écrit donc rien tant
-qu'elle dure, et écrit une fois quand elle s'arrête. Le fil d'interface ne porte
-plus qu'un drapeau et un minuteur.
+The delay restarts on every key: continuous typing therefore writes nothing
+while it lasts, and writes once when it stops. The interface thread only
+carries a flag and a timer.
 
-**250 ms, et pourquoi ce chiffre.** Il est inférieur au budget de 300 ms de
-« retour visible après une frappe » : un utilisateur qui s'arrête de taper ne
-peut pas percevoir le retard de l'écriture, puisqu'il est plus court que le délai
-au-delà duquel il cesserait de faire le lien avec son action. Il est aussi plus
-long qu'un intervalle entre deux touches d'une frappe rapide — autour de 100 ms
-—, ce qui est la condition pour qu'une phrase tapée d'un trait ne produise
-**qu'une** écriture. Ce n'est pas une mesure : c'est un choix de produit, et il
-s'amende ici.
+**250 ms, and why this number.** It is below the 300 ms budget of "visible
+feedback after a keystroke": a user who stops typing cannot perceive the delay
+of the write, since it is shorter than the delay beyond which they would stop
+connecting it to their action. It is also longer than the interval between two
+keys of fast typing — around 100 ms —, which is the condition for a sentence
+typed in one go to produce **only one** write. It is not a measurement: it is a
+product choice, and it is amended here.
 
-**Ce que la fenêtre de 250 ms coûte, énoncé sans détour.** Un arrêt brutal dans
-cet intervalle perd jusqu'à 250 ms de frappe — quelques caractères. Avant cette
-décision, il n'en perdait aucun. C'est le prix, et il est payé sciemment : un
-éditeur qui saccade à chaque touche sur un document long est un défaut que
-l'utilisateur subit à chaque seconde, là où la perte de quelques caractères
-suppose un plantage.
+**What the 250 ms window costs, stated plainly.** An abrupt stop within that
+interval loses up to 250 ms of typing — a few characters. Before this decision,
+it lost none. It is the price, and it is paid knowingly: an editor that
+stutters on every key on a long document is a flaw the user suffers every
+second, whereas losing a few characters requires a crash.
 
-**Les trois échappées sont immédiates**, et ce sont elles qui bornent la perte :
-perte de focus, fermeture de console, lancement d'une exécution. Les deux
-premières couvrent le geste ordinaire — on quitte un onglet, on va ailleurs ; la
-troisième garantit que ce qui s'exécute est ce qui est écrit.
+**The three escapes are immediate**, and they are what bound the loss: loss of
+focus, console closing, launch of an execution. The first two cover the
+ordinary action — one leaves a tab, goes elsewhere; the third guarantees that
+what executes is what is written.
 
-**Ce qui ne change pas** : la file d'ADR-0016, ses révisions attendues, son
-compteur de fermeture, et le fait qu'un brouillon suspendu par une fermeture
-annulée se reprend. Cette décision ne touche que le moment où l'on entre dans la
-file.
+**What does not change**: ADR-0016's queue, its expected revisions, its closing
+counter, and the fact that a draft suspended by a cancelled closing resumes.
+This decision only touches the moment one enters the queue.
 
-## Conséquences
+## Consequences
 
-- **+** Le fil d'interface ne copie plus le document à chaque touche : c'est la
-  cause mesurée du seul dépassement de budget du produit.
-- **+** Une phrase tapée d'un trait produit une écriture SQLite au lieu d'une par
-  caractère. Sur une machine portable, c'est aussi une écriture disque de moins
-  par frappe.
-- **+** Le coût cesse de dépendre de la **taille** du document. Aujourd'hui, plus
-  un brouillon est long, plus chaque touche coûte cher — la dégradation est donc
-  invisible sur un document court et sévère sur celui qu'on travaille depuis une
-  heure.
-- **−** Jusqu'à 250 ms de frappe perdus sur un arrêt brutal. L'écran de reprise
-  d'[ADR-0021](0021-marqueur-d-arret.md) restaure alors un texte à quelques
-  caractères près de ce qui était à l'écran.
-- **−** Un minuteur de plus dans la console, donc un état de plus à défaire
-  correctement à la fermeture — et un test à écrire pour ça, sans quoi une
-  écriture arrive après la fermeture qu'elle était censée précéder.
-- **−** Le délai est un réglage qui n'en est pas un : il n'est exposé nulle part,
-  et le changer demande de revenir ici.
+- **+** The interface thread no longer copies the document on every key: it is
+  the measured cause of the product's only budget overrun.
+- **+** A sentence typed in one go produces one SQLite write instead of one per
+  character. On a laptop, it is also one less disk write per keystroke.
+- **+** The cost stops depending on the document's **size**. Today, the longer
+  a draft is, the more each key costs — the degradation is therefore invisible
+  on a short document and severe on the one being worked on for an hour.
+- **−** Up to 250 ms of typing lost on an abrupt stop. The recovery screen of
+  [ADR-0021](0021-marqueur-d-arret.md) then restores a text within a few
+  characters of what was on screen.
+- **−** One more timer in the console, hence one more state to undo correctly
+  on closing — and a test to write for it, without which a write arrives after
+  the closing it was supposed to precede.
+- **−** The delay is a setting that is not one: it is exposed nowhere, and
+  changing it requires coming back here.
 
-**Coût de sortie :** retirer le minuteur et rappeler la copie directement dans
-`document_changed`. La file, les révisions et la reprise ne dépendent pas de
-cette décision.
+**Exit cost:** remove the timer and call the copy directly again in
+`document_changed`. The queue, the revisions and recovery do not depend on this
+decision.
 
-**Reconsidérer si** une mesure montre que la copie n'est plus le coût dominant —
-par exemple si `TextBuffer` cesse d'être un `Vec<String>` joint à la demande —,
-ou si l'usage montre que 250 ms perdus sont de trop, auquel cas la réponse est un
-délai plus court, pas la suppression du minuteur.
+**Reconsider if** a measurement shows the copy is no longer the dominant cost —
+for example if `TextBuffer` stops being a `Vec<String>` joined on demand —,
+or if usage shows that 250 ms lost is too much, in which case the answer is a
+shorter delay, not removing the timer.
 
-## Alternatives écartées
+## Rejected alternatives
 
-| Alternative | Raison du rejet |
+| Alternative | Reason for rejection |
 |---|---|
-| Laisser la file lire le texte au moment d'écrire | La file tourne sur le runtime Tokio et ne peut pas lire une entité GPUI ; il faudrait un canal inverse vers le fil d'interface, donc le même coût déplacé |
-| Copier seulement les lignes modifiées | Demande un format de brouillon incrémental, donc une migration et un format de plus à porter — pour un gain qu'un anti-rebond obtient sans rien changer au stockage |
-| Écrire à chaque touche mais hors du fil d'interface | La copie elle-même est le coût, et elle ne peut avoir lieu que là où vit l'éditeur |
-| Un anti-rebond par nombre de caractères plutôt que par temps | Une pause de dix secondes après trois caractères n'écrirait rien : le critère qui compte est l'arrêt, pas le volume |
-| Allonger le délai à 1 s pour écrire encore moins | Fait perdre une seconde de frappe sur un plantage, pour un gain nul : la frappe est déjà coalescée à 250 ms |
+| Let the queue read the text at write time | The queue runs on the Tokio runtime and cannot read a GPUI entity; it would need a reverse channel to the interface thread, hence the same cost moved |
+| Copy only the modified lines | Requires an incremental draft format, hence a migration and one more format to carry — for a gain a debounce obtains without changing storage |
+| Write on every key but off the interface thread | The copy itself is the cost, and it can only happen where the editor lives |
+| A debounce by number of characters rather than by time | A ten-second pause after three characters would write nothing: the criterion that matters is stopping, not volume |
+| Lengthen the delay to 1 s to write even less | Loses a second of typing on a crash, for zero gain: typing is already coalesced at 250 ms |

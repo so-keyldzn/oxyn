@@ -20,5 +20,7 @@ text, then the `sha256` in its header, in the same pull request. If you do not
 write French, say so in the pull request: the maintainer updates the mirror
 before merging.
 
-The French documents of `docs/` written before ADR-0047 have no mirror: they
-are the originals, and stay authoritative until translated.
+Every Markdown document of the repository has a mirror, except the
+third-party skills of `.claude/skills/` and the agent memories of
+`.claude/agent-memory/`, which are tooling notes. A new document gets its
+mirror in the same pull request.

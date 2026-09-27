@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="AGENTS.md" sha256="111dd5e1b9c5" -->
+<!-- oxyn-translation source="AGENTS.md" sha256="d6745d630556" -->
 
 > Traduction française de [AGENTS.md](../../AGENTS.md). **La version anglaise fait foi.**
 
@@ -15,10 +15,9 @@ Ces consignes métier s'appliquent aussi à Codex. Les adaptations d'outillage
 ci-dessous remplacent les indications propres à Claude Code.
 
 Le dépôt est en anglais — code, identifiants, commentaires, erreurs,
-documentation, ADR, commits ; les documents français de `docs/` restent
-d'autorité jusqu'à leur traduction, et `i18n/fr/` porte des miroirs français,
+documentation, ADR, commits ; `i18n/fr/` porte des miroirs français,
 l'anglais faisant foi
-([ADR-0047](../../docs/adr/0047-english-as-the-repository-language.md)).
+([ADR-0047](docs/adr/0047-english-as-the-repository-language.md)).
 Les documents de `docs/` font autorité sur le domaine ; signaler toute
 contradiction avec le code.
 
@@ -50,9 +49,9 @@ les contient ; les chemins de commandes shell partent de la racine du dépôt.
 
 ## Procédures et compétences
 
-Les dix procédures communes de [.claude/commands/](../../.claude/commands) sont
+Les dix procédures communes de [.claude/commands/](claude/commands) sont
 accessibles par les compétences locales décrites dans
-[.agents/README.md](../../.agents/README.md), par exemple `$oxyn-driver`,
+[.agents/README.md](agents/README.md), par exemple `$oxyn-driver`,
 `$oxyn-commande` et `$oxyn-relire`.
 Pour un driver, une commande du bus ou un écran, lire la procédure spécialisée
 avant de coder, même si la demande n'invoque pas explicitement la compétence.
@@ -66,7 +65,7 @@ Dans les procédures partagées :
   avec les outils disponibles et les permissions de la session.
 - `allowed-tools`, `tools`, `model`, `memory`, `permissions.allow` et les
   événements de hooks sont des métadonnées Claude, pas une configuration Codex.
-- Les profils de [.claude/agents/](../../.claude/agents) servent de guides de
+- Les profils de [.claude/agents/](claude/agents) servent de guides de
   spécialité. Lire ceux qui concernent la tâche ; effectuer leurs vérifications
   localement. Déléguer seulement si l'utilisateur ou les instructions de la
   session le demandent et si les outils sont disponibles. Ne pas prétendre

@@ -8,7 +8,7 @@ paths:
 
 The decision and its reasons live in
 [ADR-0029](../../docs/adr/0029-interface-tauri-shadcn.md); the IPC bridge in
-[ARCHITECTURE](../../docs/ARCHITECTURE.md#2-bis-linterface-tauri); behaviors in
+[ARCHITECTURE](../../docs/ARCHITECTURE.md#2-bis-the-tauri-interface); behaviors in
 [UX-SPEC](../../docs/UX-SPEC.md). This rule carries what gets missed when
 writing code here.
 
@@ -31,7 +31,7 @@ Adding a Tauri command widens what a script in the webview can do:
 [`/securite`](../commands/securite.md) before merging.
 
 **A Tauri command without `async` runs on the main thread**
-([RESEARCH-NOTES](../../docs/RESEARCH-NOTES.md#interface-tauri-et-front)). A body
+([RESEARCH-NOTES](../../docs/RESEARCH-NOTES.md#tauri-interface-and-front-end)). A body
 that reads the store, the keychain or a batch spilled to disk freezes the
 window there ([I-05](../../CLAUDE.md#i-05)) — and nothing reports it, since the
 read is fast on the dev machine. `async fn`, or `#[tauri::command(async)]`;
@@ -97,9 +97,9 @@ a **measured** decision — the comment carries the figures. Do not "simplify" i
 | a component from `src/components/ui` (shadcn, Base UI) | a styled `div` imitating a button, a menu, a dialog | keyboard, focus and ARIA come from Base UI; rewriting them means getting them wrong |
 | `pnpm exec shadcn add <component>` | writing a shadcn component by hand | the repository's `shadcn` skill describes the rest — `render` and not `asChild` on Base UI |
 | semantic tokens (`bg-background`, `text-muted-foreground`, `text-env-production`) | raw Tailwind colors, manual `dark:` | the theme and AA contrasts are set in `src/styles.css`, once |
-| `@hugeicons/react` | `lucide-react` | [UX-SPEC](../../docs/UX-SPEC.md#navigation-du-premier-workspace) mandates Hugeicons |
+| `@hugeicons/react` | `lucide-react` | [UX-SPEC](../../docs/UX-SPEC.md#first-workspace-navigation) mandates Hugeicons |
 | `TextInput`, `TextArea`, `InputGroupTextInput`, `InputGroupTextArea` from `components/oxyn/text-field` | `Input`, `Textarea`, `InputGroupInput`, `InputGroupTextarea` from `components/ui` — ESLint refuses them | macOS would replace `'` with `’` in a connection string ([ADR-0041](../../docs/adr/0041-registre-d-actions-menus-et-raccourcis.md) § 8); any other field (CodeMirror, Lexical, `CommandInput`) receives `TEXT_FIELD_ATTRIBUTES` |
-| React text (`{value}`) | `dangerouslySetInnerHTML` on received data | a cell, an object name or a model response are hostile inputs ([SECURITY](../../docs/SECURITY.md#surface-dentrée)) |
+| React text (`{value}`) | `dangerouslySetInnerHTML` on received data | a cell, an object name or a model response are hostile inputs ([SECURITY](../../docs/SECURITY.md#input-surface)) |
 
 `src/components/ui` is **generated**: it is neither formatted nor linted by the
 project, and a touch-up there is overwritten at the next
@@ -121,7 +121,7 @@ goes away the day Base UI names the list itself.
 
 A component of `src/components/oxyn` that depends on a remote operation has one
 story **per state**: initial, in progress, populated, empty, error
-([UX-SPEC](../../docs/UX-SPEC.md#états-dune-vue)). `make front` renders them in
+([UX-SPEC](../../docs/UX-SPEC.md#states-of-a-view)). `make front` renders them in
 Chromium and runs axe on them in `error` mode: an accessibility violation fails
 the gate.
 
@@ -177,7 +177,7 @@ is a new inline script that needs to be understood.
 ## Versions
 
 Exact in `package.json`, read from the registry and dated in
-[RESEARCH-NOTES](../../docs/RESEARCH-NOTES.md#interface-tauri-et-front)
+[RESEARCH-NOTES](../../docs/RESEARCH-NOTES.md#tauri-interface-and-front-end)
 ([I-12](../../CLAUDE.md#i-12)). `shadcn add` writes `^`s: remove them in the same
 commit. Vitest stays on 4 as long as `@storybook/addon-vitest` does not accept 5.
 

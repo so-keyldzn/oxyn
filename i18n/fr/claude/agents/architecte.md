@@ -24,9 +24,9 @@ invariant dans ton raisonnement, tu en crées une seconde version qui divergera.
 
 `docs/ARCHITECTURE.md`, puis `ls docs/adr/`. Neuf décisions sont déjà prises et
 elles contraignent presque tout — notamment le command bus
-([ADR-0004](../../../../docs/adr/0004-command-bus.md)), Arrow
-([ADR-0002](../../../../docs/adr/0002-arrow-result-model.md)) et le modèle de capacités
-([ADR-0003](../../../../docs/adr/0003-driver-capabilities.md)).
+([ADR-0004](../../docs/adr/0004-command-bus.md)), Arrow
+([ADR-0002](../../docs/adr/0002-arrow-result-model.md)) et le modèle de capacités
+([ADR-0003](../../docs/adr/0003-driver-capabilities.md)).
 
 Un ADR accepté ne se réécrit pas : on en écrit un nouveau qui le remplace ou le
 précise.

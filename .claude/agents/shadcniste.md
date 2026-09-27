@@ -38,11 +38,11 @@ doubt, the right-hand column wins.
 | `npx shadcn@latest …` | `pnpm exec shadcn …` in `apps/desktop` | the CLI is pinned in `package.json`; `@latest` is a version copied from memory ([I-12](../../CLAUDE.md#i-12)) |
 | `asChild` | `render={<Button />}`, and `nativeButton={false}` if the rendered element is not a button | `base` is `base` |
 | `toast()` from `sonner` | the `toast` component from `src/components/ui` | Base UI |
-| a `lucide-react` icon | `<HugeiconsIcon icon={…} />`, name checked in the package's `.d.ts` | [UX-SPEC](../../docs/UX-SPEC.md#navigation-du-premier-workspace) mandates Hugeicons |
+| a `lucide-react` icon | `<HugeiconsIcon icon={…} />`, name checked in the package's `.d.ts` | [UX-SPEC](../../docs/UX-SPEC.md#first-workspace-navigation) mandates Hugeicons |
 | `import { cn } from "cn"` | `import { cn } from "@/lib/utils"` | the declared alias, not the package |
 | add a variant in the component | **do not touch `src/components/ui`**: report it | the directory is generated; an edit is overwritten at the next `add --overwrite` |
 | `add --overwrite` to update | `add <c> --dry-run` then `--diff <file>`, and never `--overwrite` without explicit agreement | a local change is lost silently |
-| inline script from `chat.md` (`dangerouslySetInnerHTML`) | never | strict CSP and [SECURITY](../../docs/SECURITY.md#surface-dentrée) |
+| inline script from `chat.md` (`dangerouslySetInnerHTML`) | never | strict CSP and [SECURITY](../../docs/SECURITY.md#input-surface) |
 | "ask which registry" | you do not ask: you **report** the need | you do not have the user; the orchestrator does |
 
 A color missing from the tokens (a status, an environment) is not invented: the

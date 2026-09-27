@@ -1,21 +1,21 @@
-# ADR-0007 — Processus sidecar pour les drivers à dépendances natives
+# ADR-0007 — A sidecar process for drivers with native dependencies
 
-**Statut :** proposé · **Date :** 2026-09-05
+**Status:** proposed · **Date:** 2026-09-05
 
-## Contexte
-Oracle (OCI), Couchbase et certains SDK cloud reposent sur des bibliothèques C. Un
-segfault ou une fuite mémoire dans une de ces dépendances emporterait tout le workspace
-et le travail non sauvegardé de l'utilisateur.
+## Context
+Oracle (OCI), Couchbase and some cloud SDKs rely on C libraries. A segfault or a memory
+leak in one of these dependencies would bring down the whole workspace and the user's
+unsaved work.
 
-## Décision
-Ces drivers tournent dans `oxyn-driverd`, processus séparé exposant les mêmes traits
-par-dessus un transport local. Les résultats transitent en **Arrow IPC** (zéro-copie).
-Les drivers en Rust pur restent en processus.
+## Decision
+These drivers run in `oxyn-driverd`, a separate process exposing the same traits over
+a local transport. Results travel as **Arrow IPC** (zero-copy). Pure-Rust drivers stay
+in process.
 
-## Conséquences
-* **+** Un crash ne dégrade qu'une connexion ; le sidecar redémarre à chaud.
-* **+** Isolation mémoire, et possibilité de limiter les ressources par processus.
-* **+** Le surcoût de frontière est marginal grâce à Arrow IPC.
-* **−** Complexité de cycle de vie : supervision, redémarrage, propagation d'annulation.
-* **−** Distribution plus lourde (binaire supplémentaire, signature, notarisation macOS).
-* Reporté en phase 4 : aucun driver de phase 0-3 n'en a besoin.
+## Consequences
+* **+** A crash only degrades one connection; the sidecar restarts hot.
+* **+** Memory isolation, and the possibility of limiting resources per process.
+* **+** The boundary overhead is marginal thanks to Arrow IPC.
+* **−** Lifecycle complexity: supervision, restart, cancellation propagation.
+* **−** Heavier distribution (extra binary, signing, macOS notarization).
+* Postponed to phase 4: no driver of phases 0-3 needs it.

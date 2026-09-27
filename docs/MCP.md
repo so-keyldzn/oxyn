@@ -1,77 +1,76 @@
-# Serveurs MCP
+# MCP servers
 
-> **Autorité** : quels serveurs MCP le dépôt déclare, pourquoi, et pourquoi les
-> candidats évidents sont écartés.
+> **Authority**: which MCP servers the repository declares, why, and why the
+> obvious candidates are rejected.
 
-Configuration : [`.mcp.json`](../.mcp.json) à la racine, approbation par
-`enabledMcpjsonServers` dans [`.claude/settings.json`](../.claude/settings.json)
-— dans le fichier **commité**, pour qu'un clone n'ait rien à réapprouver.
+Configuration: [`.mcp.json`](../.mcp.json) at the root, approval through
+`enabledMcpjsonServers` in [`.claude/settings.json`](../.claude/settings.json)
+— in the **committed** file, so that a clone has nothing to re-approve.
 
-## Le critère
+## The criterion
 
-Un serveur MCP entre ici quand il apporte quelque chose que Claude Code ne sait
-pas déjà faire nativement. Un serveur redondant coûte deux fois : il consomme du
-contexte avec ses définitions d'outils, et il crée un second chemin pour faire
-la même chose — donc une incertitude sur lequel est utilisé.
+An MCP server gets in here when it brings something Claude Code cannot already
+do natively. A redundant server costs twice: it consumes context with its tool
+definitions, and it creates a second path to do the same thing — hence
+uncertainty about which one is used.
 
-## Ce qui est déclaré
+## What is declared
 
 ### `fetch`
 
 | | |
 |---|---|
-| Origine | serveur de référence officiel, maintenu ([RESEARCH-NOTES](RESEARCH-NOTES.md#écosystème-mcp)) |
-| Lancement | `uvx mcp-server-fetch` |
+| Origin | official reference server, maintained ([RESEARCH-NOTES](RESEARCH-NOTES.md#mcp-ecosystem)) |
+| Launch | `uvx mcp-server-fetch` |
 
-**Pourquoi il n'est pas redondant avec `WebFetch`.** `WebFetch` convertit la page
-puis la fait résumer par un petit modèle : on reçoit une réponse à une question,
-pas le texte. Pour lire la signature exacte d'une fonction de `tauri` sur docs.rs
-ou la valeur exacte d'un paramètre dans la documentation de PostgreSQL, ce
-résumé est une perte : c'est précisément le genre d'approximation que
-[I-12](../CLAUDE.md#i-12) interdit. `fetch` renvoie le contenu.
+**Why it is not redundant with `WebFetch`.** `WebFetch` converts the page then
+has a small model summarize it: you get an answer to a question, not the text.
+To read the exact signature of a `tauri` function on docs.rs or the exact value
+of a parameter in the PostgreSQL documentation, that summary is a loss: it is
+precisely the kind of approximation [I-12](../CLAUDE.md#i-12) forbids. `fetch`
+returns the content.
 
-`WebFetch` reste préférable pour survoler une page longue dont on ne veut qu'une
-réponse.
+`WebFetch` remains preferable to skim a long page from which you only want an
+answer.
 
-## Ce qui est écarté, et pourquoi
+## What is rejected, and why
 
-Documenté pour que la question ne soit pas reposée tous les six mois.
+Documented so that the question is not asked again every six months.
 
-| Candidat | Écarté parce que |
+| Candidate | Rejected because |
 |---|---|
-| `filesystem` | redondant avec `Read`, `Write`, `Glob`, `Grep`, qui respectent en plus les règles `permissions.deny` du dépôt — ce que le serveur ne ferait pas |
-| `git` | redondant avec `Bash(git …)`, déjà autorisé en lecture dans les permissions |
-| `memory` | créerait une **source de vérité concurrente** de `docs/`. C'est exactement ce que le socle cherche à éviter : une règle vit à un seul endroit |
-| `sequential-thinking` | redondant avec le raisonnement natif du modèle |
-| `time` | aucun besoin dans ce dépôt |
-| `everything` | serveur de démonstration |
-| **`postgres`, `sqlite`, `github`** | **serveurs de référence archivés** ([RESEARCH-NOTES](RESEARCH-NOTES.md#écosystème-mcp), vérifié 2026-09-05). Il n'existe aucun serveur MCP officiel de base de données |
+| `filesystem` | redundant with `Read`, `Write`, `Glob`, `Grep`, which in addition honor the repository's `permissions.deny` rules — which the server would not |
+| `git` | redundant with `Bash(git …)`, already allowed for reading in the permissions |
+| `memory` | would create a **competing source of truth** to `docs/`. That is exactly what the foundation tries to avoid: a rule lives in a single place |
+| `sequential-thinking` | redundant with the model's native reasoning |
+| `time` | no need in this repository |
+| `everything` | demo server |
+| **`postgres`, `sqlite`, `github`** | **archived reference servers** ([RESEARCH-NOTES](RESEARCH-NOTES.md#mcp-ecosystem), checked 2026-09-05). There is no official database MCP server |
 
-## Le cas des serveurs de bases de données
+## The case of database servers
 
-C'est le manque le plus visible pour un projet comme Oxyn : pouvoir interroger
-une vraie base pendant le développement d'un driver.
+It is the most visible gap for a project like Oxyn: being able to query a real
+database while developing a driver.
 
-Il n'est pas comblé, pour deux raisons :
+It is not filled, for two reasons:
 
-1. **Aucun serveur officiel n'existe** — ceux du dépôt de référence sont
-   archivés. Tout candidat est un serveur tiers, à auditer avant d'être branché
-   sur une base.
-2. **Il n'y a pas encore de driver à tester.** Le besoin est réel à partir de la
-   phase 2 ([IMPLEMENTATION-PLAN](IMPLEMENTATION-PLAN.md#phase-2--les-protocoles-qui-comptent)),
-   pas avant.
+1. **No official server exists** — those of the reference repository are
+   archived. Every candidate is a third-party server, to be audited before being
+   plugged into a database.
+2. **There is no driver to test yet.** The need is real from
+   phase 2 ([IMPLEMENTATION-PLAN](IMPLEMENTATION-PLAN.md#phase-2--the-protocols-that-matter)),
+   not before.
 
-Quand le besoin se présentera, la décision passera par un ADR, et le critère
-sera la surface d'accès : un serveur MCP qui reçoit une chaîne de connexion de
-production est une frontière externe de plus, au sens de
-[ARCHITECTURE](ARCHITECTURE.md#les-frontières-externes). En attendant, `psql`,
-`mysql` et `sqlite3` via `Bash` sur des bases locales couvrent le besoin sans
-ajouter de frontière.
+When the need arises, the decision will go through an ADR, and the criterion
+will be the access surface: an MCP server that receives a production connection
+string is one more external boundary, in the sense of
+[ARCHITECTURE](ARCHITECTURE.md#les-frontières-externes). In the meantime, `psql`,
+`mysql` and `sqlite3` through `Bash` on local databases cover the need without
+adding a boundary.
 
-## Serveurs demandant une autorisation
+## Servers requiring authorization
 
-Certains serveurs de la plateforme (GitHub, Linear, Slack, Notion…) sont
-disponibles mais **non autorisés** dans cette session. Ils ne sont pas déclarés
-dans `.mcp.json` : ce sont des connecteurs de compte, pas une configuration de
-dépôt. Leur autorisation se fait dans les réglages du compte claude.ai, ou par
-`claude mcp` en session interactive.
+Some platform servers (GitHub, Linear, Slack, Notion…) are available but **not
+authorized** in this session. They are not declared in `.mcp.json`: they are
+account connectors, not a repository configuration. They are authorized in the
+claude.ai account settings, or through `claude mcp` in an interactive session.

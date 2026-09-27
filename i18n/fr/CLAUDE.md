@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="CLAUDE.md" sha256="0635e616e282" -->
+<!-- oxyn-translation source="CLAUDE.md" sha256="1d3243c422b8" -->
 
 > Traduction française de [CLAUDE.md](../../CLAUDE.md). **La version anglaise fait foi.**
 
@@ -12,11 +12,9 @@ lisent les messages d'erreur de PostgreSQL.
 
 **Langue.** Le dépôt est écrit en **anglais** : code, identifiants,
 commentaires, messages d'erreur, `///`, documentation, ADR, messages de commit,
-pull requests. Deux exceptions, fixées par
-[ADR-0047](../../docs/adr/0047-english-as-the-repository-language.md) : les
-documents de `docs/` et les ADR 0001 à 0046 écrits en français font autorité
-tels quels, jusqu'à leur traduction ; et [`i18n/fr/`](../README.md) porte les
-miroirs français des documents anglais — dont celui-ci. **L'anglais fait
+pull requests ([ADR-0047](docs/adr/0047-english-as-the-repository-language.md)).
+[`i18n/fr/`](../README.md) porte un miroir français de chaque document — dont
+celui-ci. **L'anglais fait
 foi** ; un miroir est une traduction, jamais l'endroit où une règle se décide.
 
 **L'état du dépôt n'est pas ici** : il est injecté à chaque session par
@@ -26,32 +24,32 @@ foi** ; un miroir est une traduction, jamais l'endroit où une règle se décide
 
 | Document | Fait autorité sur |
 |---|---|
-| [docs/VISION.md](../../docs/VISION.md) | le périmètre du produit et ses principes |
-| [docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md) | crates, dépendances, command bus, threads |
-| [docs/DRIVER-CONTRACT.md](../../docs/DRIVER-CONTRACT.md) | ce que tout driver garantit |
-| [docs/AI-PROVIDERS.md](../../docs/AI-PROVIDERS.md) | ce qui traverse la frontière IA |
-| [docs/PLUGIN-CONTRACT.md](../../docs/PLUGIN-CONTRACT.md) | ce qu'un plugin peut faire |
-| [docs/SECURITY.md](../../docs/SECURITY.md) | secrets, connexions, surface d'entrée, `unsafe` |
-| [docs/PERFORMANCE.md](../../docs/PERFORMANCE.md) | les budgets chiffrés |
-| [docs/UX-SPEC.md](../../docs/UX-SPEC.md) | les comportements d'interface |
-| [docs/RESEARCH-NOTES.md](../../docs/RESEARCH-NOTES.md) | toute version externe, sourcée et datée |
-| [docs/IMPLEMENTATION-PLAN.md](../../docs/IMPLEMENTATION-PLAN.md) | les phases et leurs portes de sortie |
-| [docs/adr/](../../docs/adr) | les décisions coûteuses à défaire |
+| [docs/VISION.md](docs/VISION.md) | le périmètre du produit et ses principes |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | crates, dépendances, command bus, threads |
+| [docs/DRIVER-CONTRACT.md](docs/DRIVER-CONTRACT.md) | ce que tout driver garantit |
+| [docs/AI-PROVIDERS.md](docs/AI-PROVIDERS.md) | ce qui traverse la frontière IA |
+| [docs/PLUGIN-CONTRACT.md](docs/PLUGIN-CONTRACT.md) | ce qu'un plugin peut faire |
+| [docs/SECURITY.md](docs/SECURITY.md) | secrets, connexions, surface d'entrée, `unsafe` |
+| [docs/PERFORMANCE.md](docs/PERFORMANCE.md) | les budgets chiffrés |
+| [docs/UX-SPEC.md](docs/UX-SPEC.md) | les comportements d'interface |
+| [docs/RESEARCH-NOTES.md](docs/RESEARCH-NOTES.md) | toute version externe, sourcée et datée |
+| [docs/IMPLEMENTATION-PLAN.md](docs/IMPLEMENTATION-PLAN.md) | les phases et leurs portes de sortie |
+| [docs/adr/](docs/adr) | les décisions coûteuses à défaire |
 
 **En cas de contradiction entre le code et un de ces documents, c'est un bug :
 signaler, ne pas trancher seul.**
 
 ## Stack
 
-Vérifié le 2026-09-05, interface le 2026-09-15 — [détail et sources](../../docs/RESEARCH-NOTES.md).
+Vérifié le 2026-09-05, interface le 2026-09-15 — [détail et sources](docs/RESEARCH-NOTES.md).
 
 | | Version | À savoir |
 |---|---|---|
-| Rust | épinglé par `rust-toolchain.toml` ([ADR-0008](../../docs/adr/0008-chaine-outils-rust.md)) | la machine de dev est en `1.89.0`, la stable en `1.98.1` |
+| Rust | épinglé par `rust-toolchain.toml` ([ADR-0008](docs/adr/0008-chaine-outils-rust.md)) | la machine de dev est en `1.89.0`, la stable en `1.98.1` |
 | Édition | **2024** | exige Rust ≥ 1.85 |
-| Interface | **Tauri 2** + TanStack Start en **mode SPA** + shadcn/ui sur **Base UI** ([ADR-0029](../../docs/adr/0029-interface-tauri-shadcn.md)) | `apps/desktop` (pnpm) servi par `crates/oxyn-desktop` ; aucun serveur, le backend est Rust |
+| Interface | **Tauri 2** + TanStack Start en **mode SPA** + shadcn/ui sur **Base UI** ([ADR-0029](docs/adr/0029-interface-tauri-shadcn.md)) | `apps/desktop` (pnpm) servi par `crates/oxyn-desktop` ; aucun serveur, le backend est Rust |
 | Tests de composants | Storybook 10 + `addon-vitest` + `addon-a11y` | une story est un test, axe compris ; Vitest reste en **4** |
-| Résultats | Apache Arrow ([ADR-0002](../../docs/adr/0002-arrow-result-model.md)) | `RecordBatch` de bout en bout |
+| Résultats | Apache Arrow ([ADR-0002](docs/adr/0002-arrow-result-model.md)) | `RecordBatch` de bout en bout |
 
 Aucune version ne s'écrit de mémoire : voir [I-12](#i-12).
 
@@ -77,73 +75,73 @@ la faute. Chacun renvoie au document qui le fonde.
 <a id="i-01"></a>**I-01 — Rien ne contourne le command bus.** L'UI, un agent et un
 plugin émettent des `Command` ; aucun n'appelle un driver. Un second chemin
 d'exécution, une fois créé, n'est jamais audité comme le premier — et c'est
-celui-là que l'IA empruntera. → [ADR-0004](../../docs/adr/0004-command-bus.md)
+celui-là que l'IA empruntera. → [ADR-0004](docs/adr/0004-command-bus.md)
 
 <a id="i-02"></a>**I-02 — Aucune écriture sur une connexion `production` sans
 confirmation qui nomme la connexion.** Pour un `Actor::Agent`, c'est un refus,
 pas une confirmation renforcée : une confirmation finit par être cliquée. Une
 connexion sans environnement renseigné vaut `production`, jamais l'inverse.
-→ [SECURITY](../../docs/SECURITY.md#marquage-des-connexions)
+→ [SECURITY](docs/SECURITY.md#marquage-des-connexions)
 
 <a id="i-03"></a>**I-03 — Aucun secret dans un journal, une erreur affichée, un
 rapport de plantage, un fichier de workspace, une invite IA ou le presse-papiers.**
 Les six canaux comptent ; il suffit d'en oublier un. Corollaire vérifiable :
 **aucun `#[derive(Debug)]` sur un type portant un secret** — c'est le
 `tracing::debug!("{cfg:?}")` ajouté six mois plus tard qui fuit.
-→ [SECURITY](../../docs/SECURITY.md#secrets)
+→ [SECURITY](docs/SECURITY.md#secrets)
 
 <a id="i-04"></a>**I-04 — Rien ne rejoint une invite IA hors du point de passage
 unique qui applique le niveau de la connexion.** Le niveau est attaché à la
 connexion, pas à la session ni au fournisseur : sinon un réglage pris sur une
 base de test s'applique à la base client ouverte trois jours plus tard.
-→ [AI-PROVIDERS](../../docs/AI-PROVIDERS.md) · [ADR-0006](../../docs/adr/0006-ai-privacy-tiers.md)
+→ [AI-PROVIDERS](docs/AI-PROVIDERS.md) · [ADR-0006](docs/adr/0006-ai-privacy-tiers.md)
 
 <a id="i-05"></a>**I-05 — Aucun I/O, aucun réseau, aucun `block_on` sur le thread
 UI.** Une requête de 30 s y fige toute la fenêtre ; l'utilisateur conclut au
 plantage et tue le processus, perdant son travail non sauvegardé.
-→ [ARCHITECTURE](../../docs/ARCHITECTURE.md#le-modèle-de-threads)
+→ [ARCHITECTURE](docs/ARCHITECTURE.md#le-modèle-de-threads)
 
 <a id="i-06"></a>**I-06 — Aucun résultat n'est matérialisé en entier.**
 `RecordBatch` en flux, `ResultBuffer` borné, débordement sur disque. Un
 `SELECT *` sur 50 millions de lignes déclenche l'OOM killer : sur macOS le
 processus meurt sans trace, après un simple clic sur une table.
-→ [ADR-0002](../../docs/adr/0002-arrow-result-model.md) · [PERFORMANCE](../../docs/PERFORMANCE.md#budgets-de-mémoire)
+→ [ADR-0002](docs/adr/0002-arrow-result-model.md) · [PERFORMANCE](docs/PERFORMANCE.md#budgets-de-mémoire)
 
 <a id="i-07"></a>**I-07 — Aucune sortie de modèle n'est exécutée directement.**
 Elle devient une `Command` portant `Actor::Agent` et traverse le `PolicyGate`.
 Y compris ce qui « ne fait que lire » : `EXPLAIN ANALYZE` exécute réellement la
 requête qu'il analyse, `DELETE` compris.
-→ [AI-PROVIDERS](../../docs/AI-PROVIDERS.md#ce-quon-fait-des-réponses)
+→ [AI-PROVIDERS](docs/AI-PROVIDERS.md#ce-quon-fait-des-réponses)
 
 <a id="i-08"></a>**I-08 — Aucune crate hors `oxyn-desktop` ne dépend de `tauri`.**
 Un type de toolkit importé dans `oxyn-core` « juste pour un champ » supprime
 définitivement la possibilité d'une CLI, des tests sans écran, et d'un changement
-d'interface — celui que [ADR-0029](../../docs/adr/0029-interface-tauri-shadcn.md) a
+d'interface — celui que [ADR-0029](docs/adr/0029-interface-tauri-shadcn.md) a
 fait en retirant GPUI sans toucher au cœur.
-→ [ARCHITECTURE](../../docs/ARCHITECTURE.md#le-sens-des-dépendances)
+→ [ARCHITECTURE](docs/ARCHITECTURE.md#le-sens-des-dépendances)
 
 <a id="i-09"></a>**I-09 — Aucun `unwrap`, `expect`, `panic!`, `unreachable!`,
 indexation de tranche ni `as` débordant sur un chemin atteignable depuis une
 réponse serveur.** Un serveur renvoie ce qu'il veut : un type inconnu, un `NULL`
 là où le schéma l'interdit, un encodage invalide. La panique tue l'application.
-→ [DRIVER-CONTRACT](../../docs/DRIVER-CONTRACT.md#1-il-ne-panique-jamais-sur-une-entrée-venue-du-serveur)
+→ [DRIVER-CONTRACT](docs/DRIVER-CONTRACT.md#1-il-ne-panique-jamais-sur-une-entrée-venue-du-serveur)
 
 <a id="i-10"></a>**I-10 — Le SQL qu'Oxyn compose ne concatène jamais un
 identifiant reçu.** Citation par le driver, valeurs liées. Le SQL que
 *l'utilisateur écrit* part tel quel — c'est la fonctionnalité. Une table nommée
 `"users"; DROP TABLE audit; --` est légale dans PostgreSQL : un aperçu construit
 par concaténation exécute la suppression au clic.
-→ [DRIVER-CONTRACT](../../docs/DRIVER-CONTRACT.md#6-il-échappe-tout-identifiant-quil-compose)
+→ [DRIVER-CONTRACT](docs/DRIVER-CONTRACT.md#6-il-échappe-tout-identifiant-quil-compose)
 
 <a id="i-11"></a>**I-11 — Aucun format de persistance fermé.** Ce qu'Oxyn écrit
 — workspace, session, export — est lisible sans Oxyn. « Open by default » n'est
 pas une posture : un utilisateur qui ne peut pas récupérer son travail sans le
 produit est captif.
-→ [VISION](../../docs/VISION.md)
+→ [VISION](docs/VISION.md)
 
 <a id="i-12"></a>**I-12 — Aucune version, aucune limite externe recopiée de
 mémoire.** Vérifiée au registre, datée dans
-[RESEARCH-NOTES](../../docs/RESEARCH-NOTES.md), re-vérifiée par [`/versions`](claude/commands/versions.md).
+[RESEARCH-NOTES](docs/RESEARCH-NOTES.md), re-vérifiée par [`/versions`](claude/commands/versions.md).
 Une valeur plausible et fausse ne se voit ni à la compilation, ni aux tests, ni
 en revue.
 
@@ -151,18 +149,18 @@ en revue.
 dépassé côté client pendant une écriture n'est pas une erreur transitoire : le
 serveur a peut-être appliqué. Rejouer crée un doublon dans les données de
 l'utilisateur, sans message d'erreur nulle part.
-→ [DRIVER-CONTRACT](../../docs/DRIVER-CONTRACT.md#4-il-distingue-trois-familles-derreurs-et-il-les-classe)
+→ [DRIVER-CONTRACT](docs/DRIVER-CONTRACT.md#4-il-distingue-trois-familles-derreurs-et-il-les-classe)
 
 ## Organisation du code
 
 L'arborescence et le sens des dépendances font autorité dans
-[ARCHITECTURE](../../docs/ARCHITECTURE.md#le-découpage). Ce qui vaut partout :
+[ARCHITECTURE](docs/ARCHITECTURE.md#le-découpage). Ce qui vaut partout :
 
 - **une crate porte un sujet.** `utils`, `common`, `helpers`, `misc` sont
   interdits : un nom fourre-tout est un découpage raté qui devient le point de
   couplage universel ;
 - **un driver par protocole, pas par produit** — Redshift ≡ PostgreSQL
-  ([ADR-0003](../../docs/adr/0003-driver-capabilities.md)) ;
+  ([ADR-0003](docs/adr/0003-driver-capabilities.md)) ;
 - **pas de code mort, pas de code commenté « au cas où »** : git s'en souvient ;
 - **pas de `TODO` sans date** ni sans nom de ce qui le débloque ;
 - **pas d'abstraction pour un seul appelant** — un trait à une seule
@@ -209,7 +207,7 @@ parallèles, qui n'ajoute aucun contrôle de son côté et dont `make socle` vé
 qu'elle n'en oublie aucun. Sur une pull request, elle saute les jobs dont la
 zone — Rust, front — n'est pas touchée, et le job agrégat `qualite` est le seul
 check à lire ; sur `main`, tout tourne toujours
-([ADR-0045](../../docs/adr/0045-ci-selective-sur-les-pull-requests.md)) :
+([ADR-0045](docs/adr/0045-ci-selective-sur-les-pull-requests.md)) :
 
 | Ce qui refuse | L'invariant tenu |
 |---|---|

@@ -6,7 +6,7 @@ paths:
   - "**/tests/**"
 ---
 
-<!-- oxyn-translation source=".claude/rules/tests.md" sha256="61d78f2ad470" -->
+<!-- oxyn-translation source=".claude/rules/tests.md" sha256="eeaae5a18e05" -->
 
 > Traduction française de [.claude/rules/tests.md](../../../../.claude/rules/tests.md). **La version anglaise fait foi.**
 
@@ -82,7 +82,7 @@ composant n'affichera plus rien.
 
 `criterion` pour le code pur : conversion vers `RecordBatch`, analyse,
 formatage, diff de schéma
-([PERFORMANCE](../../../../docs/PERFORMANCE.md#ce-qui-se-mesure-et-comment)).
+([PERFORMANCE](../../docs/PERFORMANCE.md#ce-qui-se-mesure-et-comment)).
 
 Deux choses qui ne sont **pas** des bancs d'essai :
 

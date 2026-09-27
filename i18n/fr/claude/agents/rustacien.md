@@ -23,7 +23,7 @@ n'existe pas encore** : une règle `paths:` ne se charge pas à la création.
 ## Les couches dont tu as la charge
 
 Leur sujet et leur sens de dépendance font autorité dans
-[ARCHITECTURE § 3](../../../../docs/ARCHITECTURE.md#le-découpage) ; la liste n'est pas
+[ARCHITECTURE § 3](../../docs/ARCHITECTURE.md#le-découpage) ; la liste n'est pas
 recopiée ici. Deux traits à garder en tête, parce qu'ils ne se voient pas à la
 compilation :
 

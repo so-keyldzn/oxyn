@@ -66,12 +66,10 @@ messages, documentation, ADRs, commit messages, pull requests
 ([ADR-0047](../../docs/adr/0047-english-as-the-repository-language.md)). A code
 excerpt in a document stays in English.
 
-**What was written in French.** The documents of `docs/` and ADRs 0001 to 0046
-written in French stay authoritative as they are, until they are translated.
-Translating one is a **pure translation** commit that changes no decision — an
-accepted ADR can be translated, not rewritten. It comes before any substantial
-edit of the document; a small fix stays in the document's current language, so
-that a file never mixes two languages.
+**What was written in French.** Every document written in French before
+ADR-0047, ADRs 0001 to 0046 included, was translated as it was: a translation
+changes no decision — an accepted ADR can be translated, not rewritten. ADR
+file names stayed French so that no link breaks.
 
 **English is authoritative. French mirrors** live in `i18n/fr/`, at the path of
 their original (`.claude/` becomes `claude/`, so that Claude Code does not load

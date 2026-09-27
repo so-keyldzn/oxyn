@@ -24,10 +24,9 @@ something because it can be read in full.
 
 The number is the next one in sequence, never reusing a freed number.
 
-**A new ADR is written in English**
-([ADR-0047](../../docs/adr/0047-english-as-the-repository-language.md)). ADRs
-0001 to 0046 stay in French as they are: citing them is enough, they are not
-translated as part of another change.
+**An ADR is written in English**, and gets its French mirror in
+`i18n/fr/docs/adr/`
+([ADR-0047](../../docs/adr/0047-english-as-the-repository-language.md)).
 
 ## The rule that governs the others
 

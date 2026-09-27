@@ -32,15 +32,13 @@ in French.
 1. **The repository language is English**: code, identifiers, comments, error
    messages, documentation, ADRs, commit messages, pull requests, issues. New
    documents and ADRs are written in English.
-2. **The foundation is translated now**: `CLAUDE.md`, `AGENTS.md`, `README.md`,
-   `docs/README.md`, everything in `.claude/` that is prose (rules, commands,
-   agents, checklists, templates, workflows), the messages of the hooks, the
-   pull request and issue templates.
-3. **The authoritative documents of `docs/` and ADRs 0001 to 0046 stay in
-   French** and stay authoritative as they are. One of them is translated in a
-   dedicated commit that changes no decision — accepted ADRs included, since a
-   translation decides nothing — before any substantial edit. A small fix stays
-   in the document's current language.
+2. **Everything is translated now**: `CLAUDE.md`, `AGENTS.md`, `README.md`,
+   every document of `docs/`, ADRs 0001 to 0046, everything in `.claude/` that
+   is prose (rules, commands, agents, checklists, templates, workflows, audit
+   reports), the messages of the hooks, the pull request and issue templates.
+3. **Translating an accepted ADR decides nothing.** ADRs 0001 to 0046 are
+   translated as they are: same decision, same status, same date. File names
+   stay as they were, so that no link breaks.
 4. **French mirrors, English authoritative.** Every translated document has a
    French mirror at `i18n/fr/<path>`, where `.claude/` becomes `claude/`. The
    mirror starts with `<!-- oxyn-translation source="<path>" sha256="<12 hex>" -->`,
@@ -71,10 +69,9 @@ setting, not a repository rule: it leaves `CLAUDE.md`.
   contributor who does not write French cannot make the gate pass alone: they
   say so in the pull request and the maintainer updates the mirror before
   merging.
-* The authoritative documents stay French for now: an English-speaking
-  contributor still reads `docs/SECURITY.md` or `docs/DRIVER-CONTRACT.md` in
-  French, or through a translation tool. Anchors into these documents stay
-  French.
+* Every heading anchor changed with the translation: links into the English
+  documents use English anchors, links inside the mirrors keep French ones and
+  point to the mirrors. ADR file names stay French.
 * The history is bilingual: French before 2026-09-27, English after.
 * The Python identifiers of the hooks, the names of `make` targets, scripts,
   commands and agents (`make qualite`, `/implementer`, `rustacien`) stay in
@@ -94,10 +91,11 @@ check would then only be a cost.
 * **Only an English entry point** (README, templates, a guide summarizing the
   invariants). Two versions of the invariants, one of them not checked: they
   diverge within weeks, and the contributor reads the stale one.
-* **Everything in English now, `docs/` and the 46 ADRs included.** Several days
-  of translation during which the authoritative documents keep changing; the
-  risk of drift during the translation outweighs the benefit. The progressive
-  translation of point 3 reaches the same state without that risk.
+* **Translate `docs/` progressively, before each substantial edit.** An
+  English-speaking contributor would keep reading `docs/SECURITY.md` and
+  `docs/DRIVER-CONTRACT.md` — the documents most invariants point to — in
+  French for months, and the repository would stay in two languages for as
+  long.
 * **Bilingual files side by side (`rust.fr.md`)**. Claude Code loads every
   `*.md` of `.claude/rules`, `.claude/commands` and `.claude/agents`: a French
   file next to the English one would load a second rule, command or agent.

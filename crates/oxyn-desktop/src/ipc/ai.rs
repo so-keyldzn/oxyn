@@ -24,7 +24,7 @@ pub use self::startup::*;
 ///
 /// `Unresolved` stays `Unresolved`: it counts as remote for every decision,
 /// but showing it as « remote » would claim a measurement that did not happen
-/// ([UX-SPEC](../../../../docs/UX-SPEC.md#le-niveau-se-lit-avant-de-parler-pas-après)).
+/// ([UX-SPEC](../../../../docs/UX-SPEC.md#the-tier-is-read-before-speaking-not-after)).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub enum ProviderReach {

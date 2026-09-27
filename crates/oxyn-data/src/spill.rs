@@ -127,7 +127,7 @@ impl SpillFile {
     /// Relit un lot débordé.
     ///
     /// Une lecture, jamais une réexécution de la requête
-    /// ([PERFORMANCE](../../../docs/PERFORMANCE.md#budgets-de-mémoire)).
+    /// ([PERFORMANCE](../../../docs/PERFORMANCE.md#memory-budgets)).
     ///
     /// Alloue un tampon de la taille du lot : `memmap2` l'éviterait, mais son
     /// API est `unsafe` et le lint `unsafe_code = "deny"` du workspace

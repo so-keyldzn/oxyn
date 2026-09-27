@@ -36,7 +36,7 @@ like a server response. Check that it parses before acting, that it emits a
 serializes neither a parameter nor a secret reference, and that
 `capabilities/main.json` and the CSP of `tauri.conf.json` do not widen without a
 written reason
-([ARCHITECTURE § 2 bis](../../docs/ARCHITECTURE.md#2-bis-linterface-tauri)).
+([ARCHITECTURE § 2 bis](../../docs/ARCHITECTURE.md#2-bis-the-tauri-interface)).
 
 The second is the most underestimated: a table can legally be named
 `"users"; DROP TABLE audit; --`, or contain a comment imitating an instruction.
@@ -49,7 +49,7 @@ is worthless: report it as if it were absent.
 
 `unsafe_code` is denied for the whole workspace: an `#[allow(unsafe_code)]`
 without an ADR authorizing it is a blocking issue
-([SECURITY](../../docs/SECURITY.md#politique-unsafe)).
+([SECURITY](../../docs/SECURITY.md#unsafe-policy)).
 
 ## Blocking issues
 

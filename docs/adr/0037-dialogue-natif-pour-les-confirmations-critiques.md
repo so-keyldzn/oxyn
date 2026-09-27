@@ -1,331 +1,321 @@
-# ADR-0037 — Une décision critique se confirme dans un dialogue natif de l'hôte, jamais dans la webview
+# ADR-0037 — A critical decision is confirmed in a native dialog of the host, never in the webview
 
-**Statut :** proposé · **Date :** 2026-09-25
+**Status:** proposed · **Date:** 2026-09-25
 
-**Précise :** [ADR-0029](0029-interface-tauri-shadcn.md), dont les Conséquences
-nomment la surface nouvelle — « une XSS dans la webview atteint les commandes
-Tauri » — sans dire ce qui reste hors de sa portée. Cet ADR le dit pour trois
-décisions.
+**Clarifies:** [ADR-0029](0029-interface-tauri-shadcn.md), whose Consequences
+name the new surface — "an XSS in the webview reaches the Tauri commands" —
+without saying what stays out of its reach. This ADR says it for three
+decisions.
 
-**Complète :** [ADR-0034](0034-echantillon-pour-toute-destination.md), dont
-le § 4 fait d'`ai_answer_sample` « un geste de l'utilisateur dans l'écran » :
-c'est vrai de ce que l'agent peut envoyer, pas de ce qu'un script dans la
-webview peut appeler.
+**Complements:** [ADR-0034](0034-echantillon-pour-toute-destination.md), whose
+§ 4 makes `ai_answer_sample` "a user gesture in the screen": that is true of
+what the agent can send, not of what a script in the webview can call.
 
-## Contexte
+## Context
 
-Une confirmation dessinée dans la webview protège contre un clic malheureux,
-pas contre un script. Tout ce que la webview peut cliquer, un script injecté
-dans la webview peut l'appeler directement, sans rien dessiner. Le 2026-09-24,
-trois décisions reposaient pourtant sur un bouton de la webview :
+A confirmation drawn in the webview protects against an unfortunate click, not
+against a script. Everything the webview can click, a script injected into the
+webview can call directly, without drawing anything. On 2026-09-24, three
+decisions nevertheless rested on a webview button:
 
-| Décision | Ce qui l'accorde aujourd'hui |
+| Decision | What grants it today |
 |---|---|
-| Écriture ou DDL sur une connexion `production` ([I-02](../../CLAUDE.md#i-02)) | `decide(command, approved: true)` — `crates/oxyn-desktop/src/commands.rs`, puis `Backend::decide`, qui appelle `executor.approve("human", …)` sans autre vérification |
-| Modification ou suppression d'une connexion `production` | `decide_connection_change(command, approved: true)` — `commands/settings.rs` |
-| Sortie de lignes vers un agent | `ai_answer_sample(connection, request, columns)` pour une demande de l'agent ; le champ `sample` d'`AskRequest` pour un échantillon épinglé |
-| Changement d'environnement ou de niveau de confidentialité | `update_connection`, puis `decide_connection_change` quand la connexion est ou devient `production` — le `PolicyGate` retient le plus contraignant des deux marquages (`crates/oxyn-core/src/policy.rs`) ; **aucune** confirmation sinon : un changement de niveau sur une connexion `development` passe sans approbation |
+| Write or DDL on a `production` connection ([I-02](../../CLAUDE.md#i-02)) | `decide(command, approved: true)` — `crates/oxyn-desktop/src/commands.rs`, then `Backend::decide`, which calls `executor.approve("human", …)` without any other check |
+| Editing or deleting a `production` connection | `decide_connection_change(command, approved: true)` — `commands/settings.rs` |
+| Rows going out to an agent | `ai_answer_sample(connection, request, columns)` for an agent request; the `sample` field of `AskRequest` for a pinned sample |
+| Change of environment or privacy tier | `update_connection`, then `decide_connection_change` when the connection is or becomes `production` — the `PolicyGate` retains the more restrictive of the two markings (`crates/oxyn-core/src/policy.rs`); **no** confirmation otherwise: a tier change on a `development` connection goes through without approval |
 
-Un script qui obtient l'identifiant d'une commande en attente — il transite par
-la webview, c'est là qu'on l'affiche — l'approuve en un appel. Un script qui
-lit le catalogue approuve un échantillon qu'aucun agent n'a demandé à
-l'utilisateur. Et le dernier cas n'a même pas besoin d'identifiant : passer une
-connexion de `production` à `development`, puis écrire, supprime la
-confirmation d'[I-02](../../CLAUDE.md#i-02) en trois appels, dont le premier
-rend lui-même l'identifiant à approuver ; passer `Metadata`
-à `Sampled` rouvre la sortie de lignes que l'utilisateur avait fermée.
+A script that obtains the identifier of a pending command — it transits through
+the webview, that is where it is displayed — approves it in one call. A script
+that reads the catalog approves a sample that no agent asked the user for. And
+the last case does not even need an identifier: switching a connection from
+`production` to `development`, then writing, removes the confirmation of
+[I-02](../../CLAUDE.md#i-02) in three calls, the first of which itself returns
+the identifier to approve; switching `Metadata` to `Sampled` reopens the row
+egress the user had closed.
 
-Le dépôt a déjà la réponse, pour un cas : `ai_save_external_agent`
-(`commands/ai.rs`) ne déclare un agent qu'après un dialogue du plugin
-`tauri-plugin-dialog`, dessiné par l'hôte. Le commentaire en dit la raison :
-« a script injected in the webview can call this command, it cannot click a
-window it does not draw ». Cet ADR étend ce modèle, et rien que lui, aux
-décisions dont l'effet est irréversible ou fait sortir des données.
+The repository already has the answer, for one case: `ai_save_external_agent`
+(`commands/ai.rs`) only declares an agent after a dialog of the
+`tauri-plugin-dialog` plugin, drawn by the host. The comment gives the reason:
+"a script injected in the webview can call this command, it cannot click a
+window it does not draw". This ADR extends that model, and only that model, to
+decisions whose effect is irreversible or makes data go out.
 
-**Fait externe, vérifié dans la source de `tauri-plugin-dialog` 2.7.3 (version
-de `Cargo.lock`), `src/lib.rs`, `MessageDialogBuilder::show`, le 2026-09-25
-([I-12](../../CLAUDE.md#i-12)).** Le rappel reçoit `true` pour `Ok`, `Yes`, ou
-un bouton personnalisé **dont le libellé égale** celui du bouton de
-confirmation ; toute autre issue — Annuler, fermeture — donne `false`. Deux
-libellés identiques feraient donc d'Annuler une confirmation.
+**External fact, checked in the source of `tauri-plugin-dialog` 2.7.3 (the
+`Cargo.lock` version), `src/lib.rs`, `MessageDialogBuilder::show`, on
+2026-09-25 ([I-12](../../CLAUDE.md#i-12)).** The callback receives `true` for
+`Ok`, `Yes`, or a custom button **whose label equals** that of the confirmation
+button; any other outcome — Cancel, closing — gives `false`. Two identical
+labels would therefore make Cancel a confirmation.
 
-## Décision
+## Decision
 
-### 1. Ce qui est critique, et rien d'autre
+### 1. What is critical, and nothing else
 
-Trois familles de décisions passent par un dialogue natif :
+Three families of decisions go through a native dialog:
 
-1. **une écriture ou un DDL sur une connexion `production`** — toute
-   approbation, par `decide`, `decide_connection` ou
-   `decide_connection_change`, d'une commande
-   mutante dont la connexion est `production` **au moment de l'approbation**,
-   quel que soit le motif pour lequel le `PolicyGate` l'a retenue — un `DROP`
-   ou un `DELETE` sans `WHERE` est retenu pour « unbounded mutation » avant de
-   l'être pour la production, et c'est le pire cas. L'environnement est celui
-   que le gate retient, le plus contraignant de l'annoncé et de l'enregistré,
-   lu par **son** calcul et non recopié : une commande retenue sur
-   `development` dont la connexion est passée en `production` depuis relève
-   du dialogue. La création d'une connexion `production`, que le gate retient
-   comme DDL et que `decide_connection` approuve, en relève aussi. Pour un
-   `Actor::Agent`, rien ne change : c'est un refus, et aucun dialogue ne
-   s'ouvre ([I-02](../../CLAUDE.md#i-02)) ;
-2. **toute sortie de lignes approuvée vers un agent** — l'échantillon épinglé,
-   au moment où la question qui le porte part, et l'échantillon demandé par
-   l'outil `request_sample`, au moment où l'utilisateur a coché ses colonnes
-   ([ADR-0034](0034-echantillon-pour-toute-destination.md)) ;
-3. **tout changement d'environnement ou de niveau de confidentialité d'une
-   connexion**, dans les deux sens et quel que soit l'environnement de départ.
-   Le critère est le changement, pas sa direction : décider qu'un sens est sûr,
-   c'est écrire une seconde règle de niveau que personne ne relira. Le
-   `PolicyGate` ne retient un tel changement que si l'un des deux marquages
-   est `production` : un changement de niveau sur `development` passe sans
-   approbation. Le `Backend` compare donc l'édition à la configuration
-   enregistrée et ouvre le dialogue **avant** d'envoyer la commande, qu'elle
-   soit ensuite retenue ou non. Si elle l'est — la connexion est ou devient
-   `production` —, son approbation relève en plus de la famille 1 et ouvre son
-   propre dialogue : deux dialogues pour ce cas rare, plutôt qu'une
-   approbation accordée sans passer par `decide_connection_change`.
+1. **a write or a DDL on a `production` connection** — any approval, through
+   `decide`, `decide_connection` or `decide_connection_change`, of a mutating
+   command whose connection is `production` **at the time of approval**,
+   whatever the reason the `PolicyGate` held it — a `DROP` or a `DELETE`
+   without `WHERE` is held for "unbounded mutation" before being held for
+   production, and it is the worst case. The environment is the one the gate
+   retains, the more restrictive of the announced and the recorded one, read
+   by **its** computation and not copied: a command held on `development`
+   whose connection has since become `production` falls under the dialog. The
+   creation of a `production` connection, which the gate holds as DDL and
+   `decide_connection` approves, falls under it too. For an `Actor::Agent`,
+   nothing changes: it is a refusal, and no dialog opens
+   ([I-02](../../CLAUDE.md#i-02));
+2. **any approved row egress to an agent** — the pinned sample, when the
+   question that carries it goes out, and the sample requested by the
+   `request_sample` tool, when the user has checked its columns
+   ([ADR-0034](0034-echantillon-pour-toute-destination.md));
+3. **any change of environment or privacy tier of a connection**, in both
+   directions and whatever the starting environment. The criterion is the
+   change, not its direction: deciding that one direction is safe is writing a
+   second tier rule that nobody will review. The `PolicyGate` only holds such a
+   change if one of the two markings is `production`: a tier change on
+   `development` goes through without approval. The `Backend` therefore
+   compares the edit to the recorded configuration and opens the dialog
+   **before** sending the command, whether or not it is then held. If it
+   is — the connection is or becomes `production` —, its approval also falls
+   under family 1 and opens its own dialog: two dialogs for this rare case,
+   rather than an approval granted without going through
+   `decide_connection_change`.
 
-La déclaration d'un agent externe a déjà son dialogue natif, décidé par
-[ADR-0026](0026-agents-externes-acp.md) : elle reste hors de ces trois
-familles, et ne fait que rejoindre le port du § 4.
+The declaration of an external agent already has its native dialog, decided by
+[ADR-0026](0026-agents-externes-acp.md): it stays outside these three families,
+and only joins the port of § 4.
 
-Le reste garde la confirmation dans la webview : écriture hors `production`,
-approbation d'une commande d'agent hors `production`, renommage, suppression
-d'une connexion hors `production`. **Refuser** n'est jamais critique : un
-`approved: false` ne passe par aucun dialogue.
+The rest keeps the confirmation in the webview: write outside `production`,
+approval of an agent command outside `production`, renaming, deletion of a
+connection outside `production`. **Refusing** is never critical: an
+`approved: false` goes through no dialog.
 
-### 2. Le dialogue nomme la connexion depuis le backend
+### 2. The dialog names the connection from the backend
 
-Le texte du dialogue est composé en Rust à partir de ce que le **backend**
-tient — la configuration enregistrée, la commande retenue par l'exécuteur, la
-demande d'échantillon en attente —, jamais à partir d'un argument venu de la
-webview. Un script peut choisir quoi faire approuver ; il ne peut pas choisir
-ce que le dialogue en dit.
+The dialog text is composed in Rust from what the **backend** holds — the
+recorded configuration, the command held by the executor, the pending sample
+request —, never from an argument coming from the webview. A script can choose
+what to have approved; it cannot choose what the dialog says about it.
 
-Chaque dialogue porte :
+Each dialog carries:
 
-* **la connexion** : son nom tel qu'enregistré, son environnement en toutes
-  lettres (`PRODUCTION`), et l'adresse non secrète que l'écran de connexion
-  affiche déjà (hôte, port, base, ou chemin de fichier) — deux connexions du
-  même nom se distinguent ainsi. Aucun champ marqué secret n'y figure
-  ([I-03](../../CLAUDE.md#i-03)) ;
-* **l'objet** :
-  * pour une écriture, d'abord ce que le backend a classé — l'intention et le
-    motif du `PolicyGate` —, puis le texte de l'instruction tel que
-    l'exécuteur le tient : en entier jusqu'à **1 000 caractères**, au-delà son
-    début et sa fin (500 caractères chacun) séparés par « … N more characters
-    … ». La coupe se dit, elle ne se devine pas ; et montrer la fin empêche
-    qu'un préambule anodin de 1 000 caractères cache seul ce qui suit ;
-  * pour un échantillon, la relation, les colonnes cochées une à une, le
-    nombre de lignes au plus, et le destinataire tel que la configuration
-    enregistrée le décrit — hôte du point d'accès pour un fournisseur, commande
-    pour un agent externe, et si les lignes quittent la machine. Pas son seul
-    libellé : un script peut déclarer un fournisseur sous le libellé d'un
-    autre ;
-  * pour une édition de connexion, **chaque** champ modifié, ancienne et
-    nouvelle valeur, et si le secret est conservé ou ressaisi : l'édition se
-    confirme entière, elle se montre entière ;
-  * pour une suppression, la connexion seule — c'est tout l'objet ;
-* **aucune chaîne telle quelle** : tout ce qui vient d'une entrée non fiable —
-  nom de connexion (fichier de workspace), instruction, noms de relation et de
-  colonnes (catalogue), libellé d'un destinataire
-  ([SECURITY](../SECURITY.md#surface-dentrée), points 2 et 3) — y passe par
-  la même fonction d'échappement : caractères de contrôle et marques de
-  direction bidirectionnelle rendus visibles, longueur bornée ;
-* **deux boutons de libellés distincts**, dont celui de confirmation dit
-  l'effet (« Write to production », « Send rows », « Change marking ») et
-  l'autre « Cancel ». Les libellés sont des constantes, pas des paramètres :
-  deux libellés égaux feraient d'Annuler une confirmation (Contexte).
+* **the connection**: its name as recorded, its environment in full
+  (`PRODUCTION`), and the non-secret address the connection screen already
+  displays (host, port, database, or file path) — two connections with the
+  same name are thus told apart. No field marked secret appears in it
+  ([I-03](../../CLAUDE.md#i-03));
+* **the object**:
+  * for a write, first what the backend classified — the intent and the
+    `PolicyGate`'s reason —, then the text of the statement as the executor
+    holds it: in full up to **1,000 characters**, beyond that its beginning
+    and its end (500 characters each) separated by "… N more characters …".
+    The cut is stated, not guessed; and showing the end prevents a harmless
+    1,000-character preamble from hiding on its own what follows;
+  * for a sample, the relation, the checked columns one by one, the maximum
+    number of rows, and the recipient as the recorded configuration describes
+    it — endpoint host for a provider, command for an external agent, and
+    whether the rows leave the machine. Not just its label: a script can
+    declare a provider under another's label;
+  * for a connection edit, **each** modified field, old and new value, and
+    whether the secret is kept or re-entered: the edit is confirmed whole, it
+    is shown whole;
+  * for a deletion, the connection alone — that is the whole object;
+* **no raw string**: everything that comes from an untrusted input — connection
+  name (workspace file), statement, relation and column names (catalog),
+  recipient label ([SECURITY](../SECURITY.md#input-surface), points 2 and
+  3) — goes through the same escaping function: control characters and
+  bidirectional direction marks made visible, length bounded;
+* **two buttons with distinct labels**, the confirmation one saying the effect
+  ("Write to production", "Send rows", "Change marking") and the other
+  "Cancel". The labels are constants, not parameters: two equal labels would
+  make Cancel a confirmation (Context).
 
-### 3. Fermer, c'est refuser, et un refus épuise la décision
+### 3. Closing is refusing, and a refusal exhausts the decision
 
-Tout ce qui n'est pas le bouton de confirmation vaut refus : Annuler, Échap, la
-fermeture de la fenêtre du dialogue, l'arrêt de l'application, un dialogue qui
-n'a pas pu s'ouvrir, un canal de réponse abandonné.
+Everything that is not the confirmation button counts as a refusal: Cancel,
+Escape, closing the dialog window, stopping the application, a dialog that
+could not open, an abandoned response channel.
 
-Un refus **consomme** ce qu'il refuse, comme un refus dans l'écran :
+A refusal **consumes** what it refuses, like a refusal in the screen:
 
-* la commande retenue est rejetée (`executor.reject`) et ne reste pas en
-  attente — sinon un script rappellerait `decide` jusqu'au clic réflexe ;
-* la demande d'échantillon est déclinée, et l'échange est épuisé comme
-  l'impose [ADR-0034 § 3](0034-echantillon-pour-toute-destination.md) ; une
-  réponse du dialogue arrivée après l'expiration de cinq minutes ne lit rien ;
-* la question qui portait un échantillon épinglé ne part pas ;
-* le changement de marquage n'est pas enregistré, et rien d'autre de la même
-  édition ne l'est — une édition est confirmée entière ou pas du tout.
+* the held command is rejected (`executor.reject`) and does not stay pending —
+  otherwise a script would call `decide` again until the reflex click;
+* the sample request is declined, and the exchange is exhausted as
+  [ADR-0034 § 3](0034-echantillon-pour-toute-destination.md) requires; a dialog
+  response arriving after the five-minute expiry reads nothing;
+* the question that carried a pinned sample does not go out;
+* the marking change is not recorded, and nothing else of the same edit is —
+  an edit is confirmed whole or not at all.
 
-**Une confirmation trop rapide est un refus.** Sous macOS, le bouton de
-confirmation est le bouton par défaut de l'alerte — `CFUserNotificationDisplayAlert`
-pour un dialogue sans fenêtre parente, le cas d'Oxyn —, donc celui qu'Entrée
-déclenche, et le plugin ne permet pas d'en désigner un autre (source de `rfd`
-0.16.0, `src/backend/macos/utils/user_alert.rs`, vérifiée le 2026-09-25). Un
-script qui ouvre le dialogue pendant que l'utilisateur tape — Cmd+Entrée pour
-exécuter — obtiendrait la frappe suivante. Une confirmation reçue moins d'**une
-seconde** après l'**affichage** du dialogue vaut donc refus, et consomme la
-décision comme tout refus. La seconde part du moment où l'hôte présente le
-dialogue, pas de la demande : un dialogue qui attend son tour derrière un autre
-encore à l'écran (échéance ci-dessous) s'affiche tard, et n'a pas été lu pour
-autant. Chaque dialogue d'une telle file a sa propre seconde.
+**A confirmation that is too fast is a refusal.** On macOS, the confirmation
+button is the default button of the alert — `CFUserNotificationDisplayAlert`
+for a dialog without a parent window, Oxyn's case —, hence the one Enter
+triggers, and the plugin does not allow designating another (source of `rfd`
+0.16.0, `src/backend/macos/utils/user_alert.rs`, checked on 2026-09-25). A
+script that opens the dialog while the user is typing — Cmd+Enter to execute —
+would get the next keystroke. A confirmation received less than **one second**
+after the dialog is **displayed** therefore counts as a refusal, and consumes
+the decision like any refusal. The second starts when the host presents the
+dialog, not at the request: a dialog waiting its turn behind another still on
+screen (deadline below) is displayed late, and has not been read for all that.
+Each dialog of such a queue has its own second.
 
-**Une échéance pour tout dialogue : cinq minutes**, la borne qu'[ADR-0034](0034-echantillon-pour-toute-destination.md)
-fixe déjà à la demande d'échantillon. Le plugin ne peut pas fermer un dialogue
-par programme ; passé ce délai, la décision est consommée comme refusée, le
-dialogue suivant peut être demandé, et la réponse tardive du dialogue resté à
-l'écran est ignorée — une écriture approuvée le lendemain serait une écriture
-que personne n'a vue partir. L'hôte n'affiche qu'un dialogue critique à la fois : le
-suivant attend que celui resté à l'écran soit fermé, et ne s'affiche jamais si
-sa propre échéance passe avant. L'échéance court depuis la demande, pas depuis
-l'affichage : elle borne la vie de la décision, que l'attente de son tour ne
-prolonge pas.
+**A deadline for every dialog: five minutes**, the bound
+[ADR-0034](0034-echantillon-pour-toute-destination.md) already sets for the
+sample request. The plugin cannot close a dialog programmatically; past this
+delay, the decision is consumed as refused, the next dialog can be requested,
+and the late response of the dialog left on screen is ignored — a write
+approved the next day would be a write nobody saw go out. The host displays
+only one critical dialog at a time: the next one waits for the one left on
+screen to be closed, and is never displayed if its own deadline passes first.
+The deadline runs from the request, not from display: it bounds the life of
+the decision, which waiting for its turn does not extend.
 
-**Un seul dialogue critique à la fois.** Une décision critique qui arrive
-pendant qu'un dialogue est ouvert est refusée sur-le-champ, avec un message
-qui le dit ; elle n'attend pas son tour. Une file permettrait à un script
-d'empiler des dialogues que l'utilisateur fermerait par réflexe, le dernier
-étant le bon. Ce refus-là **ne consomme pas** la décision : sinon un script
-ferait échouer la décision légitime de l'utilisateur en ouvrant un dialogue
-juste avant lui.
+**A single critical dialog at a time.** A critical decision that arrives while
+a dialog is open is refused immediately, with a message that says so; it does
+not wait its turn. A queue would let a script stack dialogs that the user would
+close by reflex, the last one being the real one. That refusal **does not
+consume** the decision: otherwise a script would make the user's legitimate
+decision fail by opening a dialog just before it.
 
-**La webview n'ouvre jamais de dialogue de message.** La garantie repose sur
-ce que seul le backend compose un dialogue d'apparence native :
-`capabilities/main.json` n'accorde ni `dialog:allow-message`, ni
-`dialog:allow-ask`, ni `dialog:allow-confirm`, et ne les accordera pas. Un
-script qui les obtiendrait dessinerait des dialogues de même apparence, au
-texte de son choix.
+**The webview never opens a message dialog.** The guarantee rests on the fact
+that only the backend composes a native-looking dialog:
+`capabilities/main.json` grants neither `dialog:allow-message`, nor
+`dialog:allow-ask`, nor `dialog:allow-confirm`, and will not grant them. A
+script that obtained them would draw dialogs of the same appearance, with text
+of its choosing.
 
-### 4. Le dialogue passe par un port, et se teste sans fenêtre
+### 4. The dialog goes through a port, and is tested without a window
 
-`oxyn-desktop` porte un trait `HostConfirm` — une seule méthode asynchrone qui
-prend une `Confirmation` (titre, corps, libellé de confirmation, sévérité) et
-l'échéance, et rend l'issue : refusé, ou confirmé avec l'instant où le
-dialogue a été affiché, d'où la seconde du § 3 se compte. C'est l'hôte qui
-sait quand il présente un dialogue ; `NativeDialog` le date sur le thread
-principal, là où le plugin dessine, une fois l'écran libéré du précédent — et
-non avant la file de ce thread, qu'un script de la webview peut remplir. Reste
-la latence entre cet instant et l'alerte à l'écran, hors de portée d'un
-script, que la vérification à la main mesure. Arrivé à l'échéance avant son
-tour, le dialogue ne se dessine pas. Deux implémentations, c'est une frontière
-avec l'hôte et non une indirection ([CLAUDE.md](../../CLAUDE.md#code-organization)) :
+`oxyn-desktop` carries a `HostConfirm` trait — a single asynchronous method
+that takes a `Confirmation` (title, body, confirmation label, severity) and the
+deadline, and returns the outcome: refused, or confirmed with the instant the
+dialog was displayed, from which the second of § 3 is counted. The host is the
+one that knows when it presents a dialog; `NativeDialog` timestamps it on the
+main thread, where the plugin draws, once the screen is free of the previous
+one — and not before that thread's queue, which a webview script can fill.
+What remains is the latency between that instant and the alert on screen, out
+of a script's reach, which the manual check measures. Reaching its deadline
+before its turn, the dialog is not drawn. Two implementations: this is a
+boundary with the host and not an indirection
+([CLAUDE.md](../../CLAUDE.md#code-organization)):
 
-* **`NativeDialog`**, sur le plugin `tauri-plugin-dialog`, comme
-  `ai_save_external_agent` aujourd'hui — qui rejoint ce port ;
-* **une réponse scriptée**, dans les tests : confirmer, refuser, ou ne jamais
-  répondre.
+* **`NativeDialog`**, on the `tauri-plugin-dialog` plugin, like
+  `ai_save_external_agent` today — which joins this port;
+* **a scripted response**, in tests: confirm, refuse, or never answer.
 
-Le `Backend` reçoit le port à sa construction, sans valeur par défaut : un
-`Backend` qui n'en a pas ne se construit pas, donc aucune décision critique ne
-passe faute de dialogue. Le `Backend` s'ouvre avant `tauri::Builder`, pour
-qu'un échec de démarrage arrive sur stderr (`main.rs`) ; `NativeDialog` se
-construit donc sans `AppHandle`, le reçoit au `setup`, et **refuse**
-tant qu'il ne l'a pas — fermer, c'est refuser, et n'avoir pas pu ouvrir aussi. C'est le `Backend`, et non la commande Tauri, qui
-décide qu'une décision est critique et qui appelle le port : la règle vit à
-côté de la configuration qu'elle lit.
+The `Backend` receives the port at construction, without a default value: a
+`Backend` that has none does not build, so no critical decision goes through
+for lack of a dialog. The `Backend` opens before `tauri::Builder`, so that a
+startup failure lands on stderr (`main.rs`); `NativeDialog` is therefore built
+without an `AppHandle`, receives it at `setup`, and **refuses** as long as it
+does not have it — closing is refusing, and so is not having been able to open.
+It is the `Backend`, and not the Tauri command, that decides a decision is
+critical and calls the port: the rule lives next to the configuration it reads.
 
-Le port ne s'attend que depuis un contexte asynchrone : le plugin dessine le
-dialogue par `run_on_main_thread`, et une commande Tauri synchrone tourne sur
-ce thread ([I-05](../../CLAUDE.md#i-05)). `ai_answer_sample` reste synchrone —
-elle remet les colonnes à l'appel d'agent qui attend — et c'est **cet appel**,
-sur sa tâche, qui ouvre le dialogue avant de lire.
+The port is only awaited from an asynchronous context: the plugin draws the
+dialog through `run_on_main_thread`, and a synchronous Tauri command runs on
+that thread ([I-05](../../CLAUDE.md#i-05)). `ai_answer_sample` stays
+synchronous — it hands the columns to the waiting agent call — and it is **that
+call**, on its task, that opens the dialog before reading.
 
-Ce qui se teste, sans fenêtre ni `MockRuntime` :
+What is tested, without a window or `MockRuntime`:
 
-* **le texte** — les fonctions qui composent une `Confirmation` sont pures :
-  le nom et l'environnement y sont, une chaîne hostile y est échappée où
-  qu'elle apparaisse, une instruction longue y est coupée **et le dit**, sa
-  fin y figure, chaque champ modifié d'une édition y figure, aucun champ
-  secret n'y figure ;
-* **la conduite** — sur un `Backend` monté avec la réponse scriptée et des
-  délais scriptés : un `DELETE` sans `WHERE` sur `production` ouvre le
-  dialogue ; `decide(…, true)` sur `production` refusé, sans réponse
-  après l'échéance, ou confirmé en moins d'une seconde n'exécute rien et ne
-  laisse aucune commande en attente ; confirmé, exécute ; de deux dialogues
-  en file, le second refuse une confirmation arrivée moins d'une seconde
-  après son propre affichage, même plus d'une seconde après sa demande ; une
-  commande retenue
-  sur `development` dont la connexion est passée en `production` ouvre le
-  dialogue ; `production → development` refusé laisse la configuration
-  inchangée et n'envoie aucune commande ; un échantillon refusé ne lit aucune
-  ligne ; une seconde décision critique pendant la première est refusée sans
-  être consommée ; une décision non critique n'appelle pas le port ;
-* **les libellés** — un test vérifie que le libellé de confirmation de chaque
-  `Confirmation` diffère de « Cancel ».
+* **the text** — the functions that compose a `Confirmation` are pure: the name
+  and the environment are in it, a hostile string is escaped wherever it
+  appears, a long statement is cut **and says so**, its end appears, each
+  modified field of an edit appears, no secret field appears;
+* **the behavior** — on a `Backend` mounted with the scripted response and
+  scripted delays: a `DELETE` without `WHERE` on `production` opens the
+  dialog; `decide(…, true)` on `production` refused, without an answer after
+  the deadline, or confirmed in less than a second executes nothing and leaves
+  no pending command; confirmed, executes; of two queued dialogs, the second
+  refuses a confirmation arriving less than a second after its own display,
+  even more than a second after its request; a command held
+  on `development` whose connection has become `production` opens the
+  dialog; `production → development` refused leaves the configuration
+  unchanged and sends no command; a refused sample reads no row; a second
+  critical decision during the first is refused without being consumed; a
+  non-critical decision does not call the port;
+* **the labels** — a test checks that the confirmation label of each
+  `Confirmation` differs from "Cancel".
 
-Seul `NativeDialog` échappe aux tests automatiques : il se vérifie à la main
-dans `make desktop-dev`, sur les trois plateformes, une fois par changement de
-version du plugin.
+Only `NativeDialog` escapes automated tests: it is checked by hand in
+`make desktop-dev`, on the three platforms, once per plugin version change.
 
-### 5. Ce que l'écran de la webview devient
+### 5. What the webview screen becomes
 
-L'écran reste là où l'on **lit et choisit** : l'instruction complète avec sa
-coloration, les colonnes à cocher, le formulaire de connexion. Pour une
-décision critique, son bouton d'accord ne l'accorde plus : il demande au
-backend, qui ouvre le dialogue. La webview apprend l'issue par la réponse de la
-commande, comme aujourd'hui.
+The screen stays where one **reads and chooses**: the full statement with its
+highlighting, the columns to check, the connection form. For a critical
+decision, its approval button no longer grants it: it asks the backend, which
+opens the dialog. The webview learns the outcome from the command's response,
+as today.
 
-## Conséquences
+## Consequences
 
-* **+** Ce qu'une XSS peut faire sur ces trois décisions se borne à **ouvrir
-  un dialogue** que l'utilisateur voit, qui dit la vérité parce que le backend
-  l'écrit, et que fermer suffit à refuser.
-* **+** Un seul modèle de confirmation forte, déjà en service pour la
-  déclaration d'un agent externe, et désormais testable par le même port.
-* **+** Le changement de marquage cesse d'être la porte dérobée d'I-02 : il
-  n'est plus possible de déclasser une connexion puis d'y écrire sans que
-  l'utilisateur ait confirmé le déclassement dans un dialogue qui nomme la
-  connexion et son ancien environnement.
-* **−** **Deux confirmations** pour une écriture en production : l'écran de la
-  webview, puis le dialogue. C'est le cas le plus exposé à la lassitude, et
-  cet ADR l'alourdit. Ce qui le borne : le périmètre critique est étroit, et
-  le dialogue ne s'ouvre qu'une fois le choix fait dans l'écran.
-* **−** Un dialogue natif est pauvre : ni coloration, ni défilement fiable,
-  ni case à cocher. L'instruction y est coupée ; son milieu ne se relit que
-  dans l'écran, qu'un script aurait pu falsifier. Le classement du backend, le
-  début, la fin et le nombre de caractères manquants sont ce qui reste vrai.
-* **−** Une confirmation donnée dans la première seconde est perdue, et
-  l'utilisateur rapide doit recommencer depuis l'écran.
-* **−** **Trois limites que cet ADR nomme sans les fermer**, parce qu'elles
-  débordent sa décision :
-  * créer une **seconde** connexion vers la même cible, marquée
-    `development` ou `Sampled`, contourne les familles 2 et 3 par duplication
-    plutôt que par changement, dès que la cible ne demande aucun secret
-    (fichier SQLite ou DuckDB, serveur sans mot de passe) ;
-  * sous `Sampled`, le message d'erreur complet du serveur rejoint l'agent
-    (`crates/oxyn-ai/src/failure.rs`), et un tel message peut citer des
-    valeurs de lignes : c'est une sortie de lignes **non approuvée**, que la
-    famille 2 ne couvre pas ;
-  * le dialogue de déclaration d'un agent externe, qui rejoint le port,
-    montre les valeurs de ses variables d'environnement, où se trouve souvent
-    un jeton — sa forme reste celle
-    qu'[ADR-0026](0026-agents-externes-acp.md) a décidée.
-* **−** Trois moteurs, trois rendus : le dialogue de macOS, de Windows et de
-  GTK n'ont ni la même largeur ni le même ordre de boutons, et `NativeDialog`
-  ne se teste qu'à la main.
-* **−** Un script peut encore **ouvrir** un dialogue critique au moment de son
-  choix ; il ne peut ni l'empiler ni le rouvrir sur la même décision, mais un
-  utilisateur qui confirme sans lire reste possible.
+* **+** What an XSS can do on these three decisions is limited to **opening a
+  dialog** that the user sees, that tells the truth because the backend writes
+  it, and that closing is enough to refuse.
+* **+** A single strong confirmation model, already in service for the
+  declaration of an external agent, and now testable through the same port.
+* **+** The marking change stops being I-02's back door: it is no longer
+  possible to downgrade a connection then write to it without the user having
+  confirmed the downgrade in a dialog that names the connection and its former
+  environment.
+* **−** **Two confirmations** for a write in production: the webview screen,
+  then the dialog. It is the case most exposed to fatigue, and this ADR makes it
+  heavier. What bounds it: the critical perimeter is narrow, and the dialog
+  only opens once the choice is made in the screen.
+* **−** A native dialog is poor: no highlighting, no reliable scrolling, no
+  checkbox. The statement is cut in it; its middle can only be re-read in the
+  screen, which a script could have forged. The backend's classification, the
+  beginning, the end and the number of missing characters are what remains
+  true.
+* **−** A confirmation given within the first second is lost, and the fast
+  user has to start again from the screen.
+* **−** **Three limits this ADR names without closing them**, because they go
+  beyond its decision:
+  * creating a **second** connection to the same target, marked
+    `development` or `Sampled`, bypasses families 2 and 3 by duplication
+    rather than by change, as soon as the target requires no secret (SQLite
+    or DuckDB file, server without a password);
+  * under `Sampled`, the server's full error message reaches the agent
+    (`crates/oxyn-ai/src/failure.rs`), and such a message can quote row
+    values: it is an **unapproved** row egress, which family 2 does not
+    cover;
+  * the declaration dialog of an external agent, which joins the port, shows
+    the values of its environment variables, where a token often sits — its
+    form stays the one [ADR-0026](0026-agents-externes-acp.md) decided.
+* **−** Three engines, three renderings: the macOS, Windows and GTK dialogs
+  have neither the same width nor the same button order, and `NativeDialog`
+  can only be tested by hand.
+* **−** A script can still **open** a critical dialog at the time of its
+  choosing; it can neither stack it nor reopen it on the same decision, but a
+  user who confirms without reading remains possible.
 
-**Coût de sortie :** faible. Retirer l'appel au port dans les trois chemins
-rend la confirmation à la webview ; le trait et `NativeDialog` restent pour
-`ai_save_external_agent`. Aucun format persisté ne change.
+**Exit cost:** low. Removing the port call in the three paths gives the
+confirmation back to the webview; the trait and `NativeDialog` stay for
+`ai_save_external_agent`. No persisted format changes.
 
-**Reconsidérer si** la webview gagne un moyen **vérifiable** de distinguer un
-geste de l'utilisateur d'un appel de script — une permission Tauri liée à un
-événement d'entrée réel, par exemple ; si les écritures en production
-confirmées sans lecture deviennent fréquentes, auquel cas la réponse serait de
-retirer l'écran de la webview pour ce cas, pas le dialogue ; si l'une des trois
-limites nommées aux Conséquences est fermée par une décision — elle rejoint
-alors, ou non, la liste du § 1 ; ou si une nouvelle
-décision fait sortir des données ou déclasse une connexion — elle rejoint alors
-la liste du § 1, qui se modifie par un ADR.
+**Reconsider if** the webview gains a **verifiable** way to tell a user gesture
+from a script call — a Tauri permission tied to a real input event, for
+example; if production writes confirmed without reading become frequent, in
+which case the answer would be to remove the webview screen for that case, not
+the dialog; if one of the three limits named in the Consequences is closed by a
+decision — it then joins, or not, the list of § 1; or if a new decision makes
+data go out or downgrades a connection — it then joins the list of § 1, which
+is changed by an ADR.
 
-## Alternatives écartées
+## Rejected alternatives
 
-| Alternative | Raison du rejet |
+| Alternative | Reason for rejection |
 |---|---|
-| Garder la confirmation dans la webview, durcie (CSP, `capabilities`) | La CSP rend la XSS plus difficile ; elle ne rend pas un bouton de la webview inaccessible à un script qui s'y exécute. La défense ne tiendrait qu'à l'absence de faille, qu'on ne sait pas prouver |
-| Un jeton à usage unique rendu à la webview avec la demande | Le script lit le jeton là où l'écran le lit : même origine, même DOM |
-| Tout confirmer par dialogue natif | La lassitude viderait le dialogue de son sens : il doit rester rare pour être lu |
-| Ne dialoguer que pour l'abaissement d'un marquage | Fixer quel sens est sûr est une seconde règle de niveau ; `development → production` puis `production → development` redevient un contournement en deux temps |
-| Une fenêtre Tauri secondaire dessinée en HTML | C'est encore une webview, avec son script ; la garantie viendrait de l'isolation entre fenêtres, pas de l'hôte |
-| Tester par `tauri::test` et `MockRuntime` | Le test dépendrait du comportement du plugin hors d'une vraie fenêtre ; le port sépare ce qu'on décide de ce que l'hôte dessine |
+| Keep the confirmation in the webview, hardened (CSP, `capabilities`) | CSP makes XSS harder; it does not make a webview button unreachable for a script running in it. The defense would only hold by the absence of a flaw, which cannot be proven |
+| A single-use token returned to the webview with the request | The script reads the token where the screen reads it: same origin, same DOM |
+| Confirm everything through a native dialog | Fatigue would empty the dialog of its meaning: it must stay rare to be read |
+| Only dialog for lowering a marking | Fixing which direction is safe is a second tier rule; `development → production` then `production → development` becomes a two-step bypass again |
+| A secondary Tauri window drawn in HTML | It is still a webview, with its script; the guarantee would come from isolation between windows, not from the host |
+| Test with `tauri::test` and `MockRuntime` | The test would depend on the plugin's behavior outside a real window; the port separates what we decide from what the host draws |

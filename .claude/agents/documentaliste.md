@@ -63,10 +63,8 @@ The index of `docs/README.md` is updated in the same commit.
 ## Language
 
 Documentation, ADRs, commits: **English**
-([ADR-0047](../../docs/adr/0047-english-as-the-repository-language.md)). The
-French documents of `docs/` and ADRs 0001 to 0046 stay authoritative as they
-are until translated; a translation changes no decision. A code excerpt in a
-document stays in English.
+([ADR-0047](../../docs/adr/0047-english-as-the-repository-language.md)). A code
+excerpt in a document stays in English.
 
 When you edit an English file that has a French mirror in `i18n/fr/`, you
 update the mirror in the same commit, with all its accents, and its `sha256`

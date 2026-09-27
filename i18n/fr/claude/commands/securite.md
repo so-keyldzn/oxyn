@@ -61,7 +61,7 @@ Par ordre de sous-estimation (`docs/SECURITY.md` § surface d'entrée) :
 - un bloc `unsafe` sans `// SAFETY:` énonçant l'invariant **et qui le maintient**
   — une paraphrase du code ne vaut rien ;
 - une donnée quittant la machine au-delà du niveau de confidentialité de la
-  connexion ([ADR-0006](../../../../docs/adr/0006-ai-privacy-tiers.md)).
+  connexion ([ADR-0006](../../docs/adr/0006-ai-privacy-tiers.md)).
 
 ## Comment procéder
 

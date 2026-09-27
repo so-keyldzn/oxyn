@@ -56,7 +56,7 @@ clippy, tests, documentation. `make aide` lists the other targets.
 | [CLAUDE.md](CLAUDE.md) | the map of the repository and the thirteen invariants |
 | [.claude/](.claude/README.md) | the way of working — rules, commands, agents, hooks |
 | [AGENTS.md](AGENTS.md) | the equivalent entry point for Codex |
-| [i18n/fr/](i18n/fr/README.md) | French mirrors of the English documents |
+| [i18n/fr/](i18n/README.md) | French mirrors of the English documents |
 
 **When the code and a document of `docs/` contradict each other, it is a
 bug**: report it, do not settle it alone.
@@ -64,11 +64,9 @@ bug**: report it, do not settle it alone.
 ## Language
 
 The repository is written in **English**: code, identifiers, comments, error
-messages, `///`, documentation, ADRs, commit messages and pull requests. The
-documents of `docs/` and ADRs 0001 to 0046 written in French stay authoritative
-as they are until they are translated
+messages, `///`, documentation, ADRs, commit messages and pull requests
 ([ADR-0047](docs/adr/0047-english-as-the-repository-language.md)).
-[`i18n/fr/`](i18n/fr/README.md) holds French mirrors; **English is
+[`i18n/fr/`](i18n/README.md) holds French mirrors; **English is
 authoritative**, and `make qualite` refuses a mirror older than its original.
 
 ## License

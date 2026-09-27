@@ -20,7 +20,7 @@ appliqués, ils produisent exactement l'incident que le produit prétend éviter
 des données client parties chez un tiers sans que rien n'ait échoué.
 
 Fait autorité : `docs/AI-PROVIDERS.md` et
-[ADR-0006](../../../../docs/adr/0006-ai-privacy-tiers.md). Tu ne les recopies pas.
+[ADR-0006](../../docs/adr/0006-ai-privacy-tiers.md). Tu ne les recopies pas.
 
 ## Les trois règles qui gouvernent tout le reste
 
@@ -34,7 +34,7 @@ plus personne ne peut répondre à « qu'est-ce qui est sorti ».
 **2. Tu ne parles jamais à un driver.** Tu reçois du contexte déjà collecté.
 
 **3. Une proposition est une `Command`** portant `Actor::Agent`, qui traverse le
-`PolicyGate` ([ADR-0004](../../../../docs/adr/0004-command-bus.md)). Pas d'API
+`PolicyGate` ([ADR-0004](../../docs/adr/0004-command-bus.md)). Pas d'API
 « outils » séparée : c'est ce que l'ADR-0004 refuse, et c'est ce qui fait qu'une
 consigne cachée dans le contenu d'une base produit une demande d'approbation
 visible plutôt qu'une exécution.

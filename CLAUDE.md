@@ -8,12 +8,10 @@ messages.
 
 **Language.** The repository is written in **English**: code, identifiers,
 comments, error messages, `///`, documentation, ADRs, commit messages, pull
-requests. Two exceptions, set by
-[ADR-0047](docs/adr/0047-english-as-the-repository-language.md): the documents
-of `docs/` and ADRs 0001 to 0046 written in French stay authoritative as they
-are, until they are translated; and [`i18n/fr/`](i18n/README.md) holds French
-mirrors of the English documents. **English is authoritative**; a mirror is a
-translation, never a place where a rule is decided.
+requests ([ADR-0047](docs/adr/0047-english-as-the-repository-language.md)).
+[`i18n/fr/`](i18n/README.md) holds a French mirror of every document.
+**English is authoritative**; a mirror is a translation, never a place where a
+rule is decided.
 
 **The state of the repository is not here**: it is injected at every session by
 `.claude/hooks/contexte_session.py`. This file holds nothing perishable.
@@ -79,7 +77,7 @@ take. → [ADR-0004](docs/adr/0004-command-bus.md)
 confirmation that names the connection.** For an `Actor::Agent`, it is a
 refusal, not a stronger confirmation: a confirmation ends up being clicked. A
 connection with no environment set counts as `production`, never the other way
-round. → [SECURITY](docs/SECURITY.md#marquage-des-connexions)
+round. → [SECURITY](docs/SECURITY.md#connection-marking)
 
 <a id="i-03"></a>**I-03 — No secret in a log, a displayed error, a crash report, a
 workspace file, an AI prompt or the clipboard.** All six channels count;
@@ -102,13 +100,13 @@ kills the process, losing unsaved work.
 `RecordBatch`, bounded `ResultBuffer`, spill to disk. A `SELECT *` over 50
 million rows triggers the OOM killer: on macOS the process dies without a trace,
 after a simple click on a table.
-→ [ADR-0002](docs/adr/0002-arrow-result-model.md) · [PERFORMANCE](docs/PERFORMANCE.md#budgets-de-mémoire)
+→ [ADR-0002](docs/adr/0002-arrow-result-model.md) · [PERFORMANCE](docs/PERFORMANCE.md#memory-budgets)
 
 <a id="i-07"></a>**I-07 — No model output is executed directly.** It becomes a
 `Command` carrying `Actor::Agent` and goes through the `PolicyGate`. Including
 what "only reads": `EXPLAIN ANALYZE` actually runs the query it analyzes,
 `DELETE` included.
-→ [AI-PROVIDERS](docs/AI-PROVIDERS.md#ce-quon-fait-des-réponses)
+→ [AI-PROVIDERS](docs/AI-PROVIDERS.md#what-is-done-with-the-responses)
 
 <a id="i-08"></a>**I-08 — No crate other than `oxyn-desktop` depends on `tauri`.**
 A toolkit type imported into `oxyn-core` "just for one field" permanently removes
@@ -121,13 +119,13 @@ without touching the core.
 indexing or overflowing `as` on a path reachable from a server response.** A
 server returns whatever it wants: an unknown type, a `NULL` where the schema
 forbids it, an invalid encoding. The panic kills the application.
-→ [DRIVER-CONTRACT](docs/DRIVER-CONTRACT.md#1-il-ne-panique-jamais-sur-une-entrée-venue-du-serveur)
+→ [DRIVER-CONTRACT](docs/DRIVER-CONTRACT.md#1-it-never-panics-on-input-coming-from-the-server)
 
 <a id="i-10"></a>**I-10 — SQL composed by Oxyn never concatenates a received
 identifier.** Quoting by the driver, bound values. The SQL *the user writes* is
 sent as is — that is the feature. A table named `"users"; DROP TABLE audit; --`
 is legal in PostgreSQL: a preview built by concatenation runs the drop on click.
-→ [DRIVER-CONTRACT](docs/DRIVER-CONTRACT.md#6-il-échappe-tout-identifiant-quil-compose)
+→ [DRIVER-CONTRACT](docs/DRIVER-CONTRACT.md#6-it-escapes-every-identifier-it-composes)
 
 <a id="i-11"></a>**I-11 — No closed persistence format.** What Oxyn writes —
 workspace, session, export — is readable without Oxyn. "Open by default" is not a
@@ -143,7 +141,7 @@ value shows up neither at compile time, nor in tests, nor in review.
 timeout during a write is not a transient error: the server may have applied it.
 Replaying creates a duplicate in the user's data, with no error message
 anywhere.
-→ [DRIVER-CONTRACT](docs/DRIVER-CONTRACT.md#4-il-distingue-trois-familles-derreurs-et-il-les-classe)
+→ [DRIVER-CONTRACT](docs/DRIVER-CONTRACT.md#4-it-distinguishes-three-families-of-errors-and-classifies-them)
 
 ## Code organization
 

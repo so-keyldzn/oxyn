@@ -1,149 +1,150 @@
-# ADR-0019 — Un contexte de session déclaré, jamais posé en silence
+# ADR-0019 — A declared session context, never set silently
 
-**Statut :** accepté · **Date :** 2026-09-10
+**Status:** accepted · **Date:** 2026-09-10
 
-**Précise :** [ADR-0015](0015-consoles-independantes.md), sur ce qu'une session
-porte en plus de sa transaction.
+**Clarifies:** [ADR-0015](0015-consoles-independantes.md), on what a session
+carries besides its transaction.
 
-## Contexte
+## Context
 
-La barre de console de la maquette (`191:2003`, 260 px) affiche
-`commerce-prod / public` : la connexion **et** le schéma dans lequel travaille
-la console. Rien dans le produit ne porte aujourd'hui cette seconde moitié.
+The console bar of the mockup (`191:2003`, 260 px) shows
+`commerce-prod / public`: the connection **and** the schema the console works
+in. Nothing in the product carries that second half today.
 
-L'état relevé dans le code :
+The state found in the code:
 
-- le trait `Session` (`crates/oxyn-driver/src/traits.rs:119`) n'a aucune méthode
-  de contexte ; `Driver::connect` reçoit un `ConnectionConfig` qui ne porte ni
-  schéma ni `search_path` ;
-- aucune capacité de `Capabilities` (`crates/oxyn-core/src/capabilities.rs:37`)
-  ne décrit un contexte modifiable ; `SCHEMAS` ne dit que « la source expose des
-  schémas nommés », ce qui est une capacité d'introspection ;
-- `CatalogPath` (`crates/oxyn-catalog/src/path.rs:229`) désigne déjà un schéma
-  par son palier `namespace`, mais par nœud du catalogue, jamais comme un état ;
-- le driver PostgreSQL ne pose aucun `SET` (`session.rs`), et le driver SQLite
-  documente explicitement son refus de tout `PRAGMA` implicite
+- the `Session` trait (`crates/oxyn-driver/src/traits.rs:119`) has no context
+  method; `Driver::connect` receives a `ConnectionConfig` that carries neither a
+  schema nor a `search_path`;
+- no capability of `Capabilities` (`crates/oxyn-core/src/capabilities.rs:37`)
+  describes a modifiable context; `SCHEMAS` only says "the source exposes named
+  schemas", which is an introspection capability;
+- `CatalogPath` (`crates/oxyn-catalog/src/path.rs:229`) already designates a
+  schema through its `namespace` level, but per catalog node, never as a state;
+- the PostgreSQL driver sets no `SET` (`session.rs`), and the SQLite driver
+  explicitly documents its refusal of any implicit `PRAGMA`
   (`session.rs:28-35`).
 
-Deux contraintes bornent la solution. D'abord un interdit de contrat :
-« modifier l'état de session du serveur sans le déclarer » figure dans le
-tableau des refus de [DRIVER-CONTRACT](../DRIVER-CONTRACT.md), parce qu'un
-`SET search_path` invisible change le sens des requêtes suivantes de
-l'utilisateur. Ensuite l'isolation d'[ADR-0015](0015-consoles-independantes.md) :
-chaque console a sa session, mais **le catalogue et l'aperçu de table partagent
-la session « préférée »** de la connexion (`crates/oxyn-exec/src/executor.rs`,
-`SessionSlot::read_catalog`). Un contexte posé sur cette session-là déplacerait
-donc aussi ce que l'explorateur montre.
+Two constraints bound the solution. First, a contract prohibition:
+"modifying the server's session state without declaring it" is in the refusal
+table of [DRIVER-CONTRACT](../DRIVER-CONTRACT.md), because an invisible
+`SET search_path` changes the meaning of the user's next queries. Second, the
+isolation of [ADR-0015](0015-consoles-independantes.md): each console has its
+session, but **the catalog and the table preview share the "preferred"
+session** of the connection (`crates/oxyn-exec/src/executor.rs`,
+`SessionSlot::read_catalog`). A context set on that session would therefore
+also move what the explorer shows.
 
-## Décision
+## Decision
 
-Le contexte de session est une **opération déclarée**, pas un effet de bord.
+The session context is a **declared operation**, not a side effect.
 
-- Le contexte désigne un emplacement par les deux paliers déjà validés du
-  catalogue, `catalog` et `namespace`, sans relation. Il ne porte aucun texte
-  SQL. Comme `Command::PreviewRelation`, la commande les transporte en
-  `Option<String>` : `oxyn-core` ne dépend pas d'`oxyn-catalog`, et inverser ce
-  sens pour un type de commande serait payer une dépendance de crate pour un
-  confort de signature ([ARCHITECTURE](../ARCHITECTURE.md#le-sens-des-dépendances)).
-  Le type `SessionContext` du contrat vit dans `oxyn-driver`, qui connaît déjà
-  `CatalogPath` ; l'exécuteur le construit à la frontière, comme il le fait
-  aujourd'hui pour l'aperçu.
+- The context designates a location through the two already validated levels
+  of the catalog, `catalog` and `namespace`, without a relation. It carries no
+  SQL text. Like `Command::PreviewRelation`, the command carries them as
+  `Option<String>`: `oxyn-core` does not depend on `oxyn-catalog`, and
+  reversing that direction for a command type would pay a crate dependency for
+  signature comfort ([ARCHITECTURE](../ARCHITECTURE.md#le-sens-des-dépendances)).
+  The contract's `SessionContext` type lives in `oxyn-driver`, which already
+  knows `CatalogPath`; the executor builds it at the boundary, as it does today
+  for the preview.
 - `Command::SetSessionContext { connection, session, catalog, namespace }`
-  traverse le `PolicyGate` comme toute autre commande ([I-01](../../CLAUDE.md#i-01)). L'UI
-  ne l'applique pas elle-même et n'affiche rien avant la réponse du serveur.
-- Sa `StatementIntent` est `Read` : elle n'écrit aucune donnée, et la classer
-  `Ddl` la ferait refuser sur une connexion marquée en lecture seule, où changer
-  de schéma **pour lire ailleurs** est précisément l'usage. En revanche elle est
-  **refusée à `Actor::Agent`**, comme `GRANT` et pour la même raison : un agent
-  n'a aucun usage légitime de déplacer le contexte sous les pieds de l'humain,
-  et l'effet survit à la commande — le `DELETE` que l'humain écrira ensuite
-  frapperait un autre schéma que celui qu'il croit viser
-  ([I-07](../../CLAUDE.md#i-07)). C'est un refus, pas une confirmation.
-- Le trait `Session` gagne `async fn set_context(&self, context: &SessionContext,
-  cancel: &CancelToken) -> Result<()>`, de défaut `NotSupported`, et
-  `fn context(&self) -> Option<SessionContext>` qui rend ce que le serveur a
-  confirmé — une valeur et non une référence, parce qu'une implémentation garde
-  son contexte derrière un verrou : `set_context` prend `&self`. Une capacité `SESSION_CONTEXT` déclare le support ; le sélecteur
-  n'existe pas pour un driver qui ne la porte pas
+  goes through the `PolicyGate` like any other command ([I-01](../../CLAUDE.md#i-01)). The UI
+  does not apply it itself and shows nothing before the server's response.
+- Its `StatementIntent` is `Read`: it writes no data, and classifying it `Ddl`
+  would get it refused on a connection marked read-only, where switching schema
+  **to read elsewhere** is precisely the use. On the other hand it is
+  **refused to `Actor::Agent`**, like `GRANT` and for the same reason: an agent
+  has no legitimate use for moving the context under the human's feet, and the
+  effect outlives the command — the `DELETE` the human writes next would hit a
+  different schema than the one they think they target
+  ([I-07](../../CLAUDE.md#i-07)). It is a refusal, not a confirmation.
+- The `Session` trait gains `async fn set_context(&self, context: &SessionContext,
+  cancel: &CancelToken) -> Result<()>`, defaulting to `NotSupported`, and
+  `fn context(&self) -> Option<SessionContext>`, which returns what the server
+  confirmed — a value and not a reference, because an implementation keeps
+  its context behind a lock: `set_context` takes `&self`. A `SESSION_CONTEXT` capability declares support; the selector
+  does not exist for a driver that does not carry it
   ([ADR-0003](0003-driver-capabilities.md)).
-- Le driver PostgreSQL l'implémente par un `SET search_path` dont l'identifiant
-  est **cité par le driver**, jamais concaténé
-  ([I-10](../../CLAUDE.md#i-10)). Le geste est visible : il apparaît dans la
-  barre d'état et dans l'historique comme l'opération qu'il est.
-- Ce `SET` est posé **à chaque exécution, sur la connexion que cette exécution
-  emprunte**, et non une fois pour toutes. La raison est mesurable : une session
-  PostgreSQL d'Oxyn est un bassin de quatre connexions
-  (`MAX_CONNECTIONS`, `drivers/oxyn-driver-postgres/src/options.rs`), et
-  `search_path` est un état **par connexion**. Un `SET` posé une fois vaudrait
-  pour la connexion qui l'a reçu et pour aucune autre : une requête sur deux
-  résoudrait dans un autre schéma, sans rien pour le signaler. C'est le pire
-  résultat possible — un contrôle qui a l'air de marcher. `execute` tient déjà
-  une seule connexion du début à la fin, ce qui rend l'application déterministe.
-  Revenir au défaut du serveur pose de même un `SET search_path TO DEFAULT` :
-  ne rien poser laisserait la connexion sur son état précédent.
-- Symétriquement, **la connexion revient au bassin dans l'état où elle en est
-  sortie** : ce qui a été posé pour une exécution est défait avant de la rendre.
-  Sans cela, le contexte d'une console voyagerait avec la connexion vers tout ce
-  qui l'emprunte ensuite — et l'introspection en dépend, ce qui n'est pas
-  évident : `pg_get_indexdef`, `pg_get_constraintdef`, `pg_get_expr` et
-  `format_type` qualifient leur texte **relativement au `search_path`**. Un même
-  objet se verrait décrit différemment d'une lecture à l'autre, selon la
-  connexion tirée. Une connexion qu'on ne sait pas remettre au défaut est fermée
-  plutôt que rendue.
-- `set_context` **vérifie l'existence** de l'emplacement avant de le retenir,
-  par une requête à valeur liée. PostgreSQL accepte en silence un
-  `SET search_path` vers un schéma inexistant ; sans cette vérification, Oxyn
-  afficherait un contexte que le serveur n'applique pas.
-- Le palier `catalog` est refusé par PostgreSQL quand il désigne une autre base
-  que celle de la connexion : une session PostgreSQL ne change pas de base, et
-  prétendre le contraire serait le faux contrôle que cet ADR cherche à éviter.
-- SQLite ne le déclare pas. Ses schémas (`main`, `temp`, bases attachées) se
-  qualifient dans le SQL, et `ATTACH` reste une instruction de l'utilisateur.
-- **Le SQL de l'utilisateur n'est jamais réécrit.** Le contexte change ce que le
-  serveur résout, pas le texte soumis. Aucune qualification n'est ajoutée à un
-  identifiant écrit à la main.
-- La session réservée au catalogue et à l'aperçu **n'accepte pas** de changement
-  de contexte : l'explorateur montre l'arbre qualifié, pas une vue dépendante
-  d'un état. Changer le contexte d'une console ne déplace donc pas le catalogue.
+- The PostgreSQL driver implements it with a `SET search_path` whose identifier
+  is **quoted by the driver**, never concatenated
+  ([I-10](../../CLAUDE.md#i-10)). The action is visible: it appears in the
+  status bar and in the history as the operation it is.
+- This `SET` is issued **on every execution, on the connection that execution
+  borrows**, and not once and for all. The reason is measurable: an Oxyn
+  PostgreSQL session is a pool of four connections
+  (`MAX_CONNECTIONS`, `drivers/oxyn-driver-postgres/src/options.rs`), and
+  `search_path` is a **per-connection** state. A `SET` issued once would hold
+  for the connection that received it and for no other: one query in two
+  would resolve in another schema, with nothing to signal it. It is the worst
+  possible outcome — a control that looks like it works. `execute` already
+  holds a single connection from start to finish, which makes the application
+  deterministic. Going back to the server default likewise issues a
+  `SET search_path TO DEFAULT`: issuing nothing would leave the connection in
+  its previous state.
+- Symmetrically, **the connection returns to the pool in the state it left
+  it**: what was set for an execution is undone before returning it. Without
+  that, a console's context would travel with the connection to whatever
+  borrows it next — and introspection depends on it, which is not obvious:
+  `pg_get_indexdef`, `pg_get_constraintdef`, `pg_get_expr` and `format_type`
+  qualify their text **relative to the `search_path`**. The same object would
+  be described differently from one read to the next, depending on the
+  connection drawn. A connection that cannot be reset to the default is closed
+  rather than returned.
+- `set_context` **checks the existence** of the location before retaining it,
+  with a bound-value query. PostgreSQL silently accepts a `SET search_path` to
+  a nonexistent schema; without this check, Oxyn would show a context the
+  server does not apply.
+- The `catalog` level is refused by PostgreSQL when it designates a database
+  other than the connection's: a PostgreSQL session does not change database,
+  and pretending otherwise would be the false control this ADR seeks to avoid.
+- SQLite does not declare it. Its schemas (`main`, `temp`, attached databases)
+  are qualified in the SQL, and `ATTACH` remains a user statement.
+- **The user's SQL is never rewritten.** The context changes what the server
+  resolves, not the submitted text. No qualification is added to a
+  hand-written identifier.
+- The session reserved for the catalog and the preview **does not accept** a
+  context change: the explorer shows the qualified tree, not a view that
+  depends on a state. Changing a console's context therefore does not move the
+  catalog.
 
-## Conséquences
+## Consequences
 
-- **+** Le sens d'un `SELECT` non qualifié devient explicable : une seule
-  opération, visible, l'a changé, et la barre dit laquelle.
-- **+** Le contexte suit la session, donc la console. Deux onglets de la même
-  connexion peuvent travailler dans deux schémas sans se gêner.
-- **+** Aucune réécriture de SQL, donc aucune classe de bugs de requalification.
-- **−** Une capacité et une méthode de plus dans un contrat que
-  [PLUGIN-CONTRACT](../PLUGIN-CONTRACT.md) devra porter en phase 4.
-- **−** Le contexte de la console et la portée du catalogue peuvent diverger :
-  l'explorateur montre `public`, la console travaille dans `analytics`. C'est un
-  écart visible, assumé, et préférable à un catalogue qui bouge sous les pieds
-  de l'utilisateur.
-- **−** Le changement traverse le réseau et peut échouer. Il a donc les cinq
-  états d'une opération distante, y compris l'annulation.
-- **−** Un aller-retour de plus par exécution tant qu'un contexte est déclaré,
-  sur une session PostgreSQL. C'est le prix du bassin de connexions. Si une
-  mesure montre que ce coût pèse, l'alternative est de porter `search_path`
-  comme option de connexion et de recréer le bassin au changement — plus rapide,
-  mais incapable de préserver une transaction ouverte.
-- **−** Après toute exécution inscriptible, le driver PostgreSQL remet `search_path` au défaut et `standard_conforming_strings` à `on`, qu'il impose aussi à l'ouverture (valeur que suppose le découpeur) : un `SET` tapé en console ne suit pas la connexion rendue au bassin, et le schéma d'une console ne passe que par ce contexte.
+- **+** The meaning of an unqualified `SELECT` becomes explainable: a single,
+  visible operation changed it, and the bar says which.
+- **+** The context follows the session, hence the console. Two tabs of the
+  same connection can work in two schemas without getting in each other's way.
+- **+** No SQL rewriting, hence no class of requalification bugs.
+- **−** One more capability and method in a contract that
+  [PLUGIN-CONTRACT](../PLUGIN-CONTRACT.md) will have to carry in phase 4.
+- **−** The console's context and the catalog's scope can diverge: the explorer
+  shows `public`, the console works in `analytics`. It is a visible, accepted
+  gap, preferable to a catalog that moves under the user's feet.
+- **−** The change crosses the network and can fail. It therefore has the five
+  states of a remote operation, cancellation included.
+- **−** One more round trip per execution while a context is declared, on a
+  PostgreSQL session. It is the price of the connection pool. If a measurement
+  shows this cost weighs, the alternative is to carry `search_path` as a
+  connection option and recreate the pool on change — faster, but unable to
+  preserve an open transaction.
+- **−** After any writable execution, the PostgreSQL driver resets `search_path` to the default and `standard_conforming_strings` to `on`, which it also enforces at opening (the value the splitter assumes): a `SET` typed in a console does not follow the connection returned to the pool, and a console's schema only goes through this context.
 
-**Coût de sortie :** retirer une commande, une capacité et deux méthodes de
-trait, plus le sélecteur. Rien n'est persisté dans un format de workspace tant
-que le contexte n'est pas mémorisé entre lancements, ce que cet ADR ne décide
-pas — cela borne le coût à du code.
+**Exit cost:** remove a command, a capability and two trait methods, plus the
+selector. Nothing is persisted in a workspace format as long as the context is
+not remembered between launches, which this ADR does not decide — that bounds
+the cost to code.
 
-**Reconsidérer si** un driver ne sait exprimer son contexte que par une
-requalification du texte, ou si les utilisateurs demandent que le catalogue
-suive le contexte de la console active. Le second cas est un choix d'interface,
-et se tranchera sans rouvrir le contrat.
+**Reconsider if** a driver can only express its context by requalifying the
+text, or if users ask for the catalog to follow the active console's context.
+The second case is an interface choice, and will be settled without reopening
+the contract.
 
-## Alternatives écartées
+## Rejected alternatives
 
-| Alternative | Raison du rejet |
+| Alternative | Reason for rejection |
 |---|---|
-| Poser un `SET search_path` à l'ouverture de chaque session, sans le dire | Exactement l'état de session invisible que le contrat de driver refuse |
-| Qualifier les identifiants du SQL de l'utilisateur avant l'envoi | Demande d'analyser puis de réécrire du SQL arbitraire ; une requalification fausse exécute autre chose que ce qui est écrit |
-| Faire du contexte une propriété de la **connexion** | Deux consoles de la même connexion se le partageraient : changer de schéma dans un onglet déplacerait l'autre sans prévenir |
-| N'utiliser le sélecteur que pour filtrer le catalogue | Ne répond pas à la question posée par la maquette : ce que résout un `SELECT` non qualifié |
-| Ouvrir une session neuve à chaque changement de contexte | Perd la transaction et le travail en cours de la console, pour une opération que l'utilisateur croit anodine |
+| Issue a `SET search_path` when each session opens, without saying so | Exactly the invisible session state the driver contract refuses |
+| Qualify the identifiers of the user's SQL before sending | Requires parsing then rewriting arbitrary SQL; a wrong requalification executes something other than what is written |
+| Make the context a property of the **connection** | Two consoles of the same connection would share it: switching schema in one tab would move the other without warning |
+| Use the selector only to filter the catalog | Does not answer the question the mockup asks: what an unqualified `SELECT` resolves |
+| Open a new session on every context change | Loses the console's transaction and work in progress, for an operation the user believes harmless |

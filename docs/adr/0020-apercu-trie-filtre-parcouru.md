@@ -1,150 +1,150 @@
-# ADR-0020 — Aperçu : un tri qu'Oxyn compose, un prédicat que l'utilisateur écrit, une page déterministe
+# ADR-0020 — Preview: a sort Oxyn composes, a predicate the user writes, a deterministic page
 
-**Statut :** proposé · **Date :** 2026-09-10
+**Status:** proposed · **Date:** 2026-09-10
 
-**Précise :** [ADR-0012](0012-lecture-pages-resultats.md), sur ce qui distingue
-une page de résultat d'une page de table.
+**Clarifies:** [ADR-0012](0012-lecture-pages-resultats.md), on what distinguishes
+a result page from a table page.
 
-> **Précisé par [ADR-0028](0028-pas-dordre-par-defaut-pas-de-page-sans-ordre-total.md)
-> sur un point, et il est important.** Le remède proposé ici — « sans tri
-> demandé, le driver ordonne par la clé primaire seule » — **n'a pas été mis en
-> œuvre**. L'argument qui le motive, lui, est retenu : un `OFFSET` sur un ordre
-> non garanti duplique et omet des lignes en silence. Ce que le code fait à la
-> place est **plus strict** — aucun ordre imposé, et aucune page offerte tant
-> que l'ordre n'est pas total.
+> **Clarified by [ADR-0028](0028-pas-dordre-par-defaut-pas-de-page-sans-ordre-total.md)
+> on one point, and it matters.** The remedy proposed here — "without a
+> requested sort, the driver orders by the primary key alone" — **was not
+> implemented**. The argument behind it is kept: an `OFFSET` over a
+> non-guaranteed order duplicates and omits rows silently. What the code does
+> instead is **stricter** — no imposed order, and no page offered as long as
+> the order is not total.
 >
-> Lire ADR-0028 **avant** de « corriger » `pagination_from` ou de composer un
-> `ORDER BY` par défaut : les deux passages de cet ADR qui décrivent un tri
-> imposé sont périmés, et les suivre réintroduirait la panne silencieuse que cet
-> ADR existe pour empêcher.
+> Read ADR-0028 **before** "fixing" `pagination_from` or composing a default
+> `ORDER BY`: the two passages of this ADR that describe an imposed sort are
+> stale, and following them would reintroduce the silent failure this ADR
+> exists to prevent.
 
-## Contexte
+## Context
 
-Sélectionner une table ouvre l'onglet Data et lit au plus 200 lignes
-(`PREVIEW_ROWS`, `crates/oxyn-app/src/workspace/preview.rs`). Le driver compose
-`SELECT … FROM … LIMIT n`, cite les identifiants, et l'exécuteur impose la
-lecture seule. [UX-SPEC](../UX-SPEC.md#données-dune-table-sélectionnée) est
-explicite sur ce qui manque : « l'ordre des lignes n'est pas garanti et l'aperçu
-ne compte pas la table entière ».
+Selecting a table opens the Data tab and reads at most 200 rows
+(`PREVIEW_ROWS`, `crates/oxyn-app/src/workspace/preview.rs`). The driver
+composes `SELECT … FROM … LIMIT n`, quotes the identifiers, and the executor
+enforces read-only. [UX-SPEC](../UX-SPEC.md#data-of-a-selected-table) is
+explicit about what is missing: "the order of the rows is not guaranteed and
+the preview does not count the whole table".
 
-Trois faits relevés dans le code bornent la solution.
+Three facts found in the code bound the solution.
 
-**La grille n'a aucun tri.** `crates/oxyn-ui/src/data_grid.rs` lit les
-`RecordBatch` dans leur ordre d'arrivée ; ses seuls réglages de colonne sont la
-visibilité et la largeur. Il n'y a donc rien à réconcilier entre un tri client
-existant et un tri serveur — mais aussi rien sur quoi s'appuyer.
+**The grid has no sort.** `crates/oxyn-ui/src/data_grid.rs` reads the
+`RecordBatch`es in their arrival order; its only column settings are
+visibility and width. There is therefore nothing to reconcile between an
+existing client sort and a server sort — but also nothing to build on.
 
-**`ReadResultPage` ne pagine pas ce qu'on croit.** [ADR-0012](0012-lecture-pages-resultats.md)
-le dit : « c'est une lecture locale […] elle ne contacte pas le serveur, ne
-compose pas de SQL et ne réexécute rien ». Elle relit un lot Arrow **déjà reçu**
-et débordé sur disque. Paginer une *table* est l'opération inverse : une
-nouvelle exécution, avec un `OFFSET` ou un curseur. Confondre les deux donnerait
-soit un bouton « page suivante » qui remontre les mêmes lignes, soit un
-défilement qui relance des requêtes — ce que la règle de la grille interdit.
+**`ReadResultPage` does not paginate what one thinks.** [ADR-0012](0012-lecture-pages-resultats.md)
+says so: "it is a local read […] it does not contact the server, does not
+compose SQL and re-executes nothing". It rereads an Arrow batch **already
+received** and spilled to disk. Paginating a *table* is the opposite
+operation: a new execution, with an `OFFSET` or a cursor. Confusing the two
+would give either a "next page" button that shows the same rows again, or a
+scroll that relaunches queries — which the grid rule forbids.
 
-**`oxyn-core` ne peut ni nommer `CatalogPath` ni composer de SQL.**
-`Command::PreviewRelation` transporte déjà ses paliers en `Option<String>` pour
-cette raison.
+**`oxyn-core` can neither name `CatalogPath` nor compose SQL.**
+`Command::PreviewRelation` already carries its levels as `Option<String>` for
+that reason.
 
-Enfin, le catalogue sait quelles colonnes forment la clé primaire
-(`Relation::primary_key`, `crates/oxyn-catalog/src/model.rs:712`). C'est ce qui
-rend une pagination honnête possible.
+Finally, the catalog knows which columns form the primary key
+(`Relation::primary_key`, `crates/oxyn-catalog/src/model.rs:712`). That is what
+makes honest pagination possible.
 
-## Décision
+## Decision
 
-**Les deux moitiés de la demande ne se ressemblent pas, et c'est la maquette qui
-le dit.** Le relevé Figma du 2026-09-10 montre, sous la barre Data, une
-« Filter toolbar » (`190:1618`, 1272 × 32) faite d'un champ `272:10667` portant
-le préfixe littéral **`WHERE`**, une zone de saisie de 1048 px et un bouton
-`Apply`, puis d'un bouton `Sort` de 84 px. Le filtre est donc un **prédicat que
-l'utilisateur écrit**, pas un constructeur colonne/opérateur/valeur.
+**The two halves of the request do not look alike, and the mockup says so.**
+The Figma survey of 2026-09-10 shows, under the Data bar, a
+"Filter toolbar" (`190:1618`, 1272 × 32) made of a field `272:10667` carrying
+the literal prefix **`WHERE`**, a 1048 px input area and an `Apply` button,
+then an 84 px `Sort` button. The filter is therefore a **predicate the user
+writes**, not a column/operator/value builder.
 
-Ce n'est pas une entorse à [I-10](../../CLAUDE.md#i-10), c'est sa lettre : ce que
-l'invariant interdit, c'est qu'Oxyn **concatène un identifiant reçu** ; il dit
-aussi que « le SQL que *l'utilisateur écrit* part tel quel — c'est la
-fonctionnalité ». Un prédicat tapé par un professionnel appartient à la seconde
-catégorie, comme le texte d'une console.
+This is not a breach of [I-10](../../CLAUDE.md#i-10), it is its letter: what the
+invariant forbids is Oxyn **concatenating a received identifier**; it also says
+that "the SQL *the user writes* is sent as is — that is the feature". A
+predicate typed by a professional belongs to the second category, like the
+text of a console.
 
-**Le tri, lui, reste structuré.** `PreviewSort { column, descending }` : la
-colonne est un identifiant que le driver cite. C'est Oxyn qui compose ce
-fragment-là, donc c'est Oxyn qui répond de ce qu'il contient. Une colonne que la
-relation ne déclare pas est refusée plutôt que transmise au serveur.
+**The sort, for its part, stays structured.** `PreviewSort { column, descending }`:
+the column is an identifier the driver quotes. Oxyn composes that fragment, so
+Oxyn answers for what it contains. A column the relation does not declare is
+refused rather than passed to the server.
 
-**`PreviewShape` porte les trois : `sort`, `predicate: Option<String>` et
-`offset`.** Un prédicat vide ou fait d'espaces vaut « aucun filtre » — composer
-un `WHERE` sans condition produirait une erreur de syntaxe là où l'utilisateur
-croit avoir tout effacé. C'est la seule normalisation appliquée à son texte.
+**`PreviewShape` carries all three: `sort`, `predicate: Option<String>` and
+`offset`.** An empty or whitespace-only predicate means "no filter" — composing
+a `WHERE` without a condition would produce a syntax error where the user
+believes they cleared everything. It is the only normalization applied to their
+text.
 
-**Le prédicat n'est pas une porte ouverte pour autant.** Le texte final est
-reclassifié par `oxyn-query` et refusé s'il devient mutant — l'exécuteur le fait
-déjà pour tout aperçu —, la session est tenue en lecture seule **par le
-serveur**, et la borne de lignes s'applique. Un `;` suivi d'une écriture ne
-franchit aucun de ces trois-là.
+**The predicate is not an open door for all that.** The final text is
+reclassified by `oxyn-query` and refused if it becomes mutating — the executor
+already does so for every preview —, the session is held read-only **by the
+server**, and the row bound applies. A `;` followed by a write gets past none
+of these three.
 
-**Deux capacités, `PREVIEW_SORT` et `PREVIEW_FILTER`.** Un moteur qui ne les
-déclare pas n'affiche pas ces contrôles
-([ADR-0003](0003-driver-capabilities.md)). Ce n'est pas une précaution
-théorique : le produit vise aussi les familles clé-valeur, où ordonner une
-lecture n'a pas de sens.
+**Two capabilities, `PREVIEW_SORT` and `PREVIEW_FILTER`.** An engine that does
+not declare them does not show these controls
+([ADR-0003](0003-driver-capabilities.md)). This is not a theoretical
+precaution: the product also targets key-value families, where ordering a read
+makes no sense.
 
-**Une page suivante est une exécution, et elle n'est offerte que si l'ordre est
-déterministe.** Un `OFFSET` sur un ordre non garanti rend des lignes en double
-et en omet d'autres, sans que rien ne le signale — c'est la panne silencieuse
-que cet ADR refuse. Donc :
+**A next page is an execution, and it is only offered if the order is
+deterministic.** An `OFFSET` over a non-guaranteed order returns duplicate rows
+and omits others, with nothing signaling it — it is the silent failure this ADR
+refuses. Therefore:
 
-- si l'utilisateur a demandé un tri, le driver **le complète** par la clé
-  primaire déclarée au catalogue, pour lever les ex æquo ;
-- sans tri demandé, le driver ordonne par la clé primaire seule ;
-- si la relation n'a pas de clé unique connue, **la pagination n'est pas
-  proposée** et l'interface dit pourquoi. L'aperçu reste borné à sa première
-  page, ce qu'il est déjà aujourd'hui.
+- if the user requested a sort, the driver **completes it** with the primary
+  key declared in the catalog, to break ties;
+- without a requested sort, the driver orders by the primary key alone;
+- if the relation has no known unique key, **pagination is not offered** and
+  the interface says why. The preview stays bounded to its first page, which
+  it already is today.
 
-**`ReadResultPage` reste inchangé, et les deux notions ne se rejoignent nulle
-part.** Faire défiler les lignes reçues ne déclenche jamais de requête ; demander
-la page suivante de la table est un geste explicite, qui produit un nouveau
-résultat avec sa propre identité.
+**`ReadResultPage` stays unchanged, and the two notions meet nowhere.**
+Scrolling the received rows never triggers a query; asking for the table's next
+page is an explicit action, which produces a new result with its own identity.
 
-## Conséquences
+## Consequences
 
-- **+** Un aperçu devient utilisable sur une vraie table : trouver une ligne
-  n'oblige plus à écrire du SQL dans la console.
-- **+** Le prédicat est du SQL, donc il dit tout ce que le SQL dit :
-  `a IS NOT NULL AND (b > c)` s'écrit, là où trois menus ne l'auraient pas
-  exprimé.
-- **−** Ce prédicat est aussi du SQL que l'utilisateur peut écrire faux. Le
-  message d'erreur du serveur le lui dira — son public le lit — mais l'aperçu
-  n'a plus la propriété « ne peut pas échouer pour une raison de syntaxe ».
-- **+** La pagination ne ment pas : elle existe quand elle est correcte, et son
-  absence est expliquée.
-- **−** Chaque page est une exécution : elle coûte au serveur, et les données
-  peuvent avoir changé entre deux pages. L'interface doit le dire plutôt que de
-  laisser croire à un instantané.
-- **−** `OFFSET` est linéaire : la centième page coûte cent fois la première. Ce
-  n'est pas un défaut d'Oxyn, mais c'est Oxyn qui le rendra visible.
-- **−** Deux capacités et une signature de plus dans un contrat que
-  [PLUGIN-CONTRACT](../PLUGIN-CONTRACT.md) devra porter en phase 4.
-- **−** Un tri imposé par défaut sur la clé primaire change ce que l'utilisateur
-  voit en premier par rapport à aujourd'hui. C'est un ordre arbitraire remplacé
-  par un ordre déterministe, mais c'est un changement visible.
+- **+** A preview becomes usable on a real table: finding a row no longer
+  requires writing SQL in the console.
+- **+** The predicate is SQL, so it says everything SQL says:
+  `a IS NOT NULL AND (b > c)` can be written, where three menus could not have
+  expressed it.
+- **−** This predicate is also SQL the user can write wrong. The server's error
+  message will tell them — its audience reads it — but the preview no longer
+  has the property "cannot fail for a syntax reason".
+- **+** Pagination does not lie: it exists when it is correct, and its absence
+  is explained.
+- **−** Each page is an execution: it costs the server, and the data may have
+  changed between two pages. The interface must say so rather than suggest a
+  snapshot.
+- **−** `OFFSET` is linear: the hundredth page costs a hundred times the first.
+  It is not a flaw of Oxyn, but Oxyn is what will make it visible.
+- **−** Two capabilities and one more signature in a contract that
+  [PLUGIN-CONTRACT](../PLUGIN-CONTRACT.md) will have to carry in phase 4.
+- **−** A default sort imposed on the primary key changes what the user sees
+  first compared to today. It is an arbitrary order replaced by a
+  deterministic order, but it is a visible change.
 
-**Coût de sortie :** retirer un champ de forme, deux capacités et une traduction
-par driver. Rien n'est persisté dans un format de workspace — le tri
-et le filtre d'un aperçu ne survivent pas à la fermeture de l'onglet, ce que cet
-ADR ne cherche pas à changer —, ce qui borne le coût à du code.
+**Exit cost:** remove a shape field, two capabilities and one translation per
+driver. Nothing is persisted in a workspace format — a preview's sort and
+filter do not survive closing the tab, which this ADR does not seek to change —,
+which bounds the cost to code.
 
-**Reconsidérer si** un driver ne sait pas exprimer un `OFFSET` stable et impose
-un curseur opaque, ou si la mesure montre que la pagination par `OFFSET` est
-inutilisable sur les tailles de table réelles. Le second cas conduirait à une
-pagination par clé (`WHERE clé > dernière valeur vue`), qui est plus rapide mais
-suppose exactement ce que la présente décision exige déjà : un ordre unique.
+**Reconsider if** a driver cannot express a stable `OFFSET` and imposes an
+opaque cursor, or if measurement shows that `OFFSET` pagination is unusable on
+real table sizes. The second case would lead to keyset pagination
+(`WHERE key > last seen value`), which is faster but assumes exactly what the
+present decision already requires: a unique order.
 
-## Alternatives écartées
+## Rejected alternatives
 
-| Alternative | Raison du rejet |
+| Alternative | Reason for rejection |
 |---|---|
-| Trier et filtrer dans la grille, en mémoire | Ne porterait que sur les lignes déjà lues : l'utilisateur croirait chercher dans la table et chercherait dans 200 lignes |
-| Un constructeur de filtres structuré — colonne, opérateur, valeur liée | Plus sûr sur le papier, mais ce n'est pas ce que la maquette dessine, et le public d'Oxyn écrit du SQL toute la journée. Un constructeur l'obligerait à exprimer en trois menus ce qu'il tape en cinq secondes, et ne saurait pas dire `a IS NOT NULL AND (b > c)` |
-| Laisser Oxyn composer un `WHERE` à partir de valeurs qu'il concatène | Là, oui, l'invariant s'applique : ce serait du SQL composé par le produit à partir de données reçues ([I-10](../../CLAUDE.md#i-10)) |
-| Réutiliser `ReadResultPage` pour la page suivante | Elle relit un tampon déjà reçu ; elle ne contacte pas le serveur et ne peut donc pas rendre des lignes qui n'ont jamais été lues |
-| Paginer sans ordre déterministe | `OFFSET` sans `ORDER BY` stable duplique et omet des lignes sans rien signaler — un résultat faux qui a l'air juste |
-| Une seule capacité pour le tri et le filtre | Un moteur peut savoir ordonner sans savoir filtrer, et l'inverse ; un drapeau unique forcerait à refuser les deux pour n'en manquer qu'un |
+| Sort and filter in the grid, in memory | Would only cover the rows already read: the user would think they search the table and would search 200 rows |
+| A structured filter builder — column, operator, bound value | Safer on paper, but it is not what the mockup draws, and Oxyn's audience writes SQL all day. A builder would force them to express in three menus what they type in five seconds, and could not say `a IS NOT NULL AND (b > c)` |
+| Let Oxyn compose a `WHERE` from values it concatenates | There, yes, the invariant applies: it would be SQL composed by the product from received data ([I-10](../../CLAUDE.md#i-10)) |
+| Reuse `ReadResultPage` for the next page | It rereads an already received buffer; it does not contact the server and therefore cannot return rows that were never read |
+| Paginate without a deterministic order | `OFFSET` without a stable `ORDER BY` duplicates and omits rows without signaling anything — a wrong result that looks right |
+| A single capability for sort and filter | An engine may know how to order without knowing how to filter, and the reverse; a single flag would force refusing both for lacking only one |

@@ -4,13 +4,13 @@ paths:
   - "crates/oxyn-driver/**"
 ---
 
-<!-- oxyn-translation source=".claude/rules/drivers.md" sha256="7772aa97ca1c" -->
+<!-- oxyn-translation source=".claude/rules/drivers.md" sha256="425231ccc7ad" -->
 
 > Traduction française de [.claude/rules/drivers.md](../../../../.claude/rules/drivers.md). **La version anglaise fait foi.**
 
 # Drivers — conventions
 
-Le contrat fait autorité : [DRIVER-CONTRACT](../../../../docs/DRIVER-CONTRACT.md). Il
+Le contrat fait autorité : [DRIVER-CONTRACT](../../docs/DRIVER-CONTRACT.md). Il
 n'est pas résumé ici. Cette règle porte ce qui se rate à l'écriture.
 
 ## Avant d'écrire une ligne
@@ -19,7 +19,7 @@ Passer par [`/driver`](../commands/driver.md). La commande charge le contrat, la
 liste de contrôle et la question qui vient avant toutes les autres : **est-ce un
 nouveau protocole, ou un produit qui parle un protocole déjà implémenté ?**
 Redshift ≡ PostgreSQL, MariaDB ≡ MySQL, OpenSearch ≡ Elasticsearch
-([ADR-0003](../../../../docs/adr/0003-driver-capabilities.md)). Une crate en trop, ce
+([ADR-0003](../../docs/adr/0003-driver-capabilities.md)). Une crate en trop, ce
 sont deux décodeurs de protocole à maintenir pour un dialecte.
 
 ## Les quatre pièges
@@ -50,7 +50,7 @@ Ce qui se perd le plus souvent, et le plus silencieusement :
 - un `NUMERIC` PostgreSQL sans précision ne tient dans aucun type flottant ;
   le convertir en `f64` corrompt des montants ;
 - un `timestamp` sans fuseau ne se voit **jamais** attribuer un fuseau à la
-  lecture ([DRIVER-CONTRACT](../../../../docs/DRIVER-CONTRACT.md#7-il-traite-les-fuseaux-et-les-types-temporels-comme-des-données-pas-comme-du-texte)) ;
+  lecture ([DRIVER-CONTRACT](../../docs/DRIVER-CONTRACT.md#7-il-traite-les-fuseaux-et-les-types-temporels-comme-des-données-pas-comme-du-texte)) ;
 - un `u64` MySQL au-delà de 2^53 ne survit pas à un passage par un flottant ;
 - un type inconnu se rend en octets bruts **avec son identifiant de type**,
   jamais en chaîne « best effort ».
@@ -59,7 +59,7 @@ Ce qui se perd le plus souvent, et le plus silencieusement :
 
 | Interdit | Pourquoi |
 |---|---|
-| Dépendre d'`oxyn-desktop`, d'`oxyn-ai`, ou d'un autre driver | inverse le sens des dépendances. **`oxyn-core` est au contraire la dépendance attendue** — c'est le vocabulaire commun, et les deux drivers livrés en dépendent ([DRIVER-CONTRACT](../../../../docs/DRIVER-CONTRACT.md)) |
+| Dépendre d'`oxyn-desktop`, d'`oxyn-ai`, ou d'un autre driver | inverse le sens des dépendances. **`oxyn-core` est au contraire la dépendance attendue** — c'est le vocabulaire commun, et les deux drivers livrés en dépendent ([DRIVER-CONTRACT](../../docs/DRIVER-CONTRACT.md)) |
 | Lire une variable d'environnement, écrire un fichier | un driver reçoit sa configuration |
 | Retenter tout seul | la politique de reprise appartient à l'appelant, seul à savoir si l'opération est rejouable |
 | `SET`/`USE` non déclaré | change en silence le sens des requêtes suivantes de l'utilisateur |

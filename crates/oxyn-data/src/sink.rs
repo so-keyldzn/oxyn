@@ -11,7 +11,7 @@
 //!
 //! **Il n'applique pas de délai.** `ExecLimits::timeout` est appliqué par
 //! `oxyn-exec`, qui possède le runtime, le journal et le droit d'émettre
-//! l'annulation côté serveur ([ARCHITECTURE](../../../docs/ARCHITECTURE.md#9-modèle-dexécution-et-de-threads)).
+//! l'annulation côté serveur ([ARCHITECTURE](../../../docs/ARCHITECTURE.md#9-execution-and-threading-model)).
 //! Un délai posé ici n'annulerait que le futur, laissant la requête tourner et
 //! le verrou posé côté base — exactement le défaut que le contrat de driver
 //! interdit.
@@ -69,7 +69,7 @@ pub trait BatchSource: Send {
     ///
     /// Le type de retour est le désucrage d'`async fn` : il garde le trait
     /// compatible avec `dyn`, ce qui est une contrainte dure du workspace
-    /// ([ARCHITECTURE §4.1](../../../docs/ARCHITECTURE.md#41-les-traits)).
+    /// ([ARCHITECTURE §4.1](../../../docs/ARCHITECTURE.md#41-the-traits)).
     fn next_batch(&mut self) -> BoxFuture<'_, Result<Option<RecordBatch>, OxynError>>;
 
     /// Ce que la source sait de l'exécution : temps serveur, lignes, octets.

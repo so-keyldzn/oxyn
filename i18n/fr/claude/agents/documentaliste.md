@@ -7,7 +7,7 @@ memory: project
 color: blue
 ---
 
-<!-- oxyn-translation source=".claude/agents/documentaliste.md" sha256="26ad0883d142" -->
+<!-- oxyn-translation source=".claude/agents/documentaliste.md" sha256="997be19087f8" -->
 
 > Traduction française de [.claude/agents/documentaliste.md](../../../../.claude/agents/documentaliste.md). **La version anglaise fait foi.**
 
@@ -66,9 +66,8 @@ L'index de `docs/README.md` se met à jour dans le même commit.
 ## Langue
 
 Documentation, ADR, commits : **anglais**
-([ADR-0047](../../../../docs/adr/0047-english-as-the-repository-language.md)).
-Les documents français de `docs/` et les ADR 0001 à 0046 font autorité en
-l'état jusqu'à leur traduction ; une traduction ne change aucune décision. Un
+([ADR-0047](../../docs/adr/0047-english-as-the-repository-language.md)).
+Un
 extrait de code dans un document reste en anglais.
 
 Quand tu modifies un fichier anglais qui a un miroir français dans `i18n/fr/`,

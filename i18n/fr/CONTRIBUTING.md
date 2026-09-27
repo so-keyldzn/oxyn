@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="CONTRIBUTING.md" sha256="1888b1b5344b" -->
+<!-- oxyn-translation source="CONTRIBUTING.md" sha256="94f974dede73" -->
 
 > Traduction française de [CONTRIBUTING.md](../../CONTRIBUTING.md). **La version anglaise fait foi.**
 
@@ -22,7 +22,7 @@ ensemble de conditions. Il lui permet aussi de changer la licence du projet, et
 de transférer ces droits à la société qui maintiendra Oxyn. Sans lui, chaque
 contributeur devrait accepter un tel changement, et un seul pourrait le bloquer.
 Les raisons sont consignées dans
-[ADR-0044](../../docs/adr/0044-licence-gpl-et-contrat-apache.md), en français.
+[ADR-0044](docs/adr/0044-licence-gpl-et-contrat-apache.md).
 
 **Ce que le CLA ne fait pas.** Vous gardez le droit d'auteur sur votre travail.
 Vous restez libre d'utiliser votre contribution pour tout autre usage, sous
@@ -52,11 +52,9 @@ pas n'est pas prête à être relue.
 Quelques conventions que la porte ne peut pas vérifier :
 
 - tout est en **anglais** : code, identifiants, commentaires, messages d'erreur,
-  documentation, ADR, messages de commit et pull requests. Certains documents
-  de `docs/` et les ADR 0001 à 0046 sont encore en français ; ils restent
-  d'autorité jusqu'à leur traduction
-  ([ADR-0047](../../docs/adr/0047-english-as-the-repository-language.md)).
-  [`i18n/fr/`](README.md) porte des miroirs français des documents anglais ;
+  documentation, ADR, messages de commit et pull requests
+  ([ADR-0047](docs/adr/0047-english-as-the-repository-language.md)).
+  [`i18n/fr/`](../README.md) porte des miroirs français des documents anglais ;
   l'anglais fait foi ;
 - les messages de commit suivent Conventional Commits : `type(portee): sujet`,
   en minuscules, à l'impératif, sans point final, 72 caractères au plus ;

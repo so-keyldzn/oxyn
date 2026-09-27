@@ -1,127 +1,125 @@
-# ADR-0022 — Ce qui se rafraîchit tout seul, et ce qui ne le fera jamais
+# ADR-0022 — What refreshes on its own, and what never will
 
-**Statut :** proposé · **Date :** 2026-09-10
+**Status:** proposed · **Date:** 2026-09-10
 
-**Précise :** [ADR-0004](0004-command-bus.md), sur ce que le bus publie en plus
-de ce qu'il exécute.
+**Clarifies:** [ADR-0004](0004-command-bus.md), on what the bus publishes besides
+what it executes.
 
-## Contexte
+## Context
 
-Après un `CREATE TABLE` lancé dans la console, l'explorateur ne bouge pas.
-Après un `INSERT`, l'aperçu de la table affichée montre encore l'état d'avant.
-Après une exécution, l'historique reste vide tant qu'on n'a pas cliqué. Il faut
-cliquer `Refresh` partout, et l'utilisateur qui oublie regarde des données
-fausses sans que rien ne le lui dise.
+After a `CREATE TABLE` run in the console, the explorer does not move.
+After an `INSERT`, the preview of the displayed table still shows the previous
+state. After an execution, the history stays empty until one clicks. One has
+to click `Refresh` everywhere, and the user who forgets looks at wrong data
+with nothing telling them.
 
-L'audit du code donne trois faits qui commandent la solution.
+The code audit gives three facts that drive the solution.
 
-**Le mécanisme existe déjà et il ne faut pas en écrire un second.**
-`Backend::subscribe()` rend un `broadcast::Receiver<ExecEvent>` ; `QueryConsole`
-et `Workspace` s'y abonnent déjà, chacun dans une boucle `cx.spawn` qui appelle
-son `on_exec_event`. Aucun des deux ne fait d'I/O : ils lisent un tampon déjà en
-mémoire et redessinent.
+**The mechanism already exists and a second one must not be written.**
+`Backend::subscribe()` returns a `broadcast::Receiver<ExecEvent>`; `QueryConsole`
+and `Workspace` already subscribe to it, each in a `cx.spawn` loop that calls
+its `on_exec_event`. Neither does any I/O: they read a buffer already in
+memory and redraw.
 
-**`Event::CatalogUpdated` existe, et personne ne s'y abonne.** Il n'est publié
-que par `Command::RefreshCatalog`, c'est-à-dire quand quelqu'un a déjà demandé
-le rafraîchissement. Symétriquement, `CatalogCache::invalidate` existe, sa
-documentation dit « à appeler immédiatement après tout DDL émis depuis Oxyn », et
-**rien ne l'appelle**. [ARCHITECTURE](../ARCHITECTURE.md) promet ce comportement.
-C'est un écart entre le document et le code, pas une fonctionnalité à inventer.
+**`Event::CatalogUpdated` exists, and nobody subscribes to it.** It is only
+published by `Command::RefreshCatalog`, that is when someone has already asked
+for the refresh. Symmetrically, `CatalogCache::invalidate` exists, its
+documentation says "to call immediately after any DDL issued from Oxyn", and
+**nothing calls it**. [ARCHITECTURE](../ARCHITECTURE.md) promises this behavior.
+It is a gap between the document and the code, not a feature to invent.
 
-**Aucun événement ne dit ce qui a changé.** `Event::Completed` porte un
-`ResultId` et des statistiques. L'instruction est classée — `StatementIntent` —
-pour le `PolicyGate`, puis cette classification est jetée. Un abonné ne peut donc
-savoir que « une commande de cette connexion vient de finir », jamais « la table
-`orders` a changé ».
+**No event says what changed.** `Event::Completed` carries a `ResultId` and
+statistics. The statement is classified — `StatementIntent` — for the
+`PolicyGate`, then that classification is thrown away. A subscriber can
+therefore only know "a command of this connection just finished", never "the
+`orders` table changed".
 
-## Décision
+## Decision
 
-**L'événement porte l'intention, et rien de plus pour l'instant.**
-`Event::Completed` gagne `intent: StatementIntent`, que l'exécuteur possède déjà
-au moment de publier. C'est assez pour distinguer les trois cas qui comptent —
-lecture, écriture, DDL — et cela n'invente aucune structure.
+**The event carries the intent, and nothing more for now.**
+`Event::Completed` gains `intent: StatementIntent`, which the executor already
+holds when publishing. It is enough to distinguish the three cases that
+matter — read, write, DDL — and it invents no structure.
 
-Ce que cela **ne** donne pas : le nom des objets touchés. Un rafraîchissement
-est donc, à ce stade, **de la portée d'une connexion**, pas d'une table. Nous
-l'assumons plutôt que de faire semblant : extraire les objets référencés d'un
-SQL arbitraire est un travail d'analyse à part entière, et le faire à moitié
-produirait des invalidations fausses dans les deux sens — c'est-à-dire soit des
-vues périmées, soit des relectures inutiles, sans qu'on sache laquelle.
+What it does **not** give: the name of the objects touched. A refresh is
+therefore, at this stage, **scoped to a connection**, not to a table. We
+accept that rather than pretend: extracting the objects referenced by
+arbitrary SQL is an analysis job in its own right, and doing it halfway would
+produce wrong invalidations in both directions — that is either stale views, or
+useless rereads, without knowing which.
 
-**Ce qui se rafraîchit tout seul, après une exécution qui a réussi :**
+**What refreshes on its own, after a successful execution:**
 
-| Ce qui a été exécuté | Ce qui se rafraîchit | Pourquoi c'est acceptable |
+| What was executed | What refreshes | Why it is acceptable |
 |---|---|---|
-| DDL | le cache de catalogue de **cette** connexion est invalidé, l'arbre se recharge | c'est ce qu'`ARCHITECTURE` promet déjà, et l'introspection est paresseuse : seuls les paliers ouverts sont relus |
-| DDL ou écriture | l'aperçu **visible** de cette connexion est relu | une lecture bornée à 200 lignes, sur une table que l'utilisateur regarde en ce moment |
-| n'importe quoi | l'historique local, si la bibliothèque est ouverte | une lecture SQLite locale, sans réseau |
+| DDL | the catalog cache of **this** connection is invalidated, the tree reloads | it is what `ARCHITECTURE` already promises, and introspection is lazy: only the open levels are reread |
+| DDL or write | the **visible** preview of this connection is reread | a read bounded to 200 rows, on a table the user is looking at right now |
+| anything | the local history, if the library is open | a local SQLite read, no network |
 
-**Ce qui ne se rafraîchit jamais tout seul :**
+**What never refreshes on its own:**
 
-- **rien après une erreur.** [UX-SPEC](../UX-SPEC.md#données-dune-table-sélectionnée)
-  le dit déjà : « aucun rafraîchissement automatique ne suit une erreur ». Une
-  relecture qui suit un échec masque l'échec ;
-- **jamais la requête de l'utilisateur.** Relire un aperçu, c'est réémettre
-  `PreviewRelation` — une commande qu'Oxyn compose, bornée et en lecture seule.
-  Rejouer l'instruction de la console serait tout autre chose : son coût est
-  arbitraire et un `SELECT` peut ne pas être idempotent
-  ([PERFORMANCE](../PERFORMANCE.md#budgets-de-mémoire)) ;
-- **rien qui n'est pas à l'écran.** Un aperçu dont l'onglet n'est pas affiché
-  n'est pas relu : il le sera quand on y reviendra. Le travail invisible est du
-  travail que personne n'a demandé ;
-- **rien sur une autre connexion.** `ExecEvent` porte sa connexion ; un abonné
-  qui n'est pas sur celle-là ignore l'événement.
+- **nothing after an error.** [UX-SPEC](../UX-SPEC.md#data-of-a-selected-table)
+  already says so: "no automatic refresh follows an error". A reread that
+  follows a failure masks the failure;
+- **never the user's query.** Rereading a preview means reissuing
+  `PreviewRelation` — a command Oxyn composes, bounded and read-only.
+  Replaying the console's statement would be something else entirely: its cost
+  is arbitrary and a `SELECT` may not be idempotent
+  ([PERFORMANCE](../PERFORMANCE.md#memory-budgets));
+- **nothing that is not on screen.** A preview whose tab is not displayed
+  is not reread: it will be when one comes back to it. Invisible work is work
+  nobody asked for;
+- **nothing on another connection.** `ExecEvent` carries its connection; a
+  subscriber that is not on that one ignores the event.
 
-**Une relecture automatique ne détruit jamais un état en cours.** Si un aperçu
-est déjà en train de charger, le rafraîchissement ne l'interrompt pas. Si
-l'utilisateur a posé un filtre ou une page, la relecture **conserve la forme
-demandée** : le rafraîchissement montre les mêmes lignes à jour, pas un retour
-à la première page.
+**An automatic reread never destroys an ongoing state.** If a preview is
+already loading, the refresh does not interrupt it. If the user set a filter
+or a page, the reread **keeps the requested shape**: the refresh shows the same
+rows up to date, not a return to the first page.
 
-**Le canal est faillible, et le filet est explicite.** Le `broadcast` a une
-profondeur de 256 : sous charge, un abonné lent reçoit `RecvError::Lagged` et
-perd des événements. Aujourd'hui c'est sans conséquence, parce que les états
-terminaux passent par un canal fiable et que le broadcast ne porte que du
-confort d'affichage. Dès qu'un rafraîchissement en dépend, un événement perdu
-laisserait une vue périmée **pour toujours**. Donc : **sur `Lagged`, l'abonné
-rafraîchit comme s'il avait tout manqué.** On ne sait pas ce qui a été perdu ;
-la seule réponse honnête est de tout relire.
+**The channel is fallible, and the safety net is explicit.** The `broadcast`
+has a depth of 256: under load, a slow subscriber receives `RecvError::Lagged`
+and loses events. Today it has no consequence, because terminal states go
+through a reliable channel and the broadcast only carries display comfort. As
+soon as a refresh depends on it, a lost event would leave a stale view
+**forever**. Therefore: **on `Lagged`, the subscriber refreshes as if it had
+missed everything.** One does not know what was lost; the only honest answer is
+to reread everything.
 
-## Conséquences
+## Consequences
 
-- **+** L'utilisateur cesse de regarder des données fausses sans le savoir.
-  C'est le défaut que cette décision corrige, et il est silencieux.
-- **+** `Refresh` reste, et garde son sens : forcer une relecture même quand
-  rien n'a changé côté Oxyn — par exemple quand quelqu'un d'autre a écrit dans
-  la base.
-- **−** Une écriture qui ne touche pas la table affichée relit quand même son
-  aperçu : 200 lignes pour rien. C'est le prix de ne pas connaître la cible, et
-  c'est borné.
-- **−** Un DDL invalide le catalogue de la connexion entière, donc l'arbre
-  relit ses paliers ouverts. Sur une base à dizaines de milliers d'objets, c'est
-  ce que le chargement paresseux limite déjà, pas ce que cette décision aggrave.
-- **−** Une exécution en boucle — un script qui écrit cent fois — provoquerait
-  cent relectures. L'abonné **coalesce** : une relecture en cours absorbe les
-  demandes qui arrivent pendant qu'elle tourne.
-- **−** Un `Lagged` déclenche une relecture complète. C'est plus coûteux qu'un
-  rafraîchissement ciblé, et c'est voulu : la seule alternative est une vue
-  fausse.
+- **+** The user stops looking at wrong data without knowing it. It is the
+  flaw this decision fixes, and it is silent.
+- **+** `Refresh` stays, and keeps its meaning: forcing a reread even when
+  nothing changed on Oxyn's side — for example when someone else wrote to the
+  database.
+- **−** A write that does not touch the displayed table still rereads its
+  preview: 200 rows for nothing. It is the price of not knowing the target, and
+  it is bounded.
+- **−** A DDL invalidates the catalog of the whole connection, so the tree
+  rereads its open levels. On a database with tens of thousands of objects, it
+  is what lazy loading already limits, not what this decision makes worse.
+- **−** A looping execution — a script that writes a hundred times — would
+  cause a hundred rereads. The subscriber **coalesces**: a reread in progress
+  absorbs the requests that arrive while it runs.
+- **−** A `Lagged` triggers a full reread. It is more costly than a targeted
+  refresh, and it is intended: the only alternative is a wrong view.
 
-**Coût de sortie :** un champ d'événement, une invalidation dans l'exécuteur, et
-des abonnements dans trois vues. Rien n'est persisté, aucun format ne change.
+**Exit cost:** one event field, one invalidation in the executor, and
+subscriptions in three views. Nothing is persisted, no format changes.
 
-**Reconsidérer si** l'analyse SQL apprend à nommer les objets qu'une instruction
-touche — alors le rafraîchissement deviendrait ciblé, et les deux conséquences
-négatives ci-dessus disparaîtraient. C'est la suite naturelle, et elle
-n'invalide rien de ce qui est décidé ici.
+**Reconsider if** SQL analysis learns to name the objects a statement touches —
+then refresh would become targeted, and the two negative consequences above
+would disappear. It is the natural next step, and it invalidates nothing
+decided here.
 
-## Alternatives écartées
+## Rejected alternatives
 
-| Alternative | Raison du rejet |
+| Alternative | Reason for rejection |
 |---|---|
-| Un second canal de notification, dédié à l'invalidation | Le bus existe et porte déjà la connexion et la commande ; un second canal serait un second endroit où oublier de publier |
-| Interroger périodiquement le serveur pour détecter les changements | Un sondage coûte sur toutes les connexions tout le temps, y compris quand rien ne se passe, et il ne verrait toujours pas ce qui vient d'être écrit ailleurs |
-| Rejouer l'instruction de la console pour rafraîchir | Coût arbitraire, et un `SELECT` peut ne pas être idempotent |
-| Rafraîchir aussi ce qui n'est pas visible | Du travail que personne n'a demandé, sur des vues que personne ne regarde |
-| Ignorer `Lagged`, comme aujourd'hui | Tenable tant que le broadcast ne porte que du confort ; faux dès qu'une vue en dépend pour être juste |
-| Attendre de savoir quelle table a changé avant de livrer quoi que ce soit | Laisse le défaut en place pour une amélioration future ; la portée « connexion » est déjà correcte, seulement plus large que nécessaire |
+| A second notification channel, dedicated to invalidation | The bus exists and already carries the connection and the command; a second channel would be a second place to forget to publish |
+| Poll the server periodically to detect changes | Polling costs on every connection all the time, including when nothing happens, and it would still not see what was just written elsewhere |
+| Replay the console's statement to refresh | Arbitrary cost, and a `SELECT` may not be idempotent |
+| Also refresh what is not visible | Work nobody asked for, on views nobody looks at |
+| Ignore `Lagged`, as today | Tenable as long as the broadcast only carries comfort; wrong as soon as a view depends on it to be right |
+| Wait to know which table changed before shipping anything | Leaves the flaw in place for a future improvement; the "connection" scope is already correct, only broader than necessary |

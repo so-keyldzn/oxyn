@@ -141,7 +141,7 @@ impl ValuePageView {
 /// Every export format the domain names, and whether it can be written today.
 ///
 /// A format the product cannot write yet is shown **unavailable**, not absent
-/// ([UX-SPEC](../../../../docs/UX-SPEC.md#ce-qui-est-exporté-est-ce-qui-est-affiché)).
+/// ([UX-SPEC](../../../../docs/UX-SPEC.md#what-is-exported-is-what-is-displayed)).
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ExportFormatChoice {

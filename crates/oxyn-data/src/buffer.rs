@@ -18,7 +18,7 @@
 //! verrou de lecture, écrit sur le disque **sans verrou**, puis publie sous un
 //! verrou d'écriture tenu quelques microsecondes. Autrement une écriture de lot
 //! de 30 ms figerait le défilement, en violation du budget de trame de 8 ms
-//! ([PERFORMANCE](../../../docs/PERFORMANCE.md#budgets-dinteraction),
+//! ([PERFORMANCE](../../../docs/PERFORMANCE.md#interaction-budgets),
 //! [I-05](../../../CLAUDE.md#i-05)).
 //!
 //! **Le budget est strict, y compris pour le premier lot.** Garder « au moins un
@@ -74,7 +74,7 @@ impl std::fmt::Display for BatchIndex {
 ///
 /// Toutes sont des protections, pas des réglages de confort : chacune correspond
 /// à un mode de panne décrit dans
-/// [PERFORMANCE](../../../docs/PERFORMANCE.md#budgets-de-mémoire).
+/// [PERFORMANCE](../../../docs/PERFORMANCE.md#memory-budgets).
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[non_exhaustive]
 pub struct BufferLimits {

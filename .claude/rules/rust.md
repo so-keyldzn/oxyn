@@ -17,7 +17,7 @@ This rule carries what only holds for Rust code.
 | Never | `Box<dyn Error>` in a public API | erases the information at the very moment it is needed |
 
 A driver error carries its **class** — transient, permanent, ambiguous
-([DRIVER-CONTRACT](../../docs/DRIVER-CONTRACT.md#4-il-distingue-trois-familles-derreurs-et-il-les-classe)).
+([DRIVER-CONTRACT](../../docs/DRIVER-CONTRACT.md#4-it-distinguishes-three-families-of-errors-and-classifies-them)).
 The class is data, not a deduction the caller makes from the message: a message
 changes, and a caller that parsed it breaks silently.
 
@@ -54,7 +54,7 @@ used, its message states **the assumed invariant**, not "failed".
 No mechanical rule. A single one that holds:
 
 **Clear code is not replaced by fast code without the measurement showing it
-was worth it** ([PERFORMANCE](../../docs/PERFORMANCE.md#la-règle-qui-empêche-loptimisation-gratuite)).
+was worth it** ([PERFORMANCE](../../docs/PERFORMANCE.md#the-rule-that-prevents-gratuitous-optimization)).
 
 On the other hand, on a **per-row or per-value** path — conversion to
 `RecordBatch` is one —, one allocation per element is a design defect from the
@@ -68,12 +68,12 @@ moment it is written, not an optimization for later.
 - no public trait with a single implementation that is not a boundary
   ([CLAUDE.md](../../CLAUDE.md#code-organization));
 - a trait meant to cross the WASM boundary respects the constraints of
-  [PLUGIN-CONTRACT](../../docs/PLUGIN-CONTRACT.md#ce-que-ce-contrat-impose-aux-traits-daujourdhui)
+  [PLUGIN-CONTRACT](../../docs/PLUGIN-CONTRACT.md#what-this-contract-imposes-on-todays-traits)
   **starting today**: fixing them in phase 4 will cost a redesign.
 
 ## `unsafe`
 
-Policy in [SECURITY](../../docs/SECURITY.md#politique-unsafe). The point that
+Policy in [SECURITY](../../docs/SECURITY.md#unsafe-policy). The point that
 gets missed: a `// SAFETY:` that paraphrases the code is worthless. It says
 **why** the condition is true here and **who** will keep it true.
 

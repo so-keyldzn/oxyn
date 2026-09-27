@@ -416,7 +416,7 @@ where
 /// défaut, donc le cas de très loin le plus fréquent, et il ne doit rien coûter.
 /// Cette fonction est appelée une fois par cellule numérique visible et par
 /// trame — le budget est de 8 ms pour la trame entière
-/// ([PERFORMANCE](../../../docs/PERFORMANCE.md#budgets-dinteraction)).
+/// ([PERFORMANCE](../../../docs/PERFORMANCE.md#interaction-budgets)).
 ///
 /// Ne groupe que la partie entière, et laisse intacts le signe, la partie
 /// décimale et un éventuel exposant : `-1234.5678` devient `-1 234.5678`, jamais
@@ -546,7 +546,7 @@ const BASE64: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz
 ///
 /// Écrite à la main : la seule alternative serait une dépendance directe pour
 /// vingt lignes, ce que la politique de dépendances décourage
-/// ([SECURITY](../../../docs/SECURITY.md#dépendances)).
+/// ([SECURITY](../../../docs/SECURITY.md#dependencies)).
 fn push_base64(sortie: &mut String, octets: &[u8]) {
     for morceau in octets.chunks(3) {
         let a = morceau.first().copied().unwrap_or(0);

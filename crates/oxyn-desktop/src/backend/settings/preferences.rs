@@ -82,7 +82,7 @@ impl Backend {
     /// Applies a change and saves it under the next revision.
     ///
     /// The change is applied locally before the save answers: a display
-    /// setting is local ([UX-SPEC](../../../../../docs/UX-SPEC.md#ce-qui-nest-jamais-optimiste)).
+    /// setting is local ([UX-SPEC](../../../../../docs/UX-SPEC.md#what-is-never-optimistic)).
     /// A failed save leaves it applied and says so; saving again is an empty
     /// change.
     ///

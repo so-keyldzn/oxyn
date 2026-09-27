@@ -1,0 +1,1593 @@
+<!-- oxyn-translation source="docs/UX-SPEC.md" sha256="6b59614697c1" -->
+
+> Traduction française de [docs/UX-SPEC.md](../../../docs/UX-SPEC.md). **La version anglaise fait foi.**
+
+# Comportements d'interface
+
+> **Autorité** : ce que fait l'interface dans les situations où le comportement
+> se décide, pas se devine. Ce document ne parle pas d'apparence.
+
+Invariants concernés : [I-02](../CLAUDE.md#i-02), [I-05](../CLAUDE.md#i-05).
+
+## États d'une vue
+
+Toute vue qui dépend d'une opération distante a **cinq** états, et les cinq sont
+dessinés avant d'être codés. Celui qu'on oublie est toujours le même — le vide —
+et c'est le premier que voit un nouvel utilisateur.
+
+| État | Ce qu'il montre |
+|---|---|
+| Initial | avant toute action ; explique quoi faire |
+| En cours | progression et **moyen d'annuler** ; jamais un simple gel |
+| Peuplé | le résultat |
+| Vide | résultat légitimement vide ; se distingue visiblement d'une erreur |
+| Erreur | ce qui a échoué, si c'est retentable, et l'action suivante |
+
+## Ce qui se met à jour tout seul
+
+Une vue qui montre des données périmées sans le dire est un défaut silencieux :
+l'utilisateur lit un état d'avant et ne le sait pas. Après une exécution **qui a
+réussi**, sur la connexion concernée :
+
+- un DDL fait relire l'explorateur de catalogue ;
+- un DDL ou une écriture fait relire l'**aperçu visible**, en conservant le
+  prédicat, le tri et la page demandés — la relecture montre les mêmes lignes à
+  jour, pas un retour au début ;
+- toute exécution fait relire la bibliothèque, si elle est ouverte.
+
+Rien ne se relit après une **erreur** : une relecture qui suit un échec masque
+l'échec. Rien ne se relit sur une autre connexion, ni sur un onglet qui n'est pas
+à l'écran — il se relira quand on y reviendra. Et l'instruction de l'utilisateur
+n'est **jamais** rejouée : ce qui est réémis est la lecture d'aperçu qu'Oxyn
+compose, bornée et en lecture seule.
+
+`Refresh` reste, et garde son sens : forcer une relecture même quand rien n'a
+changé du côté d'Oxyn — par exemple quand quelqu'un d'autre a écrit dans la base
+([ADR-0022](adr/0022-rafraichissement-automatique.md)).
+
+## Ce qui n'est jamais optimiste
+
+L'affichage optimiste — montrer le résultat avant confirmation du serveur — est
+interdit pour toute opération qui écrit. Il est acceptable pour ce qui est
+purement local (replier un nœud, réordonner des onglets).
+
+**Panne concrète :** l'interface affiche la ligne comme mise à jour, le serveur
+rejette pour cause de contrainte, et le message d'erreur est manqué. L'utilisateur
+repart convaincu que sa correction est enregistrée.
+
+## Les opérations destructrices
+
+Une confirmation qui se clique par réflexe ne protège personne. Sur une
+connexion marquée `production` ([SECURITY](SECURITY.md#marquage-des-connexions)),
+la confirmation d'une écriture ou d'un DDL **nomme la connexion** et affiche le
+SQL exact. Le bouton par défaut n'est jamais l'action destructrice.
+
+Une revue ne contient les opérations que d'une seule connexion. Une transaction
+ouverte sur une autre connexion dispose de sa propre vue, nommant sa connexion
+et son environnement ; ses actions ne figurent pas dans la confirmation courante.
+
+`Drop…`, `Truncate…` et `Rename…` du catalogue appliquent cette règle dans une
+revue sur place, décrite dans
+[Opérations destructrices depuis le catalogue](#opérations-destructrices-depuis-le-catalogue).
+
+## Annulation
+
+Toute opération dépassant le budget de 300 ms
+([PERFORMANCE](PERFORMANCE.md#budgets-dinteraction)) est annulable, et
+l'annulation atteint le serveur
+([DRIVER-CONTRACT](DRIVER-CONTRACT.md#2-il-expose-lannulation-et-lannulation-coupe-vraiment)).
+Un bouton « Annuler » qui ne fait qu'abandonner l'affichage est un mensonge :
+il laisse une requête tourner et une connexion prise.
+
+**Quand la session ne déclare pas `SERVER_SIDE_CANCEL`**, il reste trois issues
+possibles, et une seule est acceptable :
+
+| Issue | Pourquoi elle est écartée, ou retenue |
+|---|---|
+| Promettre quand même | c'est le mensonge ci-dessus |
+| Masquer le bouton | l'opération devient inarrêtable, ce que le budget de 300 ms interdit |
+| **Garder le bouton et retirer la promesse** | retenu : couper le flux reste utile, et la réserve dit ce que le bouton ne fait pas |
+
+La réserve **accompagne** le bouton, elle ne le remplace pas, et elle n'affirme
+que ce que le drapeau absent prouve : qu'aucune annulation ne part vers un
+serveur. Elle ne conclut pas que l'instruction continue de tourner — SQLite ne
+déclare pas cette capacité faute de serveur, et `sqlite3_interrupt` arrête bien
+l'instruction ([DRIVER-CONTRACT](DRIVER-CONTRACT.md#2-il-expose-lannulation-et-lannulation-coupe-vraiment)).
+
+## Ce qui est exporté est ce qui est affiché
+
+Un export ne s'offre que sur un résultat **entier**. Un tampon encore ouvert est
+refusé par `ExportOptions` ; un tampon **clos mais tronqué** — arrêté par la
+limite de lignes ou par le budget mémoire ([I-06](../CLAUDE.md#i-06)) — ne l'est
+pas, et c'est le cas dangereux : il a fini de charger, donc rien à l'écran ne le
+distingue d'un résultat complet.
+
+**Panne concrète :** `SELECT * FROM commandes` sur cinquante millions de lignes,
+le tampon s'arrête à deux millions, l'utilisateur exporte, et repart avec un CSV
+qu'il croit être la table. Rien dans le fichier ne dit qu'il en manque
+quarante-huit millions.
+
+Un format que le produit ne sait pas encore écrire s'affiche **indisponible**,
+pas absent : le proposer ferait échouer l'écriture après le choix du fichier, en
+laissant un fichier vide sur le disque ; le masquer ferait croire que le produit
+ne l'aura jamais.
+
+L'aperçu d'une table utilise le libellé `Export preview…` et annonce le nombre
+de lignes incluses. Un résultat complet de la requête d'aperçu limitée à
+200 lignes peut être exporté ; cela ne représente pas la table entière.
+Un tampon interrompu, encore en cours ou tronqué par le budget de réception
+reste non exportable. Déplacer l'action dans un menu ne change pas cette règle.
+
+## Les erreurs s'adressent à un professionnel
+
+Le public d'Oxyn lit les messages de PostgreSQL. Un message d'erreur montre le
+message du serveur — code compris — et pas une paraphrase rassurante. Ce qui
+s'ajoute autour, c'est ce que le serveur ne dit pas : quelle connexion, quelle
+requête, est-ce retentable.
+
+Ce qui n'apparaît jamais dans un message : un identifiant de connexion, une
+valeur liée ([I-03](../CLAUDE.md#i-03)).
+
+## L'état vit dans le workspace, et il est lisible
+
+Un onglet, une requête non exécutée, une connexion : ce qui est restauré au
+redémarrage est écrit dans un format ouvert et documenté
+([I-11](../CLAUDE.md#i-11)), lisible sans Oxyn.
+
+## Restauration après un arrêt brutal
+
+**Un arrêt anormal se constate, il ne se devine pas.** Oxyn inscrit sa fermeture
+quand elle est propre, et laisse un battement pendant qu'il travaille. Au
+lancement suivant, une session laissée sans fermeture et dont le battement a
+vieilli est un arrêt anormal ; tout le reste n'en est pas un
+([ADR-0021](adr/0021-marqueur-d-arret.md)).
+
+L'écran de reprise n'apparaît donc **pas** après une fermeture ordinaire, même
+s'il reste des copies de travail : les consoles ouvertes à la fermeture
+reviennent **dans leur fenêtre, hors ligne**, sans sélection, sans reconnexion
+ni exécution, comme les éditeurs repris de « Restauration sélective au
+démarrage » ; elles restent aussi dans la bibliothèque
+([ADR-0043](adr/0043-multi-fenetre.md)). Un écran montré à chaque démarrage cesse d'être lu, et c'est le jour où une
+écriture a réellement été interrompue qu'il faut qu'il le soit.
+
+Au redémarrage après un arrêt anormal, Oxyn présente les onglets et brouillons
+locaux récupérables. L'utilisateur choisit les éléments à restaurer ou démarre
+avec un workspace vide. Sans sélection, l'action de restauration est désactivée.
+La sélection utilise des cases à cocher, accessibles au clavier avec leur nom
+d'élément. Le bouton final annonce le nombre d'éléments sélectionnés ; cocher
+ou décocher un élément ne le restaure pas immédiatement.
+La restauration reste hors ligne : elle ne reconnecte aucune session et ne
+réexécute aucune requête. Un onglet d'objet restauré conserve son emplacement,
+sans charger ses données avant une reconnexion explicite.
+
+Une écriture interrompue peut avoir un résultat inconnu. La reprise conserve cet
+avertissement et demande d'inspecter l'état du serveur après reconnexion ; elle
+ne retente jamais l'écriture ([I-13](../CLAUDE.md#i-13)).
+L'avertissement cesse quand l'utilisateur marque l'écriture réconciliée, dans
+l'onglet Historique de la bibliothèque, sur la ligne « Needs inspection » : une
+confirmation nomme la connexion et cite la requête, et son bouton par défaut
+conserve l'avertissement. Une écriture encore en cours dans ce lancement ne
+s'acquitte pas : son issue n'est pas connue. L'écran de reprise, qui précède
+toute connexion, indique en texte où se fait l'acquittement, sans rien acquitter
+lui-même. Seul l'humain acquitte — un agent n'a rien inspecté, et le
+`PolicyGate` le refuse. L'acquittement est daté dans l'état local, ne touche
+aucune base et ne rejoue rien ; l'écriture reste consultable, marquée
+« Reconciled ».
+
+## Écran d'accueil
+
+Avant toute connexion, l'écran porte une barre de titre d'une seule rangée : la
+marque Oxyn et ses deux lignes de titre à gauche, les actions de fenêtre à
+droite — reprendre les copies de travail locales, et revenir au workspace resté
+ouvert lorsqu'il y en a un. Ces actions appartiennent à la barre ; aucune n'est
+posée en calque au-dessus de l'écran, où elle recouvrirait la marque. Une action
+sans objet — un retour vers un workspace qui n'existe pas — n'est pas affichée
+désactivée : elle est absente. La marque est unique : une seule image de logo,
+jamais deux variantes côte à côte.
+
+## Modifier une connexion enregistrée
+
+Le formulaire d'édition remontre les paramètres non secrets, jamais un secret :
+un champ secret laissé vide garde ce que le trousseau porte, et le dit
+(« Stored in the keyring »). Dès qu'un paramètre non secret s'écarte de la
+valeur enregistrée, ce champ cesse de se dire stocké et annonce qu'il faut le
+ressaisir (« Connection settings changed — enter the password again ») : le
+secret enregistré sera oublié à l'enregistrement
+([SECURITY](SECURITY.md#un-secret-ne-suit-pas-sa-connexion-ailleurs)). Revenir à
+la valeur enregistrée rétablit l'état stocké. L'annonce se fait avant
+l'enregistrement, pas après : l'utilisateur qui corrige une faute de frappe dans
+l'hôte apprend qu'il perd le mot de passe au moment où il peut encore annuler.
+
+## Structure commune du workspace
+
+La structure retenue est le **workbench dense** de la page Figma
+[22 · Database workspace](https://www.figma.com/design/Yviemi4brBczzdRdBp1ONv/Oxyn?node-id=189-1163)
+(arbitrage du 2026-09-07, [ADR-0011](adr/0011-structure-commune-workspace.md)).
+Elle associe explorateur latéral, contexte de connexion, onglets d'objets et de
+consoles, sous-onglets de l'objet, zone de travail et barre d'état. Un inspecteur
+latéral peut compléter cette zone. Un en-tête de page de 88 px ne se rajoute pas
+à cette structure.
+
+La sidebar reste **inset avec repli en rail d'icônes** sur tous les écrans,
+comme dans la page Figma `01 · Sidebar`. Ouverte à 280 px ou repliée à 64 px,
+elle conserve le même composant, la même navigation globale et un contenu
+adapté à la connexion. Le panneau de travail reste dans son encart avec une
+marge de 8 px. Le workbench ne crée pas une seconde famille de sidebars et
+le repli ne masque jamais entièrement la navigation.
+
+Les écrans des pages Figma 04 à 09 reprennent cette structure commune. Leurs
+titres et sous-titres identifient les scénarios dans les onglets et le contexte ;
+ils ne prescrivent pas un second modèle de navigation. La page 01 définit le
+composant de sidebar et la page 22 la structure de référence du workbench.
+Les documents d'autorité du dépôt prévalent sur toute planche pour les
+comportements métier.
+
+### Repères permanents
+
+L'environnement est présenté dans la barre supérieure par une **pilule
+cerclée**, portant le libellé complet `PRODUCTION` pour la production.
+Le nom de connexion reste visible à côté de ce repère et dans toute revue
+d'écriture ; la couleur seule ne porte jamais cette information.
+
+Le niveau IA utilise une forme commune dans les barres supérieures :
+`Metadata · Cloud` pour un fournisseur distant au niveau Metadata,
+`Metadata · Local` pour un fournisseur résolu sur la machine. Le suffixe suit
+la **localisation mesurée** de la destination qui recevrait la question — celle
+choisie dans le panneau, sinon celle par défaut —, jamais une supposition.
+Sans destination utilisable, pour un fournisseur dont l'adresse n'a pas pu
+être résolue ou pour un agent externe, dont Oxyn ne voit pas où il envoie,
+l'étiquette n'a **pas de suffixe** : `Metadata`. Au niveau `Local`, qui
+n'admet qu'un fournisseur local, l'étiquette reste `Local` : le suffixe
+répéterait le niveau. Hors des barres supérieures,
+dans une liste où rien d'autre ne dit « IA », le badge garde la forme
+`AI · Metadata`. Le nom du
+fournisseur figure dans les détails de contexte et de confidentialité, pas
+dans cette étiquette. Les autres niveaux et les états bloqués restent
+explicitement distingués ; cette présentation ne modifie pas les règles de
+[AI-PROVIDERS](AI-PROVIDERS.md).
+
+Dans la confirmation d'une écriture en production, `Cancel` reçoit le focus
+initial visible. L'action qui nomme la connexion a un style destructif et
+n'est pas focalisée. Entrée seule ne valide pas l'écriture.
+
+### Largeur réduite
+
+En dessous de **1200 px de largeur de fenêtre**, la disposition compacte
+s'applique : sidebar repliée à **64 px**, inspecteur de ligne fermé et
+actions secondaires regroupées dans un menu. Le contenu de la grille conserve
+son défilement horizontal ; aucune colonne de données n'est supprimée.
+`Columns` et `Export preview…` figurent uniquement dans `Actions` à cette
+largeur, sans doublon dans la barre. `Read-only preview` reste sur une ligne.
+
+Les sous-onglets `Data` et `Structure` restent visibles ; `Indexes`,
+`Constraints`, `Relations` et `DDL` rejoignent le menu `More`. La connexion,
+l'environnement et le niveau IA restent visibles dans la barre supérieure.
+La barre d'état garde connexion et état d'exécution ; les informations
+secondaires telles que le fuseau et la sauvegarde passent dans les détails.
+
+L'action `Inspect row` ouvre l'inspecteur à la demande en panneau superposé,
+sans réduire davantage la grille. En largeur normale, la poignée de l'inspecteur
+se déplace à la souris ou par les flèches gauche/droite une fois focalisée ;
+Début restaure 280 px. Les bornes de 240 à 480 px sont définies dans ADR-0013.
+La largeur est sauvegardée à la fin du glissement, pas à chaque trame. En revenant à une largeur d'au moins
+1200 px, les préférences de disposition large sont restaurées. Les changements
+de largeur ne déclenchent ni requête ni changement de connexion.
+
+### Inspection du DDL
+
+Le panneau de définition est en lecture seule. Il distingue chargement
+annulable, définition disponible, erreur et capacité absente ; la provenance
+stockée/reconstruite et les limites restent visibles. Le bouton Copy DDL copie
+le texte affiché. Open DDL in console crée un document distinct et conserve les
+consoles existantes ; aucune exécution n'est déclenchée par cette préparation.
+Un texte conservé après un rafraîchissement échoué est signalé comme
+potentiellement périmé, y compris lors de sa copie dans une console.
+
+En disposition large, la définition accompagne les vues de métadonnées dans
+un panneau initialement large de 424 px. Sa poignée de 8 px fonctionne à la
+souris et au clavier (320–640 px, Début : 424 px). Cette largeur reste dans le
+workspace ouvert. En disposition compacte, le sous-onglet DDL présente la
+définition sur la largeur disponible ; changer la largeur de fenêtre ne
+relance pas sa lecture.
+
+### Lisibilité et hauteur de grille
+
+La grille occupe la hauteur disponible ; son statut et sa portée d'export
+restent en bas de sa zone. La quantité de lignes dessinées dans une planche
+ne définit pas une limite du viewport de l'application.
+
+Deux préréglages de lecture sont proposés dans les préférences : `Compact`
+(texte principal 13 px, mentions secondaires 11 px, lignes de données 24 px)
+et `Comfortable` (14 px, 12 px et 28 px). Le choix est indépendant du thème
+et du seuil de largeur de fenêtre ; il ne relance aucune requête. La barre
+de résultat permet également de changer la taille du texte. Le choix est
+sauvegardé dans le workspace avec le thème et les préférences de panneaux,
+selon [ADR-0013](adr/0013-preferences-workspace.md). Une erreur de sauvegarde
+laisse le réglage appliqué localement et affiche une action de reprise
+explicite ; elle n'annonce jamais une sauvegarde réussie.
+
+Une valeur absente utilise le jeton `null` et le repère `∅ NULL`. Une chaîne
+contenant le texte `NULL`, ou l'expression SQL `NULL` d'une valeur par défaut
+dans Structure, conserve son traitement de texte ou de code.
+
+Les pièces jointes de contexte IA conservent leur nom sur une seule ligne,
+avec une ellipse de fin si nécessaire. Le nom complet reste consultable dans
+les sources jointes et la revue du contexte sortant ; le retrait reste local.
+
+## Menus, raccourcis et gestes
+
+Le registre d'actions qui porte ces menus est décidé par
+[ADR-0041](adr/0041-registre-d-actions-menus-et-raccourcis.md) ; la revue des
+opérations destructrices par
+[ADR-0042](adr/0042-revue-sur-place-des-operations-destructrices.md) ; les
+fenêtres par [ADR-0043](adr/0043-multi-fenetre.md). Cette section
+dit ce que l'utilisateur voit ; elle ne redéfinit aucun comportement déjà écrit
+ailleurs dans ce document, elle y renvoie.
+
+### Une action, un libellé, un raccourci
+
+Toute action a **un seul libellé et un seul raccourci**, les mêmes dans la barre
+de menus, le clic droit, la palette et la feuille des raccourcis. Une entrée de
+menu déclenche exactement ce que déclenche le bouton du même nom : même
+commande, même revue, même annulation. Un libellé qui change d'une surface à
+l'autre fait croire à deux actions ; un raccourci affiché qui n'est pas celui
+qui marche est pire que pas de raccourci.
+
+Une même touche peut porter deux actions **dans deux zones différentes** :
+c'est la zone qui a le focus qui décide, la plus précise l'emportant sur le
+niveau global (`⌘/` et `⌘F`, plus bas). Jamais deux actions dans la même
+zone, et le libellé de menu affiché suit la zone active.
+
+Une entrée qui vaut pour la surface mais ne peut pas servir maintenant — rien
+de sélectionné, une exécution en cours, un niveau IA qui refuse — est
+**grisée, avec sa raison**, lisible au survol comme au clavier. Elle n'est
+absente que dans les cas que ce document fixe déjà : une capacité que la source
+ne déclare pas (« Filtrer, trier, parcourir », « Contexte de session d'une
+console »), aucune destination IA déclarée (« Le workspace IA n'existe que s'il
+a été configuré »). S'y ajoute un cas propre aux menus : les entrées
+destructrices n'existent pas pour un agent, qui n'a pas de menu à ouvrir et à
+qui aucun outil ne les offre.
+
+### Barre de menus
+
+Sur macOS, la barre de menus est **native**. Sur Windows et Linux, elle a le
+même contenu, en première rangée de la page, sous la barre de titre du
+système : `Alt` révèle les mnémoniques, `F10` lui donne le focus, et sous
+1200 px — le seuil de « Largeur réduite » — elle se replie en un seul bouton de
+menu. `Ctrl` y remplace `⌘` dans tous les raccourcis de cette section, sauf
+`⌘⌥B`, qui y devient `Ctrl+Shift+B` : `Ctrl+Alt` y est la touche `AltGr`, et
+volerait un caractère.
+
+| Menu | Entrées |
+|---|---|
+| `Oxyn` (macOS) | `About Oxyn`, `Settings…` `⌘,`, `Hide Oxyn`, `Quit Oxyn` `⌘Q` |
+| `File` | `New console` `⌘T`, `New window`, `New connection…`, `Open from library…`, `Open Recent ▸`, `Save` `⌘S`, `Save as…`, `Close tab` `⌘W`, `Export…`, et sous Windows et Linux `Settings…` `Ctrl+,` puis `Exit` `Ctrl+Q` |
+| `Edit` | `Undo`, `Redo`, `Cut`, `Copy`, `Paste`, `Select All`, `Find` `⌘F` |
+| `View` | `Toggle sidebar` `⌘B`, `Toggle side panel` `⌘⌥B`, `Assistant`, `Text size ▸`, `Enter full screen`, `Theme ▸` |
+| `Query` | `Run` `⌘↵`, `Run all` `⌘⇧↵`, `Explain`, `Cancel` `Esc`, `Format` |
+| `Window` | les fenêtres ouvertes, et les entrées de fenêtre du système |
+| `Help` | `Documentation`, `Keyboard shortcuts` `⌘/` |
+
+Ce que ces entrées font est écrit ailleurs, et le menu n'y ajoute rien :
+
+- `Quit Oxyn` et `⌘Q` sous macOS, `File ▸ Exit` et `Ctrl+Q` sous Windows et
+  Linux, font exactement ce que fait la fermeture de la dernière fenêtre
+  ([ADR-0038](adr/0038-un-plantage-s-annonce-une-fois.md)), pour toutes les
+  fenêtres à la fois : une transaction ouverte est d'abord résolue (« Fenêtres »,
+  plus bas), puis les brouillons sont écrits, la fermeture est inscrite, et
+  les consoles ne sont pas fermées une à une — elles reviennent dans leur
+  fenêtre, comme le dit « Restauration après un arrêt brutal ». Le `Quit` du
+  Dock et la fermeture de session de macOS ne laissent ni écrire les dernières
+  frappes ni résoudre une transaction, qui est annulée ; ils inscrivent la
+  fermeture ([ADR-0040](adr/0040-inscrire-la-fermeture-d-une-sortie-forcee.md)) ;
+- `Close tab` est `⌘W` de « Consoles indépendantes » ; aucune entrée ne ferme
+  la fenêtre par `⌘W` ;
+- `Undo` et `Redo` défont une édition locale — texte, disposition —, jamais
+  une écriture sur le serveur, qui ne s'annule pas après coup
+  (« Ce qui n'est jamais optimiste ») ;
+- `Find` cherche dans la zone qui a le focus : l'éditeur, ou le résultat ;
+- `Run`, `Run all`, `Explain` et `Cancel` sont ceux de la barre de la console
+  (« Portée de Run dans une console SQL », « Explain », « Annulation ») : grisés
+  dans les mêmes cas que leurs boutons ;
+- `Text size` choisit l'un des préréglages de « Lisibilité et hauteur de
+  grille », le même choix que les préférences et la barre de résultat,
+  sauvegardé de la même façon ; `Theme` choisit de même entre `Light`, `Dark`
+  et `System`, et la barre coche le choix en vigueur ;
+- `Settings…` est sous Windows et Linux dans `File`, juste au-dessus d'`Exit`
+  (arbitré le 2026-09-25) : ces plateformes n'ont pas de menu d'application ;
+- `Assistant` ouvre l'assistant dans le panneau latéral ; sans destination IA
+  déclarée, l'entrée n'existe pas ;
+- `Export…` suit « Ce qui est exporté est ce qui est affiché », y compris pour
+  un résultat tronqué.
+
+### Menus contextuels
+
+Le clic droit ouvre le menu **de ce qui est sous le pointeur**. Ses entrées sont
+des actions du registre : même libellé et même raccourci qu'ailleurs.
+
+| Surface | Entrées |
+|---|---|
+| Catalogue | `Open data`, `View structure`, `View DDL`, `New console on this schema`, `Copy qualified name`, `Copy as ▸` (`Quoted name`, `SELECT *`, `INSERT template`, `DDL`), `Refresh this level`, `Collapse all`, `Pin to question`, puis `Rename…`, `Truncate…`, `Drop…` |
+| Connexion enregistrée | `Connect` ou `Disconnect`, `New console`, `Refresh catalog`, `Edit…`, `Duplicate`, `Change environment…`, `Copy connection`, `Delete…` |
+| Onglet | `Close`, `Close others`, `Close to the right`, `Close all`, `Duplicate`, `Rename…`, `Open in new window`, `Reveal in library` |
+| Cellule ou sélection de la grille | `Copy value`, `Copy rows as ▸` (`TSV`, `CSV`, `JSON`, `Markdown`, `INSERT`, `IN list`), `Inspect full value`, `Filter by this value`, `Exclude this value`, `Is NULL`, `Sort ▸`, `Hide column`, `Open referenced row`, `Send to assistant` |
+| En-tête de colonne | `Sort ▸`, `Filter…`, `Hide`, `Freeze`, `Autosize`, `Copy name`, `Copy values` |
+| Éditeur SQL | `Cut`, `Copy`, `Paste`, `Run selection`, `Run statement`, `Explain`, `Format`, `Toggle comment`, `Open object under cursor`, `Ask assistant about selection` |
+| Bibliothèque | `Open`, `Rename…`, `Duplicate`, `Reveal in Finder` (`Reveal in Explorer` sous Windows), `Copy path`, `Delete…` |
+| Assistant, message | `Copy answer`, `Copy as Markdown`, `Regenerate answer` ; sur une question : `Edit question` |
+| Assistant, bloc de code | `Copy code`, `Open in console` |
+| Assistant, mention | `Open object` |
+| Diagramme `erd` | `Open table`, `Copy name`, `Re-layout`, `Export image…` |
+
+Ce que chaque surface garantit :
+
+- **Catalogue.** Tout SQL qu'une entrée `Copy as` compose cite ses identifiants
+  par le driver ([I-10](../CLAUDE.md#i-10)) ; il part au presse-papiers, rien ne
+  s'exécute. `New console on this schema` ouvre une console dont le contexte de
+  session est ce schéma, et n'existe que là où ce contexte existe (« Contexte
+  de session d'une console »). Les trois entrées destructrices sont décrites
+  plus bas.
+- **Connexion enregistrée.** `Copy connection` ne copie jamais de secret
+  ([I-03](../CLAUDE.md#i-03)) : le presse-papiers est l'un des six canaux.
+- **Onglet.** Fermer plusieurs onglets applique à chacun la règle de fermeture
+  d'une console : chaque console qui la demande est nommée, et `Cancel` arrête
+  la série. Le clic milieu ferme l'onglet ; `⌘⇧T` rouvre le dernier fermé, sans
+  rien exécuter. `Duplicate` ouvre une console indépendante, avec sa propre
+  session.
+- **Grille.** `Filter by this value`, `Exclude this value`, `Is NULL` et `Sort`
+  passent par le filtre et le tri de l'aperçu (« Filtrer, trier, parcourir ») :
+  le prédicat qu'Oxyn compose cite l'identifiant par le driver et lie la
+  valeur. Sur le résultat d'une console, ils sont grisés : le SQL écrit par
+  l'utilisateur n'est jamais réécrit. `Hide column` est la même action que
+  `Columns` (« Colonnes et inspection des valeurs »). `Send to assistant` ne
+  transmet de valeurs que par l'écran d'approbation d'un échantillon, sous
+  `Sampled` ; ailleurs il est grisé, avec le niveau pour raison
+  ([I-04](../CLAUDE.md#i-04)).
+- **En-tête de colonne.** `Copy values` dit ce qu'il copie : « N loaded rows »,
+  jamais « the column » — la colonne entière n'est pas en mémoire, et ne le
+  sera pas pour une copie ([I-06](../CLAUDE.md#i-06)). `Freeze` et `Autosize`
+  sont locaux, comme la visibilité.
+- **Éditeur SQL.** `Run selection` et `Run statement` sont la portée de
+  `⌘↵` rendue explicite (« Portée de Run dans une console SQL ») ; dans un
+  éditeur en lecture seule, ils n'existent pas, comme le raccourci. `Open object
+  under cursor` résout le nom contre le catalogue déjà lu, comme une mention.
+- **Assistant.** Un bloc de code n'offre jamais `Run` : il devient du texte dans
+  une console, et c'est l'utilisateur qui l'exécute
+  ([I-07](../CLAUDE.md#i-07), « Une proposition n'est jamais exécutée par le
+  fait de l'être »).
+
+### Clavier
+
+| Raccourci | Effet |
+|---|---|
+| `⌘K` | la palette : toutes les actions du registre, avec leur raccourci, les indisponibles grisées avec leur raison |
+| `⌘P` | ouvrir un objet par son nom, parmi les objets déjà chargés — la portée est annoncée, comme dans la recherche du catalogue |
+| `⌘/` | la feuille des raccourcis |
+| `⌃Tab`, `⌃⇧Tab` | l'onglet suivant, le précédent (« Consoles indépendantes ») |
+| `F6`, `⇧F6` | la zone suivante, la précédente : catalogue, éditeur, résultats, panneau latéral |
+| `⇧F10`, touche `Menu` | le menu contextuel de l'élément focalisé, comme le clic droit |
+
+`⌘J` (retour à l'éditeur), `⌘B` (sidebar) et `⌘2` (grille de l'aperçu)
+gardent le sens que leur donnent « Navigation du premier workspace » et
+« Filtrer, trier, parcourir » ; `⌘T`, `⌘W` et `⌘S` celui de « Consoles
+indépendantes » et « Sauvegarde d'une console ». `⌘1` montre le catalogue et
+`⌘⇧H` la bibliothèque dans la sidebar ; `⌘,` ouvre les réglages. Aucun
+`⌘1…9` ne sélectionne un onglet.
+
+Un raccourci que l'éditeur SQL définit l'emporte **seulement quand l'éditeur a le
+focus** : `⌘/` y commente la ligne, `⌘F` y cherche dans le texte ; ailleurs, ils
+gardent leur sens global.
+
+Les raccourcis tiennent sur une disposition non QWERTY, AZERTY comprise : ce
+que les menus, la palette et la feuille affichent est la combinaison à presser
+sur la disposition active, pas celle d'un clavier américain.
+
+### Souris et glisser
+
+- **Double-clic** sur une cellule ouvre `Inspect full value` ; sur le bord d'un
+  en-tête de colonne, il rend à la colonne sa largeur par défaut. Une table du
+  catalogue s'ouvre déjà au clic (« Données d'une table sélectionnée »).
+- **Glisser** une table du catalogue vers l'éditeur insère son nom qualifié,
+  cité par le driver ; rien ne s'exécute.
+- Les onglets et les colonnes se **réordonnent** au glisser. C'est local : ni le
+  SQL, ni les lignes reçues, ni l'ordre des colonnes d'un export ne changent,
+  comme pour leur visibilité.
+- **Déposer** un fichier `.sql` l'ouvre dans une console, sans l'exécuter. Un
+  fichier `.sqlite` ou `.duckdb` propose une connexion, si un driver
+  enregistré le lit ; elle commence en `production`, comme toute nouvelle
+  connexion (« Navigation du premier workspace »).
+- `⇧` et la molette font défiler horizontalement.
+
+### Ce qu'Oxyn ne fait pas, parce que ce n'est pas un navigateur
+
+L'interface tourne dans une webview ; rien de la webview ne doit se voir.
+
+- **Pas de menu contextuel de page** — `Reload`, `Inspect` et leurs voisins
+  n'existent nulle part. Un champ de texte sans menu propre garde `Cut`, `Copy`
+  et `Paste`.
+- **Pas de rechargement** : `⌘R` ne fait rien. Un rechargement perdrait l'état
+  non sauvegardé de la fenêtre.
+- **Pas de zoom de page**, ni au clavier ni au pincement : la taille du texte
+  passe par `View ▸ Text size`. Le diagramme `erd` garde son propre zoom,
+  pincement compris, qui ne touche que le diagramme.
+- **Pas d'historique de navigation** : aucune touche ni geste ne ramène à une
+  « page précédente ». Le retour de l'écran de connexion vers le workspace
+  resté ouvert est une action nommée, pas un historique.
+- **Pas de correction orthographique**, de majuscule automatique ni de
+  guillemets typographiques dans les champs : un nom de table corrigé en
+  silence est un nom faux.
+- **Le texte du cadre d'interface ne se sélectionne pas** — libellés, onglets,
+  barres. Ce qui est du contenu le reste : SQL, DDL, valeurs, messages
+  d'erreur, réponses de l'assistant.
+- **Un lien externe s'ouvre dans le navigateur du système**, jamais dans la
+  fenêtre d'Oxyn.
+
+### Opérations destructrices depuis le catalogue
+
+`Drop…`, `Truncate…` et `Rename…` ouvrent une **boîte de revue sur place**
+(ADR-0042, qui précise [ADR-0025](adr/0025-proposition-de-changement-de-schema.md)).
+Elle applique « Les opérations destructrices » et y ajoute :
+
+- le **SQL complet** qui partira, composé par Oxyn avec ses identifiants cités ;
+- la connexion et son environnement **nommés** ;
+- sur une connexion `production`, le bouton ne s'active qu'une fois **le nom de
+  l'objet tapé** ; `Cancel` garde le focus initial et Entrée seule ne valide
+  rien (« Repères permanents »). Le nom tapé protège d'une méprise sur l'objet ;
+  il n'accorde rien ;
+- `CASCADE` n'est **jamais coché par défaut** ;
+- les **dépendances connues** du catalogue sont listées, et la liste dit
+  qu'elle se limite à ce qui est connu ;
+- la boîte dit si, pour ce moteur, le DDL est **transactionnel** ou non —
+  c'est-à-dire si un échec peut laisser un état à moitié appliqué.
+
+Ce que la boîte soumet passe ensuite par la politique, comme tout SQL. Sur
+`production`, l'accord est donné dans le **dialogue natif** d'Oxyn, qui nomme
+la connexion et cite l'instruction
+([ADR-0037](adr/0037-dialogue-natif-pour-les-confirmations-critiques.md)) :
+aucun second écran ne s'intercale. Ailleurs, `Drop…` et `Truncate…`
+demandent l'approbation dans la même boîte, et `Rename…` s'exécute.
+
+Une entrée que le moteur ne sait pas faire est grisée avec sa raison — sur
+SQLite, `Truncate…` ; ce qui est offert suit les capacités déclarées par le
+driver (ADR-0042). Après une exécution réussie,
+le catalogue se relit (« Ce qui se met à jour tout seul »). Un délai dépassé
+n'est **pas rejoué** : la boîte dit que le serveur a peut-être appliqué, et
+propose de rafraîchir le catalogue pour le constater
+([I-13](../CLAUDE.md#i-13)). Ces entrées ne sont jamais offertes à un agent.
+
+### Fenêtres
+
+`New window` ouvre une fenêtre vide ; `Open in new window` y déplace l'onglet
+choisi (ADR-0043). **Une console vit dans une seule fenêtre** à la fois. La
+barre de menus vise la fenêtre active. Les fenêtres et leur position sont
+rendues au démarrage ; les consoles suivent les règles de restauration de ce
+document (« Restauration après un arrêt brutal », « Restauration sélective au
+démarrage »), fenêtre par fenêtre, hors ligne, sans reconnexion ni exécution.
+Un onglet ne s'arrache pas de sa fenêtre à la souris : il en change par `Open
+in new window`. Fermer une fenêtre ferme ses consoles, après le dialogue qui
+nomme celles qui le demandent : un seul pour la fenêtre, avec `Cancel`, qui a
+le focus, et `Discard and close window`. Une console à garder se sauvegarde
+avant. Fermer la dernière quitte Oxyn, sur toutes les plateformes, comme
+`Quit Oxyn` (ADR-0043).
+
+**Une transaction ouverte retient la sortie.** Avant de quitter, et avant de
+fermer une fenêtre, un dialogue liste chaque console dont la transaction est
+ouverte, ou dont l'état n'est pas connu, avec sa connexion et son
+environnement ([ADR-0039](adr/0039-etat-de-transaction-d-une-session.md)). Il
+offre `Commit`,
+`Rollback` et `Cancel` ; le focus est sur `Cancel`, et Entrée seule ne valide
+rien. `Commit` et `Rollback` partent comme si l'utilisateur les avait tapés
+dans chaque console, et la sortie ne continue que quand chaque session dit
+n'avoir plus de transaction. Un `Commit` refusé par le serveur s'affiche et
+retient la sortie ; un `Commit` dont l'issue est inconnue n'est jamais
+rejoué ([I-13](../CLAUDE.md#i-13)). `Cancel` laisse l'application, ses
+fenêtres et ses transactions intactes. Sans transaction ouverte, aucun
+dialogue ne s'ouvre.
+
+## Colonnes et inspection des valeurs
+
+`Columns` règle la visibilité locale des colonnes, sans modifier leurs indices
+Arrow, les lignes reçues ou le SQL. Le menu annonce le nombre de colonnes
+visibles et permet de toutes les réafficher. Cette visibilité ne projette pas
+l'export : le résultat exporté conserve toutes ses colonnes, ce que le menu
+indique explicitement. Le contrôle reste accessible dans `Actions` en largeur
+compacte.
+
+L'inspecteur suit la ligne sélectionnée et présente ses champs en lecture
+seule. Les flèches sélectionnent un champ ; Entrée ouvre sa valeur complète.
+Sans ligne sélectionnée, il explique comment commencer. La lecture d'une page
+manquante utilise le résultat existant, jamais une nouvelle requête.
+
+`Inspect full value` ouvre une vue en lecture seule nommant connexion, colonne
+et numéro de ligne. La représentation source est fournie en pages d'au plus
+16 Kio, aux frontières UTF-8 ; le compteur indique les octets de texte rendus,
+pas la taille de stockage native. Précédent et Suivant naviguent dans cette
+représentation. Une valeur absente, une valeur vide et le texte `NULL` restent
+visiblement distincts. Fermer pendant le chargement l'annule ; une réponse
+ancienne ne rouvre pas la vue. L'état d'erreur conserve un moyen de fermer et
+reprendre explicitement l'inspection, sans nouvelle exécution SQL.
+
+## Navigation du premier workspace
+
+La sidebar reprend le [design Oxyn](https://www.figma.com/design/Yviemi4brBczzdRdBp1ONv/Oxyn?node-id=13-291).
+Elle mesure 280 px ouverte et 64 px repliée. Son bouton de repli et `⌘B`
+partagent la même action ; `⌘J` ramène à l'éditeur SQL. Les icônes viennent de
+Hugeicons Stroke Rounded. Les variantes claire et sombre partagent les mêmes
+dimensions et comportements.
+
+L'arbre présente les objets de la connexion réellement ouverte. Déplier un
+nœud demande le palier correspondant par le command bus ; aucune table de
+démonstration ne remplace une réponse manquante. La recherche porte sur les
+objets déjà chargés et annonce cette portée. Les fonctionnalités non disponibles
+ne déclenchent pas de requête simulée.
+
+Le formulaire propose uniquement les drivers enregistrés. Toute nouvelle
+connexion commence en `production` jusqu'à changement explicite. Pendant un
+changement de connexion, l'ancien workspace reste accessible ; une **nouvelle**
+connexion copie le texte SQL de la console active dans son premier éditeur,
+l'annonce et ne l'exécute pas, et la console d'origine le garde. Les
+connexions ouvertes pendant la session rejoignent immédiatement la liste.
+
+**Les workspaces ouverts restent connectés**
+([ADR-0046](adr/0046-workspaces-retenus-restent-connectes.md)). Passer de A à B
+ne ferme rien : A garde ses consoles, leurs textes et leur historique
+d'édition, ses résultats, ses sessions, leurs transactions et leur contexte.
+Choisir A de nouveau sur l'écran d'accueil rend son workspace tel qu'il était,
+sans reconnexion et sans exécuter de SQL. Seuls `Disconnect`, la fermeture
+d'une console et la sortie d'Oxyn ferment des sessions ; `Disconnect` écrit
+d'abord les brouillons, puis ferme toutes les sessions de la connexion et
+arrête ses conversations. Un workspace masqué ne reçoit ni raccourci, ni
+dialogue, ni le texte destiné à « la console active ».
+
+Dans la liste de l'écran d'accueil, une connexion dont le workspace est
+retenu porte le libellé `Open`. Si l'une de ses consoles a signalé une
+transaction ouverte, ou un état inconnu sur une session qui déclare les
+transactions (dernière valeur reçue, [ADR-0039](adr/0039-etat-de-transaction-d-une-session.md)),
+la ligne le dit **en toutes lettres** et nomme la connexion :
+« Transaction open in a console of *billing* », « Transaction state unknown in
+a console of *billing* ». Ses verrous sont tenus pendant que l'utilisateur
+travaille ailleurs ; une couleur seule ne le dirait pas.
+
+Une fenêtre garde **au plus huit** workspaces. Une neuvième connexion est
+refusée avant toute tentative de connexion — « 8 connections are open in this
+window. Disconnect one before opening another. » — et aucun workspace n'est
+fermé d'office pour lui faire place : la fermeture pourrait annuler une
+transaction sans le dialogue qui l'annonce. Une connexion ouverte ne se
+supprime pas depuis les réglages ; la déconnecter d'abord. Modifier une
+connexion ouverte vaut aussitôt pour son workspace, visible ou masqué.
+
+Les résultats d'un workspace masqué ne sont pas épinglés au-delà des budgets
+de [PERFORMANCE](PERFORMANCE.md#budgets-de-mémoire) : un résultat évincé
+pendant l'absence se lit « expired » au retour ; il n'est jamais réexécuté.
+
+La barre d'état du formulaire nomme la connexion en préparation et distingue
+`Not tested`, le résultat du test et l'enregistrement. Elle n'annonce pas
+`Connected` pour une connexion non testée ; une autre session ouverte conserve
+son propre contexte explicite.
+
+L'aperçu d'une confirmation conserve le SQL intégral et permet son défilement
+à la souris ainsi que par les flèches, Page précédente/suivante et Début/Fin.
+Entrée seule ne valide jamais une écriture ; Échap refuse.
+
+## Données d'une table sélectionnée
+
+Sélectionner une table ou une vue SQL ouvre l'onglet **Data** et lit au plus
+**200 lignes**. Le driver construit et cite l'identifiant qualifié ; le bus
+applique la politique de la connexion et impose une requête en lecture seule.
+Sur PostgreSQL, le catalogue désigne la base de la session, tandis que seuls le
+schéma et la table rejoignent le nom SQL qualifié.
+
+Cet aperçu a sa propre grille et sa propre annulation. Il ne remplace ni le
+brouillon SQL ni les résultats de l'éditeur. Une nouvelle sélection annule
+l'aperçu précédent ; ses réponses tardives sont ignorées. **Refresh data**
+relit explicitement les lignes ; aucun rafraîchissement automatique ne suit une
+erreur. Le chargement, le résultat vide, l'échec et l'annulation sont distincts.
+Sans tri demandé, l'ordre des lignes n'est pas garanti, et l'aperçu ne compte
+jamais la table entière.
+
+### Filtrer, trier, parcourir
+
+La barre sous les actions de données porte un champ précédé de `WHERE` et un
+bouton `Apply`, puis un bouton `Sort` (Figma `190:1618`). Ces contrôles
+n'existent que pour une source qui déclare savoir filtrer ou ordonner un
+aperçu ; ailleurs ils sont absents, pas désactivés.
+
+Le champ `WHERE` reçoit un **prédicat que l'utilisateur écrit**, transmis tel
+quel : ni analysé, ni réécrit, ni complété. Un champ vide ne filtre rien.
+
+Un prédicat invalide échoue de deux façons, et l'aperçu ne les confond pas. Un
+prédicat qu'Oxyn ne parvient pas à lire comme une condition — `id >< 3` — est
+refusé **avant tout envoi** : ce qui n'est pas classé compte pour une écriture,
+et cette prudence est ce qui protège. Le message le dit alors en ces termes, et
+renvoie vers la syntaxe du prédicat ; l'annoncer comme un défaut de lecture
+seule enverrait chercher un droit manquant là où il y a une faute de frappe. Un
+prédicat bien formé mais faux pour cette table — une colonne qui n'existe pas —
+part au serveur et revient avec **son** message, code compris.
+
+L'aperçu peut donc désormais échouer pour une raison de syntaxe, ce qui n'était
+pas le cas avant. Il ne peut en revanche rien écrire : le texte final est
+reclassifié, la session est tenue en lecture seule par le serveur, et la borne
+de lignes s'applique.
+
+`Sort` choisit des colonnes, pas une expression : c'est Oxyn qui compose cette
+partie de la requête, donc il en répond. Une colonne inconnue de la relation est
+refusée avant l'envoi.
+
+La page suivante est une **nouvelle exécution**, pas un défilement : faire
+défiler les lignes déjà reçues ne déclenche jamais de requête. Elle n'est
+offerte que si l'ordre est total — le tri demandé, complété par une clé unique
+que le catalogue déclare. Sans clé connue, l'aperçu reste à sa première page et
+dit pourquoi : un `OFFSET` sur un ordre incertain montrerait deux fois la même
+ligne et en omettrait une autre, sans rien signaler. Entre deux pages, les
+données du serveur ont pu changer ; l'aperçu ne prétend pas être un instantané
+([ADR-0020](adr/0020-apercu-trie-filtre-parcouru.md)).
+
+Dans cet aperçu en lecture seule, `Edit rows…` est désactivé. Une infobulle,
+également accessible au clavier par son déclencheur d'aide, explique que
+l'édition nécessite une vue éditable, une session autorisant l'écriture et les
+capacités appropriées. Une écriture en production reste soumise à la revue
+définie ci-dessus ; le contrôle désactivé ne propose aucun contournement.
+
+**Structure** charge les colonnes à travers le catalogue existant et les affiche
+dans une liste virtualisée. `⌘2` donne le focus à la grille de l'aperçu et
+Échap annule son chargement. Les capacités de la session et la nature de l'objet
+déterminent la disponibilité de Data.
+
+
+## Consultation locale des requêtes
+
+La bibliothèque distingue historique, requêtes sauvegardées et références de
+résultats récents. Ouvrir cette bibliothèque et sélectionner une ligne ne
+remplace ni le brouillon ni le résultat de la console courante. Le texte complet
+s'affiche séparément en lecture seule : navigation, sélection et copie sont
+possibles ; saisie, collage, composition native et `⌘Entrée` ne modifient ni
+n'exécutent ce texte.
+
+Les filtres de recherche s'appliquent avant pagination. Une réponse ancienne
+ne remplace pas une recherche ou une sélection plus récente. L'annulation est
+explicite et reste distincte d'une liste vide. Une copie de travail modifiée
+peut être consultée sans modifier la copie nommée. Une référence de résultat
+dans l'historique ne prouve pas sa disponibilité après redémarrage ; sa
+réouverture doit vérifier la rétention sans rejouer la requête. Une écriture
+sans issue certaine conserve son avertissement de réconciliation.
+
+
+## Portée de Run dans une console SQL
+
+`⌘Entrée` exécute la sélection explicite lorsqu'elle existe ; sinon, seule
+l'instruction sous le curseur est soumise. La position est calculée en octets
+UTF-8 à partir du curseur Unicode de l'éditeur. Un point-virgule final reste
+rattaché à son instruction ; du code suivant au même emplacement devient
+prioritaire, mais un commentaire ne fait pas basculer vers une écriture plus
+loin. Les espaces sans instruction n'envoient aucune commande.
+
+Les corps PostgreSQL entre dollar-quotes et les triggers SQLite avec leurs
+blocs CASE/END restent entiers. Si le texte est incomplet ou si ses frontières
+sont ambiguës, la console demande une sélection explicite. Le découpage ne
+modifie ni le texte du document ni les règles de classification et de revue.
+Une sélection multi-instructions conserve les limites déclarées par la session :
+elle n'est pas transformée silencieusement en exécutions successives.
+Un éditeur en lecture seule annonce sélection/copie, sans raccourci d'exécution.
+
+La barre de la console présente Run, Stop et Explain comme trois contrôles
+distincts. Celui qui n'a rien à faire est estompé **et** inerte : Run pendant
+une exécution, Stop en dehors. Un seul bouton dont le sens bascule serait à un
+clic manqué de relancer ce qu'on voulait arrêter. Stop atteint l'annulation
+réelle, jusqu'au serveur.
+
+## Explain
+
+Explain décrit l'instruction courante ; il ne l'exécute jamais. Le préfixe est
+posé sur une instruction unique : un lot en refuse la portée, une instruction
+qui commence déjà par `EXPLAIN` aussi, et un dialecte sans plan textuel le dit
+plutôt que d'envoyer une syntaxe que le serveur rejetterait. `ANALYZE` n'est
+jamais ajouté : il exécuterait réellement la requête analysée, suppression
+comprise. Le brouillon de la console reste celui que l'utilisateur a écrit, et
+le plan revient comme un résultat ordinaire, sans revue d'écriture.
+
+Ordinaire par son chemin, pas par sa présentation : **la zone de résultat dit
+que c'est un plan**. Au-dessus des lignes, tant qu'elles sont affichées, une
+mention `Execution plan` précise que c'est la façon dont le serveur exécuterait
+l'instruction, et non ses données, et que l'instruction elle-même n'a pas été
+exécutée. Quelqu'un qui lance Explain, s'absente et revient lit la grille, pas
+le bouton qu'il a pressé ; sans la mention, il lirait un plan comme des
+données. La mention disparaît au lancement suivant qui n'est pas un Explain.
+
+## Contexte de session d'une console
+
+Le sélecteur de la barre lit `<connexion> / <schéma>` : le nom donné par
+l'utilisateur, puis l'endroit où la session résout les noms qu'une instruction
+ne qualifie pas. Il n'existe que pour une source qui sait porter ce contexte ;
+ailleurs, les schémas se qualifient dans le SQL, et aucun contrôle désactivé ne
+le laisse croire possible.
+
+Tant que rien n'a été déclaré, la barre dit que le serveur a placé la session à
+l'ouverture — elle ne nomme pas un schéma qu'Oxyn n'a pas demandé. Le choix
+traverse le réseau : pendant ce temps la barre annonce la cible, rappelle où la
+session résout **encore**, et propose une annulation qui atteint le serveur.
+L'affichage ne change qu'à la réponse, et montre ce que la session rapporte,
+jamais ce qui a été demandé. Un refus montre le message du serveur tel quel,
+dit que rien n'a bougé, et dit s'il vaut la peine d'être retenté.
+
+Le contexte appartient à la console, comme sa session : changer d'onglet montre
+celui de cet onglet, et une console n'hérite pas de sa voisine. Le retour au
+défaut du serveur est toujours offert. Le SQL écrit par l'utilisateur n'est
+jamais réécrit : le contexte change ce que le serveur résout, pas le texte
+soumis ([ADR-0019](adr/0019-contexte-de-session.md)).
+
+L'explorateur de catalogue **ne suit pas** ce contexte : il montre un arbre
+qualifié. La console peut donc travailler dans `analytics` pendant que la
+sidebar montre `public` ; c'est un écart visible, préféré à un catalogue qui se
+déplace sans qu'on le lui ait demandé.
+
+### Transaction ouverte
+
+À côté du sélecteur, la barre dit si la session garde une transaction ouverte,
+en texte : `Transaction open`. Sur une session qui déclare les transactions et
+n'a pas pu le dire — une exécution abandonnée, une session qui se ferme —, elle
+dit `Transaction state unknown` : rien n'affirme « aucune transaction » sans que
+la session l'ait constaté. Sans transaction ouverte, ou sur une session qui ne
+sait pas en tenir, la barre ne dit rien : aucun repère éteint ne laisse croire
+la transaction possible là où elle ne l'est pas.
+
+L'état est celui que la session rapporte à la fin de chaque exécution — succès,
+échec ou arrêt —, jamais celui qu'on déduit du texte soumis : un Stop ou une
+erreur peut refermer la transaction d'office. Rien d'optimiste : l'affichage
+change à ce rapport, pas à la soumission d'un `BEGIN` ou d'un `COMMIT`, et
+garde la dernière valeur constatée pendant une exécution. Oxyn n'offre aucun
+bouton `Commit` ni `Rollback` : l'utilisateur tape `COMMIT` ou `ROLLBACK`
+([ADR-0039](adr/0039-etat-de-transaction-d-une-session.md)).
+
+## Valeurs liées d'une console
+
+Une console porte ses propres valeurs liées, affichées par le contrôle
+`Parameters` et son panneau. Elles n'existent que dans la fenêtre : elles ne
+sont ni sauvegardées avec la requête, ni écrites dans l'historique ou le
+journal, ni recopiées dans un message d'erreur, et le champ de saisie refuse la
+copie comme l'extraction de texte native ([I-03](../CLAUDE.md#i-03)).
+
+Elles partent dans la requête d'exécution, **jamais** dans le texte SQL : rien
+n'est concaténé ni substitué, et le SQL écrit par l'utilisateur reste intact
+([I-10](../CLAUDE.md#i-10)). Chaque console a les siennes ; ouvrir une console
+voisine n'en hérite pas.
+
+Chaque valeur déclare son type. Une ligne neuve vaut `NULL` et sa saisie est
+close tant qu'un type n'est pas choisi. Une valeur que son type ne sait pas
+convertir arrête la soumission avant tout envoi : le panneau s'ouvre sur la
+ligne fautive, et le message nomme la position et le type attendu, jamais le
+texte saisi. Les bornes du produit sont 128 valeurs et 1 Mio de texte cumulé.
+
+## Consoles indépendantes
+
+Une nouvelle console conserve la connexion choisie et établit sa propre session
+avant toute exécution. L'ouverture est annulable ; une réponse devenue obsolète
+ne crée pas d'onglet et sa session est libérée. Changer d'onglet conserve le texte,
+le résultat, la lecture de pages, la confirmation et l'export de chaque console.
+Une confirmation d'un onglet masqué reste rattachée à cet onglet.
+
+`⌘T` ouvre une console, `Ctrl+Tab` et `Ctrl+Shift+Tab` parcourent les consoles,
+et `⌘W` vise uniquement la console active lorsque le panneau SQL est affiché.
+Fermer une console vide et inactive est immédiat. Si elle contient du SQL non
+sauvegardé ou une opération, un dialogue nomme la console, explique ce qui sera
+abandonné et place le focus sur Annuler. Une console dont la transaction est
+ouverte, ou dont l'état est inconnu sur une session qui déclare les
+transactions, ne se ferme pas non plus sans ce dialogue : il nomme alors aussi
+la connexion et dit que la transaction sera **annulée**, ses écritures non
+validées perdues — même si le texte est sauvegardé. Fermer ne rejoue aucune requête et
+n'annule pas les opérations d'une autre console. Fermer la dernière laisse un
+état vide avec l'action d'ouverture, tandis que le catalogue reste disponible.
+
+La fenêtre conserve aussi les workspaces de connexion déjà ouverts, connectés
+(« Navigation du premier workspace »). Sélectionner une connexion déjà présente
+rend son workspace et ses consoles visibles, sans remplacer leurs textes. Une
+copie vers une nouvelle connexion est annoncée et n'exécute rien ; la console
+d'origine reste disponible.
+
+
+## Sauvegarde d'une console
+
+La sauvegarde explicite porte sur le document entier et son nom, pas uniquement
+sur la sélection exécutée. `⌘S` et le bouton de sauvegarde transmettent la même
+commande locale. Le nom est borné à 256 octets UTF-8 : un remplacement trop long
+est refusé sans couper le texte ni perturber la composition native.
+
+L'éditeur reste utilisable pendant une sauvegarde. L'acquittement porte sur le
+texte demandé : des modifications plus récentes restent signalées comme non
+sauvegardées. Une seule sauvegarde est engagée par console à la fois, avec un
+moyen de l'annuler. Si le store contient une version concurrente, la nouvelle
+sauvegarde doit créer une autre identité et préserver la version existante.
+
+Le dialogue de fermeture propose sauvegarder puis fermer, abandonner les
+modifications, ou annuler. Il attend l'acquittement de sauvegarde puis celui de
+fermeture avant de retirer l'onglet. Annuler la sauvegarde empêche sa réponse
+tardive de fermer la console. Pendant la fermeture locale, texte et nom restent
+lisibles mais non modifiables ; son annulation conserve la vue si l'écriture
+n'avait pas déjà terminé. La copie nommée reste dans la bibliothèque après un
+abandon de modifications.
+
+
+## Ouvrir depuis la bibliothèque
+
+L'ouverture d'une copie nomme la connexion de destination avant l'action. Elle
+crée une console indépendante et n'exécute rien. Son indication d'origine
+rappelle notamment si le texte vient d'une entrée d'historique d'agent. Une
+écriture dont l'issue nécessite une réconciliation reste consultable mais
+n'offre pas cette ouverture éditable.
+
+La reprise d'une requête sauvegardée sur sa connexion d'origine ouvre le texte
+de travail et conserve son identité et son langage de stockage. Elle ne remplace
+pas un brouillon par la copie nommée : si la console existe déjà, elle devient
+visible avec ses modifications actuelles. Sur une autre connexion, l'utilisateur
+ouvre une copie ou sélectionne d'abord la connexion d'origine pour reprendre le
+document. Une ouverture de session annulée ne crée pas de console tardive.
+
+Un conflit de stockage ou une copie illisible pendant la sauvegarde est traité
+sans écraser le document existant. Fermer une console en conflit laisse son
+record stocké intact ; une sauvegarde sous une nouvelle identité conserve les
+deux versions.
+
+
+## Autosauvegarde des brouillons
+
+Les changements de texte et de nom sauvegardent la copie de travail localement,
+sans modifier la copie nommée et sans exécuter de SQL. Un nom de travail vide
+reste récupérable ; seul l'enregistrement d'une copie nommée exige un nom. Une
+copie neuve préremplie — depuis History, une requête enregistrée ou la
+connexion précédente — est sauvegardée comme une édition, sans attendre qu'on
+la modifie. Une
+édition hors des bornes est signalée comme non sauvegardée, et une réponse
+relative à un état antérieur ne peut pas annoncer cet état comme récupéré.
+
+Le dernier brouillon en attente remplace les brouillons intermédiaires. Les
+sauvegardes nommées gardent leur instantané, et la fermeture garde sa propre
+annulation. Si une fermeture est annulée avant sa validation, son brouillon en
+attente reprend sa place. Si elle termine, aucune ancienne écriture ne rouvre
+le document. Un conflit avec une révision modifiée ailleurs arrête la file et
+conserve le texte de l'éditeur pour une décision de copie séparée.
+
+
+## Restauration sélective au démarrage
+
+Lorsque des copies de travail ouvertes sont disponibles, l'écran de reprise les
+présente par pages avec des cases de sélection. La sélection ne charge pas tous
+les corps : seul le document affiché est lu. Continuer sans restaurer laisse les
+copies stockées intactes. Il est possible de revenir à la sélection pour ajouter
+d'autres documents sans remplacer les éditeurs déjà repris.
+
+Les éditeurs repris sont hors ligne : texte, nom, annulation d'édition,
+autosauvegarde et sauvegarde nommée fonctionnent, tandis que l'exécution attend
+une connexion. Le choix de la connexion est un geste séparé. La connexion
+originale reprend le document ; une autre produit une copie et conserve le
+document initial. Le raccordement ne lance pas le SQL et conserve l'entité de
+l'éditeur. Annuler le choix de connexion laisse le brouillon hors ligne.
+
+L'écran **dit ce qu'il a constaté**. Quand le marqueur d'arrêt révèle une
+session abandonnée, il annonce qu'Oxyn ne s'est pas fermé normalement ; ouvert à
+la demande depuis la bibliothèque, il ne l'annonce pas — ce serait affirmer un
+plantage qui n'a pas eu lieu ([ADR-0021](adr/0021-marqueur-d-arret.md)). Il
+rappelle conditionnellement qu'une écriture interrompue exige une inspection du
+serveur, et ne rejoue rien pour effectuer cette inspection.
+
+
+## Résultats conservés
+
+L'historique et Recent results permettent d'ouvrir un tampon encore retenu.
+Cette ouverture n'établit aucune session et ne soumet aucun SQL. La grille et
+l'export utilisent le résultat existant, y compris ses pages débordées sur disque.
+Un résultat incomplet, tronqué ou associé à une issue incertaine reste consultable
+mais ne peut pas être présenté comme un export complet.
+
+Une référence expirée affiche une indisponibilité explicite. Le retour à la
+bibliothèque ne coupe pas un export engagé ; un résultat en cours d'export doit
+être terminé ou annulé avant remplacement ou fermeture de sa vue. La rétention
+sans lecteur est bornée par ADR-0017, et n'implique pas une conservation entre
+redémarrages. Aucun résultat évincé n'est recréé par rejeu de la requête.
+
+## Le workspace IA n'existe que s'il a été configuré
+
+Tant qu'aucune destination n'est déclarée — ni fournisseur, ni agent externe —,
+`Ask AI` **n'est pas affiché**, aucun badge de confidentialité n'apparaît, et rien
+ne suggère qu'une fonction manque. Un agent externe déclaré seul suffit à faire
+exister l'entrée. Oxyn est un client complet sans IA (ADR-0006). L'accès à la
+configuration passe par les réglages, jamais par un appel à l'action dans la
+barre de connexion : un bouton grisé qui invite à configurer est une publicité,
+pas une fonctionnalité.
+
+La première destination enregistrée fait apparaître l'entrée **sans
+redémarrage**, et la dernière supprimée la fait disparaître — en fermant le
+panneau s'il était ouvert. Cela se fait **sans nouvelle variante du bus d'exécution** : la vue qui
+écrit la déclaration connaît le sort de son écriture et recharge la liste
+elle-même. Y publier un événement ferait ce qu'[ADR-0022](adr/0022-rafraichissement-automatique.md)
+refuse — un second endroit où penser à publier
+([ADR-0023](adr/0023-fournisseurs-declares-et-provenance.md)).
+
+### Le niveau se lit avant de parler, pas après
+
+Le badge de confidentialité et `Ask AI` sont voisins dans la barre de connexion
+et se lisent ensemble. Le badge annonce le niveau de **la connexion courante** —
+jamais un réglage d'application — et il change quand on change de connexion,
+même conversation ouverte. Ce niveau se règle dans le formulaire de la
+connexion, champ `AI privacy`, qui montre ce qui sortirait avant tout
+enregistrement ; ses garde-fous sont écrits dans
+[AI-PROVIDERS](AI-PROVIDERS.md#régler-le-niveau).
+
+Sur une connexion en `Local` dont aucun fournisseur déclaré n'est local,
+`Ask AI` reste **visible et désactivé**, avec la raison : ce niveau n'admet
+qu'un fournisseur résolu sur la machine, et un agent externe ne peut pas le
+servir non plus, faute de savoir où il envoie
+([AI-PROVIDERS](AI-PROVIDERS.md#un-agent-externe--la-portée-nest-pas-inconnue-elle-est-inconnaissable)).
+Faire disparaître l'entrée se lirait comme un défaut, et ADR-0006 demande
+qu'une fonctionnalité indisponible s'explique. Il en va de même sur une session
+qui ne parle pas SQL : l'assistant n'écrit que du SQL, et l'entrée le dit.
+
+### Qui répond se choisit dans le panneau
+
+L'en-tête du panneau porte un sélecteur, « Who answers », qui range les
+destinations en deux groupes : les fournisseurs, puis les agents externes. Une
+destination que le niveau de la connexion refuse y reste, désactivée, avec sa
+raison. Sans choix de l'utilisateur, la question part au **premier fournisseur
+utilisable** dans l'ordre de déclaration, et à un agent seulement s'il n'y en a
+aucun : un fournisseur est la seule destination dont Oxyn sait vérifier la
+portée (ADR-0026). Le choix tient tant que la destination reste offerte ;
+retirée, la question retombe sur ce défaut.
+
+Le sélecteur est inerte pendant qu'une réponse s'écrit. Changer de destination
+entre deux questions ne transmet pas les échanges précédents : le panneau le dit
+par une ligne (`destinationChanged`), puisque les réponses antérieures n'étaient
+pas celles du nouveau destinataire.
+
+Un agent choisi est accompagné de deux mentions permanentes : « Oxyn ne voit pas
+où il envoie la question », et, pour un agent qu'Oxyn ne confine pas, qu'il
+**ne peut pas l'empêcher de lancer des commandes ni de modifier des fichiers de
+la machine de lui-même**
+([ADR-0032](adr/0032-agent-externe-confine-au-lancement.md)). Pour un agent
+confiné, le sélecteur de mode de l'agent n'existe pas : Oxyn le maintient dans
+son mode le plus strict, et un mode dangereux ne doit pas pouvoir se choisir à
+l'écran. Un agent non confiné garde les modes et options qu'il déclare.
+
+Un point d'accès qu'Oxyn n'a pas su résoudre compte comme distant. La
+configuration l'affiche comme « non résolu », pas comme « local » : le doute ne
+profite pas à l'envoi.
+
+### Le panneau montre ce qui se passe, y compris quand rien n'arrive
+
+Le panneau suit les cinq états d'une vue. Ce qui les distingue ici :
+
+* **en cours** : la réponse s'écrit au fil du flux, et l'annulation reste offerte
+  pendant tout ce temps — pas seulement entre deux tours ;
+* **lecture du catalogue** : quand Oxyn lit du serveur la structure dont la
+  question a besoin et que le cache n'a pas
+  ([AI-PROVIDERS](AI-PROVIDERS.md#ce-que-lia-voit-du-schéma-et-quand-cest-lu)),
+  l'échange montre l'étape, un indicateur tournant et « Reading the catalog…
+  metadata only, no row is read. » — avant la première lecture, jamais quand
+  rien ne manque. Elle se referme **à sa place** sur son bilan : objets décrits,
+  listes lues, et, quand il y a lieu, l'arrêt au délai ou avec la question, les
+  lectures en échec, et ce qui n'est pas encore chargé, avec « The assistant was
+  told. » Une étape, pas une région `status` : le panneau annonce son état une
+  fois, ailleurs. Cinq secondes au plus, et l'annulation l'arrête comme le reste
+  de la question. `describe_schema` et `refresh_catalog` montrent la même étape
+  sous leur appel ;
+* **appel d'outil** : chaque commande demandée par l'agent est montrée **avant**
+  son résultat, avec son nom et la connexion visée. Un agent qui travaille en
+  silence pendant huit tours est indistinguable d'un agent bloqué ;
+* **erreur** : ce que l'utilisateur lit est le message entier du serveur ; ce que
+  le modèle a reçu peut être moins, selon le niveau, et le panneau le dit quand
+  les deux diffèrent. Cacher l'écart ferait passer une réponse mal informée pour
+  une réponse fausse ;
+* **réponse coupée** : une réponse arrêtée par le plafond de jetons du
+  fournisseur le dit à sa dernière ligne. Une réponse tronquée qui ne l'annonce
+  pas se lit comme une réponse fausse, et l'utilisateur corrige un modèle qui
+  n'avait pas fini de parler ;
+* **plafond de tours atteint** : dit comme tel, avec le nombre de tours. Ce n'est
+  ni un succès ni une panne.
+
+**Ce que « l'annulation reste offerte » veut dire exactement.** Le bouton reste
+actif et la demande est prise en compte immédiatement ; son *effet* dépend du
+fournisseur. La boucle relit la demande entre deux événements du flux et
+n'interrompt jamais une lecture en cours : un futur abandonné au milieu d'une
+trame laisserait le décodeur désynchronisé, et le dépôt refuse ce risque
+(`.claude/rules/rust.md`, § Async). Si le fournisseur se tait, l'annulation
+attend qu'il reparle. C'est le contrat de `LlmProvider` qui la rend effective —
+tout fournisseur honore le jeton d'annulation dans son flux — et un fournisseur
+qui ne le ferait pas rendrait l'annulation inopérante sans que rien d'autre ne
+le signale.
+
+### Les lignes d'une requête d'agent se lisent sous son appel
+
+Quand un agent — fournisseur interne ou agent externe par MCP — exécute
+`execute_query` et que la commande se termine, **l'utilisateur voit les lignes
+renvoyées** sous l'appel d'outil, dans une grille compacte. Le modèle, lui, n'en
+reçoit que la forme — nombre de lignes et de lots, troncature — et rien de ce
+que la grille montre ([ADR-0006](adr/0006-ai-privacy-tiers.md),
+[ADR-0030](adr/0030-outils-oxyn-exposes-a-un-agent-externe.md) §4) ; le pied
+de la grille le rappelle (« shown to you only; the model got the count »).
+
+* **Même chemin que la console.** Le `ResultId` retenu par l'ordonnanceur
+  remonte dans l'événement de fin d'appel, jamais dans ce qui part au modèle.
+  La grille ouvre le résultat par `OpenRetainedResult`, qui vérifie qu'il
+  appartient à la connexion de la conversation, puis lit des pages bornées par
+  `read_result_page` ; les cellules sont formatées en Rust. Un résultat produit
+  sur une autre connexion que celle de la conversation n'est pas proposé.
+* **Bornée.** La grille atteint au plus les 100 premières lignes, en affiche
+  huit avant de défiler, et dit « First 100 rows of N » quand il y en a plus.
+  `Open all rows` ouvre le résultat entier dans un onglet de résultat du
+  workspace — le tampon retenu, **jamais une réexécution**. Cet onglet n'offre
+  pas d'ouvrir l'instruction dans une console : elle n'y entre qu'avec sa
+  provenance, depuis la réponse de l'agent.
+* **États.** En cours de lecture ; peuplée ; **vide** (« The query returned no
+  rows. », sans alerte) ; erreur (le message du backend entier, `Try again`
+  seulement s'il est déclaré retentable) ; **expirée** (« Result no longer
+  available », sans rien proposer qui relance la requête).
+* **Graphique.** Le pied offre `Chart`, qui bascule entre la grille et un
+  graphique, quand les colonnes comptent au moins une colonne numérique
+  (entier, flottant, décimal) et de quoi la dessiner : une date (`Date*`,
+  `Timestamp`) ou une catégorie (texte, booléen) pour l'axe ; à défaut, deux
+  colonnes numériques, ou une seule ligne. Sinon le bouton **n'existe pas**.
+  Quatre séries au plus. Le graphique lit la même page bornée que la grille
+  (100 lignes au plus). Les nombres sont relus depuis les cellules formatées
+  par Rust, et seulement s'ils en sont sans ambiguïté (chiffres, point décimal,
+  exposant, séparateur de milliers U+00A0) ; une colonne qui contient autre
+  chose — une valeur coupée, `NaN`, du texte — est laissée de côté **et
+  nommée** sous le graphique. Si aucune ne reste, il le dit (« Nothing to
+  chart »).
+  * **Formes.** Toute la galerie shadcn charts est proposée : aire (simple,
+    empilée, empilée à 100 %, en escalier, en dégradé), barres (verticales,
+    horizontales, groupées, empilées, avec valeurs), ligne (droite, courbe, en
+    escalier, avec points), secteurs (pie, donut, donut avec total), radar,
+    barres radiales ; plus deux formes hors galerie écrites dans son style, le
+    nuage de points et le chiffre clé. Un **seul** menu déroulant, qui part sur
+    `Auto` : fermé, il ne montre que la forme dessinée (icône de sa famille et
+    nom, `Auto · …` quand Oxyn a choisi) ; ouvert, il liste `Auto` puis les
+    formes possibles, groupées par famille.
+  * **Refus.** Une forme que les lignes dessineraient mal **n'est pas
+    proposée**, et une famille sans forme possible disparaît avec elles.
+    Refusent : un secteur
+    ou une barre radiale sur des dates, avec plus d'une série, une seule
+    catégorie ou plus de cinq (la palette a cinq couleurs), une valeur `NULL`
+    ou négative, et pour le secteur une valeur nulle ou une catégorie répétée ;
+    une ligne ou une aire sur des catégories (elle tracerait une tendance
+    qu'elles n'ont pas) ou sur un seul point ; un empilement avec une seule
+    série, une valeur négative ou `NULL`, et à 100 % une ligne de somme nulle ;
+    des barres verticales à plusieurs séries (ce sont des barres groupées) et
+    groupées à une seule ; des valeurs écrites sur plus de douze barres ; un
+    radar hors de 3 à 8 catégories, avec un `NULL` ou un négatif ; un nuage
+    sans deux colonnes numériques ni deux lignes qui les portent toutes deux ;
+    un chiffre clé sur plus d'une ligne ; toute forme à axe quand il n'y en a
+    pas. Le choix de l'utilisateur ne vaut que tant que les lignes le
+    permettent ; sinon `Auto` reprend.
+  * **Auto**, dans cet ordre : une seule ligne donne des **chiffres clés**, le
+    texte exact de Rust ; sans axe, deux nombres donnent un **nuage** ; sur des
+    dates, une série donne une **aire**, plusieurs des **lignes** ; sur des
+    catégories, une série positive de 2 à 5 parts distinctes donne un
+    **donut**, plus de douze catégories ou un libellé de plus de quatorze
+    caractères des **barres horizontales**, sinon des **barres verticales**,
+    groupées s'il y a plusieurs séries. Le radar n'est jamais choisi seul : il
+    pose toutes les colonnes sur une même échelle radiale, et les colonnes
+    d'une requête partagent rarement une unité.
+  * **Ordre et calcul.** Les lignes sont dessinées dans l'ordre renvoyé par la
+    requête, sauf le secteur, lu de la plus grande part à la plus petite. Rien
+    n'est agrégé dans la webview, à trois exceptions près, toutes propres à la
+    forme choisie et dites dans la légende : le total du donut (la somme des
+    cinq parts au plus qu'il montre), les parts d'un empilement à 100 %, et le
+    sommet d'un empilement, qui est une somme.
+  * **Accessibilité.** `accessibilityLayer` sur chaque graphique, une légende
+    dès qu'il y a plusieurs séries ou des parts, une légende de figure qui dit
+    ce qui est dessiné, et la forme courante annoncée (« Drawn as Donut,
+    chosen by Oxyn »). Les couleurs sont la palette fixe `--chart-1` à
+    `--chart-5`, d'un contraste d'au moins 3:1 avec le fond dans les deux
+    thèmes (WCAG 1.4.11) ; aucune donnée n'entre dans les clés ni dans les
+    couleurs.
+
+**Durée de vie.** Le résultat d'un agent est un résultat retenu sans lecteur :
+il vit jusqu'à ce que la rétention l'évince selon les bornes
+d'[ADR-0017](adr/0017-retention-resultats.md) — au plus 16 résultats sans
+lecteur, les plus anciens partant les premiers —, jusqu'à la suppression de la
+conversation — qui libère les résultats de ses appels —, ou jusqu'à la fin du
+processus. Rien n'en est écrit dans le fichier de workspace. Une conversation
+rouverte depuis le workspace ne montre donc aucune grille : sous un appel qui
+avait renvoyé des lignes, elle dit « Result no longer available: the workspace
+keeps the statement, never its rows ».
+
+### Un échantillon s'approuve colonne par colonne, dans un seul écran
+
+Sous `Sampled`, des valeurs de ligne partent vers un agent — fournisseur ou
+agent externe — seulement après que l'utilisateur a coché, dans l'écran
+d'approbation, les colonnes qui partent. L'écran s'ouvre de deux façons, et
+c'est **le même** ([ADR-0034](adr/0034-echantillon-pour-toute-destination.md),
+[AI-PROVIDERS](AI-PROVIDERS.md#échantillon-approuvé)) :
+
+* **l'utilisateur épingle** un objet (« Pin to question » dans le menu du
+  catalogue), puis envoie sa question : l'écran s'ouvre avant l'envoi ;
+* **l'agent demande** (`request_sample`) pendant qu'il répond : l'écran s'ouvre
+  au-dessus du panneau, et l'appel attend. Titre « An agent asks for a row
+  sample », puis, avant toute autre ligne, **qui** demande : « Claude Code
+  asked for it, not you, and waits for your answer. Cancel declines. » Seules
+  les colonnes que l'agent a nommées sont offertes — toutes s'il n'en nomme
+  aucune.
+
+Ce qui ne change pas selon le déclencheur, et que les stories tiennent :
+
+* **rien n'est coché** à l'ouverture, **rien ne coche tout**, rien ne se
+  retient pour la fois suivante ;
+* **Annuler a le focus**, vient en premier à toute largeur, et **Entrée
+  n'envoie rien** ;
+* le bouton dit ce qui part et où : « Send 2 of 4 columns to Claude Code · to an
+  unresolved address » ;
+* **aucune valeur** n'apparaît dans l'écran : il approuve des colonnes, pas un
+  aperçu ;
+* hors `Sampled`, l'écran ne montre que le refus, sans case ni bouton d'envoi.
+
+**Une demande d'agent se ferme d'elle-même** quand elle est tranchée, expire
+(cinq minutes) ou que la question s'arrête : l'agent reçoit alors « the user
+declined ». Une épingle de l'utilisateur passe devant : la demande de l'agent
+attend derrière elle. L'appel d'outil se lit dans le fil comme les autres ; son
+rapport ne dit que des compteurs (« sent 5 rows of 1 column you approved »),
+jamais un nom de colonne ni une valeur.
+
+### Nommer un objet d'un `@`
+
+Dans le champ de la question, `@` ouvre au-dessus du champ la liste des objets de
+la connexion : tables, vues, collections, colonnes (`table.colonne`) et requêtes
+sauvegardées de cette connexion ou d'aucune. Ce qui suit le `@` la filtre. Elle
+vient du catalogue local et de la bibliothèque du workspace, **jamais d'un
+modèle** : c'est une complétion de nom, un résultat déterministe
+(`.claude/rules/ia.md`). Elle doit répondre en 100 ms au plus
+([PERFORMANCE](PERFORMANCE.md)) ; elle est bornée à douze objets.
+
+* la liste s'ouvre **au-dessus** du champ, et bascule dessous seulement si la
+  place y manque ; elle garde 8 px du bord, ne dépasse jamais la largeur du
+  champ ni la fenêtre, et sa hauteur est `min(18rem, place disponible)`, avec
+  défilement interne. La ligne active reste visible quand le clavier la
+  déplace. Les stories la tiennent à 360 px de large et dans une fenêtre basse ;
+* **une seule ligne active** : la souris et le clavier déplacent la même
+  surbrillance, sans style de survol distinct ;
+* les colonnes (`table.colonne`) viennent des champs que la recherche du
+  catalogue a déjà trouvés (`matchedFields`), trois par relation au plus. La
+  liste ne charge aucune description pour en proposer : ce qui est en cache
+  s'affiche d'abord, le reste complète ;
+* chaque ligne porte l'icône de sa sorte et, à droite, son schéma — de quoi
+  distinguer deux `orders` ;
+* **un `@` seul montre déjà des objets** : ceux de l'arbre du catalogue que la
+  barre latérale a lus (le même cache), dans l'ordre de l'arbre, sans les
+  objets système, puis les requêtes sauvegardées les plus récentes. Le panneau
+  prépare ces deux sources à son ouverture ; le premier `@` n'attend ni le
+  backend ni un délai, et les 60 ms d'attente de la bibliothèque ne valent
+  qu'entre deux frappes ;
+* **le premier `@` sur une connexion fait lister ce que l'arbre n'a pas
+  déplié** : les tables et vues des schémas jamais listés, sous les bornes d'une
+  question ([AI-PROVIDERS](AI-PROVIDERS.md#ce-que-lia-voit-du-schéma-et-quand-cest-lu)), puis la
+  liste relit le cache. Pendant ce temps, ce qui est déjà connu reste affiché,
+  marqué comme se complétant ; un échec ne se dit pas et laisse ce qui est
+  chargé. L'ouverture du panneau, elle, ne lit rien sur le serveur ;
+* la liste a ses états : une ligne « Loading… » en squelette tant qu'aucune
+  réponse n'est arrivée, « No matching object » **seulement** quand une réponse
+  l'a dit, « Type to search tables, views, columns and queries » quand l'arbre
+  n'est pas lisible, et l'erreur du backend telle qu'elle arrive. Pendant une
+  recherche, ce qui est affiché reste affiché : la liste ne clignote pas à
+  chaque lettre ;
+* le focus **reste dans le champ** : les flèches déplacent la surbrillance, que
+  le champ désigne par `aria-activedescendant` ;
+* **Entrée ou Tab choisit l'objet et n'envoie rien** ; **Échap ferme la liste et
+  n'arrête rien** — c'est l'Échap suivant, liste fermée, qui arrête une réponse
+  en cours. Les stories tiennent ces deux-là ;
+* l'objet choisi devient une **puce** `@orders` dans le texte. Retour arrière
+  l'efface entière : un libellé sans son adresse n'existe pas ;
+* la puce se lit **comme un mot** : à la taille du texte, sur sa ligne de base,
+  centrée à 1 px près sur le texte voisin, jamais plus haute que la ligne.
+  Insérer ou effacer une puce ne change la hauteur d'aucune ligne, le caret
+  reste au niveau de part et d'autre, et une puce en fin de ligne passe entière
+  à la suivante. Les stories le mesurent, dans le champ comme dans le fil, en
+  clair et en sombre.
+
+La puce porte une **adresse** — celle du catalogue, et le nom de colonne s'il y
+en a un —, jamais un texte que le backend reparserait. La question garde le
+libellé lisible ; le backend vérifie l'adresse contre son cache. Seize objets au
+plus par question.
+
+À l'envoi, les objets nommés sont **imposés** au contexte, avant ce que la
+question fait trouver, pour **toute** destination
+([AI-PROVIDERS](AI-PROVIDERS.md#mentions)). Nommer n'est pas envoyer de valeurs :
+l'épingle d'échantillon ci-dessus reste un geste distinct. L'en-tête dit, après
+la question, ce qui n'est pas parti : « 1 mentioned object(s) not found », « 2
+mentioned object(s) named only, over the budget ».
+
+Dans le fil, la question envoyée montre ses mentions avec **la même puce** que
+le champ : même composant, même icône par sorte, mêmes couleurs. Les puces
+viennent de ce que la question **porte**, enregistré avec elle — jamais d'une
+relecture du texte : un `@maison` tapé à la main reste du texte. Une puce de
+table, de vue, de collection ou de colonne est un bouton qui ouvre l'objet. Une
+conversation relue revérifie chaque adresse contre le cache : un objet que le
+cache sait disparu s'affiche atténué, avec « not found », et n'ouvre rien. Sans
+preuve de sa disparition, une puce reste normale. Le libellé vient du catalogue :
+c'est une entrée hostile, rendue comme du texte.
+
+### Un bloc `erd` se dessine depuis le catalogue, pas depuis la réponse
+
+Un bloc de code clôturé de langage `erd` dans une réponse liste des noms de
+tables, un par ligne, éventuellement qualifiés `schema.table` (citations SQL
+comprises : `"Ventes"."T1.totaux"`). Une fois le bloc **fermé**, le panneau le
+dessine en diagramme ; tant que la réponse s'écrit, il reste du texte — un
+diagramme redessiné à chaque nom arrivé se lirait comme un défaut.
+
+* **Les noms sont des demandes, pas des faits.** Chacun est cherché par
+  `search_catalog` parmi les objets qu'Oxyn a déjà lus : l'orthographe exacte
+  d'abord, puis sans casse si une seule table correspond. Un nom qui désigne
+  deux tables n'est pas tranché (« matches auth.users, public.users: not drawn
+  until qualified ») ; un nom introuvable est **dit**, jamais dessiné d'après son
+  orthographe (« Not found among the objects Oxyn has read »). La recherche
+  n'introspecte pas : une table d'un schéma jamais déplié n'est pas trouvée, et
+  le message le laisse entendre.
+* **Ce qui est dessiné vient du backend.** Colonnes, clé primaire et colonnes de
+  clé étrangère sont lues par les mêmes commandes que la vue d'objet
+  (`relation_facets`, puis `refresh_relation_facet` pour une facette jamais lue) ;
+  les arêtes sont les clés étrangères. Aux tables nommées s'ajoutent leurs
+  **voisines directes** par une clé, sortante ou entrante, et les clés entre
+  deux tables dessinées. Aucun modèle n'est consulté, et un même catalogue
+  donne le même diagramme (disposition dagre, de gauche à droite : la table qui
+  porte la clé avant celle qu'elle référence).
+* **Borné.** Un bloc est lu jusqu'à 20 noms, un diagramme s'arrête à 40 tables
+  et une table montre 12 colonnes, clés d'abord ; chaque surplus est compté et
+  dit. Quatre lectures au plus sont en vol à la fois.
+* **Navigable.** Déplacer à la souris, zoomer par les boutons, le pincement ou
+  le clavier (flèches, `+`, `-`, `0` pour ajuster) quand le diagramme a le
+  focus. La molette fait défiler la conversation, pas le diagramme. Un clic sur
+  le nom d'une table l'ouvre dans le workspace, comme depuis le catalogue ; rien
+  ne s'exécute. Les clés sont aussi écrites en liste pour un lecteur d'écran.
+* **États.** Lecture en cours ; dessiné ; rien à dessiner (tous les noms
+  introuvables) ; erreur — le message du backend entier, sans paraphrase, avec
+  `Try again`, qui relit sans rien écrire. Une lecture de métadonnées qui
+  exigerait une approbation est refusée et dite, comme dans la vue d'objet.
+* `Show source` montre le texte du bloc tel que le modèle l'a écrit.
+
+Pour qu'un modèle sache émettre ce bloc, l'invite système doit le décrire ;
+sans cela, il n'apparaît que si l'utilisateur le demande.
+
+### Le code et les diagrammes d'une réponse restent du texte jusqu'au bout
+
+Une réponse de modèle est une entrée hostile
+([SECURITY](SECURITY.md#surface-dentrée)) : rien de ce qu'elle écrit ne devient
+du balisage dans la page.
+
+* **Coloration.** Un bloc de code **fermé** est coloré par shiki, rendu en
+  jetons React (`<span>` et texte) — jamais en HTML. Les langages sont chargés
+  à la demande, au premier bloc qui les nomme : SQL et ses dialectes, JSON,
+  JavaScript, TypeScript, JSX, TSX, Python, shell, YAML, TOML, XML/HTML, diff,
+  Rust, Go ; un bloc sans langage est lu comme du SQL. Un autre langage, un
+  bloc de plus de 50 000 caractères ou une grammaire qui échoue restent en
+  texte brut. Les couleurs sont celles de l'éditeur SQL, en variables CSS :
+  elles suivent le thème clair ou sombre. Pendant que la réponse s'écrit, le
+  bloc ouvert reste en texte brut ; une fois coloré, un bloc n'est plus
+  recalculé (mémoire par contenu). `Copy code` et `Open in console` sont
+  inchangés.
+* **mermaid.** Un bloc `mermaid` **fermé** est dessiné ; mermaid n'est chargé
+  qu'à ce moment. Le dessin est affiché par une image
+  (`<img src="data:image/svg+xml;base64,…">`), qui n'exécute rien, ne charge
+  rien et ne reçoit aucun événement. mermaid tourne en `securityLevel:
+  "strict"`, `htmlLabels: false`, sans rendu automatique, avec 20 000
+  caractères et 500 arêtes au plus ; ces réglages sont déclarés `secure`, que
+  le diagramme ne peut pas modifier. Ses lignes de configuration —
+  directives `%%{init}%%` et en-tête `---` — sont retirées avant le rendu, et
+  le bloc le dit. `Show source` montre le texte. Un diagramme invalide affiche
+  l'erreur de mermaid, lisible, avec sa source. Le dessin suit le thème de
+  l'application au moment du rendu, et se redessine s'il change.
+
+### Ce que le panneau montre d'un agent externe
+
+Un agent externe travaille avec ses propres outils, qui ne sont pas des `Command`
+d'Oxyn. Le panneau en montre ce qu'il peut montrer **sans rien recopier de la
+machine** :
+
+* le texte de la réponse et le raisonnement que l'agent diffuse ;
+* chaque étape de ses outils propres, réduite à **sa sorte** — lecture, édition,
+  recherche… — et à son état : en attente, en cours, terminée, échouée. Le titre
+  que l'agent compose pour l'étape n'est jamais affiché, ni son contenu : il
+  peut citer un chemin de la machine. Une sorte que l'agent ne précise pas
+  s'affiche « tool », jamais comme une erreur. L'étape est dessinée comme le
+  travail de l'agent, distincte d'un appel d'outil d'Oxyn, qui lui est passé
+  par le bus. Quand l'agent appelle un outil d'Oxyn, son adaptateur annonce
+  aussi l'appel comme une étape : cette étape n'est pas dessinée, puisque la
+  carte d'Oxyn montre déjà l'appel et fait autorité. Elle est reconnue par un
+  nom exact parmi les outils annoncés à l'agent, lu dans des champs structurés
+  et jamais dans le titre. Une étape non reconnue reste dessinée : en cacher
+  une qui n'est pas d'Oxyn cacherait ce que l'agent a fait
+  ([RESEARCH-NOTES](RESEARCH-NOTES.md#ce-que-les-adaptateurs-acp-disent-dun-appel-mcp--relu-le-2026-09-24)).
+  Un appel qu'Oxyn refuse avant le bus a donc sa propre trace : la ligne
+  « refused before the bus, nothing ran », avec la raison dans les mots
+  d'Oxyn, jamais ceux de l'agent. Cela vaut pour une connexion devenue
+  `local`, un niveau illisible, le plafond d'appels de la réponse atteint, ou
+  un appel qu'Oxyn n'a pas su traduire. L'outil n'y est nommé que s'il fait
+  partie de ceux annoncés à l'agent. Sans question en cours, rien ne s'affiche,
+  et rien ne s'exécute ;
+* son **plan**, remplacé en entier à chaque envoi et jamais fusionné avec le
+  précédent : le protocole n'envoie ni différence ni identifiant d'étape. Une
+  priorité inconnue s'affiche « moyenne », un état inconnu « en attente » —
+  jamais « terminé » sur une supposition ;
+* l'occupation de sa fenêtre de contexte, et son coût quand il le donne ;
+* chaque demande d'agir sur la machine qu'Oxyn a refusée, sans bouton pour
+  l'accorder
+  ([AI-PROVIDERS](AI-PROVIDERS.md#ce-que-lagent-demande-lui-à-la-machine)).
+
+Les messages de l'utilisateur renvoyés par l'agent, ses commandes disponibles et
+les informations de session ne sont pas relayés ; une variante que cette version
+ne connaît pas n'est rien, plutôt qu'autre chose que ce qu'elle est.
+
+**Ceci précise [ADR-0026](adr/0026-agents-externes-acp.md)**, qui ne remontait
+que les fragments de texte au motif qu'un plan ou une étape d'outil affichés
+« comme les siens » feraient croire à un travail autorisé par Oxyn. Le risque est
+tenu autrement : la marque distingue le travail de l'agent de celui d'Oxyn, et
+rien de ce qu'elle montre ne peut citer la machine. Le cacher faisait retomber
+dans l'état que ce document refuse : un agent qui travaille en silence est
+indistinguable d'un agent bloqué.
+
+### Une conversation reste dans le workspace, pas ce qu'on lui a montré
+
+Une conversation appartient à sa connexion. Fermer la connexion arrête ce que
+ses conversations exécutaient et les retire de la fenêtre ; elles restent
+**dans le fichier du workspace** (tables `ai_conversations`,
+`ai_conversation_turns` et `ai_conversation_nodes`) et se rouvrent depuis la
+liste « Conversations » du panneau, qui montre les 64 plus récentes de la
+connexion. Au lancement suivant, le panneau s'ouvre sur une conversation neuve ;
+les précédentes attendent dans cette liste.
+
+Ce qui est gardé, échange par échange : la question, la destination (libellé et
+modèle, jamais de clé), le niveau de confidentialité **sous lequel cet échange a
+eu lieu**, et son issue ; pour la réponse, le texte que l'utilisateur a lu, le
+raisonnement, un **rendu** de chaque appel d'outil d'Oxyn — nom, instruction
+SQL, issue, message affiché — et les jetons déclarés. Les versions sœurs créées
+par une régénération ou une modification sont gardées avec leur arbre.
+
+Ce qui ne l'est jamais, faute de colonne où l'écrire : les arguments d'un appel
+d'outil, un résultat de requête, une valeur liée, une clé. Les étapes et le plan
+d'un agent externe ne sont pas gardés non plus.
+
+**Un échange qui a reçu un échantillon de lignes ne garde que sa question**, ses
+compteurs — lignes et colonnes, jamais leurs noms — et son issue. Ni la réponse,
+ni le raisonnement, ni un appel d'outil, ni un message d'erreur : chacun peut
+citer les valeurs envoyées, et le fichier de workspace est l'un des six canaux
+d'[I-03](../CLAUDE.md#i-03). Le fichier le refuse lui-même, et marquer l'échange
+efface ce qui avait déjà été écrit pour lui
+([AI-PROVIDERS](AI-PROVIDERS.md#échantillon-approuvé)). Rouvert, cet échange
+l'annonce au lieu de montrer un vide.
+
+**Rouvrir ne rend pas la mémoire au modèle.** La conversation s'affiche en
+entier, mais la question suivante part d'un contexte neuf, et une ligne le dit
+(`restarted`) : ce qu'on avait transmis au modèle n'a pas été écrit, et une
+transcription rejouée sans les résultats d'outils lui ferait croire à un
+contexte qui n'est plus là. Le raisonnement gardé reste sur le disque et ne
+s'affiche pas à la réouverture.
+
+Supprimer une conversation la retire du fichier avec tous ses échanges, dans la
+même transaction ; ce qui est sorti vers un destinataire reste inscrit dans
+`ai_egress`
+([SECURITY](SECURITY.md#ce-qui-sort-vers-un-destinataire-ia-laisse-une-trace)).
+Supprimer une connexion n'efface pas ses conversations, qui gardent le nom de la
+connexion : ce que l'utilisateur a demandé ne disparaît pas avec l'outil qui a
+servi à le demander. La boîte de suppression de la connexion **le dit avant**
+la suppression : ses conversations restent dans le workspace, sous son nom, et
+restent listées, en lecture seule, dans le panneau de l'assistant. Si
+l'écriture d'une conversation échoue, la question part quand même, et le
+panneau dit que ce fil n'est gardé que dans la fenêtre.
+
+Au lancement, Oxyn élague l'historique de l'assistant à son budget
+([PERFORMANCE](PERFORMANCE.md) : 200 conversations, 90 jours d'inactivité,
+32 Mio de transcription). Quand l'élagage a retiré au moins une conversation,
+la liste « Conversations » le dit, **pendant tout ce lancement**, par une
+note sobre au-dessus des fils : combien ont été retirées, et la règle, avec les
+nombres que le backend a appliqués — jamais une copie écrite dans l'interface.
+Un fil disparu sans un mot se lit comme un défaut ; un fil retiré par une
+règle dite se lit comme la règle. La note ne propose aucune action : ce qui
+est élagué est supprimé, et rien ne le rend. Sans rien d'élagué, rien n'est
+affiché.
+
+Les conversations d'une connexion supprimée sont listées dans la liste
+« Conversations », sous un volet replié
+**From deleted connections**, qui n'existe que s'il en reste au moins une.
+Chaque ligne donne le titre, le nom qu'avait la connexion, la date de dernière
+activité et le nombre d'échanges. La liste est en **lecture seule** : aucune
+ligne ne s'ouvre, ne se renomme ni ne se supprime, et rien n'en part vers un
+modèle — la connexion qui donnait son niveau de confidentialité à ces échanges
+n'existe plus. Elle couvre tout le workspace, 64 conversations au plus, et se
+relit à chaque affichage de l'historique. Un identifiant de cette liste ne
+permet pas de supprimer le fil au nom d'une autre connexion : la suppression
+porte la connexion dans sa condition. Ces conversations restent soumises à
+l'élagage du lancement, comme les autres. Le contenu des échanges ne s'y
+relit pas encore, et le panneau de l'assistant n'existe que sur une connexion
+ouverte : sans aucune connexion, la liste n'est pas accessible.
+
+### Une proposition n'est jamais exécutée par le fait de l'être
+
+Une requête proposée par un agent arrive dans une console comme du **texte**, et
+rien de plus. Elle est exécutée par l'utilisateur, avec le même bouton et le même
+chemin que ce qu'il écrit lui-même. Il n'y a pas de mode « exécution
+automatique », et `Explain` sur une proposition suit la même règle : `EXPLAIN
+ANALYZE` exécute réellement ce qu'il analyse.
+
+Quand un agent soumet lui-même une commande, elle traverse le `PolicyGate` avec
+`Actor::Agent`. Une écriture sur une connexion `production` lui est **refusée**,
+pas soumise à confirmation : une confirmation finit par être cliquée (I-02).
+L'utilisateur voit le refus dans la conversation, avec son motif.
+
+### Ce qu'un agent a écrit reste marqué
+
+Un document dont le texte vient d'une proposition d'agent porte sa provenance :
+l'agent, le modèle et la date. La marque est visible sur l'onglet et dans la
+bibliothèque.
+
+Deux règles la gouvernent, et la seconde est celle qu'on casse sans s'en
+apercevoir :
+
+* **elle apparaît dès qu'un agent écrit**, y compris dans un document que
+  l'utilisateur avait commencé lui-même ;
+* **elle ne disparaît plus ensuite.** Réécrire tout le texte à la main ne
+  l'efface pas, et une autosauvegarde ordinaire — qui ne sait rien de l'origine
+  du texte — ne l'efface pas non plus. Une provenance absente veut dire « rien
+  de neuf à écrire », jamais « personne ».
+
+Ce que la marque affirme est donc « un agent a écrit ce texte », pas « il l'a
+écrit en entier » ni « il est le dernier à l'avoir touché ». Prétendre la
+seconde chose demanderait de suivre chaque frappe, ce qu'Oxyn ne fait pas et
+n'a pas à faire.
+
+Elle ne suit pas un copier-coller : le presse-papiers ne porte pas de
+métadonnée. Un texte recopié à la main dans un autre document y arrive donc sans
+marque, et c'est une limite assumée d'ADR-0023, pas un défaut à contourner.
+
+### Configuration des fournisseurs et des agents
+
+L'écran IA des réglages déclare deux sortes de destinations et les montre dans
+**une** liste : les fournisseurs, avec leur clé, et les agents externes, sans
+clé.
+
+Un fournisseur se déclare par sa famille, son point d'accès, son modèle et, si
+le point d'accès l'exige, une clé. La clé va au trousseau du système ; elle
+n'est ni réaffichée, ni recopiée dans un message d'erreur, ni exportée avec le
+workspace (I-03). Ce que l'écran remontre après enregistrement, c'est
+« configurée » ou « absente », jamais la valeur.
+
+L'écran affiche le classement local/distant **avec l'instant de sa mesure**,
+parce qu'il est recalculé et jamais persisté : un point d'accès classé local
+hier peut résoudre ailleurs aujourd'hui. Une URL portant des identifiants dans
+son autorité est refusée à la saisie, pas nettoyée en silence.
+
+Les fournisseurs sont communs à tous les workspaces ; le niveau de
+confidentialité, lui, reste attaché à chaque connexion (ADR-0023). Il en va de
+même des agents externes.
+
+**Un agent externe se déclare de deux façons**, et aucune n'est déclarée sans que
+l'utilisateur l'ait voulu :
+
+* **par un préréglage**, pour les agents qu'Oxyn connaît — Claude Code et Codex
+  ([AI-PROVIDERS](AI-PROVIDERS.md#un-agent-externe--la-portée-nest-pas-inconnue-elle-est-inconnaissable)).
+  **À chaque ouverture de l'écran**, Oxyn cherche dans les emplacements
+  d'installation documentés le lanceur, `node` et le programme de l'agent. C'est
+  une **lecture du disque**, hors du thread de l'interface : rien n'est lancé,
+  rien n'est enregistré. Un agent installé pendant qu'Oxyn tourne se retrouve
+  par « Detect again ». L'écran montre la commande proposée, avec la version
+  épinglée de l'adaptateur, ce qui a été trouvé ou non, et la variable `PATH`
+  ajoutée pour qu'un Oxyn lancé depuis le Finder trouve Node — jamais un jeton.
+  Sans lanceur trouvé, la déclaration est impossible : elle enregistrerait un
+  agent qui ne peut pas démarrer. La commande d'authentification de l'agent est
+  affichée à côté ; c'est l'agent qui connecte son utilisateur, Oxyn ne voit
+  aucun identifiant ;
+* **à la main**, par un programme, ses arguments et son environnement, lancés
+  sans shell. Les arguments se tapent **un par ligne**, tels que le programme
+  les reçoit : aucun guillemet, aucun découpage sur l'espace
+  ([ADR-0026](adr/0026-agents-externes-acp.md)). L'environnement se tape une
+  ligne `NOM=valeur` par variable ; une ligne sans nom valide refuse
+  l'enregistrement plutôt que d'être ignorée. Les valeurs, qui sont souvent des
+  jetons, partent une fois et quittent l'écran aussitôt, que l'enregistrement
+  réussisse ou non ; la liste n'en montre que les noms.
+
+Dans les deux cas, déclarer demande **deux confirmations** : le bouton de
+l'écran, puis une boîte de dialogue **native** qui recopie la commande exacte,
+environnement compris, et rappelle qu'Oxyn ne voit pas où l'agent envoie les
+questions. Native, parce qu'un script injecté dans la webview peut appeler la
+commande de déclaration mais pas cliquer une fenêtre qu'il ne dessine pas
+([ADR-0026](adr/0026-agents-externes-acp.md)).
+
+Un agent déclaré **exactement** comme le préréglage le propose — même adaptateur,
+même version, aucun argument de plus — est confiné au lancement
+([ADR-0032](adr/0032-agent-externe-confine-au-lancement.md)). Tout autre agent,
+préréglage modifié compris, est traité comme inconnu : la liste le marque d'un
+avertissement disant qu'Oxyn ne peut pas l'empêcher d'agir seul sur la machine,
+et le panneau le répète quand il est choisi.

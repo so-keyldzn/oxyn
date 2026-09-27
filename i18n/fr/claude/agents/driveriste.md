@@ -27,7 +27,7 @@ implémenté ?**
 Redshift ≡ PostgreSQL. MariaDB ≡ MySQL. OpenSearch ≡ Elasticsearch. Memgraph
 parle Bolt. pgvector et TimescaleDB sont des extensions PostgreSQL. Les ~30
 systèmes de la vision se ramènent à ~14 implémentations
-([ADR-0003](../../../../docs/adr/0003-driver-capabilities.md)).
+([ADR-0003](../../docs/adr/0003-driver-capabilities.md)).
 
 Une crate en trop, ce sont deux décodeurs de protocole à maintenir et chaque bug
 à corriger deux fois — en oubliant une fois sur deux.

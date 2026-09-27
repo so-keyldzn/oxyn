@@ -12,7 +12,7 @@
 //! # Le fichier est une entrée hostile
 //!
 //! Un fichier de workspace se copie, se partage et s'édite avec n'importe quel
-//! client SQLite ([SECURITY](../../../docs/SECURITY.md#surface-dentrée),
+//! client SQLite ([SECURITY](../../../docs/SECURITY.md#input-surface),
 //! surface 3). La lecture borne ce qu'elle rend — 16 fenêtres, 256 consoles
 //! par fenêtre, le surplus retiré du fichier et journalisé, ses documents
 //! laissés dans la bibliothèque —, ramène un rectangle aberrant à ce qu'une

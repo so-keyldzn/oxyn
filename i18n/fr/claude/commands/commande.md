@@ -12,7 +12,7 @@ Objet : ajouter au command bus la commande qui permet **$ARGUMENTS**.
 
 ## Pourquoi ce geste a sa propre commande
 
-[ADR-0004](../../../../docs/adr/0004-command-bus.md) est la décision la plus
+[ADR-0004](../../docs/adr/0004-command-bus.md) est la décision la plus
 structurante du projet et la plus facile à éroder. Il suffit qu'une vue appelle
 un driver « en attendant », et le second chemin d'exécution existe pour toujours
 — non audité, non journalisé, et c'est celui que l'IA empruntera.

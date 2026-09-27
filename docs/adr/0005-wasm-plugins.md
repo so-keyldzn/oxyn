@@ -1,20 +1,21 @@
-# ADR-0005 — Plugins WebAssembly, pas de bibliothèques natives
+# ADR-0005 — WebAssembly plugins, no native libraries
 
-**Statut :** proposé · **Date :** 2026-09-05
+**Status:** proposed · **Date:** 2026-09-05
 
-## Contexte
-« Extensible through plugins » face à « Privacy first ». Un plugin natif (dylib) peut
-faire crasher le workspace, lire le trousseau et exfiltrer des identifiants.
+## Context
+"Extensible through plugins" versus "Privacy first". A native plugin (dylib) can crash
+the workspace, read the keychain and exfiltrate credentials.
 
-## Décision
-Hôte **wasmtime** avec le Component Model et des interfaces WIT. Trois surfaces :
-drivers (`oxyn:driver`), agents (déclaratifs, sans code), formats d'export et
-visualisations. Permissions déclarées au manifeste et approuvées à l'installation.
+## Decision
+A **wasmtime** host with the Component Model and WIT interfaces. Three surfaces:
+drivers (`oxyn:driver`), agents (declarative, no code), export formats and
+visualizations. Permissions declared in the manifest and approved at installation.
 
-## Conséquences
-* **+** Un plugin défaillant ne peut ni crasher ni exfiltrer.
-* **+** Accès réseau accordé hôte par hôte, port par port.
-* **−** Surcoût d'exécution et de sérialisation aux frontières (acceptable : les drivers
-  sont dominés par la latence réseau).
-* **−** Écrire un driver en plugin est plus contraignant qu'en crate interne — d'où le
-  report en phase 4, une fois les traits stabilisés par 6+ implémentations natives.
+## Consequences
+* **+** A faulty plugin can neither crash nor exfiltrate.
+* **+** Network access granted host by host, port by port.
+* **−** Execution and serialization overhead at the boundaries (acceptable: drivers
+  are dominated by network latency).
+* **−** Writing a driver as a plugin is more constraining than as an internal crate —
+  hence the postponement to phase 4, once the traits are stabilized by 6+ native
+  implementations.

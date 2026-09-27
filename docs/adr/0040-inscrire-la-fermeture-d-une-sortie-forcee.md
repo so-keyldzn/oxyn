@@ -1,96 +1,94 @@
-# ADR-0040 — Une sortie que macOS ne laisse pas retenir inscrit sa fermeture
+# ADR-0040 — An exit that macOS does not let us hold back records its closing
 
-**Statut :** accepté · **Date :** 2026-09-25
+**Status:** accepted · **Date:** 2026-09-25
 
-**Précise :** [ADR-0038](0038-un-plantage-s-annonce-une-fois.md), sur
-l'alternative « inscrire la fermeture dans `RunEvent::Exit` », qu'il écartait.
+**Clarifies:** [ADR-0038](0038-un-plantage-s-annonce-une-fois.md), on the
+alternative "record the closing in `RunEvent::Exit`", which it rejected.
 
-## Contexte
+## Context
 
-[ADR-0038](0038-un-plantage-s-annonce-une-fois.md) fait passer ⌘Q et le menu
-Quit par l'arrêt ordonné. Il laisse une limite : **le Quit du Dock et la
-fermeture de session macOS** envoient encore `terminate:` à l'application. La
-fermeture n'y est pas inscrite, et le lancement suivant propose la reprise
-après une sortie ordinaire. C'est le défaut même qu'ADR-0038 corrigeait, sur
-un chemin de plus.
+[ADR-0038](0038-un-plantage-s-annonce-une-fois.md) routes ⌘Q and the Quit menu
+through the orderly shutdown. It leaves one limit: **the Dock's Quit and the
+macOS session logout** still send `terminate:` to the application. The closing
+is not recorded there, and the next launch offers recovery after an ordinary
+exit. It is the very defect ADR-0038 fixed, on one more path.
 
-Le seul point où ce chemin peut être retenu est `applicationShouldTerminate:`,
-sur le délégué d'application. tao ne l'enregistre pas, ni la version épinglée
-(0.35.3) ni la dernière publiée (0.37.0), et Tauri 2.11.5 n'ajoute rien. tao
-traite seulement `applicationWillTerminate:`, qui produit `RunEvent::Exit` sur
-le thread principal. macOS termine le processus dès que ce rappel rend la main.
-Sources datées dans [RESEARCH-NOTES](../RESEARCH-NOTES.md#interface-tauri-et-front).
+The only point where this path can be held back is `applicationShouldTerminate:`,
+on the application delegate. tao does not register it, neither the pinned
+version (0.35.3) nor the latest published one (0.37.0), and Tauri 2.11.5 adds
+nothing. tao only handles `applicationWillTerminate:`, which produces
+`RunEvent::Exit` on the main thread. macOS ends the process as soon as this
+callback returns.
+Dated sources in [RESEARCH-NOTES](../RESEARCH-NOTES.md#tauri-interface-and-front-end).
 
-Ajouter la méthode au délégué de tao demanderait du `unsafe` dans
-`oxyn-desktop`, que le workspace refuse ([SECURITY](../SECURITY.md#politique-unsafe)).
+Adding the method to tao's delegate would require `unsafe` in `oxyn-desktop`,
+which the workspace refuses ([SECURITY](../SECURITY.md#unsafe-policy)).
 
-ADR-0038 écartait l'inscription dans `RunEvent::Exit` pour une raison :
-les brouillons ne peuvent plus y être vidés, parce que la webview répond par le
-thread principal que ce rappel occupe. Or l'arrêt ordonné accepte déjà ce
-cas : si la webview ne confirme pas le vidage dans les 2 s, la fermeture est
-inscrite quand même, parce qu'un brouillon est écrit au plus tard 250 ms après
-la dernière frappe ([ADR-0024](0024-autosauvegarde-au-repos-de-frappe.md)). Ce que
-`RunEvent::Exit` perd est donc ce que l'arrêt ordonné tolère déjà : au plus
-les 250 dernières millisecondes de frappe.
+ADR-0038 rejected recording in `RunEvent::Exit` for one reason: drafts can no
+longer be flushed there, because the webview answers through the main thread
+that this callback occupies. Yet the orderly shutdown already accepts this
+case: if the webview does not confirm the flush within 2 s, the closing is
+recorded anyway, because a draft is written at most 250 ms after the last
+keystroke ([ADR-0024](0024-autosauvegarde-au-repos-de-frappe.md)). What
+`RunEvent::Exit` loses is therefore what the orderly shutdown already
+tolerates: at most the last 250 milliseconds of typing.
 
-## Décision
+## Decision
 
-**Dans `RunEvent::Exit`, si l'arrêt ordonné n'a pas eu lieu, Oxyn inscrit la
-fermeture après les écritures locales, dans une attente bornée à 2 s.**
+**In `RunEvent::Exit`, if the orderly shutdown has not taken place, Oxyn
+records the closing after the local writes, in a wait bounded to 2 s.**
 
 - `Backend::close_on_forced_exit` (`crates/oxyn-desktop/src/backend/recovery.rs`)
-  marque l'arrêt comme commencé, puis lance sur le runtime la même
-  `close_session_after_local_writes` que l'arrêt ordonné. La lecture et
-  l'écriture du store se font sur le pool bloquant.
-- Le thread principal attend la fin de cette tâche sur un canal, au plus
-  `FORCED_EXIT_GRACE` (2 s, `crates/oxyn-desktop/src/commands/recovery.rs`). La
-  fenêtre est déjà partie : cette attente ne fige rien
-  ([I-05](../../CLAUDE.md#i-05)), comme le vidage du journal déjà fait au même
-  endroit.
-- Les brouillons ne sont pas vidés. Aucune demande n'est envoyée à la webview.
-- Si une écriture locale est encore en cours au terme de l'attente, la
-  fermeture **peut rester non inscrite**. La tâche n'est pas annulée : elle
-  l'inscrit si l'écriture finit avant que macOS ne tue le processus, et
-  toujours après elle. Sinon, le lancement suivant propose la reprise, et le
-  journal le dit (`warn`).
-- Les instructions en cours sur les serveurs ne sont pas annulées sur ce
-  chemin. Rien ne change sur ce point : elles ne l'étaient pas avant.
+  marks the shutdown as started, then launches on the runtime the same
+  `close_session_after_local_writes` as the orderly shutdown. Reading and
+  writing the store happen on the blocking pool.
+- The main thread waits for this task to finish on a channel, at most
+  `FORCED_EXIT_GRACE` (2 s, `crates/oxyn-desktop/src/commands/recovery.rs`). The
+  window is already gone: this wait freezes nothing
+  ([I-05](../../CLAUDE.md#i-05)), like the log flush already done at the same
+  place.
+- Drafts are not flushed. No request is sent to the webview.
+- If a local write is still in progress when the wait ends, the closing **may
+  remain unrecorded**. The task is not cancelled: it records it if the write
+  finishes before macOS kills the process, and always after it. Otherwise, the
+  next launch offers recovery, and the log says so (`warn`).
+- Statements running on servers are not cancelled on this path. Nothing
+  changes on that point: they were not before.
 
-## Conséquences
+## Consequences
 
-* **+** Le Quit du Dock et la fermeture de session ne font plus proposer la
-  reprise après une sortie ordinaire.
-* **+** Aucun `unsafe`, aucune dépendance à un comportement privé de tao : le
-  correctif ne tient qu'à `RunEvent::Exit`, que Tauri documente.
-* **+** La règle d'ADR-0021 tient : la fermeture n'est jamais écrite par-dessus
-  une écriture locale en cours.
-* **−** Sur ce chemin, les 250 dernières millisecondes de frappe peuvent être
-  perdues sans que la reprise soit proposée. C'est la tolérance de l'arrêt
-  ordonné face à une webview muette, étendue à un cas où la webview n'est pas
-  même interrogée.
-* **−** Le thread principal peut attendre jusqu'à 2 s en plus de la seconde du
-  journal. macOS peut forcer la fin d'une fermeture de session plus lente.
-  Dans ce cas, la fermeture n'est pas inscrite, ce qui est le sens prudent.
-* **−** Une instruction serveur en cours n'est pas annulée : elle continue
-  jusqu'à ce que le serveur constate la coupure.
-* **−** Une écriture n'est comptée qu'au début de sa commande Tauri. Une
-  écriture partie de la webview mais pas encore lancée échappe à l'attente,
-  pendant quelques millisecondes. L'arrêt ordonné a la même fenêtre.
+* **+** The Dock's Quit and session logout no longer cause recovery to be
+  offered after an ordinary exit.
+* **+** No `unsafe`, no dependency on a private tao behavior: the fix relies
+  only on `RunEvent::Exit`, which Tauri documents.
+* **+** ADR-0021's rule holds: the closing is never written over a local write
+  in progress.
+* **−** On this path, the last 250 milliseconds of typing can be lost without
+  recovery being offered. It is the orderly shutdown's tolerance for a silent
+  webview, extended to a case where the webview is not even asked.
+* **−** The main thread can wait up to 2 s on top of the log's second. macOS
+  may force the end of a slower session logout. In that case, the closing is
+  not recorded, which is the cautious direction.
+* **−** A running server statement is not cancelled: it continues until the
+  server notices the disconnection.
+* **−** A write is only counted at the start of its Tauri command. A write
+  sent from the webview but not yet started escapes the wait, for a few
+  milliseconds. The orderly shutdown has the same window.
 
-**Coût de sortie :** une méthode et une branche de `on_run_event`. Les retirer
-rend ce chemin à l'état décrit par ADR-0038 : fermeture non inscrite, reprise
-proposée.
+**Exit cost:** one method and one branch of `on_run_event`. Removing them
+returns this path to the state described by ADR-0038: closing not recorded,
+recovery offered.
 
-**Reconsidérer si** tao enregistre `applicationShouldTerminate:`. La sortie
-par `terminate:` deviendrait alors retenable et passerait par l'arrêt ordonné
-complet, brouillons vidés. Ce chemin et le Quit propre à Oxyn n'auraient plus
-de raison d'être.
+**Reconsider if** tao registers `applicationShouldTerminate:`. Exiting through
+`terminate:` would then become holdable and would go through the full orderly
+shutdown, drafts flushed. This path and Oxyn's own Quit would have no reason
+to exist anymore.
 
-## Alternatives écartées
+## Rejected alternatives
 
-| Alternative | Raison du rejet |
+| Alternative | Reason for rejection |
 |---|---|
-| Ajouter `applicationShouldTerminate:` à la classe du délégué de tao (`class_addMethod`) | Exige du `unsafe` dans `oxyn-desktop`, et lever ce refus pour un seul appel est une décision d'architecture disproportionnée. Le correctif dépendrait aussi du nom d'une classe privée de tao |
-| Garder la limite (reprise proposée après le Quit du Dock) | L'écran de reprise cesse d'être un signal pour qui quitte depuis le Dock, soit le défaut qu'ADR-0038 corrigeait |
-| Inscrire la fermeture sans attendre les écritures locales | Marquerait un arrêt propre par-dessus une écriture peut-être non faite, ce qu'ADR-0021 interdit |
-| Attendre sans borne | Une écriture bloquée retiendrait la fermeture de session macOS, qui finirait par tuer le processus |
+| Add `applicationShouldTerminate:` to tao's delegate class (`class_addMethod`) | Requires `unsafe` in `oxyn-desktop`, and lifting that refusal for a single call is a disproportionate architecture decision. The fix would also depend on the name of a private tao class |
+| Keep the limit (recovery offered after the Dock's Quit) | The recovery screen stops being a signal for whoever quits from the Dock, i.e. the defect ADR-0038 fixed |
+| Record the closing without waiting for local writes | Would mark a clean shutdown over a write that may not have happened, which ADR-0021 forbids |
+| Wait without a bound | A blocked write would hold back the macOS session logout, which would end up killing the process |

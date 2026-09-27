@@ -29,7 +29,7 @@ python3 .claude/hooks/verifier_versions.py
 
 Le script **ne modifie rien** : décider d'une montée de version appartient à un
 humain, et un écart n'est pas nécessairement une erreur — une version peut être
-délibérément figée ([ADR-0009](../../../../docs/adr/0009-source-dependance-gpui.md) en
+délibérément figée ([ADR-0009](../../docs/adr/0009-source-dependance-gpui.md) en
 est un cas).
 
 Pour chaque écart :

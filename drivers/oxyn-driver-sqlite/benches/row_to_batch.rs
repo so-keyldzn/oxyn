@@ -259,7 +259,7 @@ async fn drain(session: &dyn Session, sql: &str, cancel: &CancelToken) -> (usize
 /// Compiles the statement and returns as soon as the first batch is available.
 ///
 /// This is the path behind the « premières lignes affichées » budget of
-/// [PERFORMANCE](../../../docs/PERFORMANCE.md#budgets-dinteraction): the driver
+/// [PERFORMANCE](../../../docs/PERFORMANCE.md#interaction-budgets): the driver
 /// resolves the column types on a first probe pass, so the first batch costs
 /// strictly more per row than the ones that follow. Dropping the cursor right
 /// after interrupts the statement, which is what closing a tab does.

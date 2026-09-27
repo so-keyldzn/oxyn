@@ -20,7 +20,7 @@
 //! not type it for: an edit that changes any non-secret parameter the driver
 //! declares — host, port, database, file, but also the user or the TLS mode —
 //! forgets the stored secrets, and saves only what was typed for the new
-//! destination, under a fresh keyring reference ([SECURITY](../../../../../docs/SECURITY.md#un-secret-ne-suit-pas-sa-connexion-ailleurs)). Every
+//! destination, under a fresh keyring reference ([SECURITY](../../../../../docs/SECURITY.md#a-secret-does-not-follow-its-connection-elsewhere)). Every
 //! parameter rather than an « address » subset: a password for another role,
 //! or sent under `sslmode=disable` where it went under `verify-full`, leaves
 //! just as surely, and in doubt forgetting only costs a retype. The name, the

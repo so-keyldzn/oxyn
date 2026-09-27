@@ -1,4 +1,4 @@
-<!-- oxyn-translation source=".claude/checklists/revue-securite.md" sha256="4ffc3018de99" -->
+<!-- oxyn-translation source=".claude/checklists/revue-securite.md" sha256="d4c002853c91" -->
 
 > Traduction française de [.claude/checklists/revue-securite.md](../../../../.claude/checklists/revue-securite.md). **La version anglaise fait foi.**
 
@@ -54,7 +54,7 @@ Contrôle mécanique le plus rentable :
 - [ ] Chaque bloc porte un `// SAFETY:` qui énonce l'invariant **et qui le
       maintient** — une paraphrase du code ne vaut rien
 - [ ] Tout `#[allow(unsafe_code)]` renvoie à l'ADR qui l'autorise
-      ([SECURITY](../../../../docs/SECURITY.md#politique-unsafe))
+      ([SECURITY](../../docs/SECURITY.md#politique-unsafe))
 - [ ] Relu par `relecteur-securite`
 
 ## Frontière IA

@@ -7,7 +7,7 @@ memory: project
 color: cyan
 ---
 
-<!-- oxyn-translation source=".claude/agents/shadcniste.md" sha256="8c33a5c209c8" -->
+<!-- oxyn-translation source=".claude/agents/shadcniste.md" sha256="3b1c709ff44a" -->
 
 > Traduction française de [.claude/agents/shadcniste.md](../../../../.claude/agents/shadcniste.md). **La version anglaise fait foi.**
 
@@ -42,11 +42,11 @@ En cas de doute, c'est la colonne de droite qui gagne.
 | `npx shadcn@latest …` | `pnpm exec shadcn …` dans `apps/desktop` | la CLI est épinglée dans `package.json` ; `@latest` est une version recopiée de mémoire ([I-12](../../CLAUDE.md#i-12)) |
 | `asChild` | `render={<Button />}`, et `nativeButton={false}` si l'élément rendu n'est pas un bouton | `base` vaut `base` |
 | `toast()` de `sonner` | le composant `toast` de `src/components/ui` | Base UI |
-| une icône `lucide-react` | `<HugeiconsIcon icon={…} />`, nom vérifié dans le `.d.ts` du paquet | [UX-SPEC](../../../../docs/UX-SPEC.md#navigation-du-premier-workspace) impose Hugeicons |
+| une icône `lucide-react` | `<HugeiconsIcon icon={…} />`, nom vérifié dans le `.d.ts` du paquet | [UX-SPEC](../../docs/UX-SPEC.md#navigation-du-premier-workspace) impose Hugeicons |
 | `import { cn } from "cn"` | `import { cn } from "@/lib/utils"` | l'alias déclaré, pas le paquet |
 | ajouter une variante dans le composant | **ne pas toucher `src/components/ui`** : le signaler | le répertoire est généré ; une retouche est écrasée au prochain `add --overwrite` |
 | `add --overwrite` pour mettre à jour | `add <c> --dry-run` puis `--diff <fichier>`, et jamais `--overwrite` sans accord explicite | une modification locale se perd sans bruit |
-| script inline de `chat.md` (`dangerouslySetInnerHTML`) | jamais | CSP stricte et [SECURITY](../../../../docs/SECURITY.md#surface-dentrée) |
+| script inline de `chat.md` (`dangerouslySetInnerHTML`) | jamais | CSP stricte et [SECURITY](../../docs/SECURITY.md#surface-dentrée) |
 | « demander quel registre » | tu ne demandes pas : tu **rapportes** le besoin | tu n'as pas l'utilisateur ; l'orchestrateur l'a |
 
 Une couleur absente des jetons (un statut, un environnement) ne s'invente pas :

@@ -78,7 +78,7 @@ longer displays anything.
 
 `criterion` for pure code: conversion to `RecordBatch`, parsing, formatting,
 schema diff
-([PERFORMANCE](../../docs/PERFORMANCE.md#ce-qui-se-mesure-et-comment)).
+([PERFORMANCE](../../docs/PERFORMANCE.md#what-is-measured-and-how)).
 
 Two things that are **not** benches:
 

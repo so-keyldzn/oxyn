@@ -1,74 +1,75 @@
-# Contrat de plugin
+# Plugin contract
 
-> **Autorité** : ce qu'un plugin peut faire, ce qu'il ne peut pas, et ce que
-> l'hôte lui garantit.
+> **Authority**: what a plugin can do, what it cannot, and what the host
+> guarantees it.
 
-Le mécanisme est tranché par [ADR-0005](adr/0005-wasm-plugins.md) : **wasmtime**,
-Component Model, interfaces **WIT**, permissions déclarées au manifeste et
-approuvées à l'installation. Trois surfaces : drivers (`oxyn:driver`), agents
-déclaratifs, formats d'export et visualisations.
+The mechanism is settled by [ADR-0005](adr/0005-wasm-plugins.md): **wasmtime**,
+Component Model, **WIT** interfaces, permissions declared in the manifest and
+approved at install time. Three surfaces: drivers (`oxyn:driver`), declarative
+agents, export formats and visualizations.
 
-Livraison en **phase 4**, une fois les traits stabilisés par six implémentations
-natives ou plus. Ce document existe avant le code parce qu'il porte des
-contraintes qui doivent tenir dès la conception des traits — un trait dessiné
-sans elles ne passera pas la frontière WASM.
+Delivered in **phase 4**, once the traits have been stabilized by six or more
+native implementations. This document exists before the code because it carries
+constraints that must hold from the design of the traits — a trait drawn without
+them will not cross the WASM boundary.
 
-## Ce que le bac à sable garantit déjà
+## What the sandbox already guarantees
 
-[ADR-0005](adr/0005-wasm-plugins.md) règle par construction ce qui, avec des
-bibliothèques natives, aurait demandé de la discipline : un plugin défaillant ne
-peut ni faire tomber le workspace, ni lire le trousseau, ni ouvrir une connexion
-réseau non accordée. Ce document ne le répète pas.
+[ADR-0005](adr/0005-wasm-plugins.md) settles by construction what, with native
+libraries, would have required discipline: a faulty plugin can neither bring
+down the workspace, nor read the keychain, nor open a network connection it was
+not granted. This document does not repeat it.
 
-## Ce que le bac à sable ne garantit pas
+## What the sandbox does not guarantee
 
-Quatre contraintes qu'aucun bac à sable ne fait respecter à votre place.
+Four constraints that no sandbox enforces for you.
 
-### 1. Un plugin passe par le command bus comme tout le monde
+### 1. A plugin goes through the command bus like everyone else
 
-Un plugin émet des `Command` ([ADR-0004](adr/0004-command-bus.md)). Il n'obtient
-pas de poignée vers un driver, ni la liste des connexions ouvertes.
+A plugin emits `Command`s ([ADR-0004](adr/0004-command-bus.md)). It gets no
+handle to a driver, nor the list of open connections.
 
-**Panne concrète :** un plugin de coloration syntaxique, installé pour son thème,
-énumère les connexions et exfiltre les hôtes de production. Le bac à sable
-l'empêche d'ouvrir une socket non accordée, mais rien ne l'empêche d'afficher les
-hôtes dans son propre panneau. La protection est de ne pas les lui donner.
+**Concrete failure:** a syntax-highlighting plugin, installed for its theme,
+enumerates the connections and exfiltrates the production hosts. The sandbox
+prevents it from opening a socket it was not granted, but nothing prevents it
+from displaying the hosts in its own panel. The protection is not to give them
+to it.
 
-### 2. Un plugin ne bloque pas le thread UI
+### 2. A plugin does not block the UI thread
 
-Conséquence de [I-05](../CLAUDE.md#i-05). L'exécution d'un composant WASM se fait
-hors du thread UI, avec une limite de temps et de carburant. Sans limite, un
-plugin en boucle infinie ne fait pas tomber l'hôte — il le fige, ce qui revient
-au même pour l'utilisateur.
+A consequence of [I-05](../CLAUDE.md#i-05). A WASM component runs off the UI
+thread, with a time and fuel limit. Without a limit, a plugin in an infinite
+loop does not bring down the host — it freezes it, which amounts to the same
+thing for the user.
 
-### 3. La version de l'interface est vérifiée au chargement
+### 3. The interface version is checked at load time
 
-Un plugin construit contre une version antérieure d'une interface WIT est
-**refusé** avec un message clair, jamais chargé « pour voir ». Le Component Model
-rend l'incompatibilité détectable : encore faut-il la traiter comme un refus.
+A plugin built against an earlier version of a WIT interface is **refused** with
+a clear message, never loaded "to see". The Component Model makes the
+incompatibility detectable: it still has to be treated as a refusal.
 
-### 4. Le coût de frontière se paie en Arrow
+### 4. The boundary cost is paid in Arrow
 
-Les résultats traversent en Arrow IPC ([ADR-0002](adr/0002-arrow-result-model.md)),
-pas en structures sérialisées champ à champ. Un driver WASM qui reconvertit ses
-lots perd l'essentiel de ce que le modèle colonnaire apportait.
+Results cross in Arrow IPC ([ADR-0002](adr/0002-arrow-result-model.md)), not in
+structures serialized field by field. A WASM driver that converts its batches
+back loses most of what the columnar model brought.
 
-## Ce que ce contrat impose aux traits d'aujourd'hui
+## What this contract imposes on today's traits
 
-C'est la raison d'être de ce document pendant les phases 0 à 3. Un trait de
-`oxyn-driver` qui ne peut pas franchir la frontière WASM fermera la porte à
-[ADR-0005](adr/0005-wasm-plugins.md) sans que personne ne s'en aperçoive avant la
-phase 4 :
+This is the reason this document exists during phases 0 to 3. An `oxyn-driver`
+trait that cannot cross the WASM boundary will close the door on
+[ADR-0005](adr/0005-wasm-plugins.md) without anyone noticing before
+phase 4:
 
-- pas de type générique non résoluble à la frontière ;
-- pas de rappel synchrone du plugin vers l'hôte hors des interfaces WIT ;
-- pas d'état partagé implicite entre l'hôte et l'implémentation ;
-- toute erreur exprimable en valeur, jamais en panique traversant la frontière.
+- no generic type that cannot be resolved at the boundary;
+- no synchronous callback from the plugin to the host outside the WIT interfaces;
+- no implicit shared state between the host and the implementation;
+- every error expressible as a value, never as a panic crossing the boundary.
 
-## Ce qui reste à trancher
+## What remains to be settled
 
-- la politique de compatibilité des interfaces WIT entre versions d'Oxyn ;
-- la distribution et la vérification d'origine des plugins ;
-- le format et la granularité du manifeste de permissions.
+- the compatibility policy of WIT interfaces between Oxyn versions;
+- the distribution and origin verification of plugins;
+- the format and granularity of the permissions manifest.
 
-À écrire avec [`/adr`](../.claude/commands/adr.md).
+To be written with [`/adr`](../.claude/commands/adr.md).

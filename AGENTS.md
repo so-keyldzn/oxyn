@@ -11,8 +11,7 @@ domain instructions apply to Codex too. The tooling adaptations below replace
 the indications specific to Claude Code.
 
 The repository is in English — code, identifiers, comments, errors,
-documentation, ADRs, commits; French documents in `docs/` stay authoritative
-until translated, and `i18n/fr/` holds French mirrors, English being
+documentation, ADRs, commits; `i18n/fr/` holds French mirrors, English being
 authoritative ([ADR-0047](docs/adr/0047-english-as-the-repository-language.md)).
 The documents of `docs/` are authoritative on the domain; report any
 contradiction with the code.

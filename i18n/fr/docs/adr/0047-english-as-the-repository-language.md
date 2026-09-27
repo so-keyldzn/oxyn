@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="docs/adr/0047-english-as-the-repository-language.md" sha256="e3a11e8ad738" -->
+<!-- oxyn-translation source="docs/adr/0047-english-as-the-repository-language.md" sha256="619dd14fb3f1" -->
 
 > Traduction française de [docs/adr/0047-english-as-the-repository-language.md](../../../../docs/adr/0047-english-as-the-repository-language.md). **La version anglaise fait foi.**
 
@@ -37,15 +37,14 @@ en français.
 1. **La langue du dépôt est l'anglais** : code, identifiants, commentaires,
    messages d'erreur, documentation, ADR, messages de commit, pull requests,
    issues. Les nouveaux documents et ADR s'écrivent en anglais.
-2. **Le socle est traduit maintenant** : `CLAUDE.md`, `AGENTS.md`, `README.md`,
-   `docs/README.md`, toute la prose de `.claude/` (règles, commandes, agents,
-   checklists, gabarits, workflows), les messages des hooks, les modèles de
-   pull request et d'issue.
-3. **Les documents d'autorité de `docs/` et les ADR 0001 à 0046 restent en
-   français** et font autorité tels quels. L'un d'eux se traduit dans un commit
-   dédié qui ne change aucune décision — ADR acceptés compris, puisqu'une
-   traduction ne décide rien — avant toute modification substantielle. Une
-   petite correction reste dans la langue actuelle du document.
+2. **Tout est traduit maintenant** : `CLAUDE.md`, `AGENTS.md`, `README.md`,
+   tous les documents de `docs/`, les ADR 0001 à 0046, toute la prose de
+   `.claude/` (règles, commandes, agents, checklists, gabarits, workflows,
+   rapports d'audit), les messages des hooks, les modèles de pull request et
+   d'issue.
+3. **Traduire un ADR accepté ne décide rien.** Les ADR 0001 à 0046 sont
+   traduits tels quels : même décision, même statut, même date. Les noms de
+   fichier ne changent pas, pour qu'aucun lien ne casse.
 4. **Miroirs français, l'anglais fait foi.** Chaque document traduit a un
    miroir français à `i18n/fr/<chemin>`, où `.claude/` devient `claude/`. Le
    miroir commence par `<!-- oxyn-translation source="<chemin>" sha256="<12 hex>" -->`,
@@ -77,10 +76,10 @@ pas une règle du dépôt : elle sort de `CLAUDE.md`.
   request. Un contributeur qui n'écrit pas le français ne peut pas faire passer
   la porte seul : il le signale dans la pull request, et le mainteneur met le
   miroir à jour avant la fusion.
-* Les documents d'autorité restent en français pour l'instant : un
-  contributeur anglophone lit encore `docs/SECURITY.md` ou
-  `docs/DRIVER-CONTRACT.md` en français, ou via un outil de traduction. Les
-  ancres vers ces documents restent françaises.
+* Toutes les ancres de titre ont changé avec la traduction : les liens vers
+  les documents anglais utilisent des ancres anglaises, ceux des miroirs
+  gardent les ancres françaises et pointent vers les miroirs. Les noms de
+  fichier des ADR restent français.
 * L'historique est bilingue : français avant le 2026-09-27, anglais après.
 * Les identifiants Python des hooks, les noms des cibles `make`, des scripts,
   des commandes et des agents (`make qualite`, `/implementer`, `rustacien`)
@@ -100,11 +99,11 @@ lus — le contrôle ne serait alors plus qu'un coût.
 * **Une simple porte d'entrée anglaise** (README, modèles, un guide qui résume
   les invariants). Deux versions des invariants, dont une non vérifiée : elles
   divergent en quelques semaines, et le contributeur lit la périmée.
-* **Tout en anglais maintenant, `docs/` et les 46 ADR compris.** Plusieurs
-  jours de traduction pendant lesquels les documents d'autorité continuent de
-  changer ; le risque de dérive pendant la traduction l'emporte sur le
-  bénéfice. La traduction progressive du point 3 atteint le même état sans ce
-  risque.
+* **Traduire `docs/` progressivement, avant chaque modification
+  substantielle.** Un contributeur anglophone lirait encore pendant des mois
+  `docs/SECURITY.md` et `docs/DRIVER-CONTRACT.md` — les documents vers
+  lesquels pointent la plupart des invariants — en français, et le dépôt
+  resterait bilingue d'autant.
 * **Fichiers bilingues côte à côte (`rust.fr.md`).** Claude Code charge tout
   `*.md` de `.claude/rules`, `.claude/commands` et `.claude/agents` : un fichier
   français à côté de l'anglais chargerait une seconde règle, commande ou agent.

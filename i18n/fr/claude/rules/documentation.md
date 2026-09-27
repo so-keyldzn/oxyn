@@ -6,7 +6,7 @@ paths:
   - "i18n/**/*.md"
 ---
 
-<!-- oxyn-translation source=".claude/rules/documentation.md" sha256="8ee94e4f68d9" -->
+<!-- oxyn-translation source=".claude/rules/documentation.md" sha256="67f94da5daf0" -->
 
 > Traduction française de [.claude/rules/documentation.md](../../../../.claude/rules/documentation.md). **La version anglaise fait foi.**
 
@@ -32,9 +32,9 @@ C'est la seule chose qui empêche ce socle de pourrir. Les autres fichiers y
 deux semaines, et plus personne ne sait laquelle fait foi.
 
 Concrètement : le tableau des niveaux de confidentialité vit dans
-[ADR-0006](../../../../docs/adr/0006-ai-privacy-tiers.md) et nulle part ailleurs ; la
+[ADR-0006](../../docs/adr/0006-ai-privacy-tiers.md) et nulle part ailleurs ; la
 politique du `PolicyGate` vit dans
-[ADR-0004](../../../../docs/adr/0004-command-bus.md) et nulle part ailleurs.
+[ADR-0004](../../docs/adr/0004-command-bus.md) et nulle part ailleurs.
 
 ## Un document d'autorité est spécifique et chiffré
 
@@ -44,13 +44,13 @@ la requête » fait autorité.
 
 Un document d'autorité décrit **ce qui est décidé**, pas ce qui reste à faire :
 le reste à faire va dans
-[IMPLEMENTATION-PLAN](../../../../docs/IMPLEMENTATION-PLAN.md).
+[IMPLEMENTATION-PLAN](../../docs/IMPLEMENTATION-PLAN.md).
 
 ## Tout fait externe porte sa source et sa date
 
 Une valeur non datée est une valeur périmée qu'on n'a pas encore repérée
 ([I-12](../../CLAUDE.md#i-12)). Les faits externes vivent dans
-[RESEARCH-NOTES](../../../../docs/RESEARCH-NOTES.md), pas dispersés.
+[RESEARCH-NOTES](../../docs/RESEARCH-NOTES.md), pas dispersés.
 
 ## ADR
 
@@ -58,7 +58,7 @@ Gabarit : [.claude/templates/adr.md](../templates/adr.md). Geste :
 [`/adr`](../commands/adr.md).
 
 **Un ADR accepté ne se réécrit pas** : on en écrit un nouveau qui le remplace ou
-le précise, et on le dit en tête ([ADR-0009](../../../../docs/adr/0009-source-dependance-gpui.md)
+le précise, et on le dit en tête ([ADR-0009](../../docs/adr/0009-source-dependance-gpui.md)
 en est l'exemple). Une décision sans critère de révision devient un dogme : tout
 ADR porte son **coût de sortie** et la **condition qui déclencherait sa
 reconsidération**.
@@ -67,16 +67,13 @@ reconsidération**.
 
 Le dépôt est en **anglais** : code, identifiants, `///`, commentaires, messages
 d'erreur, documentation, ADR, messages de commit, pull requests
-([ADR-0047](../../../../docs/adr/0047-english-as-the-repository-language.md)).
+([ADR-0047](../../docs/adr/0047-english-as-the-repository-language.md)).
 Un extrait de code dans un document reste en anglais.
 
-**Ce qui a été écrit en français.** Les documents de `docs/` et les ADR 0001 à
-0046 rédigés en français font autorité tels quels, jusqu'à leur
-traduction. En traduire un est un commit de **pure traduction**, qui ne change
-aucune décision — un ADR accepté peut être traduit, pas réécrit. Il précède
-toute modification substantielle du document ; une petite correction reste dans
-la langue actuelle du document, pour qu'un fichier ne mélange jamais deux
-langues.
+**Ce qui a été écrit en français.** Tout document écrit en français avant
+l'ADR-0047, ADR 0001 à 0046 compris, a été traduit tel quel : une traduction ne
+change aucune décision — un ADR accepté peut être traduit, pas réécrit. Les
+noms de fichier des ADR sont restés français pour qu'aucun lien ne casse.
 
 **L'anglais fait foi. Les miroirs français** vivent dans `i18n/fr/`, au chemin
 de leur original (`.claude/` devient `claude/`, pour que Claude Code ne charge

@@ -13,7 +13,7 @@ paths:
   - "script/*"
 ---
 
-<!-- oxyn-translation source=".claude/rules/manifestes.md" sha256="14aa84999fef" -->
+<!-- oxyn-translation source=".claude/rules/manifestes.md" sha256="d74b32ee1b87" -->
 
 > Traduction française de [.claude/rules/manifestes.md](../../../../.claude/rules/manifestes.md). **La version anglaise fait foi.**
 
@@ -27,7 +27,7 @@ construire le projet six mois plus tard.
 
 Avant d'ajouter ou de modifier une dépendance : [`/versions`](../commands/versions.md).
 La valeur retenue est reportée dans
-[RESEARCH-NOTES](../../../../docs/RESEARCH-NOTES.md) **dans le même commit**.
+[RESEARCH-NOTES](../../docs/RESEARCH-NOTES.md) **dans le même commit**.
 
 ## Le workspace centralise
 
@@ -39,14 +39,14 @@ message d'erreur qui en résulte est célèbre pour son opacité.
 ## `rust-toolchain.toml`
 
 Version **exacte**, avec `rustfmt` et `clippy`
-([ADR-0008](../../../../docs/adr/0008-chaine-outils-rust.md)). Une montée de version
+([ADR-0008](../../docs/adr/0008-chaine-outils-rust.md)). Une montée de version
 est un commit délibéré, qui met à jour
-[RESEARCH-NOTES](../../../../docs/RESEARCH-NOTES.md) en même temps.
+[RESEARCH-NOTES](../../docs/RESEARCH-NOTES.md) en même temps.
 
 ## Nouvelle dépendance
 
 Elle se justifie en revue : ce qu'elle apporte, et le coût de s'en passer
-([SECURITY](../../../../docs/SECURITY.md#dépendances)). Une crate utilisée à un seul
+([SECURITY](../../docs/SECURITY.md#dépendances)). Une crate utilisée à un seul
 endroit pour une seule fonction est un candidat à la réécriture, pas une
 évidence. Une crate non maintenue sur une frontière externe est un risque à
 documenter.
@@ -70,7 +70,7 @@ le workflow ne tournerait jamais en CI. `make socle` le refuse
 deux endroits dans le même commit.
 
 Sur une pull request, les jobs d'une zone intacte sont sautés
-([ADR-0045](../../../../docs/adr/0045-ci-selective-sur-les-pull-requests.md)) ; sur
+([ADR-0045](../../docs/adr/0045-ci-selective-sur-les-pull-requests.md)) ; sur
 `main`, tout tourne. Un nouveau job qui appelle `make` s'ajoute aux `needs` du
 job agrégat `qualite` (`controler_agregat_ci`), et un nouveau répertoire de
 premier niveau se range dans `script/zones-ci` — sans quoi il déclenche tout.

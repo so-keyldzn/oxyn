@@ -1,18 +1,18 @@
 ---
 name: oxyn-relire
-description: "Relire un changement contre les invariants et les documents d'autorité dans le projet Oxyn. À utiliser pour une demande correspondante dans ce dépôt."
+description: "Review a change against the invariants and the authoritative documents in the Oxyn project. Use for a matching request in this repository."
 ---
 
 # Oxyn — relire
 
-Lire les [consignes Codex du projet](../../../AGENTS.md), puis la
-[procédure commune relire](../../../.claude/commands/relire.md) et suivre
-ses étapes applicables à la demande. La procédure reste la source unique ;
-interpréter ses syntaxes Claude selon les adaptations de `AGENTS.md`.
+Read the [project's Codex instructions](../../../AGENTS.md), then the
+[shared relire procedure](../../../.claude/commands/relire.md) and follow
+its steps that apply to the request. The procedure stays the single source;
+interpret its Claude syntax according to the adaptations of `AGENTS.md`.
 
-Relire sans modifier les sources : profils relecteur-invariants et detecteur-divergence, puis relecteur-frontiere ou relecteur-securite selon le changement. Sans périmètre explicite, inclure les modifications indexées, non indexées et les nouveaux fichiers pertinents. Les corrections nécessitent une demande correspondante.
+Review without modifying the sources: relecteur-invariants and detecteur-divergence profiles, then relecteur-frontiere or relecteur-securite depending on the change. Without an explicit scope, include staged and unstaged changes and the relevant new files. Fixes require a matching request.
 
-Résoudre les liens de la procédure depuis son propre répertoire. Les chemins
-shell sont relatifs à la racine Oxyn. Utiliser les outils de la session ; les
-métadonnées Claude n’accordent aucune permission supplémentaire. Effectuer
-les relectures localement si aucune délégation n’est demandée ou disponible.
+Resolve the procedure's links from its own directory. Shell paths are
+relative to the Oxyn root. Use the session's tools; Claude metadata grants
+no additional permission. Do the reviews locally if no delegation is
+requested or available.

@@ -1,72 +1,71 @@
-# ADR-0012 — Lire les pages de résultats hors du rendu et borner leur cache en octets
+# ADR-0012 — Read result pages outside rendering and bound their cache in bytes
 
-**Statut :** accepté · **Date :** 2026-09-10
+**Status:** accepted · **Date:** 2026-09-10
 
-**Précise :** [ADR-0002](0002-arrow-result-model.md), sur la relecture et son
-budget ; [ADR-0004](0004-command-bus.md), sur la commande locale de lecture.
+**Clarifies:** [ADR-0002](0002-arrow-result-model.md), on re-reading and its
+budget; [ADR-0004](0004-command-bus.md), on the local read command.
 
-## Contexte
+## Context
 
-`DataGrid` refuse correctement les entrées-sorties au rendu, mais ne déclenche
-aucune relecture des lots débordés. Ils restent dessinés sous forme de points
-de suspension. `SpillCache` conserve quatre lots sans borne en octets, en plus
-des lots résidents. Cette limite ne borne pas la mémoire lorsque la taille des
-lots varie. Le budget décidé par PERFORMANCE reste de 256 Mio par résultat.
+`DataGrid` correctly refuses I/O during rendering, but triggers no re-read of
+spilled batches. They remain drawn as ellipses. `SpillCache` keeps four batches
+with no bound in bytes, on top of the resident batches. This limit does not
+bound memory when batch sizes vary. The budget decided by PERFORMANCE remains
+256 MiB per result.
 
-Le code de débordement emploie déjà des flux Arrow IPC autonomes, lus avec
-`StreamReader`. Il n'utilise pas de projection mémoire. La présente décision
-rend cette divergence explicite sans introduire de `unsafe`.
+The spill code already uses self-contained Arrow IPC streams, read with
+`StreamReader`. It does not use memory mapping. This decision makes that
+divergence explicit without introducing `unsafe`.
 
-## Décision
+## Decision
 
-- `ReadResultPage` porte connexion, résultat et numéro de lot. C'est une lecture
-  locale soumise au même bus et à la même politique pour humain et agent.
-  L'exécuteur vérifie que le résultat appartient à la connexion. Elle ne contacte
-  pas le serveur, ne compose pas de SQL et ne réexécute rien.
-- La vue émet une demande lorsqu'un lot visible manque. La lecture et le
-  décodage se déroulent hors thread UI. Le retour est corrélé au résultat et à
-  la génération de grille ; une réponse ancienne ne remplace pas les données
-  courantes. Annulation et erreur sont visibles, sans reprise automatique après
-  une erreur.
-- Le budget de rétention de `ResultBuffer` comprend les lots résidents et le
-  cache de relecture. Lorsque le débordement est autorisé, un quart est réservé
-  au cache et trois quarts aux lots initiaux. Sans débordement, tout le budget
-  reste disponible pour les lots initiaux. Le cache évince par usage et compte
-  les octets Arrow et les entrées, pas seulement les lots.
-- Une lecture positionnée conserve le format Arrow IPC existant. Sa copie de
-  décodage et les références temporairement détenues par les lecteurs ne sont
-  pas de la rétention du cache. Elles doivent être mesurées séparément ; une
-  borne du cache ne prouve pas une borne RSS du processus.
-- Un lot qui dépasse seul le budget de relecture n'est pas conservé dans ce
-  cache. La vue reçoit une erreur explicite plutôt qu'une boucle de chargement
-  ou une croissance sans plafond. L'export continue de lire les lots en flux.
+- `ReadResultPage` carries connection, result and batch number. It is a local
+  read subject to the same bus and the same policy for human and agent. The
+  executor checks that the result belongs to the connection. It does not contact
+  the server, composes no SQL and re-runs nothing.
+- The view emits a request when a visible batch is missing. Reading and decoding
+  happen off the UI thread. The response is correlated with the result and the
+  grid generation; an old response does not replace current data. Cancellation
+  and error are visible, with no automatic retry after an error.
+- The retention budget of `ResultBuffer` covers the resident batches and the
+  re-read cache. When spilling is allowed, a quarter is reserved for the cache
+  and three quarters for the initial batches. Without spilling, the whole budget
+  remains available for the initial batches. The cache evicts by use and counts
+  Arrow bytes and entries, not only batches.
+- A positioned read keeps the existing Arrow IPC format. Its decoding copy and the
+  references temporarily held by readers are not cache retention. They must be
+  measured separately; a bound on the cache does not prove a bound on the
+  process RSS.
+- A batch that alone exceeds the re-read budget is not kept in this cache. The
+  view receives an explicit error rather than a loading loop or unbounded growth.
+  Export keeps reading batches as a stream.
 
-## Conséquences
+## Consequences
 
-- **+** Les lignes débordées deviennent consultables sans accès disque au rendu.
-- **+** Le budget de rétention couvre réellement les deux catégories de lots.
-- **+** La commande ne transporte aucun contenu de cellule vers le journal ou
-  vers le modèle ; le résultat reste dans le tampon partagé.
-- **−** Les lots initiaux débordent plus tôt, au profit de la relecture.
-- **−** La relecture positionnée ajoute une copie temporaire ; elle ne bénéficie
-  pas de la projection mémoire initialement décrite par ADR-0002.
-- **−** Un budget personnalisé inférieur à la taille d'un seul lot peut empêcher
-  son affichage, même si son export reste possible.
+- **+** Spilled rows become viewable without disk access during rendering.
+- **+** The retention budget really covers both categories of batches.
+- **+** The command carries no cell content to the log or to the model; the
+  result stays in the shared buffer.
+- **−** Initial batches spill earlier, in favor of re-reading.
+- **−** Positioned re-reading adds a temporary copy; it does not benefit from the
+  memory mapping initially described by ADR-0002.
+- **−** A custom budget smaller than the size of a single batch can prevent it
+  from being displayed, even though its export remains possible.
 
-**Coût de sortie :** remplacer le stockage de pages dans `oxyn-data` et son
-chargement dans `oxyn-app`, puis reprendre les tests de mémoire et d'annulation.
-Le protocole driver, les données Arrow et le SQL utilisateur ne changent pas.
+**Exit cost:** replace the page storage in `oxyn-data` and its loading in
+`oxyn-app`, then rework the memory and cancellation tests. The driver protocol,
+the Arrow data and the user's SQL do not change.
 
-**Reconsidérer si** les mesures montrent une copie dominante, une pression
-mémoire excessive lors de lectures concurrentes ou une éviction qui empêche
-un viewport normal de se stabiliser. Une projection mémoire éventuelle exige
-sa revue `unsafe` et ne s'introduit pas comme une simple optimisation.
+**Reconsider if** measurements show a dominant copy, excessive memory pressure
+during concurrent reads, or an eviction that prevents a normal viewport from
+settling. A possible memory mapping requires its `unsafe` review and is not
+introduced as a mere optimization.
 
-## Alternatives écartées
+## Rejected alternatives
 
-| Alternative | Raison du rejet |
+| Alternative | Reason for rejection |
 |---|---|
-| Lire `batch()` directement pendant le rendu | Bloque le thread UI sur le disque et le décodage |
-| Relancer la requête au défilement | Change le résultat et peut répéter des effets serveur |
-| Ajouter un cache UI sans partager le budget | Double la rétention et disperse son contrôle |
-| Considérer quatre lots comme une borne mémoire | La taille d'un lot n'est pas constante |
+| Read `batch()` directly during rendering | Blocks the UI thread on disk and decoding |
+| Re-run the query on scroll | Changes the result and may repeat server effects |
+| Add a UI cache without sharing the budget | Doubles retention and scatters its control |
+| Consider four batches a memory bound | The size of a batch is not constant |

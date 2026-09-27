@@ -62,7 +62,7 @@ correspond à une panne qui ne se verra pas en test.
       l'ouverture, `Open` après un `BEGIN` exécuté et après `begin`, `Idle`
       après `COMMIT`, `ROLLBACK`, `commit` et `rollback`, et `Idle` après une
       interruption pendant une écriture qui a déclenché l'annulation d'office
-      ([ADR-0039](../../../../docs/adr/0039-etat-de-transaction-d-une-session.md))
+      ([ADR-0039](../../docs/adr/0039-etat-de-transaction-d-une-session.md))
 
 ## Types
 

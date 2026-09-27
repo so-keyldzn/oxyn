@@ -42,7 +42,7 @@ deliberate commit, which updates
 ## New dependency
 
 It is justified in review: what it brings, and the cost of doing without it
-([SECURITY](../../docs/SECURITY.md#dépendances)). A crate used in one place for
+([SECURITY](../../docs/SECURITY.md#dependencies)). A crate used in one place for
 one function is a candidate for rewriting, not a given. An unmaintained crate
 on an external boundary is a risk to document.
 

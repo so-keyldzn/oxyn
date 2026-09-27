@@ -1,83 +1,80 @@
-# ADR-0013 — Persister les préférences de lecture dans le workspace
+# ADR-0013 — Persist reading preferences in the workspace
 
-**Statut :** accepté · **Date :** 2026-09-10
+**Status:** accepted · **Date:** 2026-09-10
 
-**Précise :** [ADR-0004](0004-command-bus.md), pour les réglages locaux.
+**Clarifies:** [ADR-0004](0004-command-bus.md), for local settings.
 
-## Contexte
+## Context
 
-La maquette propose Compact et Comfortable, indépendamment du thème et de la
-largeur. Les réglages de lecture existants disparaissent à la fermeture.
-Le store local possède un schéma SQLite migré, tandis que les types GPUI
-doivent rester dans l'interface. Les changements rapides ne doivent pas être
-réécrits dans le désordre par des tâches asynchrones.
+The mockup offers Compact and Comfortable, independently of theme and width.
+The existing reading settings disappear on close. The local store has a migrated
+SQLite schema, while GPUI types must stay in the interface. Rapid changes must
+not be rewritten out of order by asynchronous tasks.
 
-## Décision
+## Decision
 
-- `oxyn-core` porte `WorkspacePreferences`, `ReadingDensity` et
-  `PreferencesSnapshot`, sans type GPUI. Le format JSON version 1 contient
+- `oxyn-core` carries `WorkspacePreferences`, `ReadingDensity` and
+  `PreferencesSnapshot`, with no GPUI type. The JSON format version 1 contains
   `appearance`, `reading_density`, `sidebar_collapsed`, `inspector_open`,
-  `inspector_width`, `null_text`, `group_thousands` et `object_location` —
-  l'emplacement d'objet restauré, ajouté le 2026-09-10. Le 2026-09-15, pour
-  l'interface Tauri : `follow_system_appearance` (un booléen plutôt qu'une
-  variante `system` d'`appearance`, qu'un binaire antérieur refuserait au
-  démarrage), `binary_display` (une valeur inconnue se lit `hex`) et
-  `cell_max_chars` (64 à 16 384, jamais sans coupe).
-- **Un champ s'ajoute sans changer la version, et un champ inconnu est ignoré.**
-  La lecture des préférences se fait au **démarrage** de l'application : refuser
-  un champ inconnu empêcherait une version antérieure d'Oxyn de se lancer après
-  qu'une plus récente a écrit le même fichier — un retour en arrière est une
-  chose que les utilisateurs font. C'est `version` qui porte l'incompatibilité,
-  contrôlé explicitement, et lui seul. Le prix est qu'un nom de champ mal
-  orthographié se lit comme son défaut au lieu d'échouer ; c'est la moins chère
-  des deux erreurs pour un fichier qu'Oxyn écrit lui-même.
-- La migration SQLite 4 ajoute `workspace_preferences`, liée au workspace,
-  avec `revision`, `payload` JSON et `updated_at`. Les migrations précédentes
-  restent inchangées. Une ligne absente donne les valeurs par défaut.
-- Les lectures et écritures passent par `ReadWorkspacePreferences` et
-  `WriteWorkspacePreferences`. L'amorçage lit une fois le snapshot hors thread
-  UI. Ces commandes ne contactent aucune base distante. L'écriture des réglages
-  d'interface est réservée à `Actor::Human` ; un agent ne change pas l'interface
-  de son utilisateur. Le refus passe par le `PolicyGate` et le journal.
-- La révision augmente à chaque changement local. Une écriture plus ancienne
-  ne remplace jamais une révision plus récente. Une même révision avec un autre
-  contenu signale un conflit, sans écraser le fichier. L'interface distingue
-  l'application locale de la sauvegarde confirmée et propose une reprise
-  explicite en cas d'échec. La fermeture de la dernière fenêtre attend les
-  écritures engagées avant de demander l'arrêt. Le hook natif de GPUI reçoit
-  aussi cette attente, mais son délai propre de 100 ms ne suffit pas à garantir
-  tous les chemins d'arrêt du système ; ces chemins demandent leur recette.
-- Les données sont validées avant écriture et après lecture : version connue,
-  révision dans le domaine SQLite positif, libellé d'absence limité à 64 octets,
-  largeur d'inspecteur comprise entre 240 et 480 px. Ces deux bornes de largeur
-  sont des garde-fous d'implémentation ; la largeur initiale de 280 px vient de
-  Figma, pas les bornes.
-- Les panneaux conservent leur préférence large lors d'un passage compact.
-  Leur adaptation au viewport ne produit aucune écriture de préférence ni
-  aucune requête. La poignée de l'inspecteur est utilisable à la souris et au
-  clavier ; elle sauvegarde la largeur choisie après le geste.
+  `inspector_width`, `null_text`, `group_thousands` and `object_location` —
+  the restored object location, added on 2026-09-10. On 2026-09-15, for the
+  Tauri interface: `follow_system_appearance` (a boolean rather than a `system`
+  variant of `appearance`, which an earlier binary would refuse at startup),
+  `binary_display` (an unknown value reads as `hex`) and `cell_max_chars`
+  (64 to 16,384, never without truncation).
+- **A field is added without changing the version, and an unknown field is
+  ignored.** Preferences are read at application **startup**: refusing an unknown
+  field would prevent an earlier version of Oxyn from launching after a newer one
+  wrote the same file — rolling back is something users do. `version` carries
+  incompatibility, explicitly checked, and it alone. The price is that a
+  misspelled field name reads as its default instead of failing; it is the
+  cheaper of the two errors for a file Oxyn writes itself.
+- SQLite migration 4 adds `workspace_preferences`, tied to the workspace, with
+  `revision`, a JSON `payload` and `updated_at`. Previous migrations remain
+  unchanged. A missing row gives the default values.
+- Reads and writes go through `ReadWorkspacePreferences` and
+  `WriteWorkspacePreferences`. Bootstrapping reads the snapshot once off the UI
+  thread. These commands contact no remote database. Writing interface settings
+  is reserved to `Actor::Human`; an agent does not change its user's interface.
+  The refusal goes through the `PolicyGate` and the log.
+- The revision increases on every local change. An older write never replaces a
+  more recent revision. The same revision with different content signals a
+  conflict, without overwriting the file. The interface distinguishes the local
+  application from the confirmed save and offers an explicit retry on failure.
+  Closing the last window waits for committed writes before requesting shutdown.
+  GPUI's native hook also receives this wait, but its own 100 ms delay is not
+  enough to guarantee every shutdown path of the system; those paths need their
+  own manual test.
+- Data is validated before writing and after reading: known version, revision in
+  the positive SQLite range, absence label limited to 64 bytes, inspector width
+  between 240 and 480 px. These two width bounds are implementation safeguards;
+  the initial width of 280 px comes from Figma, the bounds do not.
+- Panels keep their wide preference when switching to compact. Their adaptation
+  to the viewport produces no preference write and no query. The inspector handle
+  is usable with the mouse and the keyboard; it saves the chosen width after the
+  gesture.
 
-## Conséquences
+## Consequences
 
-- **+** Les mêmes réglages sont repris après redémarrage et changement de connexion.
-- **+** Le format reste lisible avec SQLite et un lecteur JSON ordinaire.
-- **+** Une tâche lente ne peut pas écraser un réglage plus récent.
-- **−** Une seconde instance ayant lu la même révision peut provoquer un conflit
-  explicite ; l'interface doit permettre de sauvegarder de nouveau après relecture.
-- **−** La sauvegarde locale a ses propres états d'erreur et son attente de fin.
+- **+** The same settings come back after a restart and a connection change.
+- **+** The format remains readable with SQLite and an ordinary JSON reader.
+- **+** A slow task cannot overwrite a more recent setting.
+- **−** A second instance that read the same revision can cause an explicit
+  conflict; the interface must allow saving again after re-reading.
+- **−** Local saving has its own error states and its own completion wait.
 
-**Coût de sortie :** migrer une petite table de réglages et remplacer les deux
-commandes ; les connexions, secrets et données de résultats sont indépendants.
+**Exit cost:** migrate a small settings table and replace the two commands;
+connections, secrets and result data are independent.
 
-**Reconsidérer si** les préférences deviennent propres à un document, si plusieurs
-fenêtres demandent des réglages divergents, ou si une synchronisation entre
-machines nécessite une fusion de champs plutôt qu'une révision de snapshot.
+**Reconsider if** preferences become specific to a document, if several windows
+ask for diverging settings, or if a synchronization between machines needs a
+field merge rather than a snapshot revision.
 
-## Alternatives écartées
+## Rejected alternatives
 
-| Alternative | Raison du rejet |
+| Alternative | Reason for rejection |
 |---|---|
-| Sérialiser `Theme` | Introduit des types GPUI et des couleurs calculées dans le domaine |
-| Écrire un fichier depuis la vue | Bloque le rendu et contourne le bus |
-| Sauvegarder uniquement à la fermeture | Perd les réglages lors d'un arrêt anormal |
-| Accepter toutes les écritures dans leur ordre d'arrivée | Une réponse lente peut rétablir une préférence antérieure |
+| Serialize `Theme` | Brings GPUI types and computed colors into the domain |
+| Write a file from the view | Blocks rendering and bypasses the bus |
+| Save only on close | Loses the settings on an abnormal shutdown |
+| Accept all writes in their order of arrival | A slow response can restore an earlier preference |

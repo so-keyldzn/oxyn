@@ -1,48 +1,47 @@
-# ADR-0017 — Borner les résultats conservés qui n'ont plus de lecteur
+# ADR-0017 — Bound retained results that no longer have a reader
 
-**Statut :** accepté · **Date :** 2026-09-10
+**Status:** accepted · **Date:** 2026-09-10
 
-## Contexte
+## Context
 
-La bibliothèque peut rouvrir un `ResultId` sans exécuter de SQL, mais le registre
-de l'exécuteur conservait tous les tampons jusqu'à la fin du processus. La borne
-individuelle de 256 Mio n'empêche pas une accumulation de nombreux résultats.
+The library can reopen a `ResultId` without executing SQL, but the executor's
+registry kept all buffers until the process ended. The individual 256 MiB bound
+does not prevent many results from accumulating.
 
-## Décision
+## Decision
 
-Le registre conserve au plus 16 résultats sans lecteur, avec des plafonds cumulés
-de 256 Mio de lots résidents/cache décodé et 1 Gio de débordement IPC pour cette
-catégorie. Les plus anciens sont évincés en premier. Une référence détenue par
-une vue, une exécution ou un export protège son tampon de cette éviction.
+The registry keeps at most 16 results without a reader, with cumulative caps of
+256 MiB of resident batches/decoded cache and 1 GiB of IPC spill for this
+category. The oldest are evicted first. A reference held by a view, an execution
+or an export protects its buffer from this eviction.
 
-Le contrôle intervient après exécution et périodiquement dans le backend. Les
-objets retirés sont détruits hors du verrou du registre et hors du thread UI.
-Les résultats consultés restent protégés ; les budgets ne sont donc pas un
-plafond global de mémoire pour toutes les vues ouvertes. L'index et les
-allocations temporaires restent à mesurer selon PERFORMANCE.
+The check happens after execution and periodically in the backend. Removed
+objects are destroyed outside the registry lock and outside the UI thread.
+Results being viewed stay protected; the budgets are therefore not a global
+memory cap for all open views. The index and temporary allocations remain to be
+measured according to PERFORMANCE.
 
-Une référence d'historique évincée reste visible mais devient indisponible.
-Elle n'est jamais recréée par rejeu de SQL. Fermer sa vue ne change pas les
-données du serveur.
+An evicted history reference remains visible but becomes unavailable. It is never
+recreated by replaying SQL. Closing its view does not change the server's data.
 
-## Conséquences
+## Consequences
 
-- **+** Une longue session de requêtes successives ne conserve pas tous ses
-  résultats inutilisés.
-- **+** Un export ou une vue ouverte garde ses données et ses pages locales.
-- **−** Un ancien résultat peut expirer avant la fermeture de l'application.
-- **−** Les résultats tenus par des vues restent à la charge de leurs lecteurs.
+- **+** A long session of successive queries does not keep all its unused
+  results.
+- **+** An export or an open view keeps its data and its local pages.
+- **−** An old result can expire before the application is closed.
+- **−** Results held by views remain the responsibility of their readers.
 
-**Coût de sortie :** changer le registre et ses points de contrôle, sans changer
-les buffers Arrow, le SQL ni la persistance des références d'historique.
+**Exit cost:** change the registry and its checkpoints, without changing the
+Arrow buffers, the SQL or the persistence of history references.
 
-**Reconsidérer si** une rétention sur disque entre redémarrages est demandée,
-ou si des mesures imposent un budget global partagé entre vues actives.
+**Reconsider if** on-disk retention across restarts is requested, or if
+measurements impose a global budget shared between active views.
 
-## Alternatives écartées
+## Rejected alternatives
 
-| Alternative | Raison du rejet |
+| Alternative | Reason for rejection |
 |---|---|
-| Garder tous les résultats | Croissance sans borne du registre |
-| Évincer une vue encore ouverte | Ses lectures de pages et exports deviennent indisponibles |
-| Relancer une requête pour recréer le résultat | Change les données observées et peut répéter une écriture |
+| Keep all results | Unbounded growth of the registry |
+| Evict a view that is still open | Its page reads and exports become unavailable |
+| Re-run a query to recreate the result | Changes the observed data and may repeat a write |

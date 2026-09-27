@@ -17,7 +17,7 @@
 //! **A truncated result is always refused.** A buffer closed by a row limit,
 //! saturation, a cancellation or a timeout has finished loading: nothing on
 //! screen tells it from a whole result, which is why no option allows it
-//! ([UX-SPEC](../../../docs/UX-SPEC.md#ce-qui-est-exporté-est-ce-qui-est-affiché)).
+//! ([UX-SPEC](../../../docs/UX-SPEC.md#what-is-exported-is-what-is-displayed)).
 
 use std::borrow::Cow;
 use std::io::Write;

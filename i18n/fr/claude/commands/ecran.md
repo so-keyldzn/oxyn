@@ -4,7 +4,7 @@ argument-hint: "<l'écran ou le composant, ex. panneau d'historique>"
 allowed-tools: Bash, Read, Write, Edit, Grep, Glob, WebFetch, Skill
 ---
 
-<!-- oxyn-translation source=".claude/commands/ecran.md" sha256="5eed0e0014a8" -->
+<!-- oxyn-translation source=".claude/commands/ecran.md" sha256="cca529724e44" -->
 
 > Traduction française de [.claude/commands/ecran.md](../../../../.claude/commands/ecran.md). **La version anglaise fait foi.**
 
@@ -16,10 +16,10 @@ Objet : ajouter ou modifier **$ARGUMENTS** dans l'interface Tauri.
    fichier à créer n'existe pas encore : une règle `paths:` ne se charge qu'à la
    lecture d'un fichier correspondant, et le premier fichier d'un domaine s'écrit
    sinon sans elle.
-2. [UX-SPEC](../../../../docs/UX-SPEC.md) — les comportements et les états font autorité.
-3. [ARCHITECTURE § 2 bis](../../../../docs/ARCHITECTURE.md#2-bis-linterface-tauri) — le
+2. [UX-SPEC](../../docs/UX-SPEC.md) — les comportements et les états font autorité.
+3. [ARCHITECTURE § 2 bis](../../docs/ARCHITECTURE.md#2-bis-linterface-tauri) — le
    pont IPC et ce qui ne le traverse pas.
-4. [FIGMA-HANDOFF](../../../../docs/FIGMA-HANDOFF.md) — la planche, si elle existe.
+4. [FIGMA-HANDOFF](../../docs/FIGMA-HANDOFF.md) — la planche, si elle existe.
 
 ## Outils plutôt que mémoire
 
@@ -67,7 +67,7 @@ avec Storybook ; [I-03](../../CLAUDE.md#i-03) ne s'arrête pas aux journaux.
 
 **L'écran écrit pour PostgreSQL.** Il suppose un schéma et du SQL, et n'existe pas
 pour un driver qui n'en a pas : l'interface se conditionne aux capacités dès
-maintenant ([ADR-0003](../../../../docs/adr/0003-driver-capabilities.md)).
+maintenant ([ADR-0003](../../docs/adr/0003-driver-capabilities.md)).
 
 ## Vérifier
 

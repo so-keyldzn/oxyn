@@ -76,6 +76,6 @@ Puis `.claude/checklists/fin-de-tache.md`.
 - une version externe ne s'écrit jamais de mémoire : [`/versions`](versions.md) ;
 - le code, les identifiants, les commentaires, les commits et la documentation
   sont en **anglais**
-  ([ADR-0047](../../../../docs/adr/0047-english-as-the-repository-language.md)) ;
+  ([ADR-0047](../../docs/adr/0047-english-as-the-repository-language.md)) ;
 - si le code contredit un document de `docs/`, c'est un bug : le signaler, ne
   pas trancher seul.

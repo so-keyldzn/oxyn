@@ -53,7 +53,7 @@ concernée. Recouper avec le source installé si la documentation suit `latest`
 ou une autre version. Distinguer le contrat externe, le raisonnement sur Oxyn
 et la reproduction effectivement exécutée : un lien générique ne prouve pas un
 défaut du produit. Consigner les faits externes dans
-[RESEARCH-NOTES](../../../../docs/RESEARCH-NOTES.md), sans changer de dépendance.
+[RESEARCH-NOTES](../../docs/RESEARCH-NOTES.md), sans changer de dépendance.
 
 ## 3. Réfuter puis consolider
 

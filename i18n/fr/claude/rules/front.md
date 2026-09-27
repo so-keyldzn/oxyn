@@ -4,16 +4,16 @@ paths:
   - "crates/oxyn-desktop/**"
 ---
 
-<!-- oxyn-translation source=".claude/rules/front.md" sha256="2f5f889d0223" -->
+<!-- oxyn-translation source=".claude/rules/front.md" sha256="cd54359093ca" -->
 
 > Traduction française de [.claude/rules/front.md](../../../../.claude/rules/front.md). **La version anglaise fait foi.**
 
 # Interface Tauri — conventions
 
 La décision et ses raisons vivent dans
-[ADR-0029](../../../../docs/adr/0029-interface-tauri-shadcn.md) ; le pont IPC dans
-[ARCHITECTURE](../../../../docs/ARCHITECTURE.md#2-bis-linterface-tauri) ; les
-comportements dans [UX-SPEC](../../../../docs/UX-SPEC.md). Cette règle porte ce qui se
+[ADR-0029](../../docs/adr/0029-interface-tauri-shadcn.md) ; le pont IPC dans
+[ARCHITECTURE](../../docs/ARCHITECTURE.md#2-bis-linterface-tauri) ; les
+comportements dans [UX-SPEC](../../docs/UX-SPEC.md). Cette règle porte ce qui se
 rate en écrivant du code ici.
 
 ## Un seul chemin vers le backend
@@ -34,7 +34,7 @@ Ajouter une commande Tauri, c'est élargir ce qu'un script dans la webview peut
 faire : [`/securite`](../commands/securite.md) avant de fusionner.
 
 **Une commande Tauri sans `async` tourne sur le thread principal**
-([RESEARCH-NOTES](../../../../docs/RESEARCH-NOTES.md#interface-tauri-et-front)). Un corps
+([RESEARCH-NOTES](../../docs/RESEARCH-NOTES.md#interface-tauri-et-front)). Un corps
 qui lit le store, le trousseau ou un lot débordé sur disque y fige la fenêtre
 ([I-05](../../CLAUDE.md#i-05)) — et rien ne le signale, la lecture étant rapide sur
 la machine de dev. `async fn`, ou `#[tauri::command(async)]` ; synchrone seulement
@@ -48,7 +48,7 @@ côté ne se voit qu'à l'exécution : les deux changent dans le même commit.
 ## Le miroir est un schéma, pas un type
 
 `call` prend un **schéma** et parse la réponse ; `invoke<T>` ne fait que caster
-([ADR-0031](../../../../docs/adr/0031-validation-des-reponses-ipc.md)). Ce qui en
+([ADR-0031](../../docs/adr/0031-validation-des-reponses-ipc.md)). Ce qui en
 découle en écrivant :
 
 - un type de la frontière se déclare **une fois**, en schéma, et son type suit :
@@ -78,7 +78,7 @@ découle en écrivant :
   **affirmation fausse**, et le champ se valide strictement. La question n'est
   pas « est-ce gênant d'échouer ? » mais « existe-t-il une valeur honnête ? ».
   Le cas décisif est `AgentProvenance.kind`, qui *signe* ce qu'une conversation
-  propose ([ADR-0023](../../../../docs/adr/0023-fournisseurs-declares-et-provenance.md)) :
+  propose ([ADR-0023](../../docs/adr/0023-fournisseurs-declares-et-provenance.md)) :
   une provenance qui échoue coûte une proposition, une provenance qui ment coûte
   le mécanisme entier. Si la résilience y devient nécessaire, elle s'obtient en
   ajoutant une variante d'ignorance **côté Rust**, comme `Ending::Unknown` —
@@ -101,9 +101,9 @@ Ne pas la « simplifier ».
 | un composant de `src/components/ui` (shadcn, Base UI) | un `div` stylé qui imite un bouton, un menu, un dialogue | clavier, focus et ARIA viennent de Base UI ; les réécrire, c'est les rater |
 | `pnpm exec shadcn add <composant>` | écrire un composant shadcn à la main | le skill `shadcn` du dépôt décrit le reste — `render` et non `asChild` sur Base UI |
 | jetons sémantiques (`bg-background`, `text-muted-foreground`, `text-env-production`) | couleurs Tailwind brutes, `dark:` manuel | le thème et les contrastes AA sont réglés dans `src/styles.css`, une fois |
-| `@hugeicons/react` | `lucide-react` | [UX-SPEC](../../../../docs/UX-SPEC.md#navigation-du-premier-workspace) impose Hugeicons |
-| `TextInput`, `TextArea`, `InputGroupTextInput`, `InputGroupTextArea` de `components/oxyn/text-field` | `Input`, `Textarea`, `InputGroupInput`, `InputGroupTextarea` de `components/ui` — ESLint les refuse | macOS remplacerait `'` par `’` dans une chaîne de connexion ([ADR-0041](../../../../docs/adr/0041-registre-d-actions-menus-et-raccourcis.md) § 8) ; un autre champ (CodeMirror, Lexical, `CommandInput`) reçoit `TEXT_FIELD_ATTRIBUTES` |
-| texte React (`{value}`) | `dangerouslySetInnerHTML` sur une donnée reçue | une cellule, un nom d'objet ou une réponse de modèle sont des entrées hostiles ([SECURITY](../../../../docs/SECURITY.md#surface-dentrée)) |
+| `@hugeicons/react` | `lucide-react` | [UX-SPEC](../../docs/UX-SPEC.md#navigation-du-premier-workspace) impose Hugeicons |
+| `TextInput`, `TextArea`, `InputGroupTextInput`, `InputGroupTextArea` de `components/oxyn/text-field` | `Input`, `Textarea`, `InputGroupInput`, `InputGroupTextarea` de `components/ui` — ESLint les refuse | macOS remplacerait `'` par `’` dans une chaîne de connexion ([ADR-0041](../../docs/adr/0041-registre-d-actions-menus-et-raccourcis.md) § 8) ; un autre champ (CodeMirror, Lexical, `CommandInput`) reçoit `TEXT_FIELD_ATTRIBUTES` |
+| texte React (`{value}`) | `dangerouslySetInnerHTML` sur une donnée reçue | une cellule, un nom d'objet ou une réponse de modèle sont des entrées hostiles ([SECURITY](../../docs/SECURITY.md#surface-dentrée)) |
 
 `src/components/ui` est **généré** : il n'est ni formaté ni linté par le projet, et
 une retouche y est écrasée au prochain `shadcn add --overwrite`. Ce qui est propre à
@@ -124,7 +124,7 @@ Elle tombe le jour où Base UI nomme la liste lui-même.
 
 Un composant de `src/components/oxyn` qui dépend d'une opération distante a une
 story **par état** : initial, en cours, peuplé, vide, erreur
-([UX-SPEC](../../../../docs/UX-SPEC.md#états-dune-vue)). `make front` les rend dans
+([UX-SPEC](../../docs/UX-SPEC.md#états-dune-vue)). `make front` les rend dans
 Chromium et y passe axe en mode `error` : une violation d'accessibilité fait échouer
 la porte.
 
@@ -179,7 +179,7 @@ relâcher » : c'est un script inline nouveau qu'il faut comprendre.
 ## Versions
 
 Exactes dans `package.json`, relevées au registre et datées dans
-[RESEARCH-NOTES](../../../../docs/RESEARCH-NOTES.md#interface-tauri-et-front)
+[RESEARCH-NOTES](../../docs/RESEARCH-NOTES.md#interface-tauri-et-front)
 ([I-12](../../CLAUDE.md#i-12)). `shadcn add` écrit des `^` : les retirer dans le même
 commit. Vitest reste en 4 tant que `@storybook/addon-vitest` n'accepte pas la 5.
 

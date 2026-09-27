@@ -49,7 +49,7 @@ The most cost-effective mechanical check:
 - [ ] Every block carries a `// SAFETY:` that states the invariant **and who
       maintains it** — a paraphrase of the code is worthless
 - [ ] Every `#[allow(unsafe_code)]` points to the ADR that authorizes it
-      ([SECURITY](../../docs/SECURITY.md#politique-unsafe))
+      ([SECURITY](../../docs/SECURITY.md#unsafe-policy))
 - [ ] Reviewed by `relecteur-securite`
 
 ## AI boundary

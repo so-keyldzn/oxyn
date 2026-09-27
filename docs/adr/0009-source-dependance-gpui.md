@@ -1,62 +1,62 @@
-# ADR-0009 — GPUI consommé depuis crates.io, non depuis son dépôt amont
+# ADR-0009 — GPUI consumed from crates.io, not from its upstream repository
 
-**Statut :** remplacé · **Date :** 2026-09-05
-**Remplacé par :** [ADR-0029](0029-interface-tauri-shadcn.md), effectif au retrait
-des crates GPUI le 2026-09-18 : `gpui` n'est plus une dépendance du dépôt. Ce qui
-suit est conservé tel qu'il a été décidé.
-**Précisait :** [ADR-0001](0001-ui-toolkit.md), qui retenait GPUI « en épinglant un
-commit précis ». Ce point-là était remplacé ; le reste de l'ADR-0001 — le choix
-de GPUI et la règle d'isolation — restait alors en vigueur. Seule la règle
-d'isolation survit aujourd'hui, transposée par l'ADR-0029.
+**Status:** superseded · **Date:** 2026-09-05
+**Superseded by:** [ADR-0029](0029-interface-tauri-shadcn.md), effective when the
+GPUI crates were removed on 2026-09-18: `gpui` is no longer a dependency of the
+repository. What follows is kept as it was decided.
+**Clarified:** [ADR-0001](0001-ui-toolkit.md), which chose GPUI "by pinning a
+precise commit". That point was superseded; the rest of ADR-0001 — the choice of
+GPUI and the isolation rule — then remained in force. Only the isolation rule
+survives today, carried over by ADR-0029.
 
-## Contexte
+## Context
 
-L'ADR-0001 n'a pas tranché entre les deux manières de consommer GPUI, et les a
-implicitement confondues en parlant de « commit précis ». Les faits, vérifiés au
-registre le 2026-09-05 ([RESEARCH-NOTES](../RESEARCH-NOTES.md#gpui)) :
+ADR-0001 did not settle between the two ways of consuming GPUI, and implicitly
+conflated them by speaking of a "precise commit". The facts, checked against the
+registry on 2026-09-05 ([RESEARCH-NOTES](../RESEARCH-NOTES.md#gpui)):
 
-* la dernière version publiée est `0.2.2`, du **2025-10-22**, soit près de onze
-  mois sans publication, alors que le développement continue dans
-  le dépôt amont ;
-* `gpui` ne déclare **aucun MSRV** ;
-* `gpui` épingle plusieurs dépendances avec `=`, dont `cocoa =0.26.0`,
-  `cocoa-foundation =0.2.0` et `core-foundation =0.10.0`.
+* the latest published version is `0.2.2`, from **2025-10-22**, that is almost
+  eleven months without a release, while development continues in the upstream
+  repository;
+* `gpui` declares **no MSRV**;
+* `gpui` pins several dependencies with `=`, including `cocoa =0.26.0`,
+  `cocoa-foundation =0.2.0` and `core-foundation =0.10.0`.
 
-Une dépendance git sur un `rev` donne accès aux correctifs et aux API récentes,
-au prix d'une reconstruction complète du graphe à chaque remontée, d'un
-`Cargo.lock` qui référence un dépôt tiers, et d'une exposition à des ruptures
-d'API non versionnées. Une dépendance crates.io fige une API connue et un graphe
-résolu, au prix de ne recevoir ni correctif ni nouveauté.
+A git dependency on a `rev` gives access to fixes and recent APIs, at the cost of
+a full rebuild of the graph on every bump, of a `Cargo.lock` that references a
+third-party repository, and of exposure to unversioned API breakages. A
+crates.io dependency freezes a known API and a resolved graph, at the cost of
+receiving neither fixes nor new features.
 
-## Décision
+## Decision
 
-Oxyn dépend de **`gpui` publié sur crates.io**, en version exacte.
+Oxyn depends on **`gpui` published on crates.io**, at an exact version.
 
-## Conséquences
+## Consequences
 
-* **+** Graphe de dépendances reproductible, résolu par le registre ; publication
-  d'Oxyn sur crates.io possible plus tard, ce qu'une dépendance git interdit.
-* **+** L'API ne bouge pas sous les pieds du projet pendant la phase où
-  l'architecture se stabilise.
-* **−** Aucun correctif amont, aucune API postérieure à octobre 2025. Un défaut
-  GPUI rencontré doit être contourné dans `oxyn-ui`, pas corrigé en amont.
-* **−** L'écart avec le dépôt amont grandit tant qu'aucune version n'est publiée ;
-  une future migration sera d'autant plus coûteuse.
-* **−** Les épinglages `=` de `gpui` sur les crates système macOS peuvent rendre
-  insoluble l'ajout d'une dépendance qui touche aux mêmes API. À vérifier avant
-  toute crate système, pas après.
+* **+** A reproducible dependency graph, resolved by the registry; publishing
+  Oxyn on crates.io is possible later, which a git dependency forbids.
+* **+** The API does not move under the project's feet during the phase where the
+  architecture stabilizes.
+* **−** No upstream fix, no API later than October 2025. A GPUI defect
+  encountered must be worked around in `oxyn-ui`, not fixed upstream.
+* **−** The gap with the upstream repository grows as long as no version is
+  published; a future migration will be all the more expensive.
+* **−** `gpui`'s `=` pins on macOS system crates can make it impossible to add a
+  dependency that touches the same APIs. To be checked before any system crate,
+  not after.
 
-**Coût de sortie :** faible tant qu'`oxyn-ui` reste la seule crate à dépendre de
-GPUI ([I-08](../../CLAUDE.md#i-08)) — c'est un changement de ligne dans un
-`Cargo.toml`, plus la correction des ruptures d'API.
+**Exit cost:** low as long as `oxyn-ui` remains the only crate depending on GPUI
+([I-08](../../CLAUDE.md#i-08)) — it is a one-line change in a `Cargo.toml`, plus
+fixing the API breakages.
 
-**Reconsidérer si** un défaut bloquant de GPUI est corrigé en amont sans être
-publié, ou si les publications sur crates.io reprennent un rythme régulier.
+**Reconsider if** a blocking GPUI defect is fixed upstream without being
+published, or if releases on crates.io resume a regular pace.
 
-## Alternatives écartées
+## Rejected alternatives
 
-| Alternative | Raison du rejet |
+| Alternative | Reason for rejection |
 |---|---|
-| Dépendance git sur un `rev` du dépôt amont | remise en cause par la décision du mainteneur du 2026-09-05 ; interdit toute publication d'Oxyn sur crates.io |
-| Dépendance git suivant une branche | non reproductible : deux constructions à deux dates donnent deux binaires |
-| Vendorer GPUI dans le dépôt | 5,3 Mo de source et 65 dépendances à maintenir à la main |
+| Git dependency on a `rev` of the upstream repository | called into question by the maintainer's decision of 2026-09-05; forbids any publication of Oxyn on crates.io |
+| Git dependency following a branch | not reproducible: two builds on two dates give two binaries |
+| Vendoring GPUI into the repository | 5.3 MB of source and 65 dependencies to maintain by hand |

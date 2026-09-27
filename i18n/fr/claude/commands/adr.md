@@ -4,7 +4,7 @@ argument-hint: "<la décision à trancher>"
 allowed-tools: Bash, Read, Write, Edit, Grep, Glob, WebFetch
 ---
 
-<!-- oxyn-translation source=".claude/commands/adr.md" sha256="309ada469564" -->
+<!-- oxyn-translation source=".claude/commands/adr.md" sha256="1abadcf5e5a3" -->
 
 > Traduction française de [.claude/commands/adr.md](../../../../.claude/commands/adr.md). **La version anglaise fait foi.**
 
@@ -28,10 +28,9 @@ tient à ce qu'on puisse le lire en entier.
 
 Le numéro est le suivant dans l'ordre, sans réutiliser un numéro libéré.
 
-**Un nouvel ADR s'écrit en anglais**
-([ADR-0047](../../../../docs/adr/0047-english-as-the-repository-language.md)). Les ADR
-0001 à 0046 restent en français tels quels : il suffit de les citer, on ne les
-traduit pas à l'occasion d'un autre changement.
+**Un ADR s'écrit en anglais**, et reçoit son miroir français dans
+`i18n/fr/docs/adr/`
+([ADR-0047](../../docs/adr/0047-english-as-the-repository-language.md)).
 
 ## La règle qui gouverne les autres
 

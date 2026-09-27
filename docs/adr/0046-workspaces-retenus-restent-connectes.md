@@ -1,141 +1,133 @@
-# ADR-0046 — Un workspace de connexion retenu garde ses sessions ouvertes, dans la limite de huit par fenêtre
+# ADR-0046 — A retained connection workspace keeps its sessions open, up to eight per window
 
-**Statut :** accepté · **Date :** 2026-09-25
+**Status:** accepted · **Date:** 2026-09-25
 
-**Précise :** [ADR-0015](0015-consoles-independantes.md), sur le point
-suivant : les sessions d'un workspace ne se ferment plus quand une autre
-connexion est ouverte dans la fenêtre, mais seulement sur un geste explicite —
-`Disconnect`, fermeture d'une console, sortie.
+**Clarifies:** [ADR-0015](0015-consoles-independantes.md), on the following
+point: a workspace's sessions no longer close when another connection is
+opened in the window, but only on an explicit gesture — `Disconnect`, closing a
+console, quitting.
 
-## Contexte
+## Context
 
-UX-SPEC (« La fenêtre conserve aussi les workspaces de connexion déjà
-ouverts ») et IMPLEMENTATION-PLAN (« revenir à une connexion restaure toutes
-ses consoles ») promettent qu'un aller-retour A → B → A rend les consoles de A
-telles qu'elles étaient. Le code, relevé le 2026-09-25, ne tient qu'un
-workspace : `workspace-host.tsx` le remonte par `key={shown.session}`, et
-`release-workspace.ts` appelle `backend.disconnect` sur l'ancienne connexion dès
-qu'une autre la remplace (issue #17). L'utilisateur a tranché le 2026-09-25 :
-on garde les consoles et les résultats.
+UX-SPEC ("The window also keeps the connection workspaces already open") and
+IMPLEMENTATION-PLAN ("returning to a connection restores all its consoles")
+promise that a round trip A → B → A gives back A's consoles as they were. The
+code, surveyed on 2026-09-25, holds only one workspace: `workspace-host.tsx`
+remounts it through `key={shown.session}`, and `release-workspace.ts` calls
+`backend.disconnect` on the previous connection as soon as another replaces it
+(issue #17). The user settled it on 2026-09-25: consoles and results are kept.
 
-Garder l'état de l'interface ne suffit pas. Une console, c'est aussi une
-session serveur, et cette session porte deux choses que rien d'autre ne
-reconstruit :
+Keeping the interface state is not enough. A console is also a server session,
+and that session carries two things nothing else rebuilds:
 
-- **l'état de transaction** ([ADR-0039](0039-etat-de-transaction-d-une-session.md)) :
-  fermer une session dont la transaction est ouverte l'annule, écritures non
-  validées comprises. UX-SPEC exige pour cela un dialogue qui nomme la
-  connexion ; un changement de connexion n'en montre aucun ;
-- **le contexte de session** ([ADR-0019](0019-contexte-de-session.md)) :
-  schéma courant, base, tables temporaires, variables. Le rétablir au retour,
-  c'est exécuter du SQL que l'utilisateur n'a pas demandé — ce que le critère
-  de l'issue exclut (« sans exécuter du SQL »), et ce que la table temporaire
-  ne permet de toute façon pas.
+- **the transaction state** ([ADR-0039](0039-etat-de-transaction-d-une-session.md)):
+  closing a session whose transaction is open rolls it back, uncommitted writes
+  included. UX-SPEC requires a dialog naming the connection for that; a
+  connection switch shows none;
+- **the session context** ([ADR-0019](0019-contexte-de-session.md)): current
+  schema, database, temporary tables, variables. Restoring it on return means
+  running SQL the user did not ask for — which the issue's criterion excludes
+  ("without running SQL"), and which the temporary table does not allow anyway.
 
-Côté mémoire, les résultats sont déjà bornés **globalement**, pas par
-workspace : le backend tient au plus 16 résultats affichés et 256 Mio entre
-eux (`SHOWN_RESULTS`, `SHOWN_BYTES`, `backend/results.rs`), puis la rétention
-d'[ADR-0017](0017-retention-resultats.md) évince au-delà de 16 résultats sans
-lecteur, 256 Mio résidents et 1 Gio de débordement. Un résultat évincé se lit
-« expired » ; il n'est jamais recréé par rejeu. Le nombre de workspaces ne
-multiplie donc pas ce budget. Ce qu'il multiplie : les sessions serveur (au
-moins deux par workspace, catalogue et première console), le cache de
-catalogue par connexion (1 024 scopes, 50 000 objets, PERFORMANCE), et l'arbre
-React monté.
+On the memory side, results are already bounded **globally**, not per
+workspace: the backend holds at most 16 displayed results and 256 MiB between
+them (`SHOWN_RESULTS`, `SHOWN_BYTES`, `backend/results.rs`), then the retention
+of [ADR-0017](0017-retention-resultats.md) evicts beyond 16 results without a
+reader, 256 MiB resident and 1 GiB of spill. An evicted result reads
+"expired"; it is never recreated by replay. The number of workspaces therefore
+does not multiply this budget. What it multiplies: server sessions (at least
+two per workspace, catalog and first console), the per-connection catalog
+cache (1,024 scopes, 50,000 objects, PERFORMANCE), and the mounted React tree.
 
-## Décision
+## Decision
 
-**Un workspace retenu reste connecté.** Masqué, il garde ses sessions — celle
-du catalogue et celle de chaque console —, leurs transactions et leur contexte.
-Y revenir n'émet aucune commande : ni `Connect`, ni `SetContext`, ni exécution.
-Choisir sur l'écran d'accueil une connexion qui a déjà un workspace le rend
-visible au lieu d'en ouvrir un second.
+**A retained workspace stays connected.** Hidden, it keeps its sessions — the
+catalog's and each console's —, their transactions and their context.
+Returning to it emits no command: neither `Connect`, nor `SetContext`, nor an
+execution. Choosing on the home screen a connection that already has a
+workspace makes it visible instead of opening a second one.
 
-**Seul un geste explicite ferme des sessions** : `Disconnect` sur le
-workspace, la fermeture d'une console (avec son dialogue), la sortie
-d'Oxyn. `Disconnect` libère tout ce que la connexion tenait : les brouillons
-sont écrits d'abord ([ADR-0024](0024-autosauvegarde-au-repos-de-frappe.md)),
-puis `Command::Disconnect` ferme toutes ses sessions, puis ses conversations et
-ses agents externes s'arrêtent.
+**Only an explicit gesture closes sessions**: `Disconnect` on the workspace,
+closing a console (with its dialog), quitting Oxyn. `Disconnect` releases
+everything the connection held: drafts are written first
+([ADR-0024](0024-autosauvegarde-au-repos-de-frappe.md)), then
+`Command::Disconnect` closes all its sessions, then its conversations and its
+external agents stop.
 
-**Au plus huit workspaces par fenêtre** (`MAX_RETAINED_WORKSPACES`). Ouvrir
-une neuvième connexion est refusé **avant** tout `Connect`, par un message qui
-le dit : « 8 connections are open in this window. Disconnect one before
-opening another. » Aucun workspace n'est évincé d'office : l'éviction
-fermerait une session dont la transaction est peut-être ouverte, sans le
-dialogue qui l'annonce. Huit est une borne de garde, pas une mesure : seize
-sessions serveur au minimum, et huit caches de catalogue au plus de leur
-plafond.
+**At most eight workspaces per window** (`MAX_RETAINED_WORKSPACES`). Opening a
+ninth connection is refused **before** any `Connect`, with a message that says
+so: "8 connections are open in this window. Disconnect one before opening
+another." No workspace is evicted automatically: eviction would close a
+session whose transaction may be open, without the dialog that announces it.
+Eight is a guard bound, not a measurement: sixteen server sessions at least,
+and eight catalog caches at most at their ceiling.
 
-**Une transaction laissée dans un workspace masqué se dit en toutes
-lettres**, ajout de l'utilisateur à l'acceptation, le 2026-09-25. La liste des
-connexions de l'écran d'accueil — qui est aussi celle des workspaces retenus,
-marqués `Open` — nomme la connexion dont une console a signalé en dernier
-`Open`, ou `Unknown` sur une session qui déclare `TRANSACTIONS`
-([ADR-0039](0039-etat-de-transaction-d-une-session.md)) : « Transaction open in
-a console of *billing* ». Un texte, pas une couleur. Chaque workspace publie
-les sessions de ses consoles (`features/workspace/pending-transactions.ts`) ;
-l'écran d'accueil les croise avec les derniers états reçus, sans interroger le
-serveur.
+**A transaction left in a hidden workspace is stated in plain words**, the
+user's addition at acceptance, on 2026-09-25. The home screen's connection
+list — which is also that of retained workspaces, marked `Open` — names the
+connection one of whose consoles last reported `Open`, or `Unknown` on a
+session that declares `TRANSACTIONS`
+([ADR-0039](0039-etat-de-transaction-d-une-session.md)): "Transaction open in
+a console of *billing*". A text, not a color. Each workspace publishes its
+consoles' sessions (`features/workspace/pending-transactions.ts`); the home
+screen crosses them with the last received states, without querying the
+server.
 
-**Un workspace masqué est inerte** : aucun raccourci, aucun dialogue, aucune
-entrée dans le registre d'actions ; le texte envoyé à « la console active »
-— par l'assistant, l'inspecteur — va au workspace visible, jamais à un masqué.
-Le `PolicyGate` ne change pas : il lit la configuration enregistrée par
-connexion, qu'un workspace soit visible ou non ([I-02](../../CLAUDE.md#i-02),
+**A hidden workspace is inert**: no shortcut, no dialog, no entry in the
+action registry; text sent to "the active console" — by the assistant, the
+inspector — goes to the visible workspace, never to a hidden one. The
+`PolicyGate` does not change: it reads the configuration saved per
+connection, whether a workspace is visible or not ([I-02](../../CLAUDE.md#i-02),
 [I-04](../../CLAUDE.md#i-04)).
 
-**Les résultats d'un workspace masqué ne sont pas épinglés** au-delà des
-budgets existants : ses grilles restent montées et gardent leur fenêtre de
-pages, mais les tampons suivent `SHOWN_RESULTS` et ADR-0017. Au retour, une
-page d'un résultat évincé se lit « expired » ; rien n'est réexécuté.
+**The results of a hidden workspace are not pinned** beyond the existing
+budgets: its grids stay mounted and keep their page window, but the buffers
+follow `SHOWN_RESULTS` and ADR-0017. On return, a page of an evicted result
+reads "expired"; nothing is re-executed.
 
-Avec [ADR-0043](0043-multi-fenetre.md), la borne et la décision valent par
-fenêtre, et la déconnexion d'une fenêtre devient la fermeture de ses propres
-sessions, `Backend` émettant `Disconnect` quand plus aucune ne tient la
-connexion.
+With [ADR-0043](0043-multi-fenetre.md), the bound and the decision apply per
+window, and a window's disconnection becomes the closing of its own sessions,
+`Backend` emitting `Disconnect` when none holds the connection anymore.
 
-## Conséquences
+## Consequences
 
-* **+** A → B → A rend consoles, textes, résultats, transactions et contexte
-  sans un aller-retour vers le serveur.
-* **+** Aucune transaction n'est annulée par une simple navigation : la seule
-  fermeture de session sans dialogue était celle-là.
-* **+** Côté backend, la mémoire des résultats reste bornée par les budgets
-  déjà mesurés, quel que soit le nombre de workspaces.
-* **−** Côté webview, une grille masquée reste montée et garde ses pages
-  observées (au plus `MAX_PAGE_BYTES` chacune, en nombre borné) : le tas JS
-  croît avec le nombre de consoles, multiplié par huit workspaces au plus.
-  Aucun budget de PERFORMANCE ne le couvre encore ; la campagne de mesure dans
-  la webview (IMPLEMENTATION-PLAN) doit le chiffrer.
-* **−** Une connexion masquée occupe ses sessions côté serveur : elle compte
-  dans `max_connections`, et une transaction ouverte y tient ses verrous
-  pendant que l'utilisateur travaille ailleurs. L'écran d'accueil nomme la
-  connexion concernée, mais ne dit ni quelle console, ni depuis quand.
-* **−** Une session masquée peut être coupée par le serveur (délai
-  d'inactivité, redémarrage) ; l'utilisateur ne le découvre qu'à la prochaine
-  exécution, comme pour une console visible restée longtemps inactive.
-* **−** La neuvième connexion demande de fermer une des huit, geste que
-  l'utilisateur n'avait pas à faire quand Oxyn en fermait une à sa place.
+* **+** A → B → A gives back consoles, texts, results, transactions and
+  context without a round trip to the server.
+* **+** No transaction is rolled back by simple navigation: the only session
+  closing without a dialog was that one.
+* **+** On the backend side, result memory stays bounded by the budgets already
+  measured, whatever the number of workspaces.
+* **−** On the webview side, a hidden grid stays mounted and keeps its observed
+  pages (at most `MAX_PAGE_BYTES` each, in bounded number): the JS heap grows
+  with the number of consoles, multiplied by eight workspaces at most. No
+  PERFORMANCE budget covers it yet; the webview measurement campaign
+  (IMPLEMENTATION-PLAN) must quantify it.
+* **−** A hidden connection occupies its sessions on the server side: it counts
+  in `max_connections`, and an open transaction holds its locks there while
+  the user works elsewhere. The home screen names the connection concerned,
+  but says neither which console nor since when.
+* **−** A hidden session can be cut by the server (idle timeout, restart); the
+  user only discovers it at the next execution, as with a visible console left
+  idle for a long time.
+* **−** The ninth connection requires closing one of the eight, a gesture the
+  user did not have to make when Oxyn closed one in their place.
 
-**Coût de sortie :** revenir à un seul workspace connecté, c'est rétablir la
-déconnexion au changement de connexion dans `workspace-host.tsx` et
-`release-workspace.ts` — une journée. Le coût réel est ailleurs : les
-utilisateurs auront appris qu'une transaction laissée sur A les attend au
-retour. Défaire la décision rend silencieuse une annulation qu'ils ne
-prévoient plus.
+**Exit cost:** going back to a single connected workspace means restoring the
+disconnection on connection switch in `workspace-host.tsx` and
+`release-workspace.ts` — one day. The real cost is elsewhere: users will have
+learned that a transaction left on A waits for them on return. Undoing the
+decision makes silent a rollback they no longer expect.
 
-**Reconsidérer si** des mesures sous instrument montrent qu'un workspace
-masqué coûte plus que le budget d'une fenêtre (PERFORMANCE), ou si des
-utilisateurs se heurtent aux limites de sessions de leur serveur : la réponse
-serait alors une déconnexion des workspaces masqués **sans** transaction
-ouverte, annoncée, et non un retour au remplacement.
+**Reconsider if** instrumented measurements show that a hidden workspace costs
+more than a window's budget (PERFORMANCE), or if users hit their server's
+session limits: the answer would then be disconnecting hidden workspaces
+**without** an open transaction, announced, and not a return to replacement.
 
-## Alternatives écartées
+## Rejected alternatives
 
-| Alternative | Raison du rejet |
+| Alternative | Reason for rejection |
 |---|---|
-| Garder l'interface et fermer les sessions ; rouvrir au retour | annule sans dialogue toute transaction ouverte ; perd le contexte de session, qu'on ne rétablit qu'en exécutant du SQL non demandé |
-| Fermer les sessions des workspaces masqués sans transaction ouverte, garder les autres | deux comportements selon un état que l'utilisateur ne voit pas depuis l'écran d'accueil ; le contexte de session et les tables temporaires se perdent quand même |
-| Évincer le workspace le moins récent au-delà de la borne | ferme des sessions sans dialogue, éventuellement sur une transaction ouverte : c'est le défaut qu'on corrige |
-| Aucune borne | chaque workspace tient au moins deux sessions serveur et un cache de catalogue ; un geste répété les accumule sans plafond |
+| Keep the interface and close the sessions; reopen on return | rolls back any open transaction without a dialog; loses the session context, which can only be restored by running SQL nobody asked for |
+| Close the sessions of hidden workspaces without an open transaction, keep the others | two behaviors depending on a state the user cannot see from the home screen; the session context and temporary tables are lost anyway |
+| Evict the least recent workspace beyond the bound | closes sessions without a dialog, possibly on an open transaction: it is the defect being fixed |
+| No bound | each workspace holds at least two server sessions and a catalog cache; a repeated gesture accumulates them without a ceiling |

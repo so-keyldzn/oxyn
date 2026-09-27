@@ -46,7 +46,7 @@ most often, and most silently:
 - a PostgreSQL `NUMERIC` without precision fits in no floating-point type;
   converting it to `f64` corrupts amounts;
 - a `timestamp` without time zone is **never** assigned a time zone on read
-  ([DRIVER-CONTRACT](../../docs/DRIVER-CONTRACT.md#7-il-traite-les-fuseaux-et-les-types-temporels-comme-des-données-pas-comme-du-texte));
+  ([DRIVER-CONTRACT](../../docs/DRIVER-CONTRACT.md#7-it-treats-time-zones-and-temporal-types-as-data-not-as-text));
 - a MySQL `u64` beyond 2^53 does not survive a trip through a float;
 - an unknown type is returned as raw bytes **with its type identifier**, never
   as a "best effort" string.

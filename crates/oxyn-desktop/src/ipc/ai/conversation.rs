@@ -15,7 +15,7 @@
 //! [`AiEvent::Finished`] and [`AiEvent::Failed`] ends a run; a tool call is
 //! announced ([`AiEvent::ToolCall`]) before its report
 //! ([`AiEvent::ToolReported`]) because that is when it happened
-//! ([UX-SPEC](../../../../../docs/UX-SPEC.md#le-panneau-montre-ce-qui-se-passe-y-compris-quand-rien-narrive)).
+//! ([UX-SPEC](../../../../../docs/UX-SPEC.md#the-panel-shows-what-is-happening-including-when-nothing-arrives)).
 
 use std::fmt;
 

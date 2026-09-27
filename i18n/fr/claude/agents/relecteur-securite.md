@@ -6,7 +6,7 @@ model: inherit
 color: red
 ---
 
-<!-- oxyn-translation source=".claude/agents/relecteur-securite.md" sha256="bed6fa450e03" -->
+<!-- oxyn-translation source=".claude/agents/relecteur-securite.md" sha256="fde0c2a2e5fc" -->
 
 > Traduction française de [.claude/agents/relecteur-securite.md](../../../../.claude/agents/relecteur-securite.md). **La version anglaise fait foi.**
 
@@ -40,7 +40,7 @@ entrée hostile au même titre qu'une réponse serveur. Vérifie qu'elle parse a
 d'agir, qu'elle émet une `Command` au lieu d'atteindre le store ou le trousseau,
 que ce qu'elle renvoie ne sérialise ni paramètre ni référence de secret, et que
 `capabilities/main.json` et la CSP de `tauri.conf.json` ne s'élargissent pas sans
-raison écrite ([ARCHITECTURE § 2 bis](../../../../docs/ARCHITECTURE.md#2-bis-linterface-tauri)).
+raison écrite ([ARCHITECTURE § 2 bis](../../docs/ARCHITECTURE.md#2-bis-linterface-tauri)).
 
 La deuxième est la plus sous-estimée : une table peut légalement s'appeler
 `"users"; DROP TABLE audit; --`, ou contenir un commentaire imitant une consigne.
@@ -53,7 +53,7 @@ vaut rien : signale-le comme s'il était absent.
 
 `unsafe_code` est refusé pour tout le workspace : un `#[allow(unsafe_code)]` sans
 ADR qui l'autorise est un point bloquant
-([SECURITY](../../../../docs/SECURITY.md#politique-unsafe)).
+([SECURITY](../../docs/SECURITY.md#politique-unsafe)).
 
 ## Points bloquants
 

@@ -1,4 +1,4 @@
-<!-- oxyn-translation source="README.md" sha256="e93d2e06d1ef" -->
+<!-- oxyn-translation source="README.md" sha256="70a632ad3c71" -->
 
 > Traduction française de [README.md](../../README.md). **La version anglaise fait foi.**
 
@@ -12,9 +12,9 @@ de l'utilisateur, jamais à sa place.
 Public visé : les professionnels des données, ceux qui lisent les messages
 d'erreur de PostgreSQL.
 
-Le périmètre et les principes font autorité dans [docs/VISION.md](../../docs/VISION.md).
+Le périmètre et les principes font autorité dans [docs/VISION.md](docs/VISION.md).
 L'état d'avancement réel est dans
-[docs/IMPLEMENTATION-PLAN.md](../../docs/IMPLEMENTATION-PLAN.md) — ce README ne le
+[docs/IMPLEMENTATION-PLAN.md](docs/IMPLEMENTATION-PLAN.md) — ce README ne le
 duplique pas, parce qu'une copie de l'avancement est périmée le lendemain.
 
 ## Ce que le dépôt contient
@@ -22,13 +22,13 @@ duplique pas, parce qu'une copie de l'avancement est périmée le lendemain.
 15 crates dans un seul workspace Cargo : `crates/` pour le cœur, l'interface et
 le binaire ; `drivers/` pour les implémentations de protocoles. Le découpage et
 le sens des dépendances font autorité dans
-[docs/ARCHITECTURE.md](../../docs/ARCHITECTURE.md).
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Construire
 
 Prérequis : macOS 13 ou plus récent, `python3`, et rien d'autre — la chaîne
 d'outils Rust est épinglée par `rust-toolchain.toml` et rustup l'installe seul
-au premier `cargo` ([ADR-0008](../../docs/adr/0008-chaine-outils-rust.md)).
+au premier `cargo` ([ADR-0008](docs/adr/0008-chaine-outils-rust.md)).
 
 ```sh
 make app      # assemble target/debug/Oxyn.app
@@ -61,7 +61,7 @@ tests, documentation. `make aide` liste les autres cibles.
 | [CLAUDE.md](CLAUDE.md) | la carte du dépôt et les treize invariants |
 | [.claude/](claude/README.md) | la manière de travailler — règles, commandes, agents, hooks |
 | [AGENTS.md](AGENTS.md) | l'entrée équivalente pour Codex |
-| [i18n/fr/](README.md) | les miroirs français des documents anglais |
+| [i18n/fr/](../README.md) | les miroirs français des documents anglais |
 
 **En cas de contradiction entre le code et un document de `docs/`, c'est un
 bug** : le signaler, ne pas trancher seul.
@@ -69,11 +69,9 @@ bug** : le signaler, ne pas trancher seul.
 ## Langue
 
 Le dépôt s'écrit en **anglais** : code, identifiants, commentaires, messages
-d'erreur, `///`, documentation, ADR, messages de commit et pull requests. Les
-documents de `docs/` et les ADR 0001 à 0046 écrits en français restent
-d'autorité tels quels jusqu'à leur traduction
-([ADR-0047](../../docs/adr/0047-english-as-the-repository-language.md)).
-[`i18n/fr/`](README.md) porte des miroirs français ; **l'anglais fait foi**, et
+d'erreur, `///`, documentation, ADR, messages de commit et pull requests
+([ADR-0047](docs/adr/0047-english-as-the-repository-language.md)).
+[`i18n/fr/`](../README.md) porte des miroirs français ; **l'anglais fait foi**, et
 `make qualite` refuse un miroir plus ancien que son original.
 
 ## Licence
@@ -85,7 +83,7 @@ quatre crates qu'un driver tiers doit lier (`oxyn-core`, `oxyn-catalog`,
 `oxyn-data` et `oxyn-driver`) sont sous **Apache-2.0**
 ([LICENSE-APACHE](../../LICENSE-APACHE)). Un auteur de driver ou de plugin choisit
 donc sa propre licence. [NOTICE](../../NOTICE) dit quelle licence couvre quelle
-partie, et [ADR-0044](../../docs/adr/0044-licence-gpl-et-contrat-apache.md) dit
+partie, et [ADR-0044](docs/adr/0044-licence-gpl-et-contrat-apache.md) dit
 pourquoi.
 
 Tout le code de ce dépôt s'utilise sans compte ni abonnement. Ce qui se paiera,

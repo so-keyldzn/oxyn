@@ -1,2484 +1,2483 @@
-# Plan de mise en œuvre
+# Implementation plan
 
-> **Autorité** : l'ordre des phases et la porte de sortie de chacune.
-> C'est le seul document qui parle de ce qui **reste à faire** — les documents
-> d'autorité décrivent ce qui est décidé.
+> **Authority**: the order of the phases and the exit gate of each one.
+> It is the only document that talks about what **remains to be done** — the
+> authoritative documents describe what is decided.
 
-État au 2026-09-18 : l'interface est l'application Tauri (`apps/desktop` et
-`crates/oxyn-desktop`) ; l'interface GPUI a été retirée ce jour-là, voir
-[Migration vers l'interface Tauri](#migration-vers-linterface-tauri). Les états
-datés qui suivent décrivent le produit à leur date — souvent l'interface GPUI :
-ce qu'ils disent fait ne l'est pas forcément dans `apps/desktop`, et la porte de
-cette section tient la liste de ce qui y manque.
+State as of 2026-09-18: the interface is the Tauri application (`apps/desktop` and
+`crates/oxyn-desktop`); the GPUI interface was removed that day, see
+[Migration to the Tauri interface](#migration-to-the-tauri-interface). The dated
+states that follow describe the product at their date — often the GPUI interface:
+what they say is done is not necessarily done in `apps/desktop`, and the gate of
+that section keeps the list of what is missing there.
 
-État au 2026-09-10 : les quinze crates existent, avec une application GPUI,
-un formulaire de connexion et un parcours d'exécution SQL. L'intégration UI/UX
-reprend la maquette Figma : sidebar repliable, thèmes clair/sombre, Hugeicons et
-Geist embarqués, catalogue réel chargé par paliers à travers le command bus.
-Les corrections d'interaction souris, de saisie native, de session et
-d'annulation sont en place.
-Une première campagne de mesure a eu lieu le 2026-09-10 et couvre le **code
-pur** : conversion ligne-à-lot du driver SQLite, latence du premier lot, analyse
-des requêtes ([PERFORMANCE](PERFORMANCE.md#campagne-de-mesure-du-2026-09-10)).
-Elle n'a contredit aucun budget et n'en a amendé aucun. Restent à mesurer, et
-aucun ne se mesure avec `criterion` : la trame, le démarrage à froid, le
-développement d'un nœud de catalogue en cache, et la RSS — budget du
-`ResultBuffer` compris, dont seuls les déclenchements de débordement sont
-couverts, par des tests aux budgets minuscules. L'existence du code ne valide
-pas à elle seule les portes de sortie ci-dessous.
+State as of 2026-09-10: the fifteen crates exist, with a GPUI application,
+a connection form and an SQL execution flow. The UI/UX integration
+follows the Figma mockup: collapsible sidebar, light/dark themes, embedded
+Hugeicons and Geist, real catalog loaded in tiers through the command bus.
+The fixes for mouse interaction, native input, session and cancellation are
+in place.
+A first measurement campaign took place on 2026-09-10 and covers **pure
+code**: row-to-batch conversion of the SQLite driver, latency of the first batch,
+query analysis ([PERFORMANCE](PERFORMANCE.md#measurement-campaign-of-2026-09-10)).
+It contradicted no budget and amended none. Still to measure, and none of them
+is measured with `criterion`: the frame, cold start, expanding a cached catalog
+node, and RSS — including the `ResultBuffer` budget, of which only the spill
+triggers are covered, by tests with tiny budgets. The existence of the code does
+not by itself validate the exit gates below.
 
-Le premier workspace propose l'éditeur SQL, l'exploration des métadonnées et
-l'aperçu automatique des 200 premières lignes d'une table SQL. Historique visible, requêtes sauvegardées et reprise des brouillons SQL sont
-raccordés comme détaillé ci-dessous. L'aperçu accepte maintenant un prédicat
-écrit par l'utilisateur, un tri par colonnes et une page suivante lorsque l'ordre
-est total ([ADR-0020](adr/0020-apercu-trie-filtre-parcouru.md)).
-La lecture asynchrone des pages de résultats débordées passe maintenant par
-`ReadResultPage`, avec annulation, erreur explicite et refus des réponses
-obsolètes. Le cache de pages partage le budget du résultat selon ADR-0012.
-La borne en octets du cache de métadonnées, le budget global des résultats tenus par les vues
-au remplacement/à la fermeture et les mesures RSS restent à compléter.
+The first workspace offers the SQL editor, metadata exploration and
+the automatic preview of the first 200 rows of an SQL table. Visible history, saved queries and recovery of SQL drafts are
+wired as detailed below. The preview now accepts a predicate
+written by the user, a sort by columns and a next page when the order
+is total ([ADR-0020](adr/0020-apercu-trie-filtre-parcouru.md)).
+Asynchronous reading of spilled result pages now goes through
+`ReadResultPage`, with cancellation, explicit error and rejection of stale
+responses. The page cache shares the result's budget according to ADR-0012.
+The byte bound of the metadata cache, the global budget of results held by views
+on replacement/close, and the RSS measurements remain to be completed.
 
-Le cadre table/console reprend maintenant les barres denses et les onglets,
-la pilule d'environnement et le seuil compact de 1200 px. La préférence de
-sidebar large est conservée, et le catalogue compact reste accessible dans
-un panneau superposé. La confirmation focalise `Cancel`, retient le focus dans
-la revue et refuse Entrée seule. L'aide de l'édition désactivée et l'export
-réel de l'aperçu sont raccordés ; ce dernier distingue un aperçu complet d'une
-réception tronquée et conserve son annulation pendant un changement de résultat.
+The table/console frame now follows the dense bars and tabs,
+the environment pill and the 1200 px compact threshold. The wide
+sidebar preference is kept, and the compact catalog remains accessible in
+an overlay panel. The confirmation focuses `Cancel`, keeps focus in
+the review and refuses Enter alone. The help for disabled editing and the real
+export of the preview are wired; the latter distinguishes a complete preview from a
+truncated reception and keeps its cancellation during a result change.
 
-L'alignement complet sur [ADR-0011](adr/0011-structure-commune-workspace.md)
-reste en cours : cas DDL PostgreSQL avancés et menu compact complet restent à
-intégrer. La restauration de l'emplacement d'objet est tenue depuis le
-2026-09-25 (voir « Reprise et bibliothèque »). Les onglets Indexes et Relations lisent maintenant les index et clés étrangères
-sortantes réellement présents dans le cache, avec chargement par le bus, état
-vide distinct et explication des capacités absentes. Ils passent dans `More` en
-largeur compacte. Une demande de métadonnées faite pendant un autre chargement
-est mise en attente ; annuler retire aussi cette demande.
-L'onglet Relations ouvre maintenant les références entrantes PostgreSQL/SQLite,
-avec bascule vers les clés sortantes. Les colonnes From / To / Cardinality
-suivent Figma `229:33051` (340/300/200, lignes de 32 px). Le statut d'unicité
-reste inconnu pour les comparaisons complexes non établies. Entrée ou Open
-source table consulte la source ; si elle n'était pas encore dans le catalogue,
-le bus la décrit puis charge son aperçu, sans changer ni exécuter le brouillon.
-Le chemin inverse permet aussi d'ouvrir une cible depuis les clés sortantes.
-L'onglet Constraints lit à la demande les contraintes PostgreSQL et SQLite par un scope
-spécifique du bus. Il distingue non lu, vide, chargement annulable et erreur ;
-la sélection au clavier et à la souris permet de consulter et copier la
-définition du moteur sans ouvrir ni exécuter du SQL. Le contrôle rejoint `More`
-en largeur compacte. SQLite conserve le texte des clauses stockées dans le
-schéma, sans inventer de noms ni perdre `ON CONFLICT`, les références ou les
-CHECK. La colonne Status suit Figma `229:7998` : état réel de validation
-PostgreSQL, ou `Not reported` lorsqu'il n'est pas fourni. Les colonnes reprennent
-les proportions 280/220/200/140 et Geist 13 px ; l'onglet Constraints a une
-largeur minimale de 113 px. La recette visuelle native reste à réaliser.
-L'inspecteur de ligne est raccordé aux grilles de console et d'aperçu, avec
-choix du champ au clavier et lecture complète paginée par `InspectResultValue`.
-Le menu Columns, au pied des grilles de console et d'aperçu, masque et réaffiche
-les colonnes localement par indice Arrow, annonce le nombre de colonnes
-visibles et propose `Show all` ; la grille ne virtualise que les colonnes
-visibles, la copie les ignore, et l'export conserve toutes les colonnes, ce que
-le menu indique. En mode compact, l'inspecteur s'ouvre en superposition
-et ces actions passent dans Actions. La largeur initiale de l'inspecteur est
-celle de Figma (`190:1872`, 280 px). La poignée de 8 px redimensionne le panneau
-à la souris et au clavier, avec sauvegarde en fin de geste. Replier la sidebar
-conserve désormais la table active au lieu de renvoyer à la console.
-Les repères de confidentialité reflètent le fournisseur réel : l'étiquette de
-la barre supérieure lit `Metadata · Cloud` ou `Metadata · Local` d'après la
-localisation mesurée de la destination qui répondrait, et n'a pas de suffixe
-sans fournisseur connu. Aucun niveau Cloud fictif n'est affiché.
+Full alignment with [ADR-0011](adr/0011-structure-commune-workspace.md)
+is still in progress: advanced PostgreSQL DDL cases and the full compact menu remain to
+be integrated. Restoring the object location has held since
+2026-09-25 (see "Recovery and library"). The Indexes and Relations tabs now read the indexes and outgoing foreign
+keys actually present in the cache, with loading through the bus, a distinct empty
+state and an explanation of missing capabilities. They move into `More` at
+compact width. A metadata request made during another load
+is queued; cancelling also removes that request.
+The Relations tab now opens incoming PostgreSQL/SQLite references,
+with a switch to outgoing keys. The From / To / Cardinality columns
+follow Figma `229:33051` (340/300/200, 32 px rows). The uniqueness status
+stays unknown for complex comparisons that are not established. Enter or Open
+source table views the source; if it was not yet in the catalog,
+the bus describes it then loads its preview, without changing or running the draft.
+The reverse path also opens a target from the outgoing keys.
+The Constraints tab reads PostgreSQL and SQLite constraints on demand through a specific
+bus scope. It distinguishes unread, empty, cancellable loading and error;
+keyboard and mouse selection lets the user view and copy the
+engine's definition without opening or running SQL. The control joins `More`
+at compact width. SQLite keeps the text of the clauses stored in the
+schema, without inventing names or losing `ON CONFLICT`, references or
+CHECKs. The Status column follows Figma `229:7998`: actual PostgreSQL validation
+state, or `Not reported` when it is not provided. The columns use
+the proportions 280/220/200/140 and Geist 13 px; the Constraints tab has a
+minimum width of 113 px. The native visual acceptance test remains to be done.
+The row inspector is wired to the console and preview grids, with
+keyboard field selection and full paginated reading through `InspectResultValue`.
+The Columns menu, at the foot of the console and preview grids, hides and shows
+columns locally by Arrow index, announces the number of visible
+columns and offers `Show all`; the grid only virtualizes visible
+columns, copy ignores hidden ones, and export keeps all columns, which
+the menu states. In compact mode, the inspector opens as an overlay
+and these actions move into Actions. The initial width of the inspector is
+Figma's (`190:1872`, 280 px). The 8 px handle resizes the panel
+with mouse and keyboard, saving at the end of the gesture. Collapsing the sidebar
+now keeps the active table instead of returning to the console.
+Privacy markers reflect the actual provider: the label of
+the top bar reads `Metadata · Cloud` or `Metadata · Local` according to the
+measured location of the destination that would respond, and has no suffix
+without a known provider. No fictitious Cloud tier is displayed.
 
-Les corrections de maquette relevées dans [FIGMA-HANDOFF](FIGMA-HANDOFF.md)
-précisent aussi la sélection de reprise par cases, maintenant raccordée aux brouillons SQL persistés.
-Les deux préréglages de lecture sont raccordés à Settings et à la barre des
-résultats, avec persistance versionnée du thème, des panneaux, de l'indicateur
-NULL et du groupement numérique selon ADR-0013. Les erreurs de sauvegarde sont
-visibles et les écritures anciennes ne remplacent pas les nouvelles.
-La fermeture de la dernière fenêtre attend les écritures engagées ; les autres
-chemins d'arrêt natifs et le délai du hook GPUI restaient à recetter — ce hook
-a disparu avec l'interface GPUI le 2026-09-18.
-Les cellules absentes utilisent maintenant `∅ NULL` ; les cellules de grille
-reprennent Geist 13 px du nœud `190:1652`, ou 14 px en lecture confortable.
-Les en-têtes reprennent la ligne unique du nœud `190:1639`. Le prototype Figma ne valide ni la
-persistance ni les interactions du produit.
+The mockup corrections listed in [FIGMA-HANDOFF](FIGMA-HANDOFF.md)
+also specify the checkbox recovery selection, now wired to persisted SQL drafts.
+The two reading presets are wired to Settings and to the results
+bar, with versioned persistence of the theme, panels, NULL indicator
+and digit grouping according to ADR-0013. Save errors are
+visible and old writes do not replace new ones.
+Closing the last window waits for committed writes; the other
+native shutdown paths and the GPUI hook delay remained to be tested — that hook
+disappeared with the GPUI interface on 2026-09-18.
+Absent cells now use `∅ NULL`; grid cells
+use Geist 13 px from node `190:1652`, or 14 px in comfortable reading.
+Headers use the single line of node `190:1639`. The Figma prototype validates neither
+the persistence nor the interactions of the product.
 
-Le backend de la bibliothèque Figma `47:7638` possède maintenant les commandes
-paginées de documents et d'historique, la lecture séparée du texte complet,
-les brouillons et copies nommées versionnés, la fermeture avec abandon et les
-marqueurs de suppression (ADR-0014, migration 5). La réouverture d'un résultat
-retenu contrôle sa connexion d'origine sans driver ni nouvelle exécution.
-Les recherches locales peuvent être annulées pendant leur parcours SQLite.
-La navigation GPUI ouvre maintenant History / Saved queries / Recent results
-par la sidebar ou `⌘⇧H`. Les listes paginées, filtres par menus, recherche avec
-délai de 250 ms et inspection en lecture seule passent par le bus. Les copies
-nommées et de travail se consultent séparément ; cette vue ne remplace pas la
-console et ne soumet aucune exécution. Recent results filtre les entrées ayant
-une référence de résultat ; cela ne garantit pas que leur tampon est encore
-retenu. Les menus de connexion exposent les configurations connues à l'ouverture
-et la connexion active ; compléter leurs choix depuis l'historique global reste
-nécessaire pour les connexions supprimées ou d'autres workspaces.
-Les consoles disposent maintenant de contrôleurs indépendants : `⌘T` ouvre une
-session dédiée, `Ctrl+Tab` / `Ctrl+Shift+Tab` changent de console, `⌘W` ferme la
-console active après choix explicite si elle porte du SQL ou une opération.
-Chaque onglet conserve éditeur, résultat, confirmation, pages et export, y compris
-hors écran. La première console est aussi séparée de la session réservée au
-catalogue et à l'aperçu. `CloseSession` ferme uniquement la session désignée et
-annule sa préparation ou son drainage avant libération (ADR-0015).
-Les workspaces de connexion sont conservés dans la fenêtre, connectés, huit au
-plus ([ADR-0046](adr/0046-workspaces-retenus-restent-connectes.md)) ; revenir à
-une connexion restaure toutes ses consoles, sans reconnexion ni SQL
-(`features/workspace/workspace-host.tsx`, tenu par `workspace-host.test.tsx`).
-L'écran d'accueil nomme une connexion masquée dont une console tient une
-transaction (story `SavedConnections/OpenWithPendingTransaction`). Une copie du brouillon vers une nouvelle
-connexion est signalée, sans exécution, et conserve l'original. Les préférences
-communes sont réappliquées lorsqu'un workspace retenu redevient visible.
-La sauvegarde explicite depuis l'éditeur est raccordée : nom modifiable,
-`⌘S`, annulation, distinction entre version acquittée et modifications ultérieures,
-et choix Save and close / Discard and close / Cancel. La fermeture d'un document
-sauvegardé met aussi à jour son état ouvert dans le store, sans supprimer sa copie
-nommée. Un conflit propose une nouvelle identité pour préserver les deux textes.
-La dernière fenêtre attend les écritures locales de documents déjà engagées,
-comme celles des préférences ; cela ne valide pas tous les chemins natifs d'arrêt.
-Les éditions de texte et de nom soumettent maintenant une autosauvegarde locale
-par une file bornée : une opération active, le dernier brouillon en attente,
-une sauvegarde nommée et une fermeture. Le backend termine la file déjà soumise
-même si la vue disparaît. Un titre de travail vide est conservé, tandis que la
-sauvegarde nommée exige toujours un nom. Les révisions attendues sont contrôlées
-dans la transaction ; un conflit arrête les écritures de ce contrôleur.
-La fermeture protège aussi un document dont la première écriture n'a pas encore
-commencé. Annuler une fermeture remet son dernier brouillon en attente, sans
-nécessiter le retour de la vue (ADR-0016).
-La bibliothèque ouvre maintenant une copie SQL sur la connexion explicitement
-nommée par l'action, sans exécution. Sur la connexion d'origine, Resume working
-query reprend le texte de travail, sa copie nommée et sa révision ; si le
-document est déjà ouvert, sa console et ses modifications sont conservées.
-Pour éditer l'original sur une autre connexion, il faut d'abord sélectionner
-cette connexion ; la copie sur la connexion courante reste disponible.
-Les entrées nécessitant une réconciliation n'offrent pas d'ouverture éditable.
-La reprise sélective des brouillons SQL apparaît désormais au démarrage lorsque
-des copies de travail ouvertes existent. La sélection est paginée ; les corps
-sont chargés à la demande dans des éditeurs sans session. Ils restent modifiables
-et sauvegardables hors ligne. Le choix explicite d'une connexion transfère le
-même éditeur et sa file d'écriture ; une autre connexion crée une copie. Aucune
-requête ne part pendant la restauration ni lors de ce raccordement.
-Les positions des onglets d'objet, la qualification persistante d'un arrêt
-anormal et la provenance persistante des textes d'agents sont réalisées :
-`ObjectLocation` porte l'emplacement restauré, la table `app_sessions`
-(migration 6) distingue un arrêt propre d'un plantage par le battement, et la
-colonne `provenance` des documents retient qui a écrit un texte.
-La bibliothèque ouvre maintenant les tampons retenus sans session ni SQL, avec
-lecture des pages IPC et export du même résultat. Un résultat tronqué, incomplet
-ou incertain ne devient pas exportable. Une référence expirée affiche une
-indisponibilité sans proposer de rejeu implicite. Le retour à la bibliothèque
-laisse un export engagé continuer ; la fermeture du résultat exige sa fin ou
-son annulation.
-Le registre évince les résultats sans lecteur selon ADR-0017 : au plus 16,
-256 Mio résidents/cache et 1 Gio de débordement pour cette catégorie. Les vues
-et exports restent protégés par leurs références. Le contrôle s'effectue après
-exécution et toutes les secondes dans le backend ; il ne plafonne pas la mémoire
-de toutes les vues actives. Le message de récupération annonce donc des
-copies disponibles, sans prétendre avoir détecté un crash. La recette
-visuelle native de cette bibliothèque reste à effectuer.
+The backend of the Figma library `47:7638` now has the paginated
+document and history commands, separate reading of the full text,
+versioned drafts and named copies, close with discard and
+deletion markers (ADR-0014, migration 5). Reopening a retained
+result checks its original connection without a driver or a new execution.
+Local searches can be cancelled while they scan SQLite.
+GPUI navigation now opens History / Saved queries / Recent results
+through the sidebar or `⌘⇧H`. Paginated lists, menu filters, search with
+a 250 ms delay and read-only inspection go through the bus. Named
+and working copies are viewed separately; this view does not replace the
+console and submits no execution. Recent results filters entries that have
+a result reference; that does not guarantee that their buffer is still
+retained. The connection menus expose the configurations known at opening
+and the active connection; completing their choices from the global history is still
+needed for deleted connections or other workspaces.
+Consoles now have independent controllers: `⌘T` opens a
+dedicated session, `Ctrl+Tab` / `Ctrl+Shift+Tab` switch console, `⌘W` closes the
+active console after an explicit choice if it holds SQL or an operation.
+Each tab keeps editor, result, confirmation, pages and export, including
+off screen. The first console is also separated from the session reserved for the
+catalog and the preview. `CloseSession` closes only the designated session and
+cancels its preparation or draining before release (ADR-0015).
+Connection workspaces are kept in the window, connected, eight at
+most ([ADR-0046](adr/0046-workspaces-retenus-restent-connectes.md)); returning to
+a connection restores all its consoles, without reconnection or SQL
+(`features/workspace/workspace-host.tsx`, held by `workspace-host.test.tsx`).
+The home screen names a hidden connection one of whose consoles holds a
+transaction (story `SavedConnections/OpenWithPendingTransaction`). A copy of the draft to a new
+connection is flagged, without execution, and keeps the original. Common
+preferences are reapplied when a retained workspace becomes visible again.
+Explicit save from the editor is wired: editable name,
+`⌘S`, cancellation, distinction between the acknowledged version and later changes,
+and the choice Save and close / Discard and close / Cancel. Closing a saved
+document also updates its open state in the store, without deleting its named
+copy. A conflict proposes a new identity to preserve both texts.
+The last window waits for already committed local document writes,
+like those of preferences; this does not validate every native shutdown path.
+Text and name edits now submit a local autosave
+through a bounded queue: one active operation, the latest pending draft,
+one named save and one close. The backend finishes the already submitted queue
+even if the view disappears. An empty working title is kept, while
+a named save always requires a name. Expected revisions are checked
+in the transaction; a conflict stops the writes of that controller.
+Closing also protects a document whose first write has not yet
+started. Cancelling a close puts its latest draft back in the queue, without
+requiring the view to come back (ADR-0016).
+The library now opens an SQL copy on the connection explicitly
+named by the action, without execution. On the original connection, Resume working
+query resumes the working text, its named copy and its revision; if the
+document is already open, its console and its changes are kept.
+To edit the original on another connection, that connection must first be
+selected; the copy on the current connection remains available.
+Entries that need reconciliation do not offer editable opening.
+Selective recovery of SQL drafts now appears at startup when
+open working copies exist. The selection is paginated; bodies
+are loaded on demand into editors without a session. They remain editable
+and saveable offline. Explicitly choosing a connection transfers the
+same editor and its write queue; another connection creates a copy. No
+query leaves during restoration or during that attachment.
+Object tab positions, persistent qualification of an abnormal
+shutdown and persistent provenance of agent texts are done:
+`ObjectLocation` carries the restored location, the `app_sessions` table
+(migration 6) distinguishes a clean shutdown from a crash by the heartbeat, and the
+`provenance` column of documents records who wrote a text.
+The library now opens retained buffers without a session or SQL, with
+IPC page reading and export of the same result. A truncated, incomplete
+or uncertain result does not become exportable. An expired reference shows
+unavailability without offering an implicit replay. Returning to the library
+lets a committed export continue; closing the result requires its end or
+its cancellation.
+The registry evicts results without a reader according to ADR-0017: at most 16,
+256 MiB resident/cache and 1 GiB of spill for this category. Views
+and exports remain protected by their references. The check runs after
+execution and every second in the backend; it does not cap the memory
+of all active views. The recovery message therefore announces
+available copies, without claiming to have detected a crash. The native visual
+acceptance test of this library remains to be done.
 
-## Migration vers l'interface Tauri
+## Migration to the Tauri interface
 
-[ADR-0029](adr/0029-interface-tauri-shadcn.md) remplace GPUI. État au 2026-09-15 :
-`apps/desktop` et `crates/oxyn-desktop` existent et passent `make qualite` ; l'écran
-de connexion, la console SQL (exécution, annulation, approbation, export), la grille
-paginée, l'arbre du catalogue et la vue d'objet (Data, Structure) fonctionnent dans
-la fenêtre Tauri.
+[ADR-0029](adr/0029-interface-tauri-shadcn.md) replaces GPUI. State as of 2026-09-15:
+`apps/desktop` and `crates/oxyn-desktop` exist and pass `make qualite`; the connection
+screen, the SQL console (execution, cancellation, approval, export), the paginated
+grid, the catalog tree and the object view (Data, Structure) work in
+the Tauri window.
 
-La liste qui restait alors à faire avant de supprimer `oxyn-ui` et `oxyn-app` :
+The list that still had to be done at that time before deleting `oxyn-ui` and `oxyn-app`:
 
-- bascule compacte sous 1 200 px et menu `More` — **en partie** : la bascule
-  existe (`COMPACT_BELOW_PX`, `features/workspace/use-compact.ts`), le menu `More`
-  et le menu `Actions` non, voir la porte ci-dessous ;
-- ~~réglages d'affichage des cellules (`FormatOptions`) et thème clair commutable~~ — fait (`features/settings/`) ;
-- ~~restauration des brouillons après arrêt brutal~~ — fait (`features/recovery/`) ;
-- campagne de mesure des budgets de [PERFORMANCE](PERFORMANCE.md) **dans la webview**,
-  qui est la condition de reconsidération de l'ADR-0029 — **non faite**. Elle
-  ouvre des fenêtres et prend la machine sous instrument (trame, démarrage à
-  froid, RSS, défilement d'un million de lignes), ce que la consigne « aucune
-  fenêtre ouverte sur mon écran » exclut sur le poste de travail : elle demande
-  **une session ou une machine dédiée, désignée par l'utilisateur** (décision du
-  2026-09-24). Tant qu'elle n'est pas désignée, la campagne ne peut pas démarrer ;
-- vérification du rendu sous WebView2 et WebKitGTK — **non faite**.
+- compact switch below 1,200 px and `More` menu — **partly**: the switch
+  exists (`COMPACT_BELOW_PX`, `features/workspace/use-compact.ts`), the `More` menu
+  and the `Actions` menu do not, see the gate below;
+- ~~cell display settings (`FormatOptions`) and switchable light theme~~ — done (`features/settings/`);
+- ~~restoring drafts after an abrupt shutdown~~ — done (`features/recovery/`);
+- measurement campaign of the [PERFORMANCE](PERFORMANCE.md) budgets **in the webview**,
+  which is the reconsideration condition of ADR-0029 — **not done**. It
+  opens windows and puts the machine under instrumentation (frame, cold
+  start, RSS, scrolling a million rows), which the instruction "no
+  window opened on my screen" rules out on the workstation: it requires
+  **a dedicated session or machine, designated by the user** (decision of
+  2026-09-24). Until one is designated, the campaign cannot start;
+- verification of rendering under WebView2 and WebKitGTK — **not done**.
 
-**Porte de sortie — rouverte le 2026-09-25.** Elle exigeait que chaque parcours
-de l'interface GPUI ait son équivalent dans `apps/desktop`, avec ses stories.
-Elle a été déclarée franchie le 2026-09-18 (commit `6ecb8ce`), qui a retiré
-`oxyn-ui`, `oxyn-app` et la dépendance `gpui` dans un même commit, avec les
-cibles `make app` et `make lancer` — `make desktop-dev` lance désormais
-l'application, et `.claude/verifier_socle.py` refuse `gpui` partout. Le retrait
-tient ; **la parité, non**. L'audit du 2026-09-24, re-vérifié dans le code le
-2026-09-25, trouve des parcours que ce plan déclare faits, ou tenus par des tests
-GPUI que `6ecb8ce` a supprimés, et qui n'existent pas dans `apps/desktop` :
+**Exit gate — reopened on 2026-09-25.** It required every flow
+of the GPUI interface to have its equivalent in `apps/desktop`, with its stories.
+It was declared passed on 2026-09-18 (commit `6ecb8ce`), which removed
+`oxyn-ui`, `oxyn-app` and the `gpui` dependency in a single commit, along with the
+`make app` and `make lancer` targets — `make desktop-dev` now launches
+the application, and `.claude/verifier_socle.py` refuses `gpui` everywhere. The removal
+holds; **parity does not**. The audit of 2026-09-24, re-checked in the code on
+2026-09-25, finds flows that this plan declares done, or held by GPUI
+tests that `6ecb8ce` deleted, and that do not exist in `apps/desktop`:
 
-| Parcours | Ce que le plan en disait | État dans `apps/desktop` au 2026-09-25 |
+| Flow | What the plan said about it | State in `apps/desktop` as of 2026-09-25 |
 |---|---|---|
-| Menu `Actions` en largeur compacte | Columns, Export et l'inspecteur passent dans `Actions` en compact (état au 2026-09-10) | **fait le 2026-09-25** dans l'aperçu d'objet : sous 1 200 px, `Actions` (pied de `ResultPanel`) regroupe Columns, Export preview… et Inspect row, sans doublon dans la barre ; l'inspecteur est fermé par défaut (story `Oxyn/ObjectView`, `Compact`). La console garde sa barre |
-| Menu `More` | Indexes, Relations et Constraints y passent en compact ; porte cochée plus haut | **fait le 2026-09-25.** En compact, Data et Structure restent des onglets ; Indexes, Constraints, Relations et DDL passent dans `More` (story `Oxyn/ObjectView`, `Compact`) |
-| Préférences de panneaux persistées | sidebar large conservée, poignée de l'inspecteur « avec sauvegarde en fin de geste », persistance des panneaux selon ADR-0013 | **fait le 2026-09-25.** `sidebar_collapsed` et `inspector_open` sont lus au démarrage et écrits à chaque bascule en largeur normale, jamais en compact (`use-panel-preferences.test.ts`) ; `inspector_width` suit la poignée, enregistrée en fin de geste (`b03e0b0`) |
-| Bibliothèque en lecture seule | History / Saved queries / Recent results, inspection en lecture seule sans exécution | **en partie.** History, Saved et Recent results existent, paginés, filtrés, recherche à 250 ms ; sélectionner une entrée affiche son texte complet en lecture seule (`components/oxyn/library-entry-view.tsx`, le 2026-09-25) ; la bibliothèque n'existe que dans un workspace connecté |
-| Recent results | une vue dédiée aux résultats retenus ; tenu par `history_and_recent_results_read_the_same_execution_without_replaying_it` | **fait** le 2026-09-25. La vue `results` de `library-panel.tsx` lit l'historique filtré par `resultsOnly` ; le test cité existe de nouveau dans `oxyn-desktop/src/backend/library.rs`. La référence ne prouve pas la rétention : l'ouverture la vérifie |
-| Restauration hors ligne des éditeurs | les brouillons repris restent modifiables et sauvegardables sans session, puis se rattachent à une connexion choisie | **fait**, dans un workspace. Les copies choisies s'ajoutent sans remplacer celles déjà reprises et rouvrent en consoles **sans session** (`features/consoles/use-consoles.ts`) : texte, nom, autosauvegarde et sauvegarde nommée fonctionnent, l'exécution attend. `Connect to …` donne une session à la même console sur la connexion d'origine, `Open a copy on …` ouvre une copie ailleurs ; annuler laisse la console hors ligne. Tenu par `an_offline_copy_attached_to_its_connection_keeps_its_identity`, `a_copy_on_another_connection_leaves_the_original_untouched` et les stories `OfflineConsoleBar`, `ConsoleView/Offline`. Reste : à froid, sans connexion ouverte, les copies attendent le premier workspace — il n'existe pas de workspace sans connexion |
-| Export d'un résultat retenu | la bibliothèque exporte le tampon retenu sans le rejouer | **fait** le 2026-09-25. `retained-result-tab.tsx` monte `ExportMenu` sous la grille, exportable seulement pour un résultat complet, réussi et non tronqué ; l'onglet refuse de se fermer pendant un export, qui survit au changement de vue latérale. Tenu par les stories `RetainedResultView/ExportOffered`, `ExportRefusedWhenIncomplete` et `WorkspaceTabs/ResultExporting` |
-| Panneau DDL latéral | panneau DDL en lecture seule (`193:2433`), redimensionnable | **absent** comme panneau : le DDL est un onglet de la vue d'objet (`RelationDefinition`) |
-| `Edit rows…` désactivé et son infobulle | exigé par [UX-SPEC](UX-SPEC.md) dans l'aperçu en lecture seule | **absent** : aucune occurrence dans `apps/desktop` |
-| La bibliothèque suit les exécutions | la bibliothèque ouverte se relit après une exécution (lot rafraîchissement automatique, ADR-0022) | **absent.** `LIBRARY_QUERY_KEY` n'est invalidée que par Refresh et les actions de la bibliothèque ; le commentaire « a run invalidates it » n'a pas de code derrière lui |
-| Restauration de l'emplacement d'objet | « réalisée (`ObjectLocation`) », tenue par `a_restored_location_and_its_sub_tab_come_back_without_reading_anything` | **fait le 2026-09-25.** `read_object_location` / `write_object_location` (hors de `ipc/settings.rs`, qui l'exclut toujours) ; l'onglet revient tenu, sans lecture, et l'écran de reprise le propose — voir « Reprise et bibliothèque » |
+| `Actions` menu at compact width | Columns, Export and the inspector move into `Actions` in compact (state as of 2026-09-10) | **done on 2026-09-25** in the object preview: below 1,200 px, `Actions` (foot of `ResultPanel`) groups Columns, Export preview… and Inspect row, with no duplicate in the bar; the inspector is closed by default (story `Oxyn/ObjectView`, `Compact`). The console keeps its bar |
+| `More` menu | Indexes, Relations and Constraints move into it in compact; gate ticked above | **done on 2026-09-25.** In compact, Data and Structure stay tabs; Indexes, Constraints, Relations and DDL move into `More` (story `Oxyn/ObjectView`, `Compact`) |
+| Persisted panel preferences | wide sidebar kept, inspector handle "saving at the end of the gesture", panel persistence according to ADR-0013 | **done on 2026-09-25.** `sidebar_collapsed` and `inspector_open` are read at startup and written on each toggle at normal width, never in compact (`use-panel-preferences.test.ts`); `inspector_width` follows the handle, saved at the end of the gesture (`b03e0b0`) |
+| Read-only library | History / Saved queries / Recent results, read-only inspection without execution | **partly.** History, Saved and Recent results exist, paginated, filtered, search at 250 ms; selecting an entry shows its full text read-only (`components/oxyn/library-entry-view.tsx`, on 2026-09-25); the library only exists in a connected workspace |
+| Recent results | a view dedicated to retained results; held by `history_and_recent_results_read_the_same_execution_without_replaying_it` | **done** on 2026-09-25. The `results` view of `library-panel.tsx` reads the history filtered by `resultsOnly`; the cited test exists again in `oxyn-desktop/src/backend/library.rs`. The reference does not prove retention: opening checks it |
+| Offline restoration of editors | recovered drafts remain editable and saveable without a session, then attach to a chosen connection | **done**, within a workspace. The chosen copies are added without replacing those already recovered and reopen as consoles **without a session** (`features/consoles/use-consoles.ts`): text, name, autosave and named save work, execution waits. `Connect to …` gives the same console a session on the original connection, `Open a copy on …` opens a copy elsewhere; cancelling leaves the console offline. Held by `an_offline_copy_attached_to_its_connection_keeps_its_identity`, `a_copy_on_another_connection_leaves_the_original_untouched` and the stories `OfflineConsoleBar`, `ConsoleView/Offline`. Remaining: cold, with no open connection, the copies wait for the first workspace — there is no workspace without a connection |
+| Export of a retained result | the library exports the retained buffer without replaying it | **done** on 2026-09-25. `retained-result-tab.tsx` mounts `ExportMenu` under the grid, exportable only for a complete, successful, untruncated result; the tab refuses to close during an export, which survives a change of side view. Held by the stories `RetainedResultView/ExportOffered`, `ExportRefusedWhenIncomplete` and `WorkspaceTabs/ResultExporting` |
+| Side DDL panel | read-only DDL panel (`193:2433`), resizable | **absent** as a panel: the DDL is a tab of the object view (`RelationDefinition`) |
+| Disabled `Edit rows…` and its tooltip | required by [UX-SPEC](UX-SPEC.md) in the read-only preview | **absent**: no occurrence in `apps/desktop` |
+| The library follows executions | the open library rereads itself after an execution (automatic refresh batch, ADR-0022) | **absent.** `LIBRARY_QUERY_KEY` is only invalidated by Refresh and the library's actions; the comment "a run invalidates it" has no code behind it |
+| Restoring the object location | "done (`ObjectLocation`)", held by `a_restored_location_and_its_sub_tab_come_back_without_reading_anything` | **done on 2026-09-25.** `read_object_location` / `write_object_location` (outside `ipc/settings.rs`, which still excludes it); the tab comes back held, without reading, and the recovery screen offers it — see "Recovery and library" |
 
-Le menu Columns, lui, est livré (`ef2ada8`, `components/oxyn/columns-menu.tsx`)
-dans la console, l'aperçu et le résultat retenu. Chaque lot qui livre un de ces
-parcours remet sa ligne à « fait » ici, avec le test ou la story qui le prouve.
+The Columns menu, for its part, is delivered (`ef2ada8`, `components/oxyn/columns-menu.tsx`)
+in the console, the preview and the retained result. Each batch that delivers one of these
+flows sets its row back to "done" here, with the test or story that proves it.
 
-Ce qui reste ouvert après le retrait, sans qu'aucun de ces points ne soit tranché
-ici :
+What remains open after the removal, without any of these points being settled
+here:
 
-- **les deux derniers points de la liste ci-dessus.** Ils étaient annoncés
-  « avant de supprimer » ; la porte de sortie, elle, ne les exigeait pas, et le
-  retrait a eu lieu sans eux. Tant que la campagne n'est pas faite, la condition
-  de reconsidération d'ADR-0029 n'a pas été évaluée, et les verdicts de trame, de
-  démarrage à froid et de mémoire au repos de
-  [PERFORMANCE](PERFORMANCE.md#confrontation-aux-budgets) portent sur
-  l'interface retirée ;
-- ~~**le statut d'ADR-0009.**~~ — porte `remplacé` depuis le 2026-09-24 ; le
-  statut d'ADR-0029 lui-même relève de la
-  [question ouverte n° 3](#3-le-statut-des-adr--revue-du-2026-09-24) ;
-- **ce que l'interface GPUI faisait et qu'`apps/desktop` ne fait pas**, relevé en
-  réalignant [ARCHITECTURE](ARCHITECTURE.md) : ~~le titre de fenêtre qui
-  signalait un `--temporary-workspace`~~ — porté le 2026-09-25 (`window_title`,
-  `oxyn-desktop/src/main.rs`) ; le sélecteur de fichiers par `⌘O`, ou `⌘N` pour
-  une base SQLite à créer, n'est pas demandé (décision du 2026-09-24) — le front
-  n'offre qu'un `Browse…` vers un fichier existant ;
-- ~~**`assets/fonts/` et `assets/ui/`**, que seul `oxyn-ui` lisait~~ — retirés
-  le 2026-09-25, aucun lecteur ne restant ; lisibles au commit `8a1b7ff` ;
-- ~~**des commentaires de code nomment encore `oxyn-app`, `oxyn-ui` ou GPUI**~~ —
-  fait le 2026-09-25 : le dernier, dans les tests de `oxyn-core/src/value.rs`,
-  renvoie désormais au rendu `∅ NULL` de
+- **the last two points of the list above.** They were announced
+  "before deleting"; the exit gate did not require them, and the
+  removal took place without them. As long as the campaign is not done, the
+  reconsideration condition of ADR-0029 has not been evaluated, and the frame,
+  cold start and idle memory verdicts of
+  [PERFORMANCE](PERFORMANCE.md#comparison-with-the-budgets) concern
+  the removed interface;
+- ~~**the status of ADR-0009.**~~ — `superseded` since 2026-09-24; the
+  status of ADR-0029 itself falls under
+  [open question no. 3](#3-the-status-of-adrs-review-of-2026-09-24);
+- **what the GPUI interface did and `apps/desktop` does not**, found while
+  realigning [ARCHITECTURE](ARCHITECTURE.md): ~~the window title that
+  signaled a `--temporary-workspace`~~ — carried over on 2026-09-25 (`window_title`,
+  `oxyn-desktop/src/main.rs`); the file picker via `⌘O`, or `⌘N` for
+  an SQLite database to create, is not requested (decision of 2026-09-24) — the front end
+  only offers a `Browse…` to an existing file;
+- ~~**`assets/fonts/` and `assets/ui/`**, which only `oxyn-ui` read~~ — removed
+  on 2026-09-25, no reader remaining; readable at commit `8a1b7ff`;
+- ~~**code comments still name `oxyn-app`, `oxyn-ui` or GPUI**~~ —
+  done on 2026-09-25: the last one, in the tests of `oxyn-core/src/value.rs`,
+  now points to the `∅ NULL` rendering of
   `apps/desktop/src/components/oxyn/cell-value.tsx`.
   `grep -rn -i "gpui\|oxyn-ui\|oxyn_ui\|oxyn-app\|oxyn_app" crates drivers apps/desktop/src Cargo.toml`
-  ne rend plus rien.
+  returns nothing anymore.
 
-Les validations datées de ce document qui citent un « test GPUI » ou un test
-d'`oxyn-ui` décrivent l'état de leur date : ces tests ont été supprimés avec les
-deux crates. Côté front, [I-01](../CLAUDE.md#i-01) est désormais tenu par
-`.claude/hooks/code_interdit.py`, qui refuse tout appelant d'`invoke` hors de
+The dated validations of this document that cite a "GPUI test" or an
+`oxyn-ui` test describe the state at their date: those tests were deleted with the
+two crates. On the front-end side, [I-01](../CLAUDE.md#i-01) is now held by
+`.claude/hooks/code_interdit.py`, which refuses any caller of `invoke` outside
 `apps/desktop/src/lib/ipc/client.ts`.
 
-## Interactions d'une application de bureau — décidé le 2026-09-25
+## Desktop application interactions — decided on 2026-09-25
 
-Objectif : qu'Oxyn se manipule comme une application native — barre de menus,
-clic droit sur chaque surface, raccourcis, palette, glisser-déposer, plusieurs
-fenêtres. Le comportement est dans [UX-SPEC](UX-SPEC.md#menus-raccourcis-et-gestes),
-les décisions dans [ADR-0041](adr/0041-registre-d-actions-menus-et-raccourcis.md),
-[ADR-0042](adr/0042-revue-sur-place-des-operations-destructrices.md) et
-[ADR-0043](adr/0043-multi-fenetre.md). Les lots 1 à 6 sont faits (le 4 sous
-la liste), le 8 aussi, le 7 pour sa première partie ; les autres ne sont pas
-implémentés. Les interfaces sont écrites en shadcn/ui (`menubar`, `context-menu`, `command`,
-`alert-dialog`, `kbd`), sauf la barre native de macOS, construite en Rust.
+Goal: that Oxyn handles like a native application — menu bar,
+right-click on every surface, shortcuts, palette, drag and drop, several
+windows. The behavior is in [UX-SPEC](UX-SPEC.md#menus-shortcuts-and-gestures),
+the decisions in [ADR-0041](adr/0041-registre-d-actions-menus-et-raccourcis.md),
+[ADR-0042](adr/0042-revue-sur-place-des-operations-destructrices.md) and
+[ADR-0043](adr/0043-multi-fenetre.md). Batches 1 to 6 are done (4 under
+the list), 8 too, 7 for its first part; the others are not
+implemented. The interfaces are written in shadcn/ui (`menubar`, `context-menu`, `command`,
+`alert-dialog`, `kbd`), except the native macOS bar, built in Rust.
 
-Arbitrages de l'utilisateur, le 2026-09-25 : barre de menus aussi sous Windows
-et Linux ; `Drop…`, `Truncate…`, `Rename…` dans la V1, par une revue sur place ;
-multi-fenêtre dans la V1 ; annulation par `Esc` ; pas de `⌘1…9` ; `⌘/` et `⌘F`
-changent d'action selon la zone qui a le focus ; fermer la dernière fenêtre
-quitte l'application, macOS compris ; `Toggle side panel` est `Ctrl+Shift+B`
-sous Windows et Linux ; les consoles d'une fermeture ordinaire reviennent dans
-leur fenêtre, hors ligne ; une transaction ouverte retient la sortie
-(`Commit`, `Rollback`, `Cancel`), sauf le Quit du Dock, qui l'annule et le
-journalise ; `File ▸ Exit` sous Windows et Linux.
+User decisions, on 2026-09-25: a menu bar on Windows
+and Linux too; `Drop…`, `Truncate…`, `Rename…` in V1, through an in-place review;
+multi-window in V1; cancellation with `Esc`; no `⌘1…9`; `⌘/` and `⌘F`
+change action depending on the area that has focus; closing the last window
+quits the application, macOS included; `Toggle side panel` is `Ctrl+Shift+B`
+on Windows and Linux; the consoles of an ordinary close come back in
+their window, offline; an open transaction holds the exit
+(`Commit`, `Rollback`, `Cancel`), except the Dock's Quit, which cancels it and
+logs it; `File ▸ Exit` on Windows and Linux.
 
-Lots, dans l'ordre :
+Batches, in order:
 
-1. **Hygiène « pas un navigateur »** — menu contextuel de la webview limité aux
-   champs, `⌘R`, zoom de page et pincement neutralisés, correction et
-   guillemets typographiques coupés dans les champs, liens externes vers le
-   navigateur du système (ADR-0041).
-   **Fait le 2026-09-25**, sauf `open_external`, reporté (ci-dessous) :
-   - `apps/desktop/src/lib/browser-defaults.ts`, posé une fois par
-     `routes/__root.tsx`, annule par `preventDefault` seul le menu de page hors
-     d'un champ de texte, `⌘R`, `⌘⇧R`, `Ctrl+R`, `F5`, `Mod` + `=`, `-`, `0`
-     (lus par `event.code`), les touches et boutons 4 et 5 de retour, `Alt+←`
-     et `Alt+→` hors macOS, et le pincement (`wheel` avec `ctrlKey`,
-     `gesturestart`, `gesturechange`) hors d'une zone `data-own-zoom` — le
-     diagramme `erd`. Le lot 2 reprend ces combinaisons au manifeste comme
-     neutralisées (ADR-0041 § 8) : d'ici là, ce module les tient seul ;
-   - champs : `components/oxyn/text-field.tsx` enveloppe `Input`, `Textarea`,
-     `InputGroupInput` et `InputGroupTextarea` de `components/ui` avec
-     `spellCheck`, `autoCorrect`, `autoCapitalize` coupés et `autoComplete`
-     à `off` par défaut ; ESLint (`no-restricted-imports`, donc `make front`)
-     refuse les champs non enveloppés. L'éditeur SQL
-     (`contentAttributes`), le composeur de l'assistant et la recherche du
-     choix de driver reçoivent les mêmes attributs ;
-   - `crates/oxyn-desktop/src/webview_guard.rs` : la fenêtre `main` est
-     déclarée `"create": false` et construite dans `setup` par
-     `WebviewWindowBuilder::from_config`, avec `on_navigation` (refus hors de
-     l'origine de l'application : `devUrl` en développement, `tauri://localhost`
-     ou `http(s)://tauri.localhost` sous Windows) et `on_new_window` (refus
-     toujours). `allowLinkPreview` passe à `false`. Aucune permission ajoutée ;
-   - sélection : inchangée, `styles.css` la tenait déjà comme ADR-0041 § 8 le
-     décrit ;
-   - en passant : `main.rs` appelait deux fois `tauri::Builder::setup`, qui
-     **remplace** le précédent au lieu de s'y ajouter (`tauri` 2.11.5,
-     `src/app.rs`) ; le premier, qui donnait au dialogue natif d'ADR-0037 son
-     `AppHandle`, ne s'exécutait pas, et toute confirmation critique était
-     refusée. Les deux sont fusionnés.
+1. **"Not a browser" hygiene** — webview context menu limited to
+   fields, `⌘R`, page zoom and pinch neutralized, autocorrect and
+   typographic quotes turned off in fields, external links to the
+   system browser (ADR-0041).
+   **Done on 2026-09-25**, except `open_external`, postponed (below):
+   - `apps/desktop/src/lib/browser-defaults.ts`, installed once by
+     `routes/__root.tsx`, cancels with `preventDefault` alone the page menu outside
+     a text field, `⌘R`, `⌘⇧R`, `Ctrl+R`, `F5`, `Mod` + `=`, `-`, `0`
+     (read through `event.code`), the back keys and buttons 4 and 5, `Alt+←`
+     and `Alt+→` outside macOS, and pinch (`wheel` with `ctrlKey`,
+     `gesturestart`, `gesturechange`) outside a `data-own-zoom` area — the
+     `erd` diagram. Batch 2 takes these combinations into the manifest as
+     neutralized (ADR-0041 § 8): until then, this module holds them alone;
+   - fields: `components/oxyn/text-field.tsx` wraps `Input`, `Textarea`,
+     `InputGroupInput` and `InputGroupTextarea` from `components/ui` with
+     `spellCheck`, `autoCorrect`, `autoCapitalize` turned off and `autoComplete`
+     set to `off` by default; ESLint (`no-restricted-imports`, hence `make front`)
+     refuses unwrapped fields. The SQL editor
+     (`contentAttributes`), the assistant's composer and the search of the
+     driver choice receive the same attributes;
+   - `crates/oxyn-desktop/src/webview_guard.rs`: the `main` window is
+     declared `"create": false` and built in `setup` by
+     `WebviewWindowBuilder::from_config`, with `on_navigation` (refusal outside
+     the application's origin: `devUrl` in development, `tauri://localhost`
+     or `http(s)://tauri.localhost` on Windows) and `on_new_window` (always
+     refused). `allowLinkPreview` becomes `false`. No permission added;
+   - selection: unchanged, `styles.css` already held it as ADR-0041 § 8
+     describes;
+   - in passing: `main.rs` called `tauri::Builder::setup` twice, which
+     **replaces** the previous one instead of adding to it (`tauri` 2.11.5,
+     `src/app.rs`); the first, which gave the native dialog of ADR-0037 its
+     `AppHandle`, did not run, and every critical confirmation was
+     refused. The two are merged.
 
-   Écarts et reports du lot 1 :
-   - **`open_external` reporté** (arbitrage du 2026-09-25) : aucun lien
-     qu'Oxyn déclare n'existe encore, et la commande n'aurait pas d'appelant.
-     Elle exigera une dépendance — `clippy.toml` interdit
-     `std::process::Command::new` —, donc `/versions`. **Ce qui la
-     débloque** : le premier lien externe qu'Oxyn rend (documentation) ;
-   - l'attribution de React Flow (`erd-diagram.tsx`) est un `<a href>` externe
-     rendu dans la webview, contre ADR-0041 § 8. Son clic est désormais
-     refusé par `on_navigation` et ne fait rien ; `open_external` lui rendra
-     une destination ;
-   - `Ctrl+P` et `Ctrl+F` de WebView2 ne sont pas absorbés : ils reviennent au
-     répartiteur (lot 2) et à `⌘P` (lot 5) ;
-   - points à vérifier n° 4 (guillemets typographiques de macOS malgré
-     `autocorrect="off"`), 5 (pincement sous WKWebView et WebKitGTK) et 6
-     (`preventDefault` contre les raccourcis de WebView2) : toujours non
-     vérifiés à la main ; les tests couvrent les écouteurs, pas le moteur. À
-     vérifier aussi dans `make desktop-dev` : l'ouverture de la fenêtre par
-     `from_config` et le refus d'un clic sur l'attribution de React Flow.
-2. **Registre d'actions** — `actions.json` et `registry.ts`, écouteur clavier
-   unique, raccordement des boutons existants ; barre native macOS
-   (`menu.rs`, `subscribe_menu`, `set_menu_state`), qui remplace
-   `application_menu` de `commands/recovery.rs` en gardant le Quit
-   d'[ADR-0038](adr/0038-un-plantage-s-annonce-une-fois.md) traité en Rust ;
-   barre `menubar` sous Windows et Linux, avec `File ▸ Exit` et la commande
-   `request_exit` (ADR-0041 § 5).
-   **Fait le 2026-09-25.** `apps/desktop/src/lib/actions/` (manifeste,
-   comportements, répartiteur, modèle de menu), barre native lue par
+   Deviations and postponements of batch 1:
+   - **`open_external` postponed** (decision of 2026-09-25): no link
+     that Oxyn declares exists yet, and the command would have no caller.
+     It will require a dependency — `clippy.toml` forbids
+     `std::process::Command::new` —, hence `/versions`. **What
+     unblocks it**: the first external link Oxyn renders (documentation);
+   - the React Flow attribution (`erd-diagram.tsx`) is an external `<a href>`
+     rendered in the webview, against ADR-0041 § 8. Its click is now
+     refused by `on_navigation` and does nothing; `open_external` will give it
+     a destination;
+   - WebView2's `Ctrl+P` and `Ctrl+F` are not absorbed: they go back to the
+     dispatcher (batch 2) and to `⌘P` (batch 5);
+   - points to check no. 4 (macOS typographic quotes despite
+     `autocorrect="off"`), 5 (pinch under WKWebView and WebKitGTK) and 6
+     (`preventDefault` against WebView2 shortcuts): still not
+     checked by hand; the tests cover the listeners, not the engine. Also
+     to check in `make desktop-dev`: opening the window through
+     `from_config` and refusing a click on the React Flow attribution.
+2. **Action registry** — `actions.json` and `registry.ts`, single keyboard
+   listener, wiring of existing buttons; native macOS bar
+   (`menu.rs`, `subscribe_menu`, `set_menu_state`), which replaces
+   `application_menu` from `commands/recovery.rs` while keeping the Quit
+   of [ADR-0038](adr/0038-un-plantage-s-annonce-une-fois.md) handled in Rust;
+   `menubar` bar on Windows and Linux, with `File ▸ Exit` and the
+   `request_exit` command (ADR-0041 § 5).
+   **Done on 2026-09-25.** `apps/desktop/src/lib/actions/` (manifest,
+   behaviors, dispatcher, menu model), native bar read by
    `crates/oxyn-desktop/src/menu.rs`, `subscribe_menu`, `set_menu_state`,
-   `request_exit` ; `@tanstack/react-hotkeys` retiré. Tenu par
-   `manifest.test.ts` (identifiants, unicité par zone, combinaisons
-   interdites, `⌘W` au seul `Close tab`), `keyboard.test.ts` (zones, AZERTY,
-   cyrillique, `⌥`, composition, dialogue, barre native), les stories
-   `Oxyn/AppMenubar` et `Oxyn/SqlEditor`, et les tests de `menu.rs`. Écarts
-   et restes :
-   - la barre ne porte pas encore `New window`, `Open Recent ▸`, `Save as…`,
-     `Export…`, `Text size ▸`, `Theme ▸`, `Format`, ni le menu `Help`
-     (`Documentation` attend `open_external`, lot 1 ; `Keyboard shortcuts`,
-     déclarée sans place ni comportement, la feuille du lot 5) ;
-   - `Settings…` n'a pas de place fixée par UX-SPEC hors macOS : il est mis
-     dans `File`, au-dessus d'`Exit` ;
-   - l'élément natif de Quit s'appelle désormais `app.quit`, l'identifiant de
-     l'action, et non plus `oxyn-quit` que citent ADR-0038 et ADR-0043 ;
-   - `Échap` reste traité par les écouteurs de l'écran de connexion, de son
-     formulaire, des connexions enregistrées et de l'écran de reprise, en
-     phase de bouillonnement : le répartiteur, en capture, le prendrait à une
-     liste ou à un menu ouverts. Seuls `⌘[` et `Alt+←` y passent au registre ;
-   - les `kbd` écrits à la main ailleurs que dans la console, les onglets et
-     l'en-tête du workspace restent à lire au manifeste (lot 5) ;
-   - les rechargements `⌘R` / `F5` ne sont pas déclarés au manifeste : ils
-     relèvent du lot 1 ;
-   - sous macOS, que `⌘W` ferme l'onglet et non la fenêtre dépend de
-     l'ordre de livraison d'une frappe entre WKWebView et la barre (ADR-0041,
-     point à vérifier n° 1), qu'aucun test automatique n'atteint : procédure
-     d'essai manuel dans la PR du lot.
-3. **Menus contextuels** — grille et en-têtes de colonne, onglets, éditeur SQL,
-   connexions enregistrées, bibliothèque, assistant, ERD ; compléments du
-   catalogue.
-   **Fait le 2026-09-25.** Chaque surface liste des actions du registre
-   (`lib/actions/context-menus.ts`) ; la cible d'un clic droit rejoint le
-   contexte par des sources propres au menu (`menuContext`,
-   `lib/actions/targets.ts`), les conditions sont dans
-   `lib/actions/menu-behaviours.ts`, et `ActionMenuContent` rend les entrées,
-   grisées avec leur raison dans le texte de l'entrée. Le SQL copié est composé
-   en Rust : `copy_result_rows` (six formats, 2 000 lignes au plus, 32 Mio au
-   plus, littéraux par `oxyn_catalog::push_string_literal`, qui refuse NUL et
-   les caractères de contrôle autres que tabulation et fins de ligne) et
-   `compose_object_sql` (`Quoted name`, `SELECT *` sans `LIMIT`, `INSERT
-   template`). `edit.cut`, `edit.copy` et `edit.paste` existent désormais sous
-   macOS aussi, sans place dans la barre native, pour le menu de l'éditeur ;
-   `tab.close` prend le libellé `Close` sur un onglet ; `⌘⇧T` est
-   `tab.reopen`. Tenu par `context-menus.test.ts` (dont : jamais de `Run` sur un
-   bloc de code de l'assistant), les stories de chaque surface, et les tests de
-   `literal.rs` et `backend/results/copy`. Écarts et restes :
-   - **grisées, avec ce qui manque pour raison** : `Filter by this value`,
-     `Exclude this value`, `Is NULL` (l'aperçu ne porte qu'un prédicat texte ;
-     **suite à faire** une fois fusionné le lot apercus-execution, issues #14
-     et #16 : une valeur liée dans la forme de l'aperçu), `Freeze`, `Open
-     referenced row`, `Send to assistant` sous `Sampled` (l'écran
-     d'approbation ne s'ouvre qu'à la demande d'un modèle), `Format` (aucun
-     formateur SQL : dépendance à passer par `/versions`), `Ask assistant about
-     selection` (le composeur ne reçoit pas de texte de l'extérieur), `Re-layout`
-     et `Export image…` de l'ERD, `Reveal in Finder`/`Explorer` (attend une
-     commande système, comme `open_external`) ; `Open in new window` est
-     actif depuis le lot 7 ;
-   - **grisées** dans la bibliothèque, avec ce qu'elles attendent (lot 3 ter) :
-     `Rename…`, `Duplicate` et `Copy path` — il faudrait
-     `rename_query_document` et `duplicate_query_document` en Rust, la
-     composition ouvrir-puis-sauvegarder n'étant pas atomique, et
-     `DocumentEntry` ne porte pas de chemin ;
-   - `Duplicate` d'une connexion ouvre le formulaire de création pré-rempli des
-     seuls paramètres non secrets ; la copie commence en `production`, au
-     niveau IA par défaut, et rien n'est enregistré avant `Connect`. Il n'est
-     pas offert dans les réglages, qui n'ont pas de formulaire de création ;
-   - `Copy answer` copie désormais le texte lisible, bouton compris ; `Copy as
-     Markdown` copie la source ;
-   - `Rename…` du catalogue s'affiche en rouge, comme toute action
-     `destructive` ;
-   - `Open object under cursor` résout le nom en TypeScript contre l'arbre déjà
-     lu (casse ignorée hors guillemets) : une résolution par le backend
-     suivrait le dialecte ;
-   - `⌘⇧T` rouvre dans une console et une session neuves, sans les paramètres
-     liés ; `Reveal in library` ouvre la bibliothèque sans y sélectionner
-     l'entrée ;
-   - `Filter…` d'un en-tête de l'aperçu donne le focus au champ `WHERE` ;
-   - les lignes de l'onglet Structure ne prennent pas le focus : `⇧F10` n'y
-     vise pas une colonne ;
-   - pour brancher l'aperçu et l'onglet Structure, `features/workspace/object-view.tsx`
-     reçoit quelques lignes (menu de la grille, revue de renommage de colonne) ;
-   - les copies TSV, CSV, JSON et Markdown recopient les valeurs telles
-     quelles, caractères de contrôle compris, comme la copie `⌘C` de la grille ;
-     seul le SQL copié les refuse. À trancher dans SECURITY si le collage dans
-     un terminal doit valoir pour les données aussi ;
-   - relevé en relecture, antérieur à ce lot : `quote_identifier` ne double que
-     le caractère fermant, alors que BigQuery (et probablement ClickHouse) lit
-     les échappements par antislash dans un identifiant cité. Aucun driver ne
-     produit ces dialectes aujourd'hui ; à régler avant le premier.
+   `request_exit`; `@tanstack/react-hotkeys` removed. Held by
+   `manifest.test.ts` (identifiers, uniqueness per area, forbidden
+   combinations, `⌘W` on `Close tab` only), `keyboard.test.ts` (areas, AZERTY,
+   Cyrillic, `⌥`, composition, dialog, native bar), the stories
+   `Oxyn/AppMenubar` and `Oxyn/SqlEditor`, and the tests of `menu.rs`. Deviations
+   and leftovers:
+   - the bar does not yet carry `New window`, `Open Recent ▸`, `Save as…`,
+     `Export…`, `Text size ▸`, `Theme ▸`, `Format`, nor the `Help` menu
+     (`Documentation` waits for `open_external`, batch 1; `Keyboard shortcuts`,
+     declared with neither place nor behavior, the sheet of batch 5);
+   - `Settings…` has no place set by UX-SPEC outside macOS: it is put
+     in `File`, above `Exit`;
+   - the native Quit item is now called `app.quit`, the action's
+     identifier, and no longer `oxyn-quit` as cited by ADR-0038 and ADR-0043;
+   - `Escape` is still handled by the listeners of the connection screen, its
+     form, saved connections and the recovery screen, in the
+     bubbling phase: the dispatcher, in capture, would take it from an open
+     list or menu. Only `⌘[` and `Alt+←` go through the registry there;
+   - `kbd`s written by hand outside the console, the tabs and
+     the workspace header remain to be read from the manifest (batch 5);
+   - `⌘R` / `F5` reloads are not declared in the manifest: they
+     belong to batch 1;
+   - on macOS, whether `⌘W` closes the tab and not the window depends on
+     the delivery order of a keystroke between WKWebView and the bar (ADR-0041,
+     point to check no. 1), which no automated test reaches: manual test
+     procedure in the batch's PR.
+3. **Context menus** — grid and column headers, tabs, SQL editor,
+   saved connections, library, assistant, ERD; catalog
+   additions.
+   **Done on 2026-09-25.** Each surface lists registry actions
+   (`lib/actions/context-menus.ts`); the target of a right-click joins the
+   context through menu-specific sources (`menuContext`,
+   `lib/actions/targets.ts`), the conditions are in
+   `lib/actions/menu-behaviours.ts`, and `ActionMenuContent` renders the entries,
+   greyed out with their reason in the entry's text. Copied SQL is composed
+   in Rust: `copy_result_rows` (six formats, 2,000 rows at most, 32 MiB at
+   most, literals through `oxyn_catalog::push_string_literal`, which refuses NUL and
+   control characters other than tab and line endings) and
+   `compose_object_sql` (`Quoted name`, `SELECT *` without `LIMIT`, `INSERT
+   template`). `edit.cut`, `edit.copy` and `edit.paste` now exist on
+   macOS too, without a place in the native bar, for the editor's menu;
+   `tab.close` takes the label `Close` on a tab; `⌘⇧T` is
+   `tab.reopen`. Held by `context-menus.test.ts` (including: never a `Run` on an
+   assistant code block), the stories of each surface, and the tests of
+   `literal.rs` and `backend/results/copy`. Deviations and leftovers:
+   - **greyed out, with what is missing as the reason**: `Filter by this value`,
+     `Exclude this value`, `Is NULL` (the preview only carries a text predicate;
+     **follow-up** once the apercus-execution batch is merged, issues #14
+     and #16: a bound value in the preview's form), `Freeze`, `Open
+     referenced row`, `Send to assistant` under `Sampled` (the approval
+     screen only opens at a model's request), `Format` (no
+     SQL formatter: a dependency to go through `/versions`), `Ask assistant about
+     selection` (the composer does not receive text from outside), `Re-layout`
+     and `Export image…` of the ERD, `Reveal in Finder`/`Explorer` (waits for a
+     system command, like `open_external`); `Open in new window` is
+     active since batch 7;
+   - **greyed out** in the library, with what they wait for (batch 3 ter):
+     `Rename…`, `Duplicate` and `Copy path` — they would need
+     `rename_query_document` and `duplicate_query_document` in Rust, the
+     open-then-save composition not being atomic, and
+     `DocumentEntry` carries no path;
+   - `Duplicate` of a connection opens the creation form pre-filled with
+     only the non-secret parameters; the copy starts in `production`, at the
+     default AI tier, and nothing is saved before `Connect`. It is
+     not offered in the settings, which have no creation form;
+   - `Copy answer` now copies the readable text, button included; `Copy as
+     Markdown` copies the source;
+   - the catalog's `Rename…` is displayed in red, like any
+     `destructive` action;
+   - `Open object under cursor` resolves the name in TypeScript against the tree already
+     read (case ignored outside quotes): a resolution by the backend
+     would follow the dialect;
+   - `⌘⇧T` reopens in a new console and session, without the bound
+     parameters; `Reveal in library` opens the library without selecting
+     the entry in it;
+   - `Filter…` of a preview header gives focus to the `WHERE` field;
+   - the rows of the Structure tab do not take focus: `⇧F10` does not
+     target a column there;
+   - to wire the preview and the Structure tab, `features/workspace/object-view.tsx`
+     receives a few lines (grid menu, column rename review);
+   - TSV, CSV, JSON and Markdown copies copy values as
+     they are, control characters included, like the grid's `⌘C` copy;
+     only copied SQL refuses them. To be settled in SECURITY whether pasting into
+     a terminal should apply to data too;
+   - found in review, predating this batch: `quote_identifier` only doubles
+     the closing character, whereas BigQuery (and probably ClickHouse) reads
+     backslash escapes in a quoted identifier. No driver
+     produces these dialects today; to be fixed before the first one.
 
-   **Lot 3 bis — défauts relevés à l'usage, corrigés le 2026-09-25** :
-   - **copies refusées par WKWebView** (« The request is not allowed by the
-     user agent… ») : le presse-papiers était écrit après un aller-retour IPC,
-     hors du geste de l'utilisateur. `writeClipboard` (`lib/clipboard.ts`)
-     est désormais l'unique écriture : appelée dans le clic, elle confie un
-     texte encore à lire à un `ClipboardItem` résolu plus tard
-     ([RESEARCH-NOTES](RESEARCH-NOTES.md#presse-papiers-de-la-webview--vérification-du-2026-09-25)),
-     et dit en clair un refus tardif là où le moteur n'a pas `ClipboardItem`.
-     Passent par elle : le catalogue (`Copy qualified name`, `Copy as ▸`),
-     `Copy value` et les copies de lignes de la grille, `⌘C` de la grille,
-     l'éditeur, l'assistant, `Copy name` du diagramme. Aucune dépendance,
-     aucune permission Tauri ;
-   - **`Copy as ▸ INSERT template` sans colonnes lues** : le catalogue lit
-     d'abord la structure par le bus (`refresh_relation_facet`, facette
-     `detail`), puis compose ; `compose_object_sql` garde son refus, qui n'est
-     plus atteint depuis le menu. Un échec de copie est le toast de la copie,
-     et non plus l'alerte « The catalog could not be read » du panneau
-     (`features/workspace/catalog-copies.ts`) ;
-   - **infobulle d'un nœud par-dessus le menu contextuel** : l'infobulle du
-     système (`title`) est remplacée par celle de Base UI, fermée et
-     désactivée tant que le menu est ouvert ; le commentaire d'un objet reste
-     la description accessible de sa ligne ;
-   - **deux menus pour deux tables sœurs** : non reproduit. Le menu du
-     catalogue n'a qu'une source (`menuSources` de `catalog-tree.tsx`) et
-     `Collapse all` y est toujours présent ; la liste relevée sur `customers`
-     est exactement le menu écrit à la main d'avant le registre (`f038428`),
-     d'où l'hypothèse d'une build antérieure au lot 3. La story
-     `SiblingTablesShareTheirMenu` tient l'égalité ; l'utilisateur revérifie
-     sur la build installée.
+   **Batch 3 bis — defects found in use, fixed on 2026-09-25**:
+   - **copies refused by WKWebView** ("The request is not allowed by the
+     user agent…"): the clipboard was written after an IPC round trip,
+     outside the user's gesture. `writeClipboard` (`lib/clipboard.ts`)
+     is now the only write: called in the click, it hands a
+     text still to be read to a `ClipboardItem` resolved later
+     ([RESEARCH-NOTES](RESEARCH-NOTES.md#webview-clipboard--check-of-2026-09-25)),
+     and states plainly a late refusal where the engine has no `ClipboardItem`.
+     Going through it: the catalog (`Copy qualified name`, `Copy as ▸`),
+     `Copy value` and the grid's row copies, the grid's `⌘C`,
+     the editor, the assistant, the diagram's `Copy name`. No dependency,
+     no Tauri permission;
+   - **`Copy as ▸ INSERT template` without columns read**: the catalog first reads
+     the structure through the bus (`refresh_relation_facet`, `detail`
+     facet), then composes; `compose_object_sql` keeps its refusal, which is no
+     longer reached from the menu. A copy failure is the copy's toast,
+     and no longer the panel's "The catalog could not be read" alert
+     (`features/workspace/catalog-copies.ts`);
+   - **a node's tooltip over the context menu**: the system
+     tooltip (`title`) is replaced by Base UI's, closed and
+     disabled while the menu is open; an object's comment remains
+     the accessible description of its row;
+   - **two menus for two sibling tables**: not reproduced. The catalog
+     menu has only one source (`menuSources` of `catalog-tree.tsx`) and
+     `Collapse all` is always present in it; the list found on `customers`
+     is exactly the hand-written menu from before the registry (`f038428`),
+     hence the hypothesis of a build predating batch 3. The story
+     `SiblingTablesShareTheirMenu` holds the equality; the user re-checks
+     on the installed build.
 
-   **Lot 3 ter — une entrée ne disparaît plus faute de gestionnaire, fait le
-   2026-09-25.** La capture du lot 3 bis montrait un menu d'`invoices` sans
-   `Copy as ▸` ni opérations, faute de gestionnaires donnés à l'arbre : c'est
-   très probablement ce qui a donné deux menus à l'utilisateur. Désormais
-   (`onTarget` de `lib/actions/menu-behaviours.ts`), l'état de la cible décide
-   seul de l'absence — les cas d'UX-SPEC, « Une action, un libellé, un
-   raccourci » : type d'objet, capacité non déclarée, aucune destination IA,
-   agent —, et un gestionnaire que la surface ne donne pas **grise** l'entrée
-   avec une raison propre à la surface. Le catalogue fournit toujours sa source
-   d'opérations (« Catalog operations are not available here. » sans session).
-   Changements de comportement, sur toutes les surfaces :
-   - `Pin to question` sous un niveau autre que `Sampled` est **grisé** avec le
-     niveau, comme `Send to assistant` de la grille ; il restait absent,
-     contre UX-SPEC (« un niveau IA qui refuse » grise) ;
-   - `Delete…` d'une connexion ouverte est grisé (« Disconnect it to delete
-     it »), `Reveal in library` d'un onglet d'objet grisé (« Only a console is
-     saved in the library »), `Open` d'une écriture en attente d'inspection
-     grisé, `Open in console` d'un bloc de code grisé avec la raison du bouton,
-     `Hide` de la dernière colonne grisé ;
-   - dans les réglages, les entrées de connexion que l'écran ne fait pas
-     (`Refresh catalog`, `New console`, `Duplicate`…) sont grisées.
-   Tenu par `context-menus.test.ts` (« never lose an entry because its surface
-   left the handler out », sur toutes les surfaces) et les stories des
-   surfaces, dont `Oxyn/CatalogTree` `ContextMenu`.
+   **Batch 3 ter — an entry no longer disappears for lack of a handler, done on
+   2026-09-25.** The capture of batch 3 bis showed an `invoices` menu without
+   `Copy as ▸` or operations, for lack of handlers given to the tree: this is
+   very probably what gave the user two menus. From now on
+   (`onTarget` of `lib/actions/menu-behaviours.ts`), the target's state alone decides
+   absence — the UX-SPEC cases, "One action, one label, one
+   shortcut": object type, undeclared capability, no AI destination,
+   agent —, and a handler the surface does not give **greys out** the entry
+   with a reason specific to the surface. The catalog always provides its source
+   of operations ("Catalog operations are not available here." without a session).
+   Behavior changes, on every surface:
+   - `Pin to question` under a tier other than `Sampled` is **greyed out** with the
+     tier, like the grid's `Send to assistant`; it used to be absent,
+     against UX-SPEC ("an AI tier that refuses" greys out);
+   - `Delete…` of an open connection is greyed out ("Disconnect it to delete
+     it"), `Reveal in library` of an object tab greyed out ("Only a console is
+     saved in the library"), `Open` of a write awaiting inspection
+     greyed out, `Open in console` of a code block greyed out with the button's reason,
+     `Hide` of the last column greyed out;
+   - in the settings, the connection entries the screen does not perform
+     (`Refresh catalog`, `New console`, `Duplicate`…) are greyed out.
+   Held by `context-menus.test.ts` ("never lose an entry because its surface
+   left the handler out", on every surface) and the stories of the
+   surfaces, including `Oxyn/CatalogTree` `ContextMenu`.
 
-   **Lot 3 quater — la raison d'un grisé dit où agir, fait le 2026-09-25.**
-   Les raisons génériques par surface (« Not available for this connection
-   here »…) ne laissaient aucune issue : vu des réglages, `Disconnect` était
-   grisé sans dire où déconnecter. `onTarget` exige désormais, pour chaque
-   entrée, une raison qui dit ce qui manque **et où le faire** (« Connect
-   from the start screen », « Show its workspace from the start screen, then
-   press ⌘T », « Disconnect it first, from this menu »). Les réglages
-   branchent `Disconnect` (`closeConnection`, comme l'écran d'accueil ;
-   l'écran d'accueil s'affiche si c'était le workspace montré) et `Refresh
-   catalog` (`features/connections/refresh-catalog.ts`, partagé avec l'écran
-   d'accueil). `New console` et `Duplicate` y restent grisés : le premier
-   montre un workspace, le second a besoin du formulaire de création de
-   l'écran d'accueil, que les réglages n'ont pas. Les raisons « Not available
-   yet: … » gardent leur forme : elles nomment ce qui manque à Oxyn, et aucun
-   autre endroit ne le fait. Tenu par `context-menus.test.ts` (aucune raison
-   générique, ni sur une surface sans gestionnaires, ni dans les sources) et
-   la story `Oxyn/ConnectionManager` `ContextMenu`.
-4. **Revue destructive** — `review_object_operation`, `run_object_operation`,
-   qui approuve une commande retenue par `confirm_held`, donc par le dialogue
-   natif d'[ADR-0037](adr/0037-dialogue-natif-pour-les-confirmations-critiques.md)
-   sur `production` ; drapeaux de capacité `TRUNCATE`, `TRANSACTIONAL_DDL`,
-   `RESTRICT_DEPENDENTS`, chacun prouvé par un test d'intégration du driver
-   avant d'être déclaré (ADR-0042).
-5. **Palette et ouverture rapide** — `⌘K`, `⌘P`, feuille des raccourcis.
-   **Fait le 2026-09-25.** La palette (`components/oxyn/command-palette.tsx`),
-   l'ouverture rapide (`quick-open.tsx`) et la feuille (`shortcut-sheet.tsx`)
-   sont posées une fois par `features/actions/action-overlays.tsx`, ouvertes
-   par les actions `palette.open`, `object.quickOpen` et `help.shortcuts`, et
-   ne lisent que le registre : `lib/actions/listings.ts` en tire les entrées,
-   grisées avec la raison de `enabled`. `⌘P` passe par `search_catalog`, sous
-   la clé de requête de la recherche du catalogue : les objets chargés
-   seulement, bornés par le backend, aucune lecture du serveur. S'ajoutent au
-   registre et aux deux barres `New window`, `Export…`, le menu `Help`
-   (`Documentation`, `Keyboard shortcuts`), `Text size ▸`, `Theme ▸` et
-   `Format`, par les champs `parent` et `check` du manifeste qu'ADR-0041
-   (§ 1 et § 4) décrit désormais. Tenu par
-   `listings.test.ts` (la palette égale le registre du contexte, raisons
-   comprises ; `⌘/` selon la zone ; `⌘P` grisé et non absent sans catalogue),
-   `action-overlays.test.tsx` (`⌘P` n'appelle que `search_catalog`),
-   `manifest.test.ts`, les stories `Oxyn/CommandPalette`, `Oxyn/QuickOpen`,
-   `Oxyn/ShortcutSheet` et `Oxyn/AppMenubar` (`ThemeIsAChoice`), et les tests
-   de `menu.rs`. Arbitrages et écarts :
-   - `Settings…` reste sous Windows et Linux dans `File`, au-dessus d'`Exit`,
-     et UX-SPEC l'écrit désormais (arbitré le 2026-09-25) ;
-   - `Format` est présent partout, **grisé** avec sa raison : aucun formateur
-     SQL n'est livré (lot 9 ci-dessous) ;
-   - `Documentation` est présent, **grisé** avec sa raison, jusqu'à
-     `open_external` (reporté du lot 1) ;
-   - `New window` est présent ; actif depuis le lot 7 ;
-   - `Export…` ouvre le menu d'export du résultat affiché, repéré par
-     `data-action-export` : son grisé et sa raison sont ceux du bouton. Mais
-     la fin d'un aperçu d'objet ne change aucune source du registre : sous
-     macOS, l'entrée native peut rester grisée jusqu'au prochain changement
-     de focus ou d'onglet (`invoke` réévalue de toute façon au clic) ;
-   - un choix coché déjà en vigueur, cliqué dans la barre native, voit sa
-     coche basculée par AppKit : le front renvoie l'état après chaque
-     activation native pour la rétablir ;
-   - `Open Recent ▸` et `Save as…` ne sont toujours pas dans la barre ;
-   - les `Kbd` de `⌘,`, `⌘↵`, `⌘J` et `⌘⌥B` écrits à la main (préférences,
-     résultat, panneau latéral) lisent désormais le manifeste ; ceux qui
-     restent décrivent des touches internes à un composant (`Esc`, `↵`), que
-     le manifeste ne déclare pas ;
-   - la feuille ne liste pas encore les touches internes aux composants
-     (flèches, `Home`, `End`…) qu'ADR-0041 § 2 lui fait montrer : elles ne
-     sont pas déclarées au manifeste ;
-   - `Open object…` est déclaré dans la zone `app`, grisé sous un dialogue :
-     le répartiteur n'y résout que cette zone, et `Ctrl+P` y aurait atteint
-     l'impression de WebView2.
-6. **Glisser-déposer** — interne sur événements de pointeur, dépôt de fichiers
-   depuis le système (ADR-0041).
-   **Fait le 2026-09-25.** Implémentation locale, sans bibliothèque :
-   `components/oxyn/pointer-drag.ts` (seuil de 4 px, écouteurs de fenêtre,
-   `Échap` qui annule, clic avalé après un dépôt). Onglets
-   (`workspace-tabs.tsx`, ordre tenu par `workspace-screen.tsx`), colonnes de
-   la grille (`column-order.ts`, `result-grid.tsx`), relation du catalogue
-   vers l'éditeur (`catalog-name-drag.ts`, `features/workspace/name-transfer.ts`,
-   `insertAt` de la poignée de zone de `sql-editor.tsx`, à la position
-   `posAtCoords`). Le nom inséré est le `qualifiedName` de `relation_facets`,
-   cité par le backend. Dépôt de fichiers : `crates/oxyn-desktop/src/file_drop.rs`,
-   `subscribe_file_drops`, `lib/ipc/file-drops.ts`, `features/file-drops/` ;
-   aucune permission ajoutée. Tenu par `pointer-drag.test.ts`,
+   **Batch 3 quater — the reason for a greyed-out entry says where to act, done on 2026-09-25.**
+   Generic reasons per surface ("Not available for this connection
+   here"…) left no way out: seen from the settings, `Disconnect` was
+   greyed out without saying where to disconnect. `onTarget` now requires, for each
+   entry, a reason that says what is missing **and where to do it** ("Connect
+   from the start screen", "Show its workspace from the start screen, then
+   press ⌘T", "Disconnect it first, from this menu"). The settings
+   wire `Disconnect` (`closeConnection`, like the home screen;
+   the home screen is shown if it was the displayed workspace) and `Refresh
+   catalog` (`features/connections/refresh-catalog.ts`, shared with the home
+   screen). `New console` and `Duplicate` stay greyed out there: the first
+   shows a workspace, the second needs the home screen's creation form,
+   which the settings do not have. The "Not available
+   yet: …" reasons keep their form: they name what Oxyn is missing, and no
+   other place does. Held by `context-menus.test.ts` (no generic
+   reason, neither on a surface without handlers nor in the sources) and
+   the story `Oxyn/ConnectionManager` `ContextMenu`.
+4. **Destructive review** — `review_object_operation`, `run_object_operation`,
+   which approves a command held by `confirm_held`, hence by the native
+   dialog of [ADR-0037](adr/0037-dialogue-natif-pour-les-confirmations-critiques.md)
+   on `production`; capability flags `TRUNCATE`, `TRANSACTIONAL_DDL`,
+   `RESTRICT_DEPENDENTS`, each proven by a driver integration test
+   before being declared (ADR-0042).
+5. **Palette and quick open** — `⌘K`, `⌘P`, shortcut sheet.
+   **Done on 2026-09-25.** The palette (`components/oxyn/command-palette.tsx`),
+   quick open (`quick-open.tsx`) and the sheet (`shortcut-sheet.tsx`)
+   are installed once by `features/actions/action-overlays.tsx`, opened
+   by the actions `palette.open`, `object.quickOpen` and `help.shortcuts`, and
+   read only the registry: `lib/actions/listings.ts` draws the entries from it,
+   greyed out with the reason from `enabled`. `⌘P` goes through `search_catalog`, under
+   the query key of the catalog search: loaded objects
+   only, bounded by the backend, no read from the server. Added to the
+   registry and to both bars: `New window`, `Export…`, the `Help` menu
+   (`Documentation`, `Keyboard shortcuts`), `Text size ▸`, `Theme ▸` and
+   `Format`, through the manifest's `parent` and `check` fields that ADR-0041
+   (§ 1 and § 4) now describes. Held by
+   `listings.test.ts` (the palette equals the context's registry, reasons
+   included; `⌘/` depending on the area; `⌘P` greyed out and not absent without a catalog),
+   `action-overlays.test.tsx` (`⌘P` only calls `search_catalog`),
+   `manifest.test.ts`, the stories `Oxyn/CommandPalette`, `Oxyn/QuickOpen`,
+   `Oxyn/ShortcutSheet` and `Oxyn/AppMenubar` (`ThemeIsAChoice`), and the tests
+   of `menu.rs`. Decisions and deviations:
+   - `Settings…` stays in `File` on Windows and Linux, above `Exit`,
+     and UX-SPEC now says so (decided on 2026-09-25);
+   - `Format` is present everywhere, **greyed out** with its reason: no SQL
+     formatter is shipped (batch 9 below);
+   - `Documentation` is present, **greyed out** with its reason, until
+     `open_external` (postponed from batch 1);
+   - `New window` is present; active since batch 7;
+   - `Export…` opens the export menu of the displayed result, located through
+     `data-action-export`: its greyed-out state and reason are the button's. But
+     the end of an object preview changes no registry source: on
+     macOS, the native entry can stay greyed out until the next change
+     of focus or tab (`invoke` re-evaluates on click anyway);
+   - an already active checked choice, clicked in the native bar, has its
+     check toggled by AppKit: the front end sends back the state after each
+     native activation to restore it;
+   - `Open Recent ▸` and `Save as…` are still not in the bar;
+   - the hand-written `Kbd`s of `⌘,`, `⌘↵`, `⌘J` and `⌘⌥B` (preferences,
+     result, side panel) now read the manifest; those that
+     remain describe keys internal to a component (`Esc`, `↵`), which
+     the manifest does not declare;
+   - the sheet does not yet list the keys internal to components
+     (arrows, `Home`, `End`…) that ADR-0041 § 2 has it show: they are not
+     declared in the manifest;
+   - `Open object…` is declared in the `app` area, greyed out under a dialog:
+     the dispatcher only resolves that area there, and `Ctrl+P` would have reached
+     WebView2's printing there.
+6. **Drag and drop** — internal on pointer events, dropping files
+   from the system (ADR-0041).
+   **Done on 2026-09-25.** Local implementation, without a library:
+   `components/oxyn/pointer-drag.ts` (4 px threshold, window listeners,
+   `Escape` that cancels, click swallowed after a drop). Tabs
+   (`workspace-tabs.tsx`, order held by `workspace-screen.tsx`), grid
+   columns (`column-order.ts`, `result-grid.tsx`), catalog relation
+   to the editor (`catalog-name-drag.ts`, `features/workspace/name-transfer.ts`,
+   `insertAt` of the area handle of `sql-editor.tsx`, at the
+   `posAtCoords` position). The inserted name is the `qualifiedName` of `relation_facets`,
+   quoted by the backend. File drop: `crates/oxyn-desktop/src/file_drop.rs`,
+   `subscribe_file_drops`, `lib/ipc/file-drops.ts`, `features/file-drops/`;
+   no permission added. Held by `pointer-drag.test.ts`,
    `grid-selection.test.ts`, `result-grid.test.ts`, `name-transfer.test.ts`
-   (nom hostile), `use-file-drops.test.ts`, les tests de `file_drop.rs`
-   (extension, existence, taille, lien symbolique, UTF-8, nombre de
-   fichiers) et les stories `Oxyn/WorkspaceTabs`, `Oxyn/ResultGrid`,
-   `Oxyn/CatalogTree`, `Oxyn/SqlEditor`, `Oxyn/ConnectionForm`. Écarts et
-   restes :
-   - **équivalents clavier choisis par ce lot**, qu'UX-SPEC ne fixait pas :
-     `⌥⇧←` et `⌥⇧→` déplacent l'onglet focalisé ou la colonne de la cellule
-     active (`item.moveLeft`, `item.moveRight`, un seul couple au niveau
-     `global` avec un libellé par zone : deux zones précises ne peuvent pas
-     partager une combinaison) ; `⌥↵` sur une relation du catalogue pose son
-     nom dans la console active (`catalog.insertName`, zone `tree`, que
-     l'arbre déclare désormais). Tous en `binding: component` ;
-   - **pas de colonne du catalogue** : l'arbre ne montre pas les colonnes
-     (voir le lot 4). Seules les relations se glissent ;
-   - l'ordre des onglets vit tant que le workspace est ouvert, **sans
-     persistance** ; celui des colonnes est oublié au résultat suivant, comme
-     leur visibilité. Une copie suit l'ordre affiché, puisqu'elle copie ce qui est
-     montré ; l'export garde l'ordre du résultat (UX-SPEC,
-     « Colonnes et inspection des valeurs ») ;
-   - un `.sql` déposé **sans connexion ouverte** est refusé avec un message :
-     une console appartient à une connexion, et une file d'attente
-     l'aurait fait surgir dans le workspace ouvert ensuite ;
-   - les extensions reconnues (`.sqlite`, `.sqlite3` pour `sqlite` ;
-     `.duckdb` pour `duckdb`) sont une table de `file_drop.rs` : les drivers
-     ne déclarent pas les fichiers qu'ils lisent. Aucun driver DuckDB n'est
-     enregistré, un `.duckdb` est donc refusé avec sa raison. Bornes : 4 Mio
-     par `.sql`, 16 fichiers par dépôt ; un lien symbolique est refusé ;
-   - chaque fenêtre reçoit les dépôts faits sur elle, et eux seuls (lot 7) ;
-   - pas de défilement automatique quand un onglet ou une colonne est glissé
-     au bord de la vue, ni de marque de dépôt dans l'éditeur : le fantôme
-     suit le pointeur ;
-   - **à vérifier à la main** dans `make desktop-dev`, sous Windows surtout :
-     qu'un fichier déposé arrive avec `dragDropEnabled` resté vrai, et que le
-     glisser interne n'en souffre pas. Les stories simulent les événements de
-     pointeur, pas le moteur.
-7. **Multi-fenêtre** — abonnements par fenêtre, `WindowRegistry`, capability
-   par motif `workspace-*`, migration de disposition, `Open in new window`,
-   restauration par fenêtre, consoles comprises après une fermeture ordinaire
-   (ADR-0043). Livré en deux pull requests ; **la première est faite**, voir
-   ci-dessous.
-8. **Transaction ouverte à la sortie** — étape avant l'arrêt ordonné,
+   (hostile name), `use-file-drops.test.ts`, the tests of `file_drop.rs`
+   (extension, existence, size, symbolic link, UTF-8, number of
+   files) and the stories `Oxyn/WorkspaceTabs`, `Oxyn/ResultGrid`,
+   `Oxyn/CatalogTree`, `Oxyn/SqlEditor`, `Oxyn/ConnectionForm`. Deviations and
+   leftovers:
+   - **keyboard equivalents chosen by this batch**, which UX-SPEC did not set:
+     `⌥⇧←` and `⌥⇧→` move the focused tab or the column of the active
+     cell (`item.moveLeft`, `item.moveRight`, a single pair at the
+     `global` level with a label per area: two specific areas cannot
+     share a combination); `⌥↵` on a catalog relation puts its
+     name in the active console (`catalog.insertName`, `tree` area, which
+     the tree now declares). All in `binding: component`;
+   - **no catalog column**: the tree does not show columns
+     (see batch 4). Only relations can be dragged;
+   - tab order lives as long as the workspace is open, **without
+     persistence**; column order is forgotten at the next result, like
+     their visibility. A copy follows the displayed order, since it copies what is
+     shown; export keeps the result's order (UX-SPEC,
+     "Columns and value inspection");
+   - a `.sql` dropped **without an open connection** is refused with a message:
+     a console belongs to a connection, and a queue
+     would have made it pop up in the workspace opened afterwards;
+   - the recognized extensions (`.sqlite`, `.sqlite3` for `sqlite`;
+     `.duckdb` for `duckdb`) are a table in `file_drop.rs`: drivers
+     do not declare the files they read. No DuckDB driver is
+     registered, so a `.duckdb` is refused with its reason. Bounds: 4 MiB
+     per `.sql`, 16 files per drop; a symbolic link is refused;
+   - each window receives the drops made on it, and only those (batch 7);
+   - no automatic scrolling when a tab or a column is dragged
+     to the edge of the view, nor a drop marker in the editor: the ghost
+     follows the pointer;
+   - **to check by hand** in `make desktop-dev`, on Windows especially:
+     that a dropped file arrives with `dragDropEnabled` left true, and that
+     internal dragging does not suffer from it. The stories simulate pointer
+     events, not the engine.
+7. **Multi-window** — per-window subscriptions, `WindowRegistry`, capability
+   by `workspace-*` pattern, layout migration, `Open in new window`,
+   per-window restoration, consoles included after an ordinary close
+   (ADR-0043). Delivered in two pull requests; **the first is done**, see
+   below.
+8. **Open transaction at exit** — step before the ordered shutdown,
    `ShutdownSignal::ResolveTransactions`, `shutdown_acknowledged`,
-   `cancel_exit`, journal de la sortie forcée (ADR-0043). **Fait pour une
-   fenêtre**, voir ci-dessous.
-9. **Formatage SQL** — `Query ▸ Format`, déclaré et grisé depuis le lot 5 :
-   choisir un formateur par [`/versions`](../.claude/commands/versions.md),
-   dater le choix dans RESEARCH-NOTES, puis rendre l'action à l'éditeur.
-   Ajouté le 2026-09-25 par l'arbitrage du lot 5.
+   `cancel_exit`, log of the forced exit (ADR-0043). **Done for one
+   window**, see below.
+9. **SQL formatting** — `Query ▸ Format`, declared and greyed out since batch 5:
+   choose a formatter through [`/versions`](../.claude/commands/versions.md),
+   date the choice in RESEARCH-NOTES, then give the action back to the editor.
+   Added on 2026-09-25 by the decision of batch 5.
 
-**Lot 4 fait le 2026-09-25.** `backend/object_operations.rs` compose, revoit et
-soumet ; `review_object_operation` et `run_object_operation` sont les deux
-commandes Tauri ; `ObjectOperationReviewDialog` est la boîte, avec ses stories ;
-`Drop…`, `Truncate…` et `Rename…` sont dans le menu contextuel du catalogue.
-Les drapeaux `TRUNCATE`, `TRANSACTIONAL_DDL` et `RESTRICT_DEPENDENTS` (bits 44
-à 46) sont prouvés par `ddl_tests` dans chaque driver qui les déclare. Le test
-`object_operations_are_not_tools` garde `oxyn-ai`. Écarts et restes :
+**Batch 4 done on 2026-09-25.** `backend/object_operations.rs` composes, reviews and
+submits; `review_object_operation` and `run_object_operation` are the two
+Tauri commands; `ObjectOperationReviewDialog` is the dialog, with its stories;
+`Drop…`, `Truncate…` and `Rename…` are in the catalog's context menu.
+The flags `TRUNCATE`, `TRANSACTIONAL_DDL` and `RESTRICT_DEPENDENTS` (bits 44
+to 46) are proven by `ddl_tests` in each driver that declares them. The test
+`object_operations_are_not_tools` guards `oxyn-ai`. Deviations and leftovers:
 
-- **SQLite vérifie les clés étrangères par défaut.** ADR-0042 (tableau des
-  sources) et l'en-tête de `drivers/oxyn-driver-sqlite/src/session.rs` disaient
-  l'inverse. Le moteur embarqué par `libsqlite3-sys` (fonctionnalité `bundled`)
-  est compilé avec `SQLITE_DEFAULT_FOREIGN_KEYS=1`. Un `DROP TABLE` échoue
-  donc sur une ligne fille, mais pas sur une vue ni sur une clé sans lignes.
-  La décision tient : pas de `RESTRICT_DEPENDENTS`. L'en-tête de `session.rs`
-  est corrigé, et le test `foreign_keys_are_enforced_by_the_bundled_engine`
-  fixe le comportement. La ligne d'ADR-0042 reste à corriger par un ADR
-  précisant ;
-- `review_object_operation` prend aussi la **session du catalogue** : ses
-  capacités décident de ce qui est offert, et le registre des sessions ne
-  désigne pas celle du catalogue d'une connexion ;
-- **renommer une colonne** : le backend et la boîte le savent. Aucune entrée ne
-  l'offre encore, parce que l'arbre du catalogue ne montre pas les colonnes.
-  L'entrée revient au menu de l'onglet Structure (lot 3) — fait ;
-- une erreur rendue par `decide` après l'approbation ne porte pas sa classe
-  (`IpcError` n'a que `retryable`). La boîte affiche le message et
-  `Refresh catalog`, sans jamais proposer de relancer. Elle ne peut pas écrire
-  la phrase de l'erreur ambiguë à coup sûr ;
-- Redshift déclare `TRUNCATE` par le driver PostgreSQL, prouvé contre
-  PostgreSQL. Aucun serveur Redshift n'est disponible en test : le retrait de
-  `TRANSACTIONAL_DDL` et `RESTRICT_DEPENDENTS` est vérifié sur la variante
-  (`variant.rs`), pas contre le moteur ;
-- plusieurs fenêtres (ADR-0042, « Plusieurs fenêtres ») : la fermeture d'une
-  fenêtre rejette l'approbation en attente qu'elle possède (lot 7), et la
-  session de revue se ferme avec elle.
+- **SQLite enforces foreign keys by default.** ADR-0042 (table of
+  sources) and the header of `drivers/oxyn-driver-sqlite/src/session.rs` said
+  the opposite. The engine embedded by `libsqlite3-sys` (`bundled` feature)
+  is compiled with `SQLITE_DEFAULT_FOREIGN_KEYS=1`. A `DROP TABLE` therefore fails
+  on a child row, but not on a view nor on a key without rows.
+  The decision holds: no `RESTRICT_DEPENDENTS`. The header of `session.rs`
+  is corrected, and the test `foreign_keys_are_enforced_by_the_bundled_engine`
+  pins the behavior. The line of ADR-0042 remains to be corrected by a clarifying
+  ADR;
+- `review_object_operation` also takes the **catalog session**: its
+  capabilities decide what is offered, and the session registry does not
+  designate the catalog session of a connection;
+- **renaming a column**: the backend and the dialog know how. No entry
+  offers it yet, because the catalog tree does not show columns.
+  The entry comes back in the Structure tab's menu (batch 3) — done;
+- an error returned by `decide` after approval does not carry its class
+  (`IpcError` only has `retryable`). The dialog shows the message and
+  `Refresh catalog`, without ever offering to retry. It cannot write
+  the ambiguous-error sentence with certainty;
+- Redshift declares `TRUNCATE` through the PostgreSQL driver, proven against
+  PostgreSQL. No Redshift server is available for testing: the removal of
+  `TRANSACTIONAL_DDL` and `RESTRICT_DEPENDENTS` is checked on the variant
+  (`variant.rs`), not against the engine;
+- several windows (ADR-0042, "Several windows"): closing a
+  window rejects the pending approval it owns (batch 7), and the
+  review session closes with it.
 
-**Lot 7, première partie, faite le 2026-09-25 : des fenêtres vivantes.**
-`backend/windows.rs` tient le registre. Il donne à chaque fenêtre sa
-`WindowKey` et son libellé `workspace-<uuid>`, borne les fenêtres à 16 et suit
-le focus. Il dit aussi ce que chaque fenêtre possède : sessions, commandes,
-résultats, documents, assistant d'une connexion, connexions tenues. Les
-commandes de `commands/` reçoivent la `Webview` appelante et refusent ce qu'une
-autre fenêtre possède. `tauri.conf.json` ne déclare plus qu'un gabarit,
-`workspace`, et `capabilities/main.json` couvre `workspace-*` avec ses trois
-permissions. `clippy.toml` interdit les six méthodes d'émission. Les flux
-d'exécution, de catalogue, d'arrêt, de menu, de dépôts et le nouveau
-`subscribe_window` sont par fenêtre, filtrés en Rust. Le menu natif montre
-l'état de la fenêtre au focus et lui envoie ses actions, à elle seule.
-`Disconnect` n'est émis que par le backend, quand la dernière fenêtre relâche
-la connexion. Fermer une fenêtre non dernière résout ses seules transactions,
-puis demande dans un dialogue groupé ce qu'on fait de ses consoles
-(`CloseWindowDialog`). La sortie interroge chaque fenêtre sur ses propres
-transactions et vide les brouillons de toutes. `New window` est actif. Les tests
-sont dans `backend/windows/tests.rs` (registre, propriété, borne, routage) et
-`backend/windows/closing/tests.rs` (sortie à plusieurs fenêtres, fermeture non
-dernière, approbation rejetée, vidage de toutes les fenêtres). Les précisions
-et écarts sont écrits dans ADR-0043, « Précisions de mise en œuvre » :
-assistant par connexion, fermeture en deux temps, événements d'agent.
+**Batch 7, first part, done on 2026-09-25: live windows.**
+`backend/windows.rs` holds the registry. It gives each window its
+`WindowKey` and its label `workspace-<uuid>`, bounds windows to 16 and follows
+focus. It also says what each window owns: sessions, commands,
+results, documents, a connection's assistant, held connections. The
+commands of `commands/` receive the calling `Webview` and refuse what another
+window owns. `tauri.conf.json` now declares only one template,
+`workspace`, and `capabilities/main.json` covers `workspace-*` with its three
+permissions. `clippy.toml` forbids the six emit methods. The execution,
+catalog, shutdown, menu and drop streams and the new
+`subscribe_window` are per window, filtered in Rust. The native menu shows
+the state of the focused window and sends it its actions, to it alone.
+`Disconnect` is only emitted by the backend, when the last window releases
+the connection. Closing a window that is not the last resolves its own transactions only,
+then asks in a grouped dialog what to do with its consoles
+(`CloseWindowDialog`). Exit asks each window about its own
+transactions and flushes the drafts of all of them. `New window` is active. The tests
+are in `backend/windows/tests.rs` (registry, ownership, bound, routing) and
+`backend/windows/closing/tests.rs` (exit with several windows, closing a non-last
+window, rejected approval, flushing all windows). The clarifications
+and deviations are written in ADR-0043, "Implementation clarifications":
+assistant per connection, two-step close, agent events.
 
-**Lot 7, disposition et restauration, faite le 2026-09-26.** La migration 18
-ajoute `workspace_windows` et `workspace_window_consoles`, écrites par
-`Command::WriteWindowLayout`, refusée à un agent, comptée comme écriture
-locale, et relues comme une entrée hostile par `oxyn-store/src/windows.rs`.
-`backend/windows/layout.rs` tient la disposition de chaque fenêtre et
-sérialise ses écritures. Au lancement, `build_launch_windows` rouvre chaque
-fenêtre sous sa clé, à sa place si elle recoupe un écran branché. Le
-rectangle s'écrit une seconde après le dernier déplacement et avant l'arrêt.
-Les consoles de chaque fenêtre reviennent hors ligne après une fermeture
-ordinaire, et chaque fenêtre propose les siennes après un arrêt anormal. Les
-copies qu'aucune fenêtre ne réclame vont à la première. `object_location` est
-par fenêtre. Les tests sont dans `oxyn-store/src/windows/tests.rs` (aller et
-retour, déplacement d'une console, instance vivante, borne de 16, ligne
-hostile) et `backend/windows/layout/tests.rs` (consoles d'une autre fenêtre
-écartées, fenêtre fermée qui ne revient pas, copies orphelines une fois, refus
-à un agent). Précisions dans ADR-0043, « Précisions de mise en œuvre,
-2026-09-26 ».
+**Batch 7, layout and restoration, done on 2026-09-26.** Migration 18
+adds `workspace_windows` and `workspace_window_consoles`, written by
+`Command::WriteWindowLayout`, refused to an agent, counted as a local
+write, and read back as hostile input by `oxyn-store/src/windows.rs`.
+`backend/windows/layout.rs` holds each window's layout and
+serializes its writes. At launch, `build_launch_windows` reopens each
+window under its key, in its place if it overlaps a connected screen. The
+rectangle is written one second after the last move and before shutdown.
+Each window's consoles come back offline after an ordinary
+close, and each window offers its own after an abnormal shutdown. The
+copies no window claims go to the first one. `object_location` is
+per window. The tests are in `oxyn-store/src/windows/tests.rs` (round
+trip, moving a console, live instance, bound of 16, hostile
+row) and `backend/windows/layout/tests.rs` (consoles of another window
+set aside, closed window that does not come back, orphan copies once, refusal
+to an agent). Clarifications in ADR-0043, "Implementation clarifications,
+2026-09-26".
 
-**Lot 7, `Open in new window`, fait le 2026-09-26.** Le menu d'un onglet
-déplace une console vers une fenêtre construite pour elle, avec sa session,
-son document, son résultat et ses valeurs liées ; rien n'est réexécuté.
-`backend/windows/handoff.rs` prépare le `ConsoleHandoff` avant de construire la
-fenêtre, et la nouvelle webview l'adopte une fois (`take_console_handoff`).
-Le registre transfère session et document sous un seul verrou ; la cible lit le
-résultat avant que la source ne relâche sa vue. Une fenêtre qui ne se
-construit pas rend la console. Un onglet d'objet part comme un emplacement.
-L'entrée est grisée, avec sa raison, pendant une exécution, une confirmation,
-un export ou une sauvegarde. Les tests sont dans
-`backend/windows/handoff/tests.rs` (même session, adoption unique, résultat
-toujours lu, console d'une autre fenêtre refusée, console rendue) et
-`context-menus.test.ts`. Reste :
+**Batch 7, `Open in new window`, done on 2026-09-26.** A tab's menu
+moves a console to a window built for it, with its session,
+its document, its result and its bound values; nothing is re-executed.
+`backend/windows/handoff.rs` prepares the `ConsoleHandoff` before building the
+window, and the new webview adopts it once (`take_console_handoff`).
+The registry transfers session and document under a single lock; the target reads the
+result before the source releases its view. A window that fails to
+build gives the console back. An object tab leaves as a location.
+The entry is greyed out, with its reason, during an execution, a confirmation,
+an export or a save. The tests are in
+`backend/windows/handoff/tests.rs` (same session, single adoption, result
+always read, console of another window refused, console given back) and
+`context-menus.test.ts`. Remaining:
 
-- rouvrir depuis la bibliothèque un document qu'une autre fenêtre écrit : il
-  est refusé à l'écriture, mais la fenêtre propriétaire ne passe pas encore
-  au premier plan sur cet onglet ;
-- l'essai à la main sous Windows et Linux : la fermeture d'une fenêtre, la
-  barre web de chacune, la création d'une fenêtre depuis une commande
-  `async`, et la restauration sur deux écrans d'échelles différentes.
+- reopening from the library a document that another window writes: it
+  is refused for writing, but the owning window does not yet come
+  to the foreground on that tab;
+- the manual test on Windows and Linux: closing a window, the
+  web bar of each one, creating a window from an
+  `async` command, and restoration on two screens with different scales.
 
-**Lot 8 fait le 2026-09-25, pour une fenêtre.** ADR-0039 est accepté et mis en
-œuvre. `backend/exit.rs` tient les sessions de console et le dernier état
-constaté de chacune, et l'étape `exit_step` précède `begin_shutdown` sur tous
-les chemins ordonnés (`⌘Q`, fermeture de la fenêtre, `request_exit`,
-`ExitRequested`). `shutdown_acknowledged` et `cancel_exit` sont les deux
-commandes sans argument ; `ExitTransactionsDialog` est le dialogue, avec ses
-stories ; `features/recovery/exit-transactions.ts` envoie `COMMIT` ou
-`ROLLBACK` par `run_console`. Les tests de `backend/exit/tests.rs` couvrent
-l'absence de transaction, la sortie retenue, `Commit` et `Rollback` puis la
-sortie, le `COMMIT` refusé (clé étrangère différée de SQLite), l'issue inconnue
-jamais rejouée, la webview muette et le Quit du Dock. Écarts et restes :
+**Batch 8 done on 2026-09-25, for one window.** ADR-0039 is accepted and
+implemented. `backend/exit.rs` holds the console sessions and the last observed
+state of each, and the `exit_step` step precedes `begin_shutdown` on all
+ordered paths (`⌘Q`, closing the window, `request_exit`,
+`ExitRequested`). `shutdown_acknowledged` and `cancel_exit` are the two
+commands without arguments; `ExitTransactionsDialog` is the dialog, with its
+stories; `features/recovery/exit-transactions.ts` sends `COMMIT` or
+`ROLLBACK` through `run_console`. The tests of `backend/exit/tests.rs` cover
+the absence of a transaction, the held exit, `Commit` and `Rollback` then
+exit, the refused `COMMIT` (SQLite deferred foreign key), the unknown outcome
+never replayed, the silent webview and the Dock's Quit. Deviations and leftovers:
 
-- **l'état lu est celui que l'exécuteur a publié**, et non une lecture par
-  `Session::transaction_state` depuis le pont : ADR-0043 est précisé en ce
-  sens (appel au driver hors du bus, I-01) ;
-- le signal porte la session, pas le document : la fenêtre nomme la console
-  d'après ses onglets (`features/consoles/console-labels.ts`), et le journal
-  nomme la connexion et la session ;
-- seul SQLite déclare `TRANSACTIONS` : PostgreSQL ne le fera qu'avec
-  l'épinglage d'une connexion par session (`variant.rs`, phase 1). Ce jour-là,
-  le piège noté dans DRIVER-CONTRACT vaut aussi ici : un `COMMIT` de
-  production est une lecture bornée à la lecture seule, et la borne ne doit
-  pas toucher la transaction qu'il valide ;
-- **étendu par le lot 7** : la liste est groupée par fenêtre et chaque
-  fenêtre reçoit les siennes sur son propre canal d'arrêt ; l'accusé est
-  attendu de chacune ; `ExitCancelled` va à toutes celles qui ont été
-  interrogées ; la fermeture d'une fenêtre non dernière porte sur ses seules
-  sessions, sans passer par `begin_shutdown` ; seules les fenêtres qui ont
-  une transaction passent au premier plan.
+- **the state read is the one the executor published**, and not a read through
+  `Session::transaction_state` from the bridge: ADR-0043 is clarified in that
+  sense (call to the driver outside the bus, I-01);
+- the signal carries the session, not the document: the window names the console
+  after its tabs (`features/consoles/console-labels.ts`), and the log
+  names the connection and the session;
+- only SQLite declares `TRANSACTIONS`: PostgreSQL will only do so with
+  pinning one connection per session (`variant.rs`, phase 1). On that day,
+  the trap noted in DRIVER-CONTRACT applies here too: a production `COMMIT`
+  is a read bounded to read-only, and the bound must
+  not touch the transaction it commits;
+- **extended by batch 7**: the list is grouped by window and each
+  window receives its own on its own shutdown channel; the acknowledgment is
+  awaited from each; `ExitCancelled` goes to all those that were
+  asked; closing a non-last window concerns only its own
+  sessions, without going through `begin_shutdown`; only windows that have
+  a transaction come to the foreground.
 
-Écarts relevés en rédigeant, non tranchés, re-vérifiés sur `origin/main` le
-2026-09-25 :
+Deviations found while writing, not settled, re-checked on `origin/main` on
+2026-09-25:
 
-- sous macOS, `⌘W` est lié deux fois : par `workspace-screen.tsx` (fermer
-  l'onglet actif) et par l'élément prédéfini `Close Window` que le menu
-  d'ADR-0038 garde dans `File` et `Window`. Si la frappe atteint le menu,
-  `performClose:` lance l'arrêt ordonné et `⌘W` quitte Oxyn ; l'ordre de
-  livraison n'est pas vérifié (ADR-0041, point à vérifier n° 1). ADR-0041 retire
-  ce prédéfini ; d'ici là, le vérifier à la main dans `make desktop-dev` ;
-- `⌘1` (catalogue) et `⌘⇧H` (bibliothèque) étaient liés par le code sans être
-  écrits dans UX-SPEC ; ils le sont désormais, section « Clavier » ;
-- ADR-0025 cite `workspace/definition.rs`, `open_definition_console` et
-  `library::OpenQuery::Copy`, disparus avec GPUI ; le composeur actuel est
-  `crates/oxyn-desktop/src/backend/proposal.rs` ;
-- DRIVER-CONTRACT §6 parle d'une fonction de citation du driver ; le code
-  appelle partout `oxyn_catalog::quote_identifier` ;
-- ADR-0029 dit qu'une commande Tauri ne fait qu'émettre une `Command`, ce que
-  `subscribe_events` et `shutdown_flushed` démentent déjà ;
-- la description de `capabilities/main.json` dit la fenêtre sans barre de
-  titre : ce n'est vrai que sous macOS ;
-- `.claude/commands/adr.md` affirme que `make socle` attrape un ADR absent de
-  l'index : `verifier_socle.py` ne le contrôle pas.
+- on macOS, `⌘W` is bound twice: by `workspace-screen.tsx` (close
+  the active tab) and by the predefined `Close Window` item that the menu
+  of ADR-0038 keeps in `File` and `Window`. If the keystroke reaches the menu,
+  `performClose:` starts the ordered shutdown and `⌘W` quits Oxyn; the delivery
+  order is not checked (ADR-0041, point to check no. 1). ADR-0041 removes
+  this predefined item; until then, check it by hand in `make desktop-dev`;
+- `⌘1` (catalog) and `⌘⇧H` (library) were bound by the code without being
+  written in UX-SPEC; they now are, section "Keyboard";
+- ADR-0025 cites `workspace/definition.rs`, `open_definition_console` and
+  `library::OpenQuery::Copy`, gone with GPUI; the current composer is
+  `crates/oxyn-desktop/src/backend/proposal.rs`;
+- DRIVER-CONTRACT §6 talks about a driver quoting function; the code
+  calls `oxyn_catalog::quote_identifier` everywhere;
+- ADR-0029 says that a Tauri command only emits a `Command`, which
+  `subscribe_events` and `shutdown_flushed` already contradict;
+- the description of `capabilities/main.json` says the window has no title
+  bar: this is only true on macOS;
+- `.claude/commands/adr.md` claims that `make socle` catches an ADR missing from
+  the index: `verifier_socle.py` does not check it.
 
-Reste à vérifier à la main : le double lien de `⌘W` sous macOS (premier écart
-ci-dessus), dans `make desktop-dev`, avant le lot 2.
+Still to check by hand: the double binding of `⌘W` on macOS (first deviation
+above), in `make desktop-dev`, before batch 2.
 
-## D'où viennent ces phases
+## Where these phases come from
 
-### Intégration complète de la maquette — travail engagé le 2026-09-10
+### Full integration of the mockup — work started on 2026-09-10
 
-La demande porte sur les parcours frontend **et** leur comportement backend.
-Le relevé Figma en direct confirme la structure de `190:1163`, avec les régions
-`190:1543`, `190:1558`, `190:1588` et `190:1860`. Les modifications locales
-antérieures de ce document, de UX-SPEC et de FIGMA-HANDOFF sont conservées.
+The request covers the front-end flows **and** their back-end behavior.
+The live Figma survey confirms the structure of `190:1163`, with the regions
+`190:1543`, `190:1558`, `190:1588` and `190:1860`. Earlier local changes
+to this document, to UX-SPEC and to FIGMA-HANDOFF are kept.
 
-Ordre d'intégration et critères de validation :
+Integration order and validation criteria:
 
-1. **Workbench table/console** (`oxyn-app`, `oxyn-ui`) : cadre dense, contexte
-   permanent, navigation clavier, largeur compacte, aide de lecture seule,
-   focus sûr de confirmation et export de l'aperçu par `Command::Export`.
-   Les exports de console et de table gardent des identités distinctes.
-2. **Exploration et résultats** (`oxyn-catalog`, `oxyn-data`, `oxyn-exec`, UI) :
-   sous-onglets réels selon les capacités, inspecteur, colonnes, lecture des
-   pages débordées hors thread UI et borne du cache. Aucune requête au resize.
-3. **Travail local** (`oxyn-store`, `oxyn-app`, UI) : historique, documents et
-   consoles, préférences persistées, restauration sélective hors ligne.
-   Toute précision de format persistant nécessite un ADR avant implémentation.
-4. **Connexions et workspace IA** : intégrer les écrans aux contrats de
-   connexion et de confidentialité existants, avec états vides, annulation,
-   refus et revue du contexte réellement transmis.
-5. **Recette complète** : `cargo fmt --all`, `make qualite`, interactions GPUI
-   et SQLite isolé, captures réelles aux largeurs de référence et dans les deux
-   thèmes, puis mesures conformément à PERFORMANCE.
+1. **Table/console workbench** (`oxyn-app`, `oxyn-ui`): dense frame, permanent
+   context, keyboard navigation, compact width, read-only help,
+   safe confirmation focus and preview export through `Command::Export`.
+   Console and table exports keep distinct identities.
+2. **Exploration and results** (`oxyn-catalog`, `oxyn-data`, `oxyn-exec`, UI):
+   real sub-tabs according to capabilities, inspector, columns, reading of
+   spilled pages off the UI thread and cache bound. No query on resize.
+3. **Local work** (`oxyn-store`, `oxyn-app`, UI): history, documents and
+   consoles, persisted preferences, selective offline restoration.
+   Any clarification of a persistent format requires an ADR before implementation.
+4. **Connections and AI workspace**: integrate the screens with the existing
+   connection and privacy contracts, with empty states, cancellation,
+   refusal and review of the context actually sent.
+5. **Full acceptance test**: `cargo fmt --all`, `make qualite`, GPUI interactions
+   and isolated SQLite, real captures at the reference widths and in both
+   themes, then measurements according to PERFORMANCE.
 
-Les parcours étiquetés phase 4 dans la maquette respectent la condition
-d'entrée de cette phase ; une planche ne rend pas une capacité disponible.
-La fin exige des preuves pour les parcours intégrés ; une compilation ou une
-capture Figma seule ne permet pas de déclarer cette intégration achevée.
+The flows labeled phase 4 in the mockup respect the entry condition
+of that phase; a board does not make a capability available.
+The end requires evidence for the integrated flows; a compilation or a
+Figma capture alone does not allow declaring this integration complete.
 
-Validation du premier lot : `make qualite` a passé le format, Clippy, les tests
-et la documentation après correction de trois constructeurs du catalogue
-(`with_default`, `with_system`, `with_inferred`). Les tests couvrent le focus
-sûr, la conservation des brouillons au redimensionnement, les réponses tardives,
-la borne d'aperçu et l'export CSV limité à cet aperçu. Les tests PostgreSQL
-nécessitant un serveur restent ignorés ; les mesures de performance restent
-absentes. La recette native a ouvert la base SQLite temporaire, son catalogue
-et 200 lignes, puis basculé entre les thèmes. L'utilisateur utilisait aussi son ordinateur pendant cette recette : les
-interférences de fenêtre ne sont pas des défauts de l'application. La recette
-native compacte reste non concluante ; seul le test GPUI prouve ce trajet.
-Les interactions de bureau ont été arrêtées à sa remarque ; la suite du travail
-se poursuit sans manipuler ses fenêtres.
-L'utilisateur a également confirmé le fonctionnement de l'export dans
-l'application le 2026-09-10 ; le format et le fichier précis n'ont pas été
-précisés. Cette validation manuelle complète les tests CSV, sans prouver les
-autres formats ni tous les cas d'interruption.
-Les dernières retouches de présentation doivent être reprises dans la recette
-visuelle finale de l'intégration complète.
+Validation of the first batch: `make qualite` passed format, Clippy, tests
+and documentation after fixing three catalog constructors
+(`with_default`, `with_system`, `with_inferred`). The tests cover safe
+focus, keeping drafts on resize, late responses,
+the preview bound and CSV export limited to that preview. PostgreSQL tests
+requiring a server remain ignored; performance measurements remain
+absent. The native acceptance test opened the temporary SQLite database, its catalog
+and 200 rows, then switched between themes. The user was also using their computer during this acceptance test: the
+window interferences are not application defects. The compact native
+acceptance test remains inconclusive; only the GPUI test proves that path.
+Desktop interactions were stopped at their remark; the rest of the work
+continues without handling their windows.
+The user also confirmed that export works in
+the application on 2026-09-10; the exact format and file were not
+specified. This manual validation complements the CSV tests, without proving the
+other formats or all interruption cases.
+The last presentation touch-ups must be taken up in the final visual
+acceptance test of the full integration.
 
-Validation du lot de relecture : test GPUI + SQLite sur un résultat de
-100 000 lignes, avec budget de 512 Kio pour forcer le débordement. Atteindre
-une page débordée la charge par le bus sans nouvelle exécution SQL. Les tests
-vérifient aussi l'appartenance à la connexion pour humain et agent, le journal
-sans cellules, l'annulation, le refus des pages trop grosses et des réponses
-obsolètes, et le partage du budget de rétention. `make qualite` passe avec
-1 268 tests réussis et 18 ignorés. Cela ne mesure ni la RSS ni les budgets de
-trame et ne remplace pas une recette native du défilement.
+Validation of the page-reading batch: GPUI + SQLite test on a result of
+100,000 rows, with a 512 KiB budget to force spilling. Reaching
+a spilled page loads it through the bus without a new SQL execution. The tests
+also check connection ownership for human and agent, the log
+without cells, cancellation, refusal of pages too large and of stale
+responses, and sharing of the retention budget. `make qualite` passes with
+1,268 tests passed and 18 ignored. This measures neither RSS nor frame
+budgets and does not replace a native scrolling acceptance test.
 
-Validation du lot inspecteur/colonnes : `make qualite` passe avec 1 274 tests
-réussis et 18 ignorés. Les tests GPUI/SQLite parcourent une valeur réelle de
-30 000 octets au clavier, annulent l'inspection lors du remplacement du résultat,
-et vérifient la conservation de la préférence large à 1024 px. Les tests de
-formatage reconstruisent un texte Unicode long par pages bornées sans omission
-ni répétition ; l'absence, le texte vide et `NULL` restent distincts. Les tests
-vérifient aussi l'index Arrow des colonnes masquées et l'appartenance de la
-valeur à sa connexion pour humain et agent. La recette visuelle native et le
-redimensionnement par poignée de l'inspecteur restent à effectuer.
+Validation of the inspector/columns batch: `make qualite` passes with 1,274 tests
+passed and 18 ignored. The GPUI/SQLite tests go through a real value of
+30,000 bytes with the keyboard, cancel the inspection when the result is replaced,
+and check that the wide preference is kept at 1024 px. The formatting
+tests rebuild a long Unicode text through bounded pages without omission
+or repetition; absence, empty text and `NULL` remain distinct. The tests
+also check the Arrow index of hidden columns and the ownership of the
+value by its connection for human and agent. The native visual acceptance test and
+resizing the inspector by its handle remain to be done.
 
-Validation du lot résultats conservés : `make qualite` passe avec 1 331 tests
-réussis, aucun échec et 18 ignorés. Le test GPUI rouvre un résultat réel de
-100 000 lignes, vérifie le partage du tampon original, charge sa dernière page
-IPC et l'exporte pendant que la bibliothèque est de nouveau affichée. Aucun
-événement d'exécution supplémentaire n'est observé. Les tests couvrent aussi
-l'indisponibilité d'une référence expirée et le refus d'export d'un résultat
-tronqué. Le registre est testé sur l'éviction des plus anciens résultats sans
-lecteur, la conservation d'une référence active et les limites de mémoire et
-de débordement. Ces contrôles ne prouvent pas la RSS globale ni les budgets de
-trame des vues ouvertes ; leur recette native reste à effectuer.
+Validation of the retained-results batch: `make qualite` passes with 1,331 tests
+passed, no failure and 18 ignored. The GPUI test reopens a real result of
+100,000 rows, checks sharing of the original buffer, loads its last IPC
+page and exports it while the library is displayed again. No additional
+execution event is observed. The tests also cover
+unavailability of an expired reference and refusal to export a
+truncated result. The registry is tested on eviction of the oldest results without
+a reader, keeping an active reference and the memory and
+spill limits. These checks do not prove the global RSS or the frame
+budgets of open views; their native acceptance test remains to be done.
 
-Validation de la restauration SQL hors ligne : `make qualite` passe avec
-1 326 tests réussis, aucun échec et 18 ignorés. Les tests GPUI livrent la touche
-Espace aux cases de reprise, restaurent uniquement les documents choisis,
-modifient leur texte sans session et relisent leur autosauvegarde. `⌘Entrée`
-ne démarre aucune exécution hors ligne. Sauvegarder puis fermer fonctionne sans
-connexion. Un autre test transmet le même éditeur restauré à une connexion
-explicitement ouverte, sans événement d'exécution. Le glyphe de case cochée
-provient du nœud Figma `232:9100`, est embarqué et conserve ses deux couleurs.
-Ces tests ne valident ni les pixels natifs, ni la récupération d'onglets d'objet,
-ni la détection d'un crash ou l'inspection réelle d'une écriture interrompue.
+Validation of offline SQL restoration: `make qualite` passes with
+1,326 tests passed, no failure and 18 ignored. The GPUI tests deliver the Space
+key to the recovery checkboxes, restore only the chosen documents,
+modify their text without a session and reread their autosave. `⌘Enter`
+starts no offline execution. Saving then closing works without
+a connection. Another test transfers the same restored editor to an
+explicitly opened connection, without an execution event. The checked box glyph
+comes from Figma node `232:9100`, is embedded and keeps its two colors.
+These tests validate neither native pixels, nor recovery of object tabs,
+nor crash detection or the actual inspection of an interrupted write.
 
-Validation de l'autosauvegarde : `make qualite` passe avec 1 323 tests réussis,
-aucun échec et 18 ignorés. Un runtime contrôlé vérifie que 200 soumissions ne
-conservent que le dernier brouillon et la sauvegarde explicite intermédiaire ;
-après disparition des receivers, les versions 200 et 50 sont bien relues dans
-leurs colonnes respectives. Les tests couvrent deux écrivains concurrents,
-le marqueur d'une fermeture avant première écriture, une fermeture annulée dont
-le brouillon est repris sans vue, et le refus de mutation sous une révision
-attendue périmée. Le harnais GPUI vérifie récupération du texte sans sauvegarde
-nommée, conservation de la copie nommée lors d'une édition suivante, nom de
-travail vide et abandon d'une console autosauvegardée. Le parcours de sélection
-et restauration au démarrage, la recette native et ses chemins de fermeture
-restent à valider.
+Validation of autosave: `make qualite` passes with 1,323 tests passed,
+no failure and 18 ignored. A controlled runtime checks that 200 submissions only
+keep the latest draft and the intermediate explicit save;
+after the receivers disappear, versions 200 and 50 are correctly reread in
+their respective columns. The tests cover two concurrent writers,
+the marker of a close before the first write, a cancelled close whose
+draft is taken up without a view, and refusal of mutation under a stale expected
+revision. The GPUI harness checks recovery of text without a named
+save, keeping the named copy during a later edit, an empty working
+name and discarding an autosaved console. The selection
+and restoration flow at startup, the native acceptance test and its close paths
+remain to be validated.
 
-Validation du lot ouverture depuis la bibliothèque : `make qualite` passe avec
-1 316 tests réussis, aucun échec et 18 ignorés. Les tests GPUI vérifient l'ouverture
-d'une copie sans exécuter ni remplacer le brouillon courant, le refus d'ouverture
-éditable d'une entrée ambiguë, la reprise d'un texte de travail sous son identité
-et son langage conservés, puis le retour à sa console déjà modifiée. Une copie
-vers une autre connexion garde l'original intact. Les conflits de sauvegarde à
-révision égale et à révision supérieure conduisent à une nouvelle identité.
-Les titres hérités restent lisibles jusqu'à 4 Kio ; au-delà, la lecture est
-refusée avant matérialisation Rust, sans changer la borne de 256 octets des
-nouvelles écritures. Les validations natives et la reprise automatique ne sont
-pas prouvées par ce lot.
+Validation of the open-from-library batch: `make qualite` passes with
+1,316 tests passed, no failure and 18 ignored. The GPUI tests check opening
+a copy without running or replacing the current draft, refusal of editable
+opening of an ambiguous entry, resuming a working text under its kept identity
+and language, then returning to its already modified console. A copy
+to another connection keeps the original intact. Save conflicts at
+equal revision and at higher revision lead to a new identity.
+Legacy titles remain readable up to 4 KiB; beyond, reading is
+refused before Rust materialization, without changing the 256-byte bound of
+new writes. Native validations and automatic recovery are
+not proven by this batch.
 
-Validation du lot sauvegarde explicite : `make qualite` passe avec 1 312 tests
-réussis, aucun échec et 18 ignorés. Les nouveaux tests parcourent nom modifiable,
-`⌘S`, édition après sauvegarde, retour à la version sauvegardée puis annulation
-de cette édition, abandon préservant la copie nommée et Save and close attendu
-jusqu'au stockage. Une annulation de sauvegarde suivie d'une réponse tardive ne
-ferme pas la console. Une version concurrente est conservée lorsque la console
-sauve sous une nouvelle identité. Les tests d'entrée couvrent une composition
-Unicode refusée sans altérer la valeur précédente et la lecture seule pendant
-la fermeture. Douze sauvegardes dont les receivers sont abandonnés conservent la
-dernière version après attente du backend. Cette preuve concerne les commandes
-soumises ; elle ne prouve ni autosauvegarde à chaque frappe, ni restauration au
-démarrage, ni tous les chemins de fermeture natifs.
+Validation of the explicit-save batch: `make qualite` passes with 1,312 tests
+passed, no failure and 18 ignored. The new tests go through the editable name,
+`⌘S`, editing after saving, returning to the saved version then cancelling
+that edit, discarding while preserving the named copy and Save and close awaited
+until storage. A save cancellation followed by a late response does not
+close the console. A concurrent version is kept when the console
+saves under a new identity. The input tests cover a Unicode composition
+refused without altering the previous value and read-only mode during
+closing. Twelve saves whose receivers are abandoned keep the
+latest version after waiting for the backend. This proof concerns submitted
+commands; it proves neither autosave on each keystroke, nor restoration at
+startup, nor all native close paths.
 
-Validation du lot consoles indépendantes : `make qualite` passe avec 1 306 tests
-réussis, aucun échec et 18 ignorés. Les événements GPUI vérifient deux consoles
-ayant des identités de session et de résultat distinctes, leurs réponses hors
-écran, l'export du premier résultat pendant que le second onglet est visible,
-et le choix Annuler / Abandonner avant fermeture. Le retour à une connexion
-retrouve ses deux consoles et leurs textes, sans exécution. Les tests SQLite
-vérifient une transaction non validée, sa fin par fermeture d'une seule session,
-et la disponibilité de la console voisine et de la session de catalogue.
-Un driver contrôlé vérifie la fermeture pendant préparation et drainage pour
-humain et agent, avec refus d'une mauvaise connexion. Le contrat SQLite couvre
-aussi les profils en mémoire séparés, la copie partagée entre leurs sessions,
-la lecture seule non levable par les limites de l'appelant, et la destruction
-après fermeture de la dernière session. Les relectures locales ont couvert la
-corrélation des réponses, les confirmations tardives, les ouvertures annulées,
-la frontière SQLite et l'absence d'I/O dans le rendu. La recette native et les
-mesures de performance restent ouvertes ; le test sans GPU ne les remplace pas.
+Validation of the independent-consoles batch: `make qualite` passes with 1,306 tests
+passed, no failure and 18 ignored. The GPUI events check two consoles
+with distinct session and result identities, their off-screen
+responses, export of the first result while the second tab is visible,
+and the Cancel / Discard choice before closing. Returning to a connection
+finds its two consoles and their texts, without execution. The SQLite tests
+check an uncommitted transaction, its end by closing a single session,
+and the availability of the neighboring console and of the catalog session.
+A controlled driver checks closing during preparation and draining for
+human and agent, with refusal of a wrong connection. The SQLite contract also covers
+separate in-memory profiles, the copy shared between their sessions,
+read-only mode that the caller's limits cannot lift, and destruction
+after closing the last session. The local reviews covered
+response correlation, late confirmations, cancelled openings,
+the SQLite boundary and the absence of I/O in rendering. The native acceptance test and
+performance measurements remain open; the GPU-less test does not replace them.
 
-Validation de la consultation GPUI de la bibliothèque : `make qualite` passe
-avec 1 300 tests réussis, aucun échec et 18 ignorés. Les tests livrent des
-événements clavier et souris aux menus, à l'éditeur en lecture seule et à la
-navigation `⌘⇧H` / `⌘J`. Ils vérifient la copie nommée face au brouillon, les
-réponses obsolètes, l'annulation d'une inspection, le refus de saisie et de
-composition native, et l'absence d'événement d'exécution pendant la consultation.
-Le texte et l'identité du résultat de la console restent inchangés. La sélection
-d'un menu n'est appliquée qu'à validation ; Escape et un clic extérieur ferment
-le menu sans changer le filtre. Le test des références récentes vérifie que leur
-filtrage précède la pagination. Les lignes et en-têtes reprennent les 40 px de
-`47:7881`, les filtres étiquetés les 74 px de `47:7868`, et le panneau inférieur
-les 238 px de `47:7937`. Ces constats de source et tests sans GPU ne prouvent
-pas la fidélité des pixels ni le budget de trame natif.
+Validation of GPUI library browsing: `make qualite` passes
+with 1,300 tests passed, no failure and 18 ignored. The tests deliver
+keyboard and mouse events to the menus, to the read-only editor and to
+the `⌘⇧H` / `⌘J` navigation. They check the named copy against the draft,
+stale responses, cancelling an inspection, refusal of native input and
+composition, and the absence of an execution event during browsing.
+The text and result identity of the console remain unchanged. A menu
+selection is only applied on validation; Escape and an outside click close
+the menu without changing the filter. The recent-references test checks that their
+filtering precedes pagination. The rows and headers use the 40 px of
+`47:7881`, the labeled filters the 74 px of `47:7868`, and the bottom panel
+the 238 px of `47:7937`. These source findings and GPU-less tests do not prove
+pixel fidelity or the native frame budget.
 
-Validation du backend bibliothèque : `make qualite` passe avec 1 294 tests
-réussis, aucun échec et 18 ignorés. Les nouveaux cas couvrent la migration des
-anciennes copies nommées, l'ordre des sauvegardes, les conflits de révision,
-l'abandon et les marqueurs de suppression, la portée du workspace, les filtres
-littéraux et la pagination, le refus d'ouvrir un texte tronqué, les écritures
-historiques à réconcilier et la réouverture locale d'un tampon sans driver.
-L'annulation est exercée pendant un parcours SQLite et une transaction d'écriture,
-avec vérification du rollback et du retrait du handler avant l'opération suivante.
-La relecture locale des invariants et de la frontière de sérialisation a conduit
-à protéger aussi les chemins de sauvegarde/suppression historiques et la lecture
-d'une copie nommée illisible. Cette validation porte sur le backend ; les actions d'édition de la
-bibliothèque et la reprise restent ouvertes, au-delà de la consultation GPUI
-validée séparément.
+Validation of the library backend: `make qualite` passes with 1,294 tests
+passed, no failure and 18 ignored. The new cases cover migration of
+old named copies, save ordering, revision conflicts,
+discarding and deletion markers, workspace scope, literal
+filters and pagination, refusal to open a truncated text, legacy
+writes to reconcile and local reopening of a buffer without a driver.
+Cancellation is exercised during an SQLite scan and a write transaction,
+with verification of the rollback and of handler removal before the next operation.
+The local review of the invariants and of the serialization boundary led
+to also protecting the legacy save/delete paths and the reading
+of an unreadable named copy. This validation covers the backend; the library's editing actions and
+recovery remain open, beyond the GPUI browsing
+validated separately.
 
-Validation du lot préférences/panneaux : `make qualite` passe avec 1 282 tests
-réussis et 18 ignorés. Les tests couvrent la réouverture du SQLite local, les
-écritures reçues dans le désordre, les conflits et payloads illisibles, le refus
-d'un agent et la bonne cible de workspace. Le harnais GPUI vérifie les lignes
-de 24/28 px, l'indépendance vis-à-vis du thème et du viewport, la poignée de
-8 px par événements souris livrés, son clavier et la conservation de la table
-active au repli. Trente sauvegardes dont les receivers UI sont abandonnés
-conservent la dernière révision après attente. Les chemins d'arrêt natifs hors
-fermeture de la dernière fenêtre, la recette visuelle et les mesures de
-performance restent ouverts.
+Validation of the preferences/panels batch: `make qualite` passes with 1,282 tests
+passed and 18 ignored. The tests cover reopening the local SQLite,
+writes received out of order, conflicts and unreadable payloads, refusal
+of an agent and the correct workspace target. The GPUI harness checks the
+24/28 px rows, independence from the theme and viewport, the
+8 px handle through delivered mouse events, its keyboard and keeping the active
+table on collapse. Thirty saves whose UI receivers are abandoned
+keep the latest revision after waiting. Native shutdown paths other than
+closing the last window, the visual acceptance test and performance
+measurements remain open.
 
-Validation du lot contraintes PostgreSQL : `make qualite` passe avec
-1 335 tests réussis et 20 ignorés. Deux tests supplémentaires ont été exécutés
-sur une instance PostgreSQL 17.11 jetable, initialisée pour ce lot puis arrêtée :
-clés composées, noms atypiques, CHECK, unicité, clés étrangères, NOT NULL et
-refus des dépassements de limites. Les tests de cache/bus couvrent la lecture
-explicite, les capacités absentes, la non-publication après annulation et la
-compatibilité des anciens JSON. Le test GPUI vérifie sélection et copie sans
-modifier ni exécuter le brouillon. La fidélité des pixels, les budgets de trame
-et l'annulation d'une introspection déjà engagée côté serveur ne sont pas
-prouvés par ces nouveaux tests. L'absence de nextest et les deux avertissements
-Rust sur des dépendances amont restent signalés par la porte. Le socle, lui, ne
-signale plus rien : `make socle` rend 42/42 cas conformes et 0 avertissement.
+Validation of the PostgreSQL constraints batch: `make qualite` passes with
+1,335 tests passed and 20 ignored. Two additional tests were run
+on a disposable PostgreSQL 17.11 instance, initialized for this batch then stopped:
+composite keys, atypical names, CHECK, uniqueness, foreign keys, NOT NULL and
+refusal of limit overruns. The cache/bus tests cover explicit
+reading, missing capabilities, non-publication after cancellation and
+compatibility of old JSON. The GPUI test checks selection and copy without
+modifying or running the draft. Pixel fidelity, frame budgets
+and cancelling an introspection already started on the server side are not
+proven by these new tests. The absence of nextest and the two Rust
+warnings on upstream dependencies remain reported by the gate. The foundation, for its part, no longer
+reports anything: `make socle` returns 42/42 compliant cases and 0 warnings.
 
-Validation du lot contraintes SQLite et statut de validation : `make qualite`
-passe avec 1 346 tests réussis et 21 ignorés. Les nouveaux tests SQLite portent
-sur le moteur embarqué : noms atypiques, clauses conservées, contraintes
-adjacentes sans virgule, absence/vide, tables virtuelles, limites et statut
-inconnu malgré un CHECK déclaré. Le test GPUI de métadonnées traverse le bus et
-le worker SQLite et garde le brouillon intact. Trois tests PostgreSQL sont
-exécutés séparément sur une instance jetable puis arrêtée, dont la transition
-réelle `NOT VALID` → `VALIDATE CONSTRAINT`. Le test de l'ancien JSON conserve
-un statut inconnu. Figma `229:7998` a été relu pour les colonnes et proportions ;
-cette lecture ne prouve pas les pixels du rendu natif. Les avertissements
-préexistants de la porte restent identiques au lot précédent.
+Validation of the SQLite constraints and validation status batch: `make qualite`
+passes with 1,346 tests passed and 21 ignored. The new SQLite tests cover
+the embedded engine: atypical names, kept clauses, adjacent constraints
+without a comma, absence/empty, virtual tables, limits and unknown
+status despite a declared CHECK. The GPUI metadata test goes through the bus and
+the SQLite worker and keeps the draft intact. Three PostgreSQL tests are
+run separately on a disposable instance then stopped, including the real
+transition `NOT VALID` → `VALIDATE CONSTRAINT`. The old-JSON test keeps
+an unknown status. Figma `229:7998` was reread for the columns and proportions;
+this reading does not prove the pixels of the native rendering. The pre-existing
+warnings of the gate remain identical to the previous batch.
 
-Validation du lot relations entrantes : `make qualite` passe avec 1 353 tests
-réussis et 22 ignorés. Les tests SQLite couvrent sens des liens, ordre composite,
-références implicites, séparation des espaces de noms, comparaisons d'affinité
-et de collation, index partiels/d'expression et refus des listes incomplètes ou
-trop grandes. Les tests du cache et du bus vérifient indépendance des sens,
-capacités et non-publication après annulation. Le test GPUI charge les liens,
-ouvre au clavier une source qui n'était pas dans le catalogue, reçoit son
-aperçu réel et conserve le brouillon intact. Le test PostgreSQL exécuté sur
-instance jetable couvre les références entre schémas, les colonnes INCLUDE et
-les comparaisons non établies ; les trois essais de contraintes ont aussi été
-relancés pendant ce lot. L'instance a été arrêtée après les essais. Les pixels
-natifs et les budgets de trame restent à vérifier.
+Validation of the incoming-relations batch: `make qualite` passes with 1,353 tests
+passed and 22 ignored. The SQLite tests cover link direction, composite order,
+implicit references, namespace separation, affinity
+and collation comparisons, partial/expression indexes and refusal of incomplete or
+too large lists. The cache and bus tests check independence of directions,
+capabilities and non-publication after cancellation. The GPUI test loads the links,
+opens with the keyboard a source that was not in the catalog, receives its
+real preview and keeps the draft intact. The PostgreSQL test run on a
+disposable instance covers references across schemas, INCLUDE columns and
+comparisons that are not established; the three constraint tests were also
+rerun during this batch. The instance was stopped after the tests. Native
+pixels and frame budgets remain to be checked.
 
-Le panneau DDL en lecture seule (`193:2433`, repris dans `229:7749`), Copy DDL
-et Open DDL in console sont raccordés au bus (ADR-0018). La copie crée une
-console distincte sans exécution. SQLite fournit les déclarations stockées des
-tables/vues, index et triggers, y compris les tables virtuelles. PostgreSQL
-reconstruit tables ordinaires, racines partitionnées, vues, vues matérialisées
-et séquences ; les séquences détenues, contraintes, index, règles, triggers
-utilisateur et politiques RLS sont inclus. La portée exclut données, privilèges,
-commentaires et dépendances externes, et ses notes restent visibles.
-Les enfants de partition sont maintenant reconstruits avec `PARTITION OF`,
-parent qualifié, borne native et options locales. Les sous-partitions conservent
-leur `PARTITION BY` ; les contraintes, index et triggers clonés du parent ne
-sont pas recréés en double. Les fixtures vérifient le lien parent et la borne
-après réapplication du DDL. Sur PostgreSQL 12, une partition portant des
-triggers utilisateur reste refusée faute de métadonnée native de filiation ;
-aucune comparaison heuristique ne décide d'omettre un trigger.
-Les objets PostgreSQL temporaires, hérités, typés ou
-étrangers, ainsi que les NOT NULL non validés, sont encore refusés : leur
-raccordement reste à réaliser. La persistance de la largeur DDL entre
-lancements, l'alignement visuel natif complet et les mesures de trame restent
-également ouverts.
+The read-only DDL panel (`193:2433`, taken up in `229:7749`), Copy DDL
+and Open DDL in console are wired to the bus (ADR-0018). The copy creates a
+distinct console without execution. SQLite provides the stored declarations of
+tables/views, indexes and triggers, virtual tables included. PostgreSQL
+rebuilds ordinary tables, partitioned roots, views, materialized views
+and sequences; owned sequences, constraints, indexes, rules, user
+triggers and RLS policies are included. The scope excludes data, privileges,
+comments and external dependencies, and its notes remain visible.
+Partition children are now rebuilt with `PARTITION OF`,
+qualified parent, native bound and local options. Sub-partitions keep
+their `PARTITION BY`; constraints, indexes and triggers cloned from the parent are
+not recreated twice. The fixtures check the parent link and the bound
+after reapplying the DDL. On PostgreSQL 12, a partition carrying
+user triggers remains refused for lack of native lineage metadata;
+no heuristic comparison decides to omit a trigger.
+Temporary, inherited, typed or
+foreign PostgreSQL objects, as well as unvalidated NOT NULLs, are still refused: their
+wiring remains to be done. Persisting the DDL width across
+launches, full native visual alignment and frame measurements also remain
+open.
 
-Validation du lot DDL : `make qualite` passe avec 1 365 tests réussis et
-25 ignorés. Les tests GPUI vérifient le refus de saisie/exécution dans l'aperçu,
-la copie exacte, le clic réel ouvrant une console distincte sans exécution,
-l'annulation en quittant le DDL et la poignée souris/clavier sans nouvelle
-lecture lors du redimensionnement. Les tests SQLite recréent table, index,
-trigger, vue et table virtuelle dans des bases temporaires. Trois tests
-PostgreSQL exécutés séparément sur une instance jetable vérifient identity,
-serial, colonnes générées, contraintes, index, états de triggers, RLS, vues,
-séquences et racines partitionnées ; le cluster a été arrêté. Le DTO, la
-publication du bus et l'éviction des définitions, même invalidées, sont testés.
-Les avertissements préexistants (absence de nextest, dépendances amont) restent
-identiques ; le socle, lui, ne signale plus rien. Cette porte ne remplace pas une
-recette de pixels.
+Validation of the DDL batch: `make qualite` passes with 1,365 tests passed and
+25 ignored. The GPUI tests check refusal of input/execution in the preview,
+the exact copy, the real click opening a distinct console without execution,
+cancellation when leaving the DDL and the mouse/keyboard handle without a new
+read during resizing. The SQLite tests recreate table, index,
+trigger, view and virtual table in temporary databases. Three
+PostgreSQL tests run separately on a disposable instance check identity,
+serial, generated columns, constraints, indexes, trigger states, RLS, views,
+sequences and partitioned roots; the cluster was stopped. The DTO, the
+bus publication and eviction of definitions, even invalidated, are tested.
+The pre-existing warnings (absence of nextest, upstream dependencies) remain
+identical; the foundation, for its part, no longer reports anything. This gate does not replace a
+pixel acceptance test.
 
-La portée de Run est maintenant alignée sur l'aide de la console : sélection
-explicite ou instruction courante. Le helper `oxyn_query::current_statement`
-préserve les corps composés et refuse les frontières ambiguës. Le classificateur
-existant reste inchangé. Le texte périmé de la sidebar prétendant que
-l'historique était indisponible a été retiré.
+The scope of Run is now aligned with the console's help: explicit
+selection or current statement. The helper `oxyn_query::current_statement`
+preserves compound bodies and refuses ambiguous boundaries. The existing
+classifier remains unchanged. The stale sidebar text claiming that
+history was unavailable was removed.
 
-Parcours importants encore à raccorder, vérifiés dans le code :
+Important flows still to be wired, checked in the code:
 
-| Parcours | Travail restant |
+| Flow | Remaining work |
 |---|---|
-| Accueil : recette native | La superposition est corrigée et testée sur les rectangles rendus ; l'observer à l'écran, à plusieurs largeurs et dans les deux thèmes, reste à faire |
-| Aperçu de table | Réalisé, selon [ADR-0020](adr/0020-apercu-trie-filtre-parcouru.md) : `PreviewSort` et `PreviewFilter` sont dans la commande, les capacités `PREVIEW_SORT` et `PREVIEW_FILTER` sont déclarées, les deux drivers composent la traduction citée, et la page suivante existe quand l'ordre est déterministe. Une réserve d'arbitrage subsiste sur le tri par défaut — voir les questions ouvertes en fin de document |
-| Reprise de session | Le marqueur d'arrêt est en place ([ADR-0021](adr/0021-marqueur-d-arret.md)) : un `⌘Q` ne déclenche plus la reprise, une session sans fermeture au battement vieilli si. La restauration de l'emplacement d'objet qu'[UX-SPEC](UX-SPEC.md#restauration-après-un-arrêt-brutal) promet est de nouveau tenue dans `apps/desktop` depuis le 2026-09-25 (`ObjectLocation`, lu par `read_object_location`) — voir « Reprise et bibliothèque » |
-| Bibliothèque inter-workspaces | Réalisé : les filtres portent les connexions historiques supprimées ou extérieures au workspace courant, par `Command::ListHistoryConnections` |
-| Workspace IA | La fuite [I-04](../CLAUDE.md#i-04) est fermée : `ToolOutcome::Failed` porte un rapport aux champs privés dont le seul constructeur exige le niveau de la connexion, et le filtre s'applique **à la construction** — sous `Local`/`Metadata`, le message du serveur n'entre jamais dans la structure. `PrivacyTier` vit désormais sur la `ConnectionConfig`, comme sa documentation l'affirmait déjà. La configuration des fournisseurs, l'entrée conditionnelle `Ask AI` (`190:1549`), les propositions par le bus et la provenance persistante des documents sont réalisées, et `oxyn-ai` est une dépendance déclarée d'`oxyn-app` — d'`oxyn-desktop` depuis le retrait de GPUI |
-| Recette produit | Rendu natif complet, accessibilité et mesures de performance, distincts des tests GPUI sans GPU — aujourd'hui des stories Storybook, qui ne remplacent pas davantage la recette |
+| Home: native acceptance test | The overlap is fixed and tested on the rendered rectangles; observing it on screen, at several widths and in both themes, remains to be done |
+| Table preview | Done, according to [ADR-0020](adr/0020-apercu-trie-filtre-parcouru.md): `PreviewSort` and `PreviewFilter` are in the command, the capabilities `PREVIEW_SORT` and `PREVIEW_FILTER` are declared, both drivers compose the quoted translation, and the next page exists when the order is deterministic. A pending decision remains on the default sort — see the open questions at the end of the document |
+| Session recovery | The shutdown marker is in place ([ADR-0021](adr/0021-marqueur-d-arret.md)): a `⌘Q` no longer triggers recovery, a session without a close whose heartbeat has aged does. Restoring the object location that [UX-SPEC](UX-SPEC.md#restoring-after-an-abrupt-stop) promises is held again in `apps/desktop` since 2026-09-25 (`ObjectLocation`, read by `read_object_location`) — see "Recovery and library" |
+| Cross-workspace library | Done: the filters carry the historical connections that were deleted or are outside the current workspace, through `Command::ListHistoryConnections` |
+| AI workspace | The [I-04](../CLAUDE.md#i-04) leak is closed: `ToolOutcome::Failed` carries a report with private fields whose only constructor requires the connection's tier, and the filter applies **at construction** — under `Local`/`Metadata`, the server's message never enters the structure. `PrivacyTier` now lives on the `ConnectionConfig`, as its documentation already claimed. Provider configuration, the conditional `Ask AI` entry (`190:1549`), proposals through the bus and persistent provenance of documents are done, and `oxyn-ai` is a declared dependency of `oxyn-app` — of `oxyn-desktop` since the removal of GPUI |
+| Product acceptance test | Full native rendering, accessibility and performance measurements, distinct from GPU-less GPUI tests — today Storybook stories, which do not replace the acceptance test either |
 
-Validation du lot rafraîchissement automatique : `make qualite` passe avec
-1 536 tests réussis, aucun échec et 39 ignorés. Les vues se relisent seules après
-une exécution réussie, selon [ADR-0022](adr/0022-rafraichissement-automatique.md) :
-un DDL relit l'explorateur, un DDL ou une écriture relit l'aperçu **visible** en
-conservant le prédicat, le tri et la page appliqués, et la bibliothèque ouverte
-suit. Rien après une erreur, rien sur une autre connexion, rien sur un onglet
-caché, et jamais l'instruction de l'utilisateur — c'est la lecture d'aperçu
-qu'Oxyn compose qui est réémise. L'invalidation du cache de catalogue après DDL
-et la publication de `CatalogUpdated` existaient déjà côté exécuteur ; ce qui
-manquait était l'intention dans `Event::Completed` et les abonnés.
+Validation of the automatic-refresh batch: `make qualite` passes with
+1,536 tests passed, no failure and 39 ignored. The views reread themselves after
+a successful execution, according to [ADR-0022](adr/0022-rafraichissement-automatique.md):
+a DDL rereads the explorer, a DDL or a write rereads the **visible** preview while
+keeping the applied predicate, sort and page, and the open library
+follows. Nothing after an error, nothing on another connection, nothing on a hidden
+tab, and never the user's statement — it is the preview read
+Oxyn composes that is re-emitted. Invalidating the catalog cache after DDL
+and publishing `CatalogUpdated` already existed on the executor side; what
+was missing was the intent in `Event::Completed` and the subscribers.
 
-Deux constats de ce lot méritent d'être retenus. Le premier est un défaut
-préexistant du chemin **manuel** : `refresh_catalog` ignorait une demande de même
-portée arrivée pendant une lecture en vol, si bien qu'un DDL exécuté pendant un
-`Refresh` laissait l'arbre périmé indéfiniment. Le second porte sur la
-bibliothèque : un `reload()` déclenché dans le dos de l'utilisateur reviendrait à
-la première page et jetterait le détail ouvert, donc la relecture automatique
-s'abstient dès qu'une entrée est sélectionnée, qu'un résultat retenu est affiché
-ou qu'on a quitté la première page. La coalescence est un drapeau par vue, effacé
-au départ d'une lecture et consommé à son arrivée, et seulement si cette arrivée
-a ramené des lignes — sinon une relecture recouvrirait l'erreur. Elle est
-vérifiée par mutation.
+Two findings of this batch are worth keeping. The first is a pre-existing defect
+of the **manual** path: `refresh_catalog` ignored a request with the same
+scope arriving during an in-flight read, so that a DDL run during a
+`Refresh` left the tree stale indefinitely. The second concerns the
+library: a `reload()` triggered behind the user's back would go back to
+the first page and throw away the open detail, so the automatic reread
+abstains as soon as an entry is selected, a retained result is displayed
+or the first page has been left. Coalescing is a per-view flag, cleared
+when a read starts and consumed when it arrives, and only if that arrival
+brought back rows — otherwise a reread would cover the error. It is
+checked by mutation.
 
-Ce que ce lot ne prouve pas : la branche `RecvError::Lagged` elle-même, dont la
-provocation fiable reviendrait à fabriquer la panne plutôt qu'à l'observer ;
-seule la fonction de rattrapage est testée directement. Et la fenêtre entre le
-départ d'une lecture et son arrivée au serveur reste ouverte — une écriture
-dispatchée juste avant peut s'appliquer juste après, et rien ne la redemande.
-C'est inhérent à un rafraîchissement sans horloge partagée ; l'ADR ne promet pas
-d'instantané.
+What this batch does not prove: the `RecvError::Lagged` branch itself, whose
+reliable provocation would amount to manufacturing the failure rather than observing it;
+only the catch-up function is tested directly. And the window between the
+start of a read and its arrival at the server remains open — a write
+dispatched just before can apply just after, and nothing requests it again.
+This is inherent to a refresh without a shared clock; the ADR does not promise
+a snapshot.
 
-Validation du lot contexte de session : `make qualite` passe avec 1 450 tests
-réussis, aucun échec et 37 ignorés. Le sélecteur de `191:2003` est raccordé,
-conditionnel à la capacité `SESSION_CONTEXT` : sur un moteur qui ne la déclare
-pas — SQLite — il est **absent**, pas grisé, et un test l'ancre. Ses cinq états
-sont distincts, y compris l'initial, qui dit que le serveur a placé la session
-plutôt que de nommer un schéma qu'Oxyn n'a pas demandé. Rien n'y est optimiste :
-l'affichage montre ce que la session rapporte.
+Validation of the session-context batch: `make qualite` passes with 1,450 tests
+passed, no failure and 37 ignored. The selector of `191:2003` is wired,
+conditional on the `SESSION_CONTEXT` capability: on an engine that does not declare it
+— SQLite — it is **absent**, not greyed out, and a test anchors it. Its five states
+are distinct, including the initial one, which says that the server placed the session
+rather than naming a schema Oxyn did not ask for. Nothing there is optimistic:
+the display shows what the session reports.
 
-Deux faits ont modifié la conception en cours de route et sont consignés dans
-[ADR-0019](adr/0019-contexte-de-session.md). D'abord `oxyn-core` ne peut pas
-nommer `CatalogPath` : la commande transporte deux `Option<String>`, comme
-`PreviewRelation`. Ensuite, une session PostgreSQL est un bassin de quatre
-connexions et `search_path` est un état **par connexion** : le `SET` est donc
-posé à chaque exécution, sur la connexion que cette exécution emprunte, et
-défait avant qu'elle reparte au bassin. Cette seconde moitié n'était pas prévue
-et vient d'une relecture : `pg_get_indexdef`, `pg_get_constraintdef`,
-`pg_get_expr` et `format_type` rendent leur texte **relativement au
-`search_path`**, si bien qu'un même objet aurait pu être décrit différemment
-d'une lecture à l'autre. Un chemin d'erreur qui ne peut pas défaire le `SET`
-ferme la connexion plutôt que de la rendre.
+Two facts changed the design along the way and are recorded in
+[ADR-0019](adr/0019-contexte-de-session.md). First, `oxyn-core` cannot
+name `CatalogPath`: the command carries two `Option<String>`, like
+`PreviewRelation`. Then, a PostgreSQL session is a pool of four
+connections and `search_path` is a **per-connection** state: the `SET` is therefore
+set on each execution, on the connection that execution borrows, and
+undone before it goes back to the pool. This second half was not planned
+and comes from a review: `pg_get_indexdef`, `pg_get_constraintdef`,
+`pg_get_expr` and `format_type` render their text **relative to the
+`search_path`**, so that the same object could have been described differently
+from one read to the next. An error path that cannot undo the `SET`
+closes the connection rather than giving it back.
 
-Les tests PostgreSQL sur instance jetable couvrent la cohérence à travers le
-bassin — quatre curseurs concurrents, quatre pids distincts relevés par
-`pg_backend_pid()` dans la requête elle-même —, le retour au défaut, le refus
-d'un schéma absent et d'une autre base, deux schémas réellement nommés
-`oxyn_ctx"weird` et `oxyn_ctx.dotted`, la lecture seule préservée, et le fait
-que le serveur atteste lui-même, par `pg_stat_activity.query`, que le texte
-soumis n'a pas été réécrit. Le test d'introspection force l'emprunt d'une
-connexion recyclée en immobilisant trois curseurs sur un bassin de quatre. Le
-cluster a été arrêté après chaque campagne. La preuve par l'échec — désactiver
-la remise au défaut pour voir le test rougir — n'a pas été faite ; la
-sensibilité des rendus au `search_path` a été vérifiée séparément en `psql` sur
-17.11 et le tableau des deux formes figure dans le commentaire du test.
+The PostgreSQL tests on a disposable instance cover consistency across the
+pool — four concurrent cursors, four distinct pids read by
+`pg_backend_pid()` in the query itself —, the return to the default, the refusal
+of an absent schema and of another database, two schemas actually named
+`oxyn_ctx"weird` and `oxyn_ctx.dotted`, preserved read-only mode, and the fact
+that the server itself attests, through `pg_stat_activity.query`, that the submitted
+text was not rewritten. The introspection test forces borrowing a
+recycled connection by pinning three cursors on a pool of four. The
+cluster was stopped after each campaign. Proof by failure — disabling
+the reset to the default to see the test turn red — was not done; the
+sensitivity of the renderings to `search_path` was checked separately in `psql` on
+17.11 and the table of both forms is in the test's comment.
 
-Validation du lot accueil / Explain / valeurs liées : `make qualite` passait avec
-1 431 tests réussis, aucun échec et 27 ignorés.
+Validation of the home / Explain / bound values batch: `make qualite` passed with
+1,431 tests passed, no failure and 27 ignored.
 
-La superposition signalée le 10 septembre avait deux causes distinctes, toutes
-deux corrigées. Les actions de l'accueil étaient dessinées par `oxyn-app` en
-calques `absolute()` posés à 20 px du haut, exactement sur l'en-tête de 56 px du
-formulaire ; elles appartiennent maintenant à sa barre de titre, qui partage une
-seule rangée entre la marque et les actions. Le formulaire dessinait aussi deux
-marques — `logo(theme.mode)` et `icon(IconName::Logo)` — alors que la migration
-consignée dans `assets/ui/README.md` prévoyait le retrait de la seconde ; la
-variante `IconName::Logo` n'avait plus d'autre appelant et a été supprimée. Le
-test vérifie les rectangles rendus : la marque et chaque action ne se recoupent
-pas, et les actions restent à droite. Une action sans objet est absente plutôt
-qu'affichée inerte. La garde de `ConnectionForm::on_key` applique désormais ce
-que son commentaire annonçait, ce qui rend la barre atteignable au clavier.
+The overlap reported on September 10 had two distinct causes, both
+fixed. The home actions were drawn by `oxyn-app` as
+`absolute()` layers placed 20 px from the top, exactly on the form's 56 px
+header; they now belong to its title bar, which shares a
+single row between the brand and the actions. The form also drew two
+brands — `logo(theme.mode)` and `icon(IconName::Logo)` — whereas the migration
+recorded in `assets/ui/README.md` planned the removal of the second; the
+`IconName::Logo` variant had no other caller and was deleted. The
+test checks the rendered rectangles: the brand and each action do not overlap,
+and the actions stay on the right. An action without a purpose is absent rather
+than displayed inert. The guard of `ConnectionForm::on_key` now applies what
+its comment announced, which makes the bar reachable by keyboard.
 
-`ParameterEditor` existait sans être instancié nulle part. Il appartient
-maintenant à chaque `QueryConsole` : valeurs isolées par console, éphémères,
-transmises par `ExecRequest::params` et jamais insérées dans le texte SQL. Le
-parsing est descendu dans `oxyn-core`, seul endroit où `ParameterType` existe
-désormais ; UUID, dates, heures, horodatages et JSON sont réellement construits,
-et les formats acceptés ont été établis par des tests avant d'être documentés.
-Un horodatage sans décalage est refusé plutôt qu'interprété en UTC en silence.
-La validation décimale ne passe plus par `f64`, qui acceptait `1e400`.
-Les tests couvrent une valeur hostile réellement liée sur une session SQLite,
-l'indépendance de deux consoles, et une valeur non convertible qui arrête la
-soumission sans que le message répète la saisie.
+`ParameterEditor` existed without being instantiated anywhere. It now
+belongs to each `QueryConsole`: values isolated per console, ephemeral,
+passed through `ExecRequest::params` and never inserted into the SQL text. The
+parsing moved down into `oxyn-core`, the only place where `ParameterType` now
+exists; UUIDs, dates, times, timestamps and JSON are actually built,
+and the accepted formats were established by tests before being documented.
+A timestamp without an offset is refused rather than silently interpreted as UTC.
+Decimal validation no longer goes through `f64`, which accepted `1e400`.
+The tests cover a hostile value actually bound on an SQLite session,
+the independence of two consoles, and a non-convertible value that stops
+submission without the message repeating the input.
 
-La barre reprend le groupe `273:37036` : Run, Stop et Explain sont trois
-contrôles, celui qui n'a rien à faire étant estompé **et** inerte, vérifié par
-un test qui clique les deux. Le contrôle `Parameters` suit les 144 px de
+The bar follows group `273:37036`: Run, Stop and Explain are three
+controls, the one with nothing to do being dimmed **and** inert, checked by
+a test that clicks both. The `Parameters` control follows the 144 px of
 `191:1993`.
 
-La fuite relevée par la relecture est corrigée à la frontière driver. Quand une
-instruction porte au moins une valeur liée de l'appelant, le message primaire du
-serveur n'est plus propagé : PostgreSQL rend un message protégé suivi de son
-SQLSTATE, SQLite le code de résultat étendu et son libellé canonique. L'erreur
-d'origine n'est pas conservée dans le type, pour qu'aucun `Debug` ne la
-ré-expose. La classe d'erreur, l'annulation et le refus de rejeu d'une erreur
-ambiguë sont préservés, et un test le vérifie. Deux tests PostgreSQL exécutés
-sur l'instance jetable — un cast invalide de `$1` et un déclencheur plpgsql qui
-recopie la valeur — puis le cluster arrêté. Le test symétrique **sans** valeur
-liée montre que le message du moteur arrive entier : c'est lui qui prouve que le
-premier teste quelque chose. Le message de l'encodeur `sqlx` n'est plus
-interpolé dans `bind_params`. Les erreurs de transport PostgreSQL conservent
-leur texte : `sqlx` les compose sans y verser les arguments, et les retenir
-coûterait un diagnostic sans rien protéger.
+The leak found by the review is fixed at the driver boundary. When a
+statement carries at least one bound value from the caller, the server's primary
+message is no longer propagated: PostgreSQL returns a protected message followed by its
+SQLSTATE, SQLite the extended result code and its canonical label. The original
+error is not kept in the type, so that no `Debug` can
+re-expose it. The error class, cancellation and the refusal to replay an ambiguous
+error are preserved, and a test checks it. Two PostgreSQL tests run
+on the disposable instance — an invalid cast of `$1` and a plpgsql trigger that
+copies the value — then the cluster stopped. The symmetrical test **without** a bound
+value shows that the engine's message arrives whole: it is what proves that the
+first one tests something. The message of the `sqlx` encoder is no longer
+interpolated in `bind_params`. PostgreSQL transport errors keep
+their text: `sqlx` composes them without pouring the arguments into them, and holding them back
+would cost a diagnosis without protecting anything.
 
-Ces preuves ne valent pas recette de pixels : le rendu natif de l'accueil
-corrigé et de la barre n'a pas été observé à l'écran, et les budgets de trame
-restent non mesurés. Les avertissements préexistants de la porte (absence de
-nextest, deux dépendances amont) sont inchangés ; le socle ne signale plus rien.
+These proofs are not a pixel acceptance test: the native rendering of the fixed
+home screen and of the bar was not observed on screen, and frame budgets
+remain unmeasured. The pre-existing warnings of the gate (absence of
+nextest, two upstream dependencies) are unchanged; the foundation no longer reports anything.
 
-Validation du lot partitions/instruction courante : `make qualite` passe avec
-1 377 tests réussis et 25 ignorés. Les tests de résolution couvrent UTF-8,
-dollar-quotes, commentaires, séparateurs, SQL incomplet et corps de triggers.
-La relecture a détecté puis fait corriger une fausse fermeture sur une colonne
-SQLite nommée END : la fermeture doit être à une frontière d'instruction, et
-le préfixe CREATE TRIGGER est strict. Le test GPUI vérifie une revue portant
-sur tout le trigger, jamais sur son UPDATE interne, et l'absence d'exécution
-de l'INSERT suivant. Un autre test montre que les écritures voisines ne partent
-qu'après sélection explicite du script. Trois fixtures PostgreSQL réelles ont
-été réexécutées pour les partitions, RLS et autres définitions ; le cluster
-jetable a été arrêté. Le fallback de métadonnées PG12 est vérifié structurellement,
-mais n'a pas été exécuté sur un serveur PG12. Les réserves natives et de
-performance ainsi que les avertissements préexistants de la porte restent
-ouverts.
+Validation of the partitions/current-statement batch: `make qualite` passes with
+1,377 tests passed and 25 ignored. The resolution tests cover UTF-8,
+dollar-quotes, comments, separators, incomplete SQL and trigger bodies.
+The review detected and had fixed a false closing on an SQLite column
+named END: the closing must be at a statement boundary, and
+the CREATE TRIGGER prefix is strict. The GPUI test checks a review covering
+the whole trigger, never its inner UPDATE, and that the following INSERT
+is not executed. Another test shows that neighboring writes only leave
+after explicit selection of the script. Three real PostgreSQL fixtures were
+rerun for partitions, RLS and other definitions; the disposable
+cluster was stopped. The PG12 metadata fallback is checked structurally,
+but was not run on a PG12 server. The native and
+performance reservations as well as the pre-existing warnings of the gate remain
+open.
 
-Écarts documentaires relevés : le phasage du §11 d'ARCHITECTURE diffère de
-celui du présent document, qui fait autorité sur l'ordre des phases — le §11
-y renvoie depuis le 2026-09-25 ;
-la formulation périmée de PERFORMANCE affirmant l'absence de code a été
-corrigée. Les budgets restent à mesurer.
+Documentation deviations found: the phasing of §11 of ARCHITECTURE differs from
+that of this document, which is authoritative on the order of phases — §11
+points to it since 2026-09-25;
+the stale wording of PERFORMANCE claiming the absence of code was
+corrected. The budgets remain to be measured.
 
-Validation du lot restauration d'objet et filtres de bibliothèque :
-`make qualite` passe. La restauration rouvre l'onglet d'objet, son chemin
-sélectionné et son sous-onglet sans écraser un brouillon. `ListHistoryConnections`
-rend la page des connexions **telles que l'historique les a enregistrées**, ce
-qui permet de filtrer par une connexion supprimée depuis ou appartenant à un
-autre workspace ; chaque entrée dit si le workspace la possède encore. Le champ
-de menu porte une `ConnectionId` et non un rang, parce que la liste s'allonge
-quand la page arrive — un rang aurait désigné une autre connexion. Un test
-traverse la vue au clavier et vérifie **zéro événement d'exécution** : filtrer
-n'ouvre aucune session. `deny_unknown_fields` a été retiré de
-`WorkspacePreferences` et d'`ObjectLocation` : une version antérieure d'Oxyn
-refusait un fichier écrit par une version plus récente et échouait au
-démarrage, ce qui est consigné dans ADR-0013.
+Validation of the object-restoration and library-filters batch:
+`make qualite` passes. Restoration reopens the object tab, its selected
+path and its sub-tab without overwriting a draft. `ListHistoryConnections`
+returns the page of connections **as the history recorded them**, which
+allows filtering by a connection deleted since or belonging to another
+workspace; each entry says whether the workspace still owns it. The menu
+field carries a `ConnectionId` and not a rank, because the list grows
+when the page arrives — a rank would have designated another connection. A test
+goes through the view with the keyboard and checks **zero execution events**: filtering
+opens no session. `deny_unknown_fields` was removed from
+`WorkspacePreferences` and from `ObjectLocation`: an earlier version of Oxyn
+refused a file written by a more recent version and failed at
+startup, which is recorded in ADR-0013.
 
-Validation du lot d'intégration IA : `make qualite` passe avec **1 635 tests
-réussis**, sortie vérifiée. Le lot est décrit par
+Validation of the AI integration batch: `make qualite` passes with **1,635 tests
+passed**, output checked. The batch is described by
 [ADR-0023](adr/0023-fournisseurs-declares-et-provenance.md).
 
-État constaté avant le lot, qui en justifie l'ampleur : `oxyn-ai` (4 480 lignes)
-et `oxyn-llm` (5 988 lignes) étaient complets et testés, et **aucune crate ne les
-déclarait en dépendance**. `oxyn-exec/src/sink.rs` exposait l'`ExecutorSink` en
-disant explicitement que la traduction revenait à `oxyn-app` ; elle n'y était
-pas écrite.
+State found before the batch, which justifies its scale: `oxyn-ai` (4,480 lines)
+and `oxyn-llm` (5,988 lines) were complete and tested, and **no crate
+declared them as a dependency**. `oxyn-exec/src/sink.rs` exposed the `ExecutorSink`,
+saying explicitly that the translation was up to `oxyn-app`; it was not
+written there.
 
-Ce qui est tenu, et par quoi :
+What is held, and by what:
 
-- **le workspace IA n'existe que configuré** — l'entrée `Ask AI` et le badge de
-  confidentialité sont absents tant qu'aucun fournisseur n'est déclaré, et un
-  test traverse les quatre couches (l'écran émet, le workspace traduit en
-  `Command`, le store écrit, la lecture reclassée revient, l'entrée apparaît
-  sans redémarrage). Il rougit dès qu'un maillon saute, vérifié par sabotage ;
-- **le classement local/distant n'est jamais persisté** : `Reach` n'a pas de
-  colonne et se recalcule à chaque ouverture, sur le pool bloquant. Une réponse
-  DNS d'hier appliquée à un envoi d'aujourd'hui est le piège du mandataire que
-  AI-PROVIDERS demande d'éviter ;
-- **l'asymétrie utilisateur / modèle est portée par le type** : l'observateur de
-  conversation reçoit les faits entiers — message du serveur compris — pendant
-  que l'invite ne reçoit que ce que `ToolOutcome::from_dispatch` a filtré sous
-  le niveau de la connexion. L'écart est **constaté en comparant les deux
-  valeurs**, jamais en rejouant la règle du filtre : une règle recopiée diverge
-  en silence le jour où l'originale change ;
-- **la provenance est écrite de bout en bout**, avec une règle unique dans le
-  dépôt : une provenance absente veut dire « rien de neuf à écrire », jamais
-  « personne ». Une autosauvegarde ordinaire ne l'efface donc pas. Les deux sens
-  ont été vérifiés par sabotage.
+- **the AI workspace only exists when configured** — the `Ask AI` entry and the privacy
+  badge are absent as long as no provider is declared, and a
+  test goes through the four layers (the screen emits, the workspace translates into a
+  `Command`, the store writes, the reclassified read comes back, the entry appears
+  without a restart). It turns red as soon as a link breaks, checked by sabotage;
+- **the local/remote classification is never persisted**: `Reach` has no
+  column and is recomputed at each opening, on the blocking pool. A DNS
+  answer from yesterday applied to a send today is the proxy trap that
+  AI-PROVIDERS asks to avoid;
+- **the user / model asymmetry is carried by the type**: the conversation
+  observer receives the whole facts — server message included — while
+  the prompt only receives what `ToolOutcome::from_dispatch` filtered under
+  the connection's tier. The gap is **observed by comparing the two
+  values**, never by replaying the filter's rule: a copied rule diverges
+  silently the day the original changes;
+- **provenance is written end to end**, with a single rule in the
+  repository: an absent provenance means "nothing new to write", never
+  "nobody". An ordinary autosave therefore does not erase it. Both directions
+  were checked by sabotage.
 
-Trois défauts trouvés en cours de lot, hors du plan :
+Three defects found during the batch, outside the plan:
 
-1. **`controls.rs` affirmait le faux sur un point bloquant d'accessibilité** —
-   que GPUI activerait un contrôle focalisé sur Entrée et Espace. Une sonde le
-   réfute, avec un témoin qui compte les touches *reçues* : sans lui, un zéro
-   d'activations se lirait aussi bien comme « GPUI n'active pas » que comme
-   « les touches ne sont jamais arrivées ». Trois boutons du panneau de
-   conversation en étaient inutilisables au clavier. Le commentaire est corrigé
-   et le fait figé par un test, qui rougirait aussi si GPUI se mettait à activer
-   sur Entrée — ce serait alors une régression de sécurité, un bouton
-   d'approbation d'écriture en production ne devant jamais être activable à la
-   touche Entrée ([I-02](../CLAUDE.md#i-02)) ;
-2. **une classification réduite à un booléen** écrasait la distinction entre
-   « distant » et « non résolu », dont l'écran de configuration a besoin — il
-   dit « non résolu » plutôt que d'affirmer une mesure qui n'a pas eu lieu. La
-   laisser aurait imposé une seconde campagne de résolution DNS et un second
-   endroit où les deux réponses peuvent diverger ;
-3. **une divergence de langue** : toute l'interface est en anglais, `format_settings`
-   en était la seule exception. Tranché pour l'anglais, les deux écrans suivent,
-   et `Reach::as_str` cesse de rendre du français dans du code source.
+1. **`controls.rs` claimed something false on a blocking accessibility point** —
+   that GPUI would activate a focused control on Enter and Space. A probe
+   refutes it, with a witness that counts the keys *received*: without it, zero
+   activations would read just as well as "GPUI does not activate" as
+   "the keys never arrived". Three buttons of the conversation panel
+   were unusable by keyboard because of it. The comment is corrected
+   and the fact pinned by a test, which would also turn red if GPUI started to activate
+   on Enter — that would then be a security regression, a production
+   write approval button never being activatable with the
+   Enter key ([I-02](../CLAUDE.md#i-02));
+2. **a classification reduced to a boolean** crushed the distinction between
+   "remote" and "unresolved", which the configuration screen needs — it
+   says "unresolved" rather than asserting a measurement that did not take place. Leaving
+   it would have required a second DNS resolution campaign and a second
+   place where the two answers can diverge;
+3. **a language divergence**: the whole interface is in English, `format_settings`
+   was the only exception. Settled for English, both screens follow,
+   and `Reach::as_str` stops returning French in source code.
 
-Deux relectures indépendantes ont suivi — invariants et sécurité —, chacune
-avec pour consigne de vérifier les affirmations contre le code plutôt que de
-croire les commentaires. Elles ont convergé sur un maillon manquant et trouvé
-cinq défauts que le lot n'avait pas vus. Tous sont corrigés, et `make qualite`
-repasse avec **1 640 tests réussis**.
+Two independent reviews followed — invariants and security —, each
+instructed to check the claims against the code rather than
+believe the comments. They converged on a missing link and found
+five defects the batch had not seen. All are fixed, and `make qualite`
+passes again with **1,640 tests passed**.
 
-1. **Le niveau de confidentialité n'était pas persisté.** `ConnectionConfig` le
-   portait depuis le début ; la table `connections` n'avait pas la colonne. Toute
-   connexion relue repartait donc à `Metadata`, ce qui rendait `Local`
-   inatteignable d'une session à l'autre : un réglage pris sur une base client
-   était perdu à la fermeture, **sans message**, et le premier `Ask AI` suivant
-   envoyait le DDL et les noms de colonnes chez un fournisseur distant. Migration
-   8, avec deux replis distincts qui sont la décision : colonne **absente** →
-   défaut d'ADR-0006, parce que la ligne a été écrite par un binaire qui ignorait
-   ce réglage et que l'utilisateur n'en a donc jamais choisi ; valeur
-   **illisible** → `Local`, le plus contraignant, parce qu'un réglage dont le
-   sens s'est perdu n'obtient pas le bénéfice du doute. Les deux sens sont
-   testés et vérifiés par sabotage.
-2. **La provenance était émise puis jetée.** Tout existait — la colonne, le
-   `coalesce`, le type, l'événement — et aucun chemin applicatif ne posait jamais
-   autre chose que `None`. Le dépôt affirmait donc formellement une
-   contre-vérité sur exactement la ligne qu'ADR-0023 existe pour marquer. Le
-   maillon est posé : `AiEvent::Started` → `Assistant::provenance` →
-   `OpenQuery::Copy` → la console → ses deux écritures. Une copie d'historique,
-   elle, n'hérite d'aucune marque — marquer par excès ferait passer pour écrit
-   par un agent un texte que l'utilisateur avait écrit lui-même.
-3. **Le seul type portant le message serveur non filtré dérivait `Debug`.**
-   `DispatchOutcome::Failed` porte `Key (email)=(dupont@example.com)` par
-   construction : c'est son objet, et l'utilisateur a le droit de le lire. Mais
-   un `Debug` dérivé le rendait recopiable par un `tracing::debug!` ajouté plus
-   tard pour diagnostiquer autre chose — le mode de fuite exact que le
-   corollaire vérifiable d'I-03 nomme. `Debug` écrit à la main : la classe et la
-   **longueur** du message, jamais le message. Le repli de traduction de
-   l'adaptateur journalisait de même un rapport entier ; il ne journalise plus
-   que l'identifiant de commande.
-4. **Une écriture de fournisseur n'était pas attendue à la fermeture.** Un ⌘Q
-   dans la seconde suivant un « Save » inscrivait un arrêt **propre** sur un
-   travail perdu : au redémarrage, pas de fournisseur, pas d'entrée, une clé
-   orpheline au trousseau, et rien nulle part qui l'explique. Les deux commandes
-   rejoignent les écritures locales attendues.
-5. **Une provenance illisible rendait le document inouvrable.** Ajouter une
-   famille de fournisseur ne demande aucune migration : un Oxyn plus récent peut
-   écrire, sur un schéma que celui-ci accepte, une marque qu'il ne sait pas lire
-   — le piège que `deny_unknown_fields` avait déjà tendu aux préférences
-   (ADR-0013). Elle est désormais écartée avec un cri, et **rien n'est détruit** :
-   la valeur reste en base, protégée par le `coalesce`, et un binaire qui saura
-   la lire la retrouvera. Un test le vérifie sur la colonne brute.
-6. **L'identité d'une déclaration était frappée deux fois** — une fois pour la
-   référence de trousseau, une fois dans la fabrique — et réconciliée par une
-   ligne d'affectation qu'aucun test ne gardait. La supprimer compilait, passait
-   la porte, et produisait une déclaration dont la clé était introuvable,
-   signalée au premier message et longtemps après un enregistrement annoncé
-   réussi. Elle est frappée une fois et passée en argument.
+1. **The privacy tier was not persisted.** `ConnectionConfig`
+   carried it from the start; the `connections` table did not have the column. Every
+   reread connection therefore started again at `Metadata`, which made `Local`
+   unreachable from one session to the next: a setting chosen on a customer database
+   was lost on closing, **without a message**, and the next `Ask AI`
+   sent the DDL and column names to a remote provider. Migration
+   8, with two distinct fallbacks that are the decision: column **absent** →
+   ADR-0006 default, because the row was written by a binary that ignored
+   this setting and the user therefore never chose one; value
+   **unreadable** → `Local`, the most restrictive, because a setting whose
+   meaning was lost does not get the benefit of the doubt. Both directions are
+   tested and checked by sabotage.
+2. **Provenance was emitted then thrown away.** Everything existed — the column, the
+   `coalesce`, the type, the event — and no application path ever set
+   anything other than `None`. The repository therefore formally asserted a
+   falsehood on exactly the line ADR-0023 exists to mark. The
+   link is laid: `AiEvent::Started` → `Assistant::provenance` →
+   `OpenQuery::Copy` → the console → its two writes. A history copy,
+   for its part, inherits no mark — marking in excess would pass off as written
+   by an agent a text the user had written themselves.
+3. **The only type carrying the unfiltered server message derived `Debug`.**
+   `DispatchOutcome::Failed` carries `Key (email)=(dupont@example.com)` by
+   construction: that is its purpose, and the user has the right to read it. But
+   a derived `Debug` made it copyable by a `tracing::debug!` added
+   later to diagnose something else — the exact leak mode that the
+   checkable corollary of I-03 names. `Debug` written by hand: the class and the
+   **length** of the message, never the message. The adapter's translation
+   fallback likewise logged a whole report; it now only logs
+   the command identifier.
+4. **A provider write was not awaited on closing.** A ⌘Q
+   within a second of a "Save" recorded a **clean** shutdown over
+   lost work: on restart, no provider, no entry, an orphan key
+   in the keychain, and nothing anywhere to explain it. Both commands
+   join the awaited local writes.
+5. **An unreadable provenance made the document impossible to open.** Adding a
+   provider family requires no migration: a more recent Oxyn can
+   write, on a schema this one accepts, a mark it cannot read
+   — the trap `deny_unknown_fields` had already set for preferences
+   (ADR-0013). It is now set aside with a loud warning, and **nothing is destroyed**:
+   the value stays in the database, protected by the `coalesce`, and a binary that can
+   read it will find it again. A test checks it on the raw column.
+6. **The identity of a declaration was minted twice** — once for the
+   keychain reference, once in the factory — and reconciled by an
+   assignment line no test guarded. Deleting it compiled, passed
+   the gate, and produced a declaration whose key could not be found,
+   reported at the first message and long after a registration announced as
+   successful. It is minted once and passed as an argument.
 
-Ce que les deux relectures ont regardé et trouvé sain, et qui vaut d'être
-consigné : le chemin d'exécution d'un agent ne comporte aucune seconde API
-(I-01, I-07) ; le point de passage unique du contexte n'est pas contournable et
-l'observateur ne peut pas refermer la boucle vers une invite (I-04) ; trousseau,
-DNS et SQLite passent tous par le pool bloquant (I-05) ; trois barrières
-indépendantes empêchent un agent de s'élever — refus d'usurpation d'acteur avant
-l'ordonnanceur, refus de politique sur `production` et sur la déclaration d'un
-fournisseur, périmètre d'outils qui ne laisse choisir ni la connexion ni le point
-d'accès (I-02) ; aucun `unsafe` dans les huit crates.
+What the two reviews looked at and found sound, and which is worth
+recording: an agent's execution path has no second API
+(I-01, I-07); the single context gateway cannot be bypassed and
+the observer cannot close the loop back to a prompt (I-04); keychain,
+DNS and SQLite all go through the blocking pool (I-05); three
+independent barriers prevent an agent from escalating — refusal of actor impersonation before
+the scheduler, policy refusal on `production` and on declaring a
+provider, a tool perimeter that lets it choose neither the connection nor the
+endpoint (I-02); no `unsafe` in the eight crates.
 
-Réserves de ce lot, explicitement ouvertes : le choix du fournisseur quand
-plusieurs sont déclarés suit le premier utilisable sous le niveau, faute de
-spécification — un sélecteur est une décision de produit, et ADR-0023 affirme au
-présent que l'utilisateur choisit, ce que le code ne fait pas encore ;
-l'indisponibilité sur une session sans `Capabilities::SQL` est expliquée plutôt
-que masquée, par analogie avec ADR-0003, mais aucun document ne la nomme ; aucune
-icône d'assistant n'existe dans `assets/ui` et le glyphe employé est un emprunt ;
-le niveau de confidentialité se persiste et se règle désormais dans le
-formulaire de connexion
-([AI-PROVIDERS](AI-PROVIDERS.md#régler-le-niveau)). Les réserves natives et de performance
-restent ouvertes.
+Reservations of this batch, explicitly open: the choice of provider when
+several are declared follows the first usable one under the tier, for lack of a
+specification — a selector is a product decision, and ADR-0023 states in the
+present tense that the user chooses, which the code does not do yet;
+unavailability on a session without `Capabilities::SQL` is explained rather
+than hidden, by analogy with ADR-0003, but no document names it; no
+assistant icon exists in `assets/ui` and the glyph used is borrowed;
+the privacy tier is now persisted and set in the
+connection form
+([AI-PROVIDERS](AI-PROVIDERS.md#setting-the-tier)). The native and performance
+reservations remain open.
 
-Validation d'accessibilité — lot clavier : un recensement des contrôles du dépôt
-a montré que **six** boutons étaient atteignables au Tab et inertes, tous pour la
-même raison. `oxyn_ui::control` pose `tab_stop`, donc l'atteignabilité, et rien
-de plus ; un commentaire de `controls.rs` affirmait que GPUI activait de lui-même
-sur Entrée et Espace, ce qui est faux — une sonde le réfute, avec un témoin qui
-compte les touches **reçues** pour que le test ne puisse pas passer faute de
-touches plutôt que faute d'activation.
+Accessibility validation — keyboard batch: a census of the repository's controls
+showed that **six** buttons were reachable with Tab and inert, all for the
+same reason. `oxyn_ui::control` sets `tab_stop`, hence reachability, and nothing
+more; a comment in `controls.rs` claimed that GPUI activated by itself
+on Enter and Space, which is false — a probe refutes it, with a witness that
+counts the keys **received** so that the test cannot pass for lack of
+keys rather than for lack of activation.
 
-Le plus gênant des six est le bouton **Annuler d'une exécution en cours**.
-UX-SPEC pose que « l'état *en cours* porte toujours un moyen d'annuler » ; ce
-moyen demandait une souris. Deux choses l'avaient rendu invisible : son
-commentaire décrivait l'intention et non ce qui était fait, et il n'avait aucun
-`debug_selector` — donc aucun test ne pouvait l'atteindre, ni pour son existence
-ni pour son clavier. Les cinq autres : les trois boutons du panneau de
-conversation, `Add` dans l'éditeur de paramètres, et les segments du format des
-nombres.
+The most troublesome of the six is the **Cancel button of a running execution**.
+UX-SPEC states that "the *running* state always carries a way to cancel"; that
+way required a mouse. Two things had made it invisible: its
+comment described the intent and not what was done, and it had no
+`debug_selector` — so no test could reach it, neither for its existence
+nor for its keyboard. The other five: the three buttons of the conversation
+panel, `Add` in the parameter editor, and the segments of the number
+format.
 
-**Audit d'atteignabilité, passé sur tout le dépôt** : chaque fichier portant un
-`on_click` a été confronté à son nombre de `tab_index`. Huit fichiers en ont
-moins — et aucun n'est un défaut, vérification faite un par un. Ils relèvent tous
-du même modèle, qui est le bon : un composant à **focus unique** et navigation
-interne. Le formulaire de connexion gère `enter`, `escape` et les déplacements
-dans son propre `on_key` ; la grille de résultats porte sept touches de
-navigation et un focus propre — y mettre un `tab_index` par ligne créerait des
-milliers d'arrêts de tabulation, ce qui rendrait la tabulation inutilisable
-plutôt que l'inverse.
+**Reachability audit, run on the whole repository**: each file carrying an
+`on_click` was compared with its number of `tab_index`. Eight files have
+fewer — and none is a defect, checked one by one. They all follow
+the same model, which is the right one: a **single-focus** component with internal
+navigation. The connection form handles `enter`, `escape` and movements
+in its own `on_key`; the results grid carries seven navigation
+keys and its own focus — putting a `tab_index` on each row would create
+thousands of tab stops, which would make tabbing unusable
+rather than the opposite.
 
-Ce que cet audit établit, et qui n'était pas acquis : les six boutons corrigés
-n'étaient pas la partie visible d'un problème général. Ils étaient les six seuls,
-et ils partageaient une cause unique — un commentaire faux.
+What this audit establishes, and which was not a given: the six fixed buttons
+were not the visible part of a general problem. They were the only six,
+and they shared a single cause — a false comment.
 
-La récidive est fermée par `oxyn_ui::activable`, déclaré **à côté** de `control`
-et jamais dedans. La raison est écrite sur place : le dialogue d'approbation
-d'une écriture en production ne doit pas être approuvable à la touche Entrée
-([I-02](../CLAUDE.md#i-02)), et son test
-`production_focus_stays_inside_review_and_enter_never_approves` tient cela.
-L'activation se déclare donc vue par vue ; ce qui n'est pas déclaré n'est pas
-activable. Un seul helper existe dans le dépôt.
+Recurrence is closed by `oxyn_ui::activable`, declared **next to** `control`
+and never inside it. The reason is written on the spot: the approval dialog
+of a production write must not be approvable with the Enter key
+([I-02](../CLAUDE.md#i-02)), and its test
+`production_focus_stays_inside_review_and_enter_never_approves` holds that.
+Activation is therefore declared view by view; what is not declared is not
+activatable. Only one helper exists in the repository.
 
-Mesures de performance — première campagne consignée ici, `cargo bench -p
-oxyn-query --bench analysis`, 100 échantillons :
+Performance measurements — first campaign recorded here, `cargo bench -p
+oxyn-query --bench analysis`, 100 samples:
 
-| Chemin | 1 instruction | 10 | 50 |
+| Path | 1 statement | 10 | 50 |
 |---|---|---|---|
-| `split` | 1,12 µs | 11,2 µs | 55,1 µs |
-| `classify` | 52,0 µs | 516 µs | **2,60 ms** |
-| `words` | 1,59 µs | 14,6 µs | 66,5 µs |
-| `format` | 2,23 µs | 21,8 µs | 108 µs |
-| `current_statement_at_end` | 1,15 µs | 11,4 µs | 55,6 µs |
+| `split` | 1.12 µs | 11.2 µs | 55.1 µs |
+| `classify` | 52.0 µs | 516 µs | **2.60 ms** |
+| `words` | 1.59 µs | 14.6 µs | 66.5 µs |
+| `format` | 2.23 µs | 21.8 µs | 108 µs |
+| `current_statement_at_end` | 1.15 µs | 11.4 µs | 55.6 µs |
 
-Ce que ces chiffres disent, et qui n'était pas acquis : `classify` est le seul à
-sortir du bruit — 2,6 ms sur cinquante instructions, soit un tiers du budget de
-trame de 8 ms. Il n'est **pas** sur le chemin de frappe : `QueryConsole` l'appelle
-à la soumission et le dit (`console.rs:386`). Ce qui tourne par trame est
-`current_statement`, à 55,6 µs pour le même document — deux ordres de grandeur
-sous le budget. Le jour où quelqu'un déplacerait `classify` vers le rendu, ces
-deux lignes disent ce que ça coûterait.
+What these figures say, and which was not a given: `classify` is the only one to
+stand out from the noise — 2.6 ms over fifty statements, a third of the 8 ms frame
+budget. It is **not** on the typing path: `QueryConsole` calls it
+on submission and says so (`console.rs:386`). What runs per frame is
+`current_statement`, at 55.6 µs for the same document — two orders of magnitude
+below the budget. The day someone moved `classify` into rendering, these
+two lines say what it would cost.
 
-Recette native — exécutée le 2026-09-11, application réelle, sans toucher à une
-vraie base ni prendre le focus de la machine. `--temporary-workspace` ouvre un
-store en mémoire ; `open -g` lance le bundle sans activer l'application.
+Native acceptance test — run on 2026-09-11, real application, without touching a
+real database or taking the machine's focus. `--temporary-workspace` opens an
+in-memory store; `open -g` launches the bundle without activating the application.
 
-| Ce qui a été constaté | Résultat |
+| What was observed | Result |
 |---|---|
-| Ouverture de la fenêtre | `Oxyn · Temporary workspace`, 1280 × 852 |
-| Migrations appliquées sur un store neuf | **les 8**, `initial` → `connection_privacy_tier` |
-| Registre de drivers | 2 drivers, 0 connexion enregistrée |
-| Avertissements ou erreurs au démarrage | **aucun**, sur trois lancements |
-| Largeurs éprouvées | 1440, 1024, 900, 760 — la fenêtre suit et le processus survit aux quatre |
-| Fermeture | la croix termine le processus, sans résidu |
+| Opening the window | `Oxyn · Temporary workspace`, 1280 × 852 |
+| Migrations applied on a fresh store | **all 8**, `initial` → `connection_privacy_tier` |
+| Driver registry | 2 drivers, 0 saved connections |
+| Warnings or errors at startup | **none**, over three launches |
+| Widths tried | 1440, 1024, 900, 760 — the window follows and the process survives all four |
+| Closing | the cross terminates the process, with no residue |
 
-**Le démarrage à froid est mesurable, contrairement à ce que ce document
-affirmait** : il suffit d'horodater entre le lancement du processus et le
-`window ready` du journal. Trois lancements consécutifs, profil `dev` :
-**274 ms, 249 ms, 235 ms**, pour un budget de **1 s**. La marge est confortable,
-et la mesure est reproductible sans Instruments.
+**Cold start is measurable, contrary to what this document
+claimed**: it is enough to timestamp between the launch of the process and the
+`window ready` of the log. Three consecutive launches, `dev` profile:
+**274 ms, 249 ms, 235 ms**, for a budget of **1 s**. The margin is comfortable,
+and the measurement is reproducible without Instruments.
 
-**Une capture de l'accueil a bien été obtenue**, en thème sombre, et elle établit
-ce que la phase 4 demandait en premier : la marque « Oxyn / Personal workspace »
-en haut à gauche et l'action « Saved working copies » à droite **ne se
-chevauchent pas** — le défaut rapporté le 2026-09-10 est visuellement corrigé.
-La capture montre aussi la liste des drivers, l'état vide « Your first connection
-starts here », l'aide clavier et la barre de statut.
+**A capture of the home screen was indeed obtained**, in the dark theme, and it establishes
+what phase 4 asked for first: the brand "Oxyn / Personal workspace"
+at the top left and the action "Saved working copies" on the right **do not
+overlap** — the defect reported on 2026-09-10 is visually fixed.
+The capture also shows the list of drivers, the empty state "Your first connection
+starts here", the keyboard help and the status bar.
 
-Le chemin pour l'obtenir mérite d'être noté, parce qu'il n'est pas celui qu'on
-croit : `screencapture -l<windowid>` a disparu des macOS récents, et les modes
-fenêtre restants sont interactifs. Il faut donc lever la fenêtre par
-`AXRaise` — qui la met devant **sans** lui donner le focus clavier — puis
-capturer par région. Une première tentative sans lever la fenêtre a photographié
-l'écran de l'utilisateur et non Oxyn ; l'image a été détruite. Une seconde a
-capté une boîte de dialogue d'une application tierce ; elle a été détruite et
-recadrée.
+The path to obtain it is worth noting, because it is not the one you
+think: `screencapture -l<windowid>` has disappeared from recent macOS, and the remaining window
+modes are interactive. The window must therefore be raised with
+`AXRaise` — which puts it in front **without** giving it keyboard focus — then
+captured by region. A first attempt without raising the window photographed
+the user's screen and not Oxyn; the image was destroyed. A second one
+captured a dialog box of a third-party application; it was destroyed and
+recropped.
 
-**Le thème clair a été capturé lui aussi.** Il vient des préférences persistées,
-qu'un workspace temporaire ne porte pas ; la voie est un `$HOME` temporaire, que
-`directories` suit — Oxyn y crée un store jetable, où `appearance: "light"`
-s'écrit avant relance. Le store de l'utilisateur n'est pas touché, vérifié à sa
-date de modification.
+**The light theme was captured too.** It comes from the persisted preferences,
+which a temporary workspace does not carry; the way is a temporary `$HOME`, which
+`directories` follows — Oxyn creates a disposable store there, where `appearance: "light"`
+is written before relaunching. The user's store is not touched, checked by its
+modification date.
 
-**La comparaison aux planches a été faite**, en récupérant les images du serveur
-Figma et en les confrontant aux captures. Elle a trouvé deux écarts réels :
+**The comparison with the boards was done**, by fetching the images from the Figma
+server and comparing them with the captures. It found two real deviations:
 
-* le badge de confidentialité était en capitales — `METADATA · CLOUD` — là où le
-  relevé `190:1163` écrit **`Metadata · Cloud`**. Les capitales sont réservées au
-  marquage d'environnement, où elles portent l'alerte. Corrigé ;
-* le pied de grille de la maquette annonce `200 rows loaded · 284 ms · Total
-  count not requested` ; le code n'écrit pas cette dernière mention. Elle dit
-  quelque chose d'utile — que le total n'a **pas** été demandé, donc que le
-  nombre affiché n'est pas celui de la table. Non implémenté, consigné.
+* the privacy badge was in capitals — `METADATA · CLOUD` — where the
+  survey `190:1163` writes **`Metadata · Cloud`**. Capitals are reserved for
+  environment marking, where they carry the alert. Fixed;
+* the mockup's grid footer announces `200 rows loaded · 284 ms · Total
+  count not requested`; the code does not write this last mention. It says
+  something useful — that the total was **not** requested, hence that the
+  number displayed is not the table's. Not implemented, recorded.
 
-**La planche de console `191:1521` a été confrontée de la même façon**, et elle
-dit quelque chose d'utile : la barre y est conforme — `Run ⌘↵`, `Stop`,
-`Explain`, `Parameters · 3`, le sélecteur `commerce-prod / public` — et la
-**zone de résultat** de la maquette a depuis été rattrapée sur tous ses éléments
-sauf un :
+**The console board `191:1521` was compared in the same way**, and it
+says something useful: the bar there is compliant — `Run ⌘↵`, `Stop`,
+`Explain`, `Parameters · 3`, the selector `commerce-prod / public` — and the mockup's
+**result area** has since been caught up on all its elements
+but one:
 
-| Élément de la maquette | État |
+| Mockup element | State |
 |---|---|
-| Onglet `Messages` à côté de `Result 1 · 10 rows` | absent — bloqué **en amont**, voir plus bas |
-| Onglet `Explain plan` à côté de `Result 1 · 10 rows` | **fait** |
-| Champ `Find in loaded results…` | **fait** |
-| Mention `Read-only console` près de `Parameters` | **fait** |
-| Pied `10 rows received · Display timezone UTC · Results belong to this execution` | **fait** |
+| `Messages` tab next to `Result 1 · 10 rows` | absent — blocked **upstream**, see below |
+| `Explain plan` tab next to `Result 1 · 10 rows` | **done** |
+| `Find in loaded results…` field | **done** |
+| `Read-only console` mention near `Parameters` | **done** |
+| Footer `10 rows received · Display timezone UTC · Results belong to this execution` | **done** |
 
-L'absence de `Messages` n'est pas une divergence de nommage — vérifié, il
-n'existe sous aucun autre nom. C'est une fonction non implémentée pour une raison
-amont, décrite plus bas. La console est donc conforme sur sa barre d'outils, et
-sur sa zone de résultat à cette seule réserve près.
-La mention « Results belong to this execution » est
-celle qui compte le plus : elle dit que ce qui est affiché appartient à **cette**
-exécution et pas à la précédente, ce qui est exactement le genre d'ambiguïté
-qu'UX-SPEC cherche à fermer ailleurs.
+The absence of `Messages` is not a naming divergence — checked, it
+does not exist under any other name. It is a feature not implemented for an
+upstream reason, described below. The console is therefore compliant on its toolbar, and
+on its result area with this single reservation.
+The mention "Results belong to this execution" is
+the one that matters most: it says that what is displayed belongs to **this**
+execution and not to the previous one, which is exactly the kind of ambiguity
+UX-SPEC tries to close elsewhere.
 
-**Les autres planches nommées par le plan ont été confrontées de la même façon.**
-Le résultat est constant : les **structures** sont conformes, les **fonctions
-secondaires** manquent.
+**The other boards named by the plan were compared in the same way.**
+The result is constant: the **structures** are compliant, the **secondary
+features** are missing.
 
-| Planche | Conforme | Absent du code |
+| Board | Compliant | Absent from the code |
 |---|---|---|
-| Aperçu `190:1163` | barre, inspecteur (`Record · …`, `Inspect full value`, `Hide inspector`), filtre `WHERE … Apply … Sort` | mention `Total count not requested` |
-| Console `191:1521` | `Run ⌘↵`, `Stop`, `Explain`, `Parameters · 3`, sélecteur de contexte, `Read-only console`, pied complet fuseau compris, **`Find in loaded results…`** | onglet `Messages` (bloqué en amont, voir ci-dessus) |
-| Contraintes / DDL / Indexes `229:7637` | `Refresh structure`, `Copy DDL`, `DDL · Read only`, `Open DDL in console`, statut `Validated`, **sections `NOT NULL columns` et `Unique indexes`**, et — depuis — **`Propose change…`** ([ADR-0025](adr/0025-proposition-de-changement-de-schema.md)) | — |
-| Relations `229:32690` | `Incoming relationships`, la barre de structure, **`Selected relationship`**, et — depuis — **`Bounded related-row preview`** et **`Review related-row query`** : la requête est composée bornée, citée par le driver ([I-10](../CLAUDE.md#i-10)), et ouverte dans la console **sans être exécutée** | — |
-| Reprise `232:9100` | `Ask AI` et le badge portent `hidden` — l'entrée conditionnelle est bien celle que la maquette prescrit | — |
-| Barre de connexion `190:1543` | 48 px, badge 136 px, `Ask AI` 96 px à x = 1188, dans l'ordre | — |
+| Preview `190:1163` | bar, inspector (`Record · …`, `Inspect full value`, `Hide inspector`), filter `WHERE … Apply … Sort` | mention `Total count not requested` |
+| Console `191:1521` | `Run ⌘↵`, `Stop`, `Explain`, `Parameters · 3`, context selector, `Read-only console`, full footer including time zone, **`Find in loaded results…`** | `Messages` tab (blocked upstream, see above) |
+| Constraints / DDL / Indexes `229:7637` | `Refresh structure`, `Copy DDL`, `DDL · Read only`, `Open DDL in console`, `Validated` status, **sections `NOT NULL columns` and `Unique indexes`**, and — since then — **`Propose change…`** ([ADR-0025](adr/0025-proposition-de-changement-de-schema.md)) | — |
+| Relations `229:32690` | `Incoming relationships`, the structure bar, **`Selected relationship`**, and — since then — **`Bounded related-row preview`** and **`Review related-row query`**: the query is composed bounded, quoted by the driver ([I-10](../CLAUDE.md#i-10)), and opened in the console **without being run** | — |
+| Recovery `232:9100` | `Ask AI` and the badge carry `hidden` — the conditional entry is indeed the one the mockup prescribes | — |
+| Connection bar `190:1543` | 48 px, badge 136 px, `Ask AI` 96 px at x = 1188, in order | — |
 
-Les **sept sous-onglets d'objet** sont implémentés — `Data`, `Structure`,
-`Indexes`, `Constraints`, `Relations`, `Ddl` — plus `IncomingRelations`, que la
-maquette ne montre pas sur cette planche mais que `229:32690` couvre.
+The **seven object sub-tabs** are implemented — `Data`, `Structure`,
+`Indexes`, `Constraints`, `Relations`, `Ddl` — plus `IncomingRelations`, which the
+mockup does not show on this board but which `229:32690` covers.
 
-**Trois de ces absences sont fermées dans la foulée**, parce qu'elles ne sont
-pas cosmétiques — chacune ferme une ambiguïté que rien d'autre ne fermait :
+**Three of these absences are closed right away**, because they are not
+cosmetic — each closes an ambiguity nothing else closed:
 
-* le pied d'aperçu annonce désormais `Total count not requested`. Un aperçu de
-  200 lignes sur une table qui en contient cinquante millions ressemblait en
-  tout point à un aperçu de 200 lignes sur une table qui en contient 200 ;
-* le pied de résultat porte `Results belong to this execution`. Une console
-  garde son résultat précédent affiché pendant qu'une nouvelle exécution tourne,
-  et rien ne disait de quelle exécution venaient les lignes qu'on lisait ;
-* la barre de console affiche `Read-only console` quand la connexion l'est. Sans
-  elle, l'utilisateur écrit son `UPDATE` et découvre le refus à l'exécution.
+* the preview footer now announces `Total count not requested`. A preview of
+  200 rows on a table containing fifty million looked in
+  every respect like a preview of 200 rows on a table containing 200;
+* the result footer carries `Results belong to this execution`. A console
+  keeps its previous result displayed while a new execution runs,
+  and nothing said which execution the rows being read came from;
+* the console bar displays `Read-only console` when the connection is. Without
+  it, the user writes their `UPDATE` and discovers the refusal at execution.
 
-**Une quatrième a suivi le 2026-09-12 : le fuseau d'affichage.** Elle n'était pas
-seulement une absence de la maquette — [UX-SPEC](UX-SPEC.md) la promettait déjà,
-en rangeant « le fuseau » parmi les informations secondaires de la barre d'état.
-C'était donc une divergence code/documentation, pas un simple manque.
+**A fourth followed on 2026-09-12: the display time zone.** It was not
+only an absence from the mockup — [UX-SPEC](UX-SPEC.md) already promised it,
+listing "the time zone" among the secondary information of the status bar.
+It was therefore a code/documentation divergence, not a mere gap.
 
-Le libellé n'est pas écrit en dur : `oxyn_data::timestamp_display` le **déduit du
-schéma**, parce qu'Oxyn ne convertit aucun horodatage. Vérifié contre une vraie
-base dans `integration.rs` : le driver PostgreSQL rend `timestamptz` en
-`Timestamp(µs, Some("UTC"))` et `timestamp` en `Timestamp(µs, None)`. D'où trois
-cas, et le troisième est celui qui compte :
+The label is not hard-coded: `oxyn_data::timestamp_display` **deduces it from the
+schema**, because Oxyn converts no timestamp. Checked against a real
+database in `integration.rs`: the PostgreSQL driver returns `timestamptz` as
+`Timestamp(µs, Some("UTC"))` and `timestamp` as `Timestamp(µs, None)`. Hence three
+cases, and the third is the one that matters:
 
-* une seule zone déclarée → `Display timezone UTC`, le cas courant ;
-* plusieurs zones → `Display timezone varies by column`, parce qu'en nommer une
-  décrirait les autres colonnes à tort ;
-* aucune colonne datée → **rien**. Écrire « UTC » par défaut affirmerait quelque
-  chose du contenu, et un `timestamp without time zone` ne porte aucun fuseau :
-  annoncer le sien inventerait une information que le serveur n'a pas envoyée.
-  C'est ce que tient `un_horodatage_sans_fuseau_nen_fait_pas_annoncer_un`.
+* a single declared zone → `Display timezone UTC`, the common case;
+* several zones → `Display timezone varies by column`, because naming one
+  would describe the other columns wrongly;
+* no dated column → **nothing**. Writing "UTC" by default would assert something
+  about the content, and a `timestamp without time zone` carries no time zone:
+  announcing one would invent information the server did not send.
+  This is what `un_horodatage_sans_fuseau_nen_fait_pas_annoncer_un` holds.
 
-Le fuseau voyage dans la variante `ExecutionStatus::Completed`, pas à côté d'elle :
-rangé dans la barre, il survivrait au résultat suivant et décrirait des lignes
-qui ne sont plus à l'écran.
+The time zone travels in the `ExecutionStatus::Completed` variant, not next to it:
+stored in the bar, it would survive the next result and describe rows
+that are no longer on screen.
 
-`format_stats` a été traduit à cette occasion — il rendait « 2 lignes en 30 ms
-(serveur 8 ms) » dans une interface anglaise.
+`format_stats` was translated on this occasion — it returned "2 lignes en 30 ms
+(serveur 8 ms)" in an English interface.
 
-**Il n'était pas le dernier**, contrairement à ce que ce paragraphe affirmait :
-un relevé de divergences du 2026-09-14 en a trouvé **seize autres**, et parmi
-elles les deux états que [UX-SPEC](UX-SPEC.md#états-dune-vue) demande de soigner
-le plus — l'état **vide** de la grille (« Aucune ligne ») et son état **erreur**
-(« L'erreur est transitoire… »). S'y ajoutaient l'état initial, l'état en cours,
-l'annulation, le pied de grille, le libellé d'annulation, la mention d'exécution
-de l'éditeur, et — le plus gênant — l'écran d'**approbation** : `actor_label`
-rendait « Vous demandez » / « Un agent demande » sur la surface même qui tient
-[I-02](../CLAUDE.md#i-02), plus « Nombre de lignes touchées inconnu. ».
+**It was not the last one**, contrary to what this paragraph claimed:
+a divergence survey of 2026-09-14 found **sixteen others**, and among
+them the two states that [UX-SPEC](UX-SPEC.md#states-of-a-view) asks to care for
+the most — the **empty** state of the grid ("Aucune ligne") and its **error** state
+("L'erreur est transitoire…"). Added to them were the initial state, the running state,
+cancellation, the grid footer, the cancellation label, the editor's execution
+mention, and — the most troublesome — the **approval** screen: `actor_label`
+returned "Vous demandez" / "Un agent demande" on the very surface that holds
+[I-02](../CLAUDE.md#i-02), plus "Nombre de lignes touchées inconnu.".
 
-Les libellés d'environnement du sélecteur de connexion étaient à moitié traduits
-(« développement », « préproduction » à côté de « local » et « production »), ce
-qui est pire qu'une traduction franche : c'est le marquage qui décide de la
-confirmation de production.
+The environment labels of the connection selector were half translated
+("développement", "préproduction" next to "local" and "production"), which
+is worse than a clean translation: it is the marking that decides the
+production confirmation.
 
-Tous traduits. La leçon vaut plus que le lot : **déclarer un chantier clos sans
-balayage exhaustif le rouvre**, et c'est ce paragraphe-ci qui l'avait fait.
+All translated. The lesson is worth more than the batch: **declaring a work item closed without
+an exhaustive sweep reopens it**, and it is this very paragraph that had done so.
 
-### Les quatre surfaces qui restent, et ce que chacune demande de décider
+### The four remaining surfaces, and what each one requires deciding
 
-Elles ne sont pas des libellés manquants. Chacune bute sur une question à
-trancher **avant** d'écrire, et la trancher à la légère produirait exactement ce
-que cette campagne a passé sa journée à corriger.
+They are not missing labels. Each one runs into a question to
+settle **before** writing, and settling it lightly would produce exactly what
+this campaign spent its day fixing.
 
-**`Propose change…`** (`229:7663`) — **l'ADR demandé est écrit :
-[ADR-0025](adr/0025-proposition-de-changement-de-schema.md).** Ce lot était
-classé « décision de produit en attente ». La confrontation à la planche du
-2026-09-13 a montré que ce classement était faux : la maquette avait déjà
-tranché, et personne n'était allé lire sa phrase.
+**`Propose change…`** (`229:7663`) — **the requested ADR is written:
+[ADR-0025](adr/0025-proposition-de-changement-de-schema.md).** This batch was
+classified "product decision pending". The comparison with the board on
+2026-09-13 showed that this classification was wrong: the mockup had already
+decided, and nobody had gone to read its sentence.
 
-Le panneau de définition `229:7749` porte, entre le DDL et `Open DDL in console`,
-la mention « **Changes require a SQL review naming commerce-prod before
-execution** ». C'est mot pour mot [I-02](../CLAUDE.md#i-02) — une revue qui nomme
-la connexion, avant exécution. Il n'y avait donc pas à arbitrer entre
-« appliquer » et « proposer » : le contrôle propose, et l'exécution reste un
-geste séparé et relu, exactement comme `Open DDL in console` le fait déjà.
+The definition panel `229:7749` carries, between the DDL and `Open DDL in console`,
+the mention "**Changes require a SQL review naming commerce-prod before
+execution**". That is word for word [I-02](../CLAUDE.md#i-02) — a review that names
+the connection, before execution. There was therefore no need to arbitrate between
+"apply" and "propose": the control proposes, and execution remains a
+separate, reviewed gesture, exactly as `Open DDL in console` already does.
 
-L'ADR enchaîne des décisions existantes plutôt que d'en inventer : le chemin est
-`open_library_query` avec `OpenQuery::Copy`, donc **aucune commande nouvelle** et
-[I-01](../CLAUDE.md#i-01) tenu par construction ; les identifiants sont cités par
-`quote_identifier` ([I-10](../CLAUDE.md#i-10)) et les expressions reprises
-verbatim du catalogue ; le geste est **indisponible** pour un
-`Actor::Agent`, pas « confirmable » — I-02 nomme la confirmation renforcée comme
-insuffisante. La provenance reste `None`, comme pour le modèle de requête liée : un
-squelette composé par Oxyn n'est écrit ni par l'utilisateur ni par un agent, et
-la provenance marque **qui a écrit**. Une première rédaction de ce paragraphe
-disait l'inverse ; c'est ADR-0025 et le code qui font foi.
+The ADR chains existing decisions rather than inventing new ones: the path is
+`open_library_query` with `OpenQuery::Copy`, hence **no new command** and
+[I-01](../CLAUDE.md#i-01) held by construction; identifiers are quoted by
+`quote_identifier` ([I-10](../CLAUDE.md#i-10)) and expressions taken
+verbatim from the catalog; the gesture is **unavailable** for an
+`Actor::Agent`, not "confirmable" — I-02 names a stronger confirmation as
+insufficient. Provenance stays `None`, as for the bound-query template: a
+skeleton composed by Oxyn is written neither by the user nor by an agent, and
+provenance marks **who wrote**. A first draft of this paragraph
+said the opposite; ADR-0025 and the code are authoritative.
 
-**Implémenté le 2026-09-14** — `workspace/propose.rs`, huit tests.
+**Implemented on 2026-09-14** — `workspace/propose.rs`, eight tests.
 
-La forme retenue est celle de son jumeau `related_row_query` : un **modèle à
-compléter**, pas une instruction à lancer. Oxyn fournit ce qu'il connaît — la
-relation, la colonne sélectionnée, leur citation correcte — et laisse à
-l'utilisateur ce qu'il est seul à savoir, le nouveau nom ou la nouvelle
-expression. Réutiliser le motif existant plutôt que d'inventer un formulaire
-évitait de recréer un parcours déjà présent.
+The chosen form is that of its twin `related_row_query`: a **template to
+complete**, not a statement to run. Oxyn provides what it knows — the
+relation, the selected column, their correct quoting — and leaves to
+the user what only they know, the new name or the new
+expression. Reusing the existing pattern rather than inventing a form
+avoided recreating a flow that already existed.
 
-Quatre garanties, chacune tenue par un test qui échoue quand on la retire :
+Four guarantees, each held by a test that fails when it is removed:
 
-* **toute ligne est un commentaire.** Rien ne peut partir sur un `Run` distrait,
-  ce qui rend littéralement vraie la phrase de la planche ;
-* **les identifiants sont cités**, y compris hostiles — sabotage vérifié : sans
-  `quote_identifier`, une colonne nommée `x"; DROP TABLE audit; --` passe telle
-  quelle dans le modèle ;
-* **le sens proposé est celui qui change l'état** : une colonne nullable se voit
-  offrir `SET NOT NULL`, jamais les deux. Un modèle qui ne fait rien se lit comme
-  un modèle qui a échoué ;
-* **SQLite ne reçoit que le renommage.** Il n'a ni `ALTER COLUMN` ni
-  `DROP CONSTRAINT` ; le contrôle disparaît plutôt que de produire un texte qui
-  échouerait à l'exécution ([ADR-0003](adr/0003-driver-capabilities.md)).
+* **every line is a comment.** Nothing can leave on an absent-minded `Run`,
+  which makes the board's sentence literally true;
+* **identifiers are quoted**, hostile ones included — sabotage checked: without
+  `quote_identifier`, a column named `x"; DROP TABLE audit; --` goes as is
+  into the template;
+* **the proposed direction is the one that changes the state**: a nullable column is
+  offered `SET NOT NULL`, never both. A template that does nothing reads like
+  a template that failed;
+* **SQLite only gets the rename.** It has neither `ALTER COLUMN` nor
+  `DROP CONSTRAINT`; the control disappears rather than producing a text that
+  would fail at execution ([ADR-0003](adr/0003-driver-capabilities.md)).
 
-Le défaut courant est repris **verbatim** du catalogue : le reformater changerait
-son sens sans le dire. Et l'en-tête nomme la connexion en **commentaire SQL**,
-parce qu'il doit survivre au copier-coller vers un ticket — c'est là que la
-proposition sera relue, souvent par quelqu'un d'autre.
+The current default is taken **verbatim** from the catalog: reformatting it would change
+its meaning without saying so. And the header names the connection in an **SQL comment**,
+because it must survive copy-pasting into a ticket — that is where the
+proposal will be reviewed, often by someone else.
 
-**`Explain plan`** (`191:1521`) — **la moitié qui comptait est faite.** Le
-constat de départ était juste mais incomplet : `Explain` existait comme mode
-d'exécution, et son résultat arrivait dans la grille **sans que rien ne dise que
-c'était un plan**. Un utilisateur qui lance `Explain`, s'absente et revient lit
-sa grille comme des données — un contresens que le libellé de la maquette
-existait précisément pour empêcher. La zone de résultat porte désormais la
-mention et sa phrase d'explication.
+**`Explain plan`** (`191:1521`) — **the half that mattered is done.** The
+initial finding was right but incomplete: `Explain` existed as an execution
+mode, and its result arrived in the grid **without anything saying that
+it was a plan**. A user who runs `Explain`, steps away and comes back reads
+their grid as data — a misreading the mockup's label
+existed precisely to prevent. The result area now carries the
+mention and its explanatory sentence.
 
-Ce qui reste est le **rendu enrichi** : un plan est un arbre, avec des coûts et
-des lignes estimées, et les formats diffèrent entre PostgreSQL et SQLite.
+What remains is the **enriched rendering**: a plan is a tree, with costs and
+estimated rows, and the formats differ between PostgreSQL and SQLite.
 
-Une version antérieure de ce paragraphe affirmait qu'`EXPLAIN` « rend des lignes
-lisibles telles quelles, donc l'absence de cet affichage ne fait perdre aucune
-information — seulement du confort ». **C'était faux, et la vérification l'a
-montré.** `Metrics::max_column_width` valait 480 px et `char_width` 7,2 px : la
-colonne `QUERY PLAN` était ajustée à environ 66 caractères, alors qu'une ligne de
-plan PostgreSQL en fait couramment plus de cent. Ce qui tombait hors de la
-cellule était la queue `(cost=… rows=…)` — la seule partie qu'on lit un plan pour
-voir. L'information était récupérable en élargissant la colonne à la souris
-(`set_column_width` ne borne que par le minimum), mais l'affichage par défaut
-mentait.
+An earlier version of this paragraph claimed that `EXPLAIN` "returns rows
+readable as they are, so the absence of this display loses no
+information — only comfort". **That was false, and verification
+showed it.** `Metrics::max_column_width` was 480 px and `char_width` 7.2 px: the
+`QUERY PLAN` column was fitted to about 66 characters, whereas a PostgreSQL
+plan line commonly has more than a hundred. What fell outside the
+cell was the tail `(cost=… rows=…)` — the only part one reads a plan to
+see. The information was recoverable by widening the column with the mouse
+(`set_column_width` only bounds by the minimum), but the default display
+lied.
 
-Le défaut est corrigé, et pas par un cas particulier : `fit_columns` traitait le
-plafond comme un maximum absolu, alors qu'il dit ce qu'une colonne peut prendre
-**au détriment des autres**. Il ne s'applique donc plus quand les colonnes
-tiennent ensemble dans la fenêtre — le cas d'une colonne unique et large, dont
-`EXPLAIN` est l'exemple. Tenu par
+The defect is fixed, and not by a special case: `fit_columns` treated the
+cap as an absolute maximum, whereas it says what a column can take
+**at the expense of the others**. It therefore no longer applies when the columns
+fit together in the window — the case of a single, wide column, of which
+`EXPLAIN` is the example. Held by
 `une_colonne_seule_depasse_le_plafond_plutot_que_de_couper_le_plan`.
 
-Le rendu en arbre, lui, reste du confort — et cette fois la phrase est vérifiée
-plutôt que supposée. L'indentation de PostgreSQL, qui *est* la structure d'arbre
-du plan, survit jusqu'à l'écran : aucun `trim` sur le chemin `format_cell` →
-`render_cell`, aucun non plus dans le système de texte de `gpui 0.2.2`, dont
-`WhiteSpace` ne gouverne que le retour à la ligne — il n'y a pas d'écrasement des
-blancs à la manière de CSS.
+The tree rendering, for its part, remains comfort — and this time the sentence is checked
+rather than assumed. PostgreSQL's indentation, which *is* the plan's tree
+structure, survives to the screen: no `trim` on the `format_cell` →
+`render_cell` path, none either in the text system of `gpui 0.2.2`, whose
+`WhiteSpace` only governs line wrapping — there is no CSS-style
+whitespace collapsing.
 
-Une limite demeure, et elle est honnête à écrire : la grille compose en fonte
-proportionnelle. L'indentation est donc présente mais pas alignée au caractère
-près, et les colonnes internes d'un plan (`cost`, `rows`, `width`) ne se lisent
-pas en colonne. C'est ce que le rendu enrichi apporterait.
+One limit remains, and it is honest to write it: the grid composes in a
+proportional font. Indentation is therefore present but not aligned to the
+character, and the internal columns of a plan (`cost`, `rows`, `width`) do not read
+as columns. This is what the enriched rendering would bring.
 
-**`Messages`** (`191:1521`) — les notices du serveur (`NOTICE`, `WARNING`,
-avertissements de `VACUUM`). Ce paragraphe disait que le contrat de driver ne
-prévoyait pas de canal pour elles, et concluait à un lot de `DRIVER-CONTRACT`.
-**C'était vrai mais trop optimiste** : le blocage n'est pas dans notre contrat,
-il est un cran plus bas, dans la bibliothèque cliente. Vérifié le 2026-09-12
-dans les sources de `sqlx-postgres 0.9.0`.
+**`Messages`** (`191:1521`) — the server's notices (`NOTICE`, `WARNING`,
+`VACUUM` warnings). This paragraph said that the driver contract did not
+provide a channel for them, and concluded with a `DRIVER-CONTRACT` batch.
+**That was true but too optimistic**: the block is not in our contract,
+it is one level lower, in the client library. Checked on 2026-09-12
+in the sources of `sqlx-postgres 0.9.0`.
 
-`sqlx` **reçoit** les notices — `BackendMessageFormat::NoticeResponse` est décodé
-dans `connection/stream.rs` — puis les **jette** : il en fait un événement
-`tracing`/`log` sur la cible `sqlx::postgres::notice`, et rien d'autre. Son
-propre commentaire à cet endroit dit « do we need this to be more configurable?
-if you are reading this comment and think so, open an issue ». Le type `Notice`
-n'est pas atteignable depuis l'extérieur : `mod message` est privé dans
-`src/lib.rs`, qui ne réexporte que `PgSeverity`. **Il n'existe donc aucune API
-d'abonnement.**
+`sqlx` **receives** the notices — `BackendMessageFormat::NoticeResponse` is decoded
+in `connection/stream.rs` — then **throws them away**: it turns them into a
+`tracing`/`log` event on the target `sqlx::postgres::notice`, and nothing else. Its
+own comment at that spot says "do we need this to be more configurable?
+if you are reading this comment and think so, open an issue". The `Notice` type
+is not reachable from outside: `mod message` is private in
+`src/lib.rs`, which only re-exports `PgSeverity`. **There is therefore no
+subscription API.**
 
-Trois voies étaient ouvertes, aucune gratuite :
+Three ways were open, none free:
 
-1. **Écouter la cible `tracing`.** Une couche filtrant `sqlx::postgres::notice`
-   récupère le texte. Le problème est l'**attribution** : l'événement ne porte ni
-   connexion ni session, et il faudrait la déduire de la portée `tracing`
-   ambiante au moment du sondage du flux. Cela marche sur un test à une seule
-   session et se met à attribuer la notice à la mauvaise console dès qu'il y en
-   a deux — un défaut silencieux, qui affiche un avertissement réel sous une
-   requête qui ne l'a pas produit. C'est pire que de ne rien afficher.
-2. **Faire remonter le besoin chez `sqlx`.** Le commentaire l'invite. Coût nul
-   pour nous, délai hors de notre contrôle.
-3. **Passer le driver PostgreSQL à `tokio-postgres`**, qui expose les notices
-   comme messages asynchrones de la connexion. `tokio-postgres` n'est pas dans
-   le graphe (vérifié dans `Cargo.lock`) : c'est une dépendance nouvelle, donc
-   [I-12](../CLAUDE.md#i-12) et une vérification des épinglages `=` de GPUI, et
-   c'est surtout la réécriture du driver le plus utilisé du produit. **Demande un
+1. **Listen to the `tracing` target.** A layer filtering `sqlx::postgres::notice`
+   retrieves the text. The problem is **attribution**: the event carries neither
+   connection nor session, and it would have to be deduced from the ambient `tracing`
+   scope at the moment the stream is polled. That works on a test with a single
+   session and starts attributing the notice to the wrong console as soon as there
+   are two — a silent defect, which displays a real warning under a
+   query that did not produce it. That is worse than displaying nothing.
+2. **Push the need upstream to `sqlx`.** The comment invites it. Zero cost
+   for us, a delay outside our control.
+3. **Switch the PostgreSQL driver to `tokio-postgres`**, which exposes notices
+   as asynchronous messages of the connection. `tokio-postgres` is not in
+   the graph (checked in `Cargo.lock`): it is a new dependency, hence
+   [I-12](../CLAUDE.md#i-12) and a check of GPUI's `=` pins, and
+   above all it is rewriting the product's most used driver. **Requires an
    ADR.**
 
-Côté SQLite, il n'y a rien à faire et rien à regretter : sans serveur, il n'y a
-pas de notice. La capacité se déclarera absente, et l'onglet n'existera pas pour
-ce driver — ce que [ADR-0003](adr/0003-driver-capabilities.md) exige déjà.
+On the SQLite side, there is nothing to do and nothing to regret: without a server, there is
+no notice. The capability will be declared absent, and the tab will not exist for
+this driver — which [ADR-0003](adr/0003-driver-capabilities.md) already requires.
 
-**Décidé le 2026-09-24 (audit, D13) : la voie 2.** L'onglet `Messages` attend
-que `sqlx` expose les notices ; le driver ne passe pas à `tokio-postgres`, et la
-voie 1 reste écartée pour la mauvaise attribution qu'elle produirait. L'état
-amont — le ticket [#3621](https://github.com/transact-rs/sqlx/issues/3621), sans
-réponse — est suivi et daté dans
-[RESEARCH-NOTES](RESEARCH-NOTES.md#suivis-amont) ; le lot se rouvre quand une
-version de `sqlx` livre l'abonnement.
+**Decided on 2026-09-24 (audit, D13): way 2.** The `Messages` tab waits
+for `sqlx` to expose notices; the driver does not switch to `tokio-postgres`, and
+way 1 stays rejected for the wrong attribution it would produce. The upstream
+state — ticket [#3621](https://github.com/transact-rs/sqlx/issues/3621), without
+an answer — is tracked and dated in
+[RESEARCH-NOTES](RESEARCH-NOTES.md#upstream-follow-ups); the batch reopens when a
+version of `sqlx` ships the subscription.
 
-**`Find in loaded results…`** (`273:37024`) — **implémenté le 2026-09-14.**
-`oxyn-data/src/find.rs` et `workspace/find.rs`, neuf tests.
+**`Find in loaded results…`** (`273:37024`) — **implemented on 2026-09-14.**
+`oxyn-data/src/find.rs` and `workspace/find.rs`, nine tests.
 
-Ce lot a été bloqué trop longtemps, et pour une mauvaise raison : **la mienne**.
-Je l'avais lu comme un filtre, ce qui le faisait buter sur « ce qui est exporté
-est ce qui est affiché ». Il suffisait de relire la planche. Elle écrit
-**`Find`**, pas `Filter` ; un filtre `WHERE` existe déjà, ailleurs, sur la
-planche d'aperçu ; et sa grille montre **les dix lignes** du résultat sous le
-champ, sans compteur de correspondances ni ligne cachée.
+This batch was blocked too long, and for a bad reason: **mine**.
+I had read it as a filter, which made it run into "what is exported
+is what is displayed". Rereading the board was enough. It writes
+**`Find`**, not `Filter`; a `WHERE` filter already exists, elsewhere, on the
+preview board; and its grid shows **the ten rows** of the result under the
+field, with no match counter or hidden row.
 
-Une recherche qui **révèle** ne retranche rien. La règle d'UX-SPEC reste donc
-vraie sans qu'on y touche, et l'arbitrage export/affichage — toujours ouvert pour
-les colonnes masquées — ne commandait pas ce lot. Il ne commandait que ma
-lecture.
+A search that **reveals** removes nothing. The UX-SPEC rule therefore stays
+true without touching it, and the export/display decision — still open for
+hidden columns — did not govern this batch. It only governed my
+reading.
 
-Ce que le code garantit, chaque point tenu par un test :
+What the code guarantees, each point held by a test:
 
-* **les lots débordés ne sont jamais lus.** `find_rows` ne regarde que le
-  résident ([I-05](../CLAUDE.md#i-05)), et
-  `un_lot_deborde_est_compte_et_jamais_lu_depuis_le_disque` vérifie qu'aucune
-  ligne d'un lot débordé n'apparaît dans les correspondances ;
-* **ce qui n'a pas été parcouru est dit.** Le nombre de lots sautés s'affiche en
-  couleur d'avertissement. Sans lui, « No match » voudrait dire « aucune
-  correspondance dans ce que j'ai bien voulu lire », et l'utilisateur conclurait
-  que sa valeur n'est pas là ;
-* **`NULL` ne correspond à rien.** Chercher « null » trouverait sinon toutes les
-  absences de valeur, et celui qui cherche une colonne `nullable` n'aurait aucun
-  moyen de s'en sortir ;
-* **le parcours ne bloque pas.** Il part sur l'exécuteur de fond ; le champ
-  cherche à la validation, parce qu'un parcours par frappe serait du travail
-  jeté à la frappe suivante ;
-* **aucune ligne ne disparaît.** `la_recherche_revele_une_ligne_sans_en_retrancher_aucune`
-  compare le nombre de lignes avant et après : c'est l'assertion qui garde le lot
-  du côté où il ne touche pas à l'export.
+* **spilled batches are never read.** `find_rows` only looks at the
+  resident part ([I-05](../CLAUDE.md#i-05)), and
+  `un_lot_deborde_est_compte_et_jamais_lu_depuis_le_disque` checks that no
+  row of a spilled batch appears in the matches;
+* **what was not scanned is said.** The number of skipped batches is displayed in
+  the warning color. Without it, "No match" would mean "no
+  match in what I cared to read", and the user would conclude
+  that their value is not there;
+* **`NULL` matches nothing.** Searching for "null" would otherwise find every
+  absent value, and whoever searches for a `nullable` column would have no
+  way out;
+* **the scan does not block.** It goes to the background executor; the field
+  searches on validation, because a scan per keystroke would be work
+  thrown away at the next keystroke;
+* **no row disappears.** `la_recherche_revele_une_ligne_sans_en_retrancher_aucune`
+  compares the number of rows before and after: it is the assertion that keeps the batch
+  on the side where it does not touch export.
 
-Une correspondance se **marque** d'un repère d'accent, elle ne se colore pas : un
-fond supplémentaire changerait le contraste du texte par-dessus, que le test des
-thèmes tient. Un nouveau résultat efface les correspondances — `None` y veut dire
-« aucune recherche », jamais « aucune correspondance ».
+A match is **marked** with an accent marker, it is not colored: an
+additional background would change the contrast of the text on top of it, which the themes
+test holds. A new result clears the matches — `None` there means
+"no search", never "no match".
 
-**Ce qui n'est pas prouvé, et pourquoi c'est écrit ici.** La maquette donne 300 px
-au champ. À 760 px de fenêtre, 300 px fixes poussent le résumé — donc
-l'avertissement sur les lots non parcourus — hors du cadre. Le champ est donc
-borné (`flex_1` + `max_w`) et la rangée se replie.
+**What is not proven, and why it is written here.** The mockup gives 300 px
+to the field. At a 760 px window, a fixed 300 px pushes the summary — hence
+the warning about unscanned batches — out of the frame. The field is therefore
+bounded (`flex_1` + `max_w`) and the row wraps.
 
-Cette correction **n'a pas de test**, et c'est délibéré. Un premier test a été
-écrit, puis retiré : il passait aussi bien avec 300 px fixes qu'avec la borne,
-parce que la métrique de texte du harnais GPUI est déterministe *et* fausse — le
-libellé y est plus étroit qu'à l'écran, et le débordement ne se produit donc
-jamais. C'est exactement le piège que [tests.md](../.claude/rules/tests.md) nomme :
-« ne jamais asserter une dimension qui dépend de la largeur d'un texte ». Un test
-qui ne peut pas échouer ne prouve rien.
+This fix **has no test**, and that is deliberate. A first test was
+written, then removed: it passed just as well with a fixed 300 px as with the bound,
+because the text metrics of the GPUI harness are deterministic *and* wrong — the
+label there is narrower than on screen, and the overflow therefore never
+happens. This is exactly the trap that [tests.md](../.claude/rules/tests.md) names:
+"never assert a dimension that depends on the width of a text". A test
+that cannot fail proves nothing.
 
-Ce point reste donc **à voir à l'écran**, et il rejoint la recette native en
-attente. Celle-ci ne peut pas être jouée pour l'instant : l'utilisateur a demandé
-le 2026-09-10 qu'on cesse de manipuler ses fenêtres, et cette demande n'a pas été
-levée.
+This point therefore remains **to be seen on screen**, and it joins the pending native
+acceptance test. That one cannot be run for now: the user asked
+on 2026-09-10 that we stop handling their windows, and this request has not been
+lifted.
 
-**Ce qui a été fait en attendant, et pourquoi ce n'est pas trancher.** Laisser
-l'écran muet pendant que la question reste ouverte, c'est laisser la fuite. La
-barre d'export porte donc une réserve — `2 hidden columns will still be
-written` — qui est **vraie sous les deux lectures** et n'en ferme aucune : sous
-la première elle disparaîtra avec le défaut, sous la seconde elle *est* la
-réponse. C'est la forme qu'UX-SPEC retient déjà ailleurs : garder le geste,
-retirer la promesse.
+**What was done in the meantime, and why it is not settling.** Leaving
+the screen silent while the question stays open means leaving the leak. The
+export bar therefore carries a reservation — `2 hidden columns will still be
+written` — which is **true under both readings** and closes neither: under
+the first it will disappear with the defect, under the second it *is* the
+answer. It is the form UX-SPEC already uses elsewhere: keep the gesture,
+remove the promise.
 
-Le compte est pris au changement de visibilité (`GridEvent::ColumnsChanged`) et
-non à l'arrivée du résultat, parce que l'utilisateur masque **puis** exporte.
-Tenu par `une_colonne_masquee_part_quand_meme_a_lexport_et_la_barre_lannonce`,
-qui exporte réellement et vérifie que la colonne masquée est dans le CSV : une
-réserve qui s'afficherait sans dire vrai ne vaudrait rien, et le jour où
-quelqu'un fera suivre la visibilité à l'export, ce test échouera et forcera à
-retirer la réserve en même temps.
+The count is taken on a visibility change (`GridEvent::ColumnsChanged`) and
+not on the arrival of the result, because the user hides **then** exports.
+Held by `une_colonne_masquee_part_quand_meme_a_lexport_et_la_barre_lannonce`,
+which actually exports and checks that the hidden column is in the CSV: a
+reservation displayed without telling the truth would be worthless, and the day
+someone makes export follow visibility, this test will fail and force
+removing the reservation at the same time.
 
-### Ce que deux relectures indépendantes ont trouvé, le 2026-09-14
+### What two independent reviews found, on 2026-09-14
 
-Le travail du jour a été relu par un agent **invariants** et un agent
-**sécurité**, chacun sur les seuls fichiers écrits ou modifiés ce jour-là. Les
-deux ont trouvé le **même défaut grave**, qu'aucun des tests écrits en même temps
-que le code ne voyait. C'est le meilleur argument pour la relecture indépendante
-qu'on puisse produire : le code et ses tests venaient de la même main, et ils
-partageaient donc la même hypothèse fausse.
+The day's work was reviewed by an **invariants** agent and a
+**security** agent, each on only the files written or modified that day. Both
+found the **same serious defect**, which none of the tests written at the same time
+as the code saw. It is the best argument for independent review
+one could produce: the code and its tests came from the same hand, and they
+therefore shared the same false assumption.
 
-**Grave — un saut de ligne sortait du commentaire SQL** (`propose.rs`). `--` ne
-commente que jusqu'au prochain saut de ligne. `quote_identifier` protège de
-l'évasion par guillemet, pas de celle-là : il double le guillemet fermant et
-laisse le `\n` intact. Or `CatalogPath` refuse les caractères de contrôle — donc
-le nom de relation est sûr — mais **`Field::new` et `Constraint::new` ne valident
-rien**, et une expression de défaut multi-ligne (`DEFAULT 'a` + saut + `b'::text`)
-est banale, sans aucun adversaire. Une ligne échappée transformait un modèle
-annoncé « Nothing has been executed » en instruction que `Run` exécute.
+**Serious — a line break escaped the SQL comment** (`propose.rs`). `--` only
+comments until the next line break. `quote_identifier` protects against
+escape by quote, not against this one: it doubles the closing quote and
+leaves the `\n` intact. Now `CatalogPath` refuses control characters — so
+the relation name is safe — but **`Field::new` and `Constraint::new` validate
+nothing**, and a multi-line default expression (`DEFAULT 'a` + break + `b'::text`)
+is commonplace, with no adversary at all. An escaped line turned a template
+announced as "Nothing has been executed" into a statement that `Run` executes.
 
-Le test `aucune_instruction_nest_active…` vérifiait pourtant la bonne propriété —
-« toute ligne commence par `--` » — mais sur une fixture d'une seule ligne. La
-garantie testée était plus étroite que la garantie annoncée.
+The test `aucune_instruction_nest_active…` did check the right property —
+"every line starts with `--`" — but on a single-line fixture. The
+tested guarantee was narrower than the announced guarantee.
 
-Corrigé **structurellement** : plus aucun `--` n'est écrit dans les `format!`.
-Le corps se compose nu, puis `en_commentaire` préfixe **chaque ligne physique**.
-La garantie ne dépend plus de ce que contiennent les identifiants. Tenu par
-`un_saut_de_ligne_dans_un_nom_ne_sort_pas_du_commentaire`, qui échoue sur le code
-d'avant.
+Fixed **structurally**: no `--` is written in the `format!`s anymore.
+The body is composed bare, then `en_commentaire` prefixes **each physical line**.
+The guarantee no longer depends on what the identifiers contain. Held by
+`un_saut_de_ligne_dans_un_nom_ne_sort_pas_du_commentaire`, which fails on the
+earlier code.
 
-**Cinq autres constats, tous corrigés :**
+**Five other findings, all fixed:**
 
-* **la réserve d'export était muette dans l'aperçu d'objet.** Ses colonnes sont
-  masquables par le même panneau et exportables par le même chemin, mais seul
-  l'export de la console était câblé : masquer `email` sur l'onglet `Data` puis
-  exporter écrivait la colonne sans rien dire. C'était la fuite que je croyais
-  avoir fermée, encore ouverte à côté ;
-* **la réserve survivait au résultat qu'elle décrivait** — « 2 hidden columns »
-  affiché sur un résultat dont rien n'est masqué. Une réserve qui peut être
-  fausse cesse d'être une réserve, et un avertissement pris pour du bruit est
-  ignoré le jour où il est vrai. `ResultExport::reset` remet le compte à zéro ;
-* **une recherche pouvait s'appliquer au résultat suivant.** La génération ne
-  captait qu'une *nouvelle recherche*, jamais un *nouveau résultat* : un parcours
-  parti sur A et revenu après B soulignait dans B des lignes trouvées dans A. Le
-  retour compare désormais l'**identité du tampon** parcouru ;
-* **l'index de correspondances n'était pas borné.** Sur une colonne étroite et
-  une aiguille peu sélective, le `Vec` d'indices pouvait dépasser le budget que
-  tout le reste respecte. Plafonné à `MATCH_LIMIT`, et **avoué** au même titre
-  que les lots sautés. Le clone de ce vecteur sur le fil d'interface à chaque
-  appui a disparu ;
-* **la recherche ne voyait que les 512 premiers caractères** d'une valeur, sans
-  le dire. Un identifiant plus loin dans un `jsonb` donnait « aucune
-  correspondance ». Elle porte maintenant sur la valeur entière ;
-* **le nom de fuseau venu du serveur** était rendu sans borne, au milieu de la
-  phrase qui se termine par « Results belong to this execution ». Filtré et
-  borné à 64 caractères.
+* **the export reservation was silent in the object preview.** Its columns can be
+  hidden by the same panel and exported by the same path, but only
+  the console's export was wired: hiding `email` on the `Data` tab then
+  exporting wrote the column without saying anything. It was the leak I thought
+  I had closed, still open right next to it;
+* **the reservation survived the result it described** — "2 hidden columns"
+  displayed on a result where nothing is hidden. A reservation that can be
+  false stops being a reservation, and a warning taken for noise is
+  ignored the day it is true. `ResultExport::reset` resets the count to zero;
+* **a search could apply to the next result.** The generation only
+  captured a *new search*, never a *new result*: a scan
+  started on A and returned after B highlighted in B rows found in A. The
+  return now compares the **identity of the scanned buffer**;
+* **the match index was not bounded.** On a narrow column and
+  a poorly selective needle, the `Vec` of indices could exceed the budget that
+  everything else respects. Capped at `MATCH_LIMIT`, and **admitted** in the same way
+  as skipped batches. Cloning this vector on the interface thread on each
+  keypress is gone;
+* **the search only saw the first 512 characters** of a value, without
+  saying so. An identifier further into a `jsonb` gave "no
+  match". It now covers the whole value;
+* **the time zone name coming from the server** was rendered without a bound, in the middle of the
+  sentence that ends with "Results belong to this execution". Filtered and
+  bounded to 64 characters.
 
-**Et un défaut d'atteignabilité**, hors des treize invariants : « correspondance
-précédente » n'existait pour **aucun geste**. Le code écoutait `FieldEvent::Next`,
-que `TextField` n'émet que sur **Tab**, et seulement s'il a été construit avec
-`with_managed_tab_order()` — ce qui n'est pas le cas ici. Le bras était mort. Les
-deux boutons que la maquette place à côté du champ (`273:37076`) le remplacent.
+**And a reachability defect**, outside the thirteen invariants: "previous
+match" existed for **no gesture**. The code listened to `FieldEvent::Next`,
+which `TextField` only emits on **Tab**, and only if it was built with
+`with_managed_tab_order()` — which is not the case here. The arm was dead. The
+two buttons that the mockup places next to the field (`273:37076`) replace it.
 
-Dernier point, relevé comme un doute et traité : `proposed_change_text()` était
-appelée **au rendu** pour décider si le bouton existe, donc composait le modèle
-entier à chaque trame pour en jeter le résultat. La décision est descendue dans
-`peut_proposer`, et `le_bouton_existe_exactement_quand_un_modele_existe` balaie la
-matrice onglet × index × dialecte pour que les deux ne puissent pas diverger.
+Last point, raised as a doubt and handled: `proposed_change_text()` was
+called **at render time** to decide whether the button exists, hence composed the whole
+template on each frame to throw away the result. The decision moved down into
+`peut_proposer`, and `le_bouton_existe_exactement_quand_un_modele_existe` sweeps the
+tab × index × dialect matrix so that the two cannot diverge.
 
-### Agents externes : ce qui est écrit, et le seul lot qui reste
+### External agents: what is written, and the only remaining batch
 
-[ADR-0026](adr/0026-agents-externes-acp.md), ouvert par l'utilisateur le
-2026-09-14 (« regarder […] deux modes, un avec API et l'autre les agents
-externes »). **Le dos est complet et éprouvé ; il ne manque que
-l'interface.**
+[ADR-0026](adr/0026-agents-externes-acp.md), opened by the user on
+2026-09-14 ("look at […] two modes, one with an API and the other external
+agents"). **The back end is complete and proven; only the
+interface is missing.**
 
-> **État au 2026-09-23.** Le tableau et les deux paragraphes qui le suivent
-> décrivent l'interface GPUI du 2026-09-14 : `provider_settings.rs`,
-> `row_display` et leurs tests **sans fenêtre** ont été retirés avec elle le
-> 2026-09-18 ([Migration vers l'interface Tauri](#migration-vers-linterface-tauri)).
-> L'interface existe désormais dans `apps/desktop` : liste commune des
-> fournisseurs et des agents, préréglages Claude Code et Codex détectés à
-> l'ouverture de l'écran, confinement ([ADR-0032](adr/0032-agent-externe-confine-au-lancement.md)),
-> sélecteur « Who answers » dans le panneau. Le comportement fait autorité dans
-> [UX-SPEC](UX-SPEC.md#configuration-des-fournisseurs-et-des-agents), pas ici.
+> **State as of 2026-09-23.** The table and the two paragraphs that follow it
+> describe the GPUI interface of 2026-09-14: `provider_settings.rs`,
+> `row_display` and their **windowless** tests were removed with it on
+> 2026-09-18 ([Migration to the Tauri interface](#migration-to-the-tauri-interface)).
+> The interface now exists in `apps/desktop`: a common list of
+> providers and agents, Claude Code and Codex presets detected when
+> the screen opens, confinement ([ADR-0032](adr/0032-agent-externe-confine-au-lancement.md)),
+> the "Who answers" selector in the panel. The behavior is authoritative in
+> [UX-SPEC](UX-SPEC.md#provider-and-agent-configuration), not here.
 
-| Couche | État | Ce qui la tient |
+| Layer | State | What holds it |
 |---|---|---|
-| Déclaration | fait | `oxyn_core::ExternalAgentConfig` — **aucun champ de secret**, `Debug` manuel qui ne rend que le nombre de variables d'environnement |
-| Persistance | fait | migration 9, table `external_agents`. `la_table_na_aucune_colonne_de_secret` lit le **schéma**, pas la documentation |
-| Bus | fait | trois commandes, **refusées à un `Actor::Agent`** — `un_agent_ne_declare_pas_dagent_externe` |
-| Confidentialité | fait | `Local` fermé, et refusé **avant le lancement** — `le_niveau_local_refuse_avant_meme_de_lancer_le_processus` |
-| Autorisations | fait | refus par défaut de tout ce qui touche la machine ; `option_for` n'autorise jamais « toujours » |
-| Lancement | fait | commande et arguments **jamais recollés** en chaîne — `la_commande_et_ses_arguments_ne_sont_jamais_recolles` |
-| Tour de conversation | fait | `run_turn`, fragments remontés par l'`AgentObserver` existant |
-| Ligne d'écran | fait | `provider_settings::row::row_display` — le calcul sort, la vue dessine ; 5 tests **sans fenêtre** |
-| Liste et retrait | fait | les deux sortes dans **une** liste, un curseur, une confirmation ; `le_rang_dun_retrait_designe_la_bonne_liste` |
-| Chargement côté application | fait | `Backend::external_agents`, `reload_external_agents`, `refresh_agent_settings`, `remove_external_agent` |
+| Declaration | done | `oxyn_core::ExternalAgentConfig` — **no secret field**, manual `Debug` that only renders the number of environment variables |
+| Persistence | done | migration 9, table `external_agents`. `la_table_na_aucune_colonne_de_secret` reads the **schema**, not the documentation |
+| Bus | done | three commands, **refused to an `Actor::Agent`** — `un_agent_ne_declare_pas_dagent_externe` |
+| Privacy | done | `Local` closed, and refused **before launch** — `le_niveau_local_refuse_avant_meme_de_lancer_le_processus` |
+| Permissions | done | default refusal of everything that touches the machine; `option_for` never authorizes "always" |
+| Launch | done | command and arguments **never glued back** into a string — `la_commande_et_ses_arguments_ne_sont_jamais_recolles` |
+| Conversation turn | done | `run_turn`, fragments passed up by the existing `AgentObserver` |
+| Screen row | done | `provider_settings::row::row_display` — the computation goes out, the view draws; 5 **windowless** tests |
+| List and removal | done | both kinds in **one** list, one cursor, one confirmation; `le_rang_dun_retrait_designe_la_bonne_liste` |
+| Application-side loading | done | `Backend::external_agents`, `reload_external_agents`, `refresh_agent_settings`, `remove_external_agent` |
 
-**Le découpage retenu, et pourquoi.** `provider_settings.rs` fait 1 386 lignes,
-et son `DeclaredProvider` porte `kind`, `base_url`, `model`, `key` et `reach` :
-aucun de ces cinq champs n'a de sens pour un agent. Dupliquer la liste, la ligne,
-le focus et la confirmation aurait recopié 400 lignes de parcours, ce que
-[CLAUDE.md](../CLAUDE.md#code-organization) interdit.
+**The chosen split, and why.** `provider_settings.rs` is 1,386 lines,
+and its `DeclaredProvider` carries `kind`, `base_url`, `model`, `key` and `reach`:
+none of these five fields makes sense for an agent. Duplicating the list, the row,
+the focus and the confirmation would have copied 400 lines of flow, which
+[CLAUDE.md](../CLAUDE.md#code-organization) forbids.
 
-La voie prise est celle que la règle d'interface prescrit — « le calcul sort, la
-vue dessine ». `row_display` rend, pour les deux sortes, **les mêmes six champs
-de texte** ; `render_row` n'existe donc qu'une fois, et se teste **sans fenêtre**.
-Un test vérifie qu'aucune sorte ne laisse un champ vide : ce serait le premier pas
-vers un `when` dans le rendu, et le parcours se remettrait à diverger.
+The path taken is the one the interface rule prescribes — "the computation goes out, the
+view draws". `row_display` returns, for both kinds, **the same six text
+fields**; `render_row` therefore exists only once, and is tested **windowless**.
+A test checks that no kind leaves a field empty: that would be the first step
+towards a `when` in the rendering, and the flow would start diverging again.
 
-Deux nuances de vocabulaire sont tenues par des tests, parce qu'elles décident de
-ce que l'utilisateur croit :
+Two nuances of vocabulary are held by tests, because they decide
+what the user believes:
 
-* un agent n'affiche **pas** « clé absente » — cela se lirait comme un réglage
-  qui manque, alors qu'il n'y a pas de clé à configurer ;
-* sa destination est annoncée **inconnaissable**, pas « inconnue » :
-  l'avertissement est permanent, puisque aucune mesure ne viendra le lever. Le
-  test refuse que la mention contienne « measured ».
+* an agent does **not** display "key missing" — that would read as a setting
+  that is missing, whereas there is no key to configure;
+* its destination is announced as **unknowable**, not "unknown":
+  the warning is permanent, since no measurement will come to lift it. The
+  test refuses that the mention contains "measured".
 
-Les deux sortes partagent **une** liste, un curseur et une confirmation. Le rang
-global se traduit en rang de liste **une seule fois**, dans l'écran, et l'appelant
-reçoit un rang qui indexe la liste qu'il connaît. Sabotage vérifié : mal traduire
-fait retirer une déclaration pour une autre, sans message — les deux gestes
-réussissent.
+Both kinds share **one** list, one cursor and one confirmation. The global
+rank is translated into a list rank **only once**, in the screen, and the caller
+receives a rank that indexes the list it knows. Sabotage checked: translating it wrong
+removes one declaration instead of another, without a message — both gestures
+succeed.
 
-**Le chargement est câblé**, en miroir de celui des fournisseurs et
-délibérément **séparé** de lui : la lecture des agents ne porte aucun classement
-de portée, donc rien ne justifierait de faire attendre l'une pour l'autre. Une
-lecture qui échoue **conserve la liste** au lieu de la vider, pour la raison qui
-vaut déjà pour les fournisseurs — une panne locale ne doit pas se lire comme une
-absence de déclaration.
+**Loading is wired**, mirroring that of providers and
+deliberately **separate** from it: reading agents carries no reach
+classification, so nothing would justify making one wait for the other. A
+read that fails **keeps the list** instead of emptying it, for the reason that
+already holds for providers — a local failure must not read as an
+absence of declaration.
 
-`remove_external_agent` est plus court que son jumeau, et c'est le sujet : **il
-n'y a pas de clé à oublier**, le geste s'arrête au bus.
+`remove_external_agent` is shorter than its twin, and that is the point: **there
+is no key to forget**, the gesture stops at the bus.
 
-**Ce qui restait au 2026-09-14 :** le champ d'environnement dans le formulaire de
-déclaration, et le choix explicite d'un second agent plutôt que du premier
-déclaré. Le trajet lui-même — déclarer, persister, lister, retirer, lancer,
-converser, refuser sur `Local`, refuser à un agent — est écrit et éprouvé
+**What remained as of 2026-09-14:** the environment field in the declaration
+form, and the explicit choice of a second agent rather than the first
+declared. The path itself — declare, persist, list, remove, launch,
+converse, refuse on `Local`, refuse to an agent — is written and proven
 ([ADR-0026](adr/0026-agents-externes-acp.md)).
 
-**Ce qui reste au 2026-09-23 :**
+**What remains as of 2026-09-23:**
 
-- ~~le choix explicite d'un second agent~~ — fait : le sélecteur « Who answers »
-  du panneau offre chaque fournisseur et chaque agent déclarés
-  (`features/assistant/availability.ts`) ;
-- ~~le champ d'environnement du formulaire manuel~~ — fait le 2026-09-23
-  (`components/oxyn/provider-form.tsx`, `parseEnvironment`). Le même jour, la
-  saisie des arguments est revenue à **un argument par ligne**, comme le veut
-  l'ADR-0026 : le portage vers Tauri avait réintroduit un découpage sur
-  l'espace avec guillemets ;
-- ~~**la nuance « inconnaissable » n'est plus tenue par un test.**~~ — tranché
-  le 2026-09-24 pour un mot propre à l'agent, qui dit vrai sur la cause : une
-  destination d'agent est inconnaissable, aucune mesure ne la lèvera, et elle
-  compte comme distante. Le badge de portée de l'en-tête dit `Agent-managed`
-  pour un agent et garde `Unresolved` pour un point d'accès **pas encore**
-  résolu ; les stories `ExternalAgent` et `UnresolvedProvider`
-  (`assistant-header.stories.tsx`) tiennent les deux sens. **Reste :** l'écran
-  d'échantillon dit encore « to an unresolved address » quand un agent le
-  reçoit — pour un échantillon épinglé, il ne sait pas que le destinataire est
-  un agent.
+- ~~the explicit choice of a second agent~~ — done: the panel's "Who answers"
+  selector offers each declared provider and agent
+  (`features/assistant/availability.ts`);
+- ~~the environment field of the manual form~~ — done on 2026-09-23
+  (`components/oxyn/provider-form.tsx`, `parseEnvironment`). The same day,
+  argument input went back to **one argument per line**, as
+  ADR-0026 requires: the port to Tauri had reintroduced splitting on
+  spaces with quotes;
+- ~~**the "unknowable" nuance is no longer held by a test.**~~ — settled
+  on 2026-09-24 for a word specific to the agent, which tells the truth about the cause: an
+  agent's destination is unknowable, no measurement will lift it, and it
+  counts as remote. The header's reach badge says `Agent-managed`
+  for an agent and keeps `Unresolved` for an endpoint **not yet**
+  resolved; the stories `ExternalAgent` and `UnresolvedProvider`
+  (`assistant-header.stories.tsx`) hold both directions. **Remaining:** the sample
+  screen still says "to an unresolved address" when an agent
+  receives it — for a pinned sample, it does not know that the recipient is
+  an agent.
 
-### Vérification phase par phase, avec les preuves
+### Phase-by-phase verification, with the evidence
 
-Arrêtée le **2026-09-14**, porte de qualité franchie, **1 676 tests**. Chaque
-ligne nomme une sortie de test réelle, pas une lecture de code : la colonne de
-droite se rejoue avec `cargo test -p <crate> <motif>`.
+Closed on **2026-09-14**, quality gate passed, **1,676 tests**. Each
+row names a real test output, not a code reading: the right-hand column
+can be replayed with `cargo test -p <crate> <pattern>`.
 
-| Phase | État | Ce qui l'établit, nominativement |
+| Phase | State | What establishes it, by name |
 |---|---|---|
-| **0 — état et découpage** | tenu | Documents d'autorité relus, planches Figma confrontées par le serveur MCP, propriété des fichiers répartie sans chevauchement entre sous-agents |
-| **1 — aperçu trié, filtré, paginé** | tenu | `PreviewShape { sort, predicate, offset }` dans `oxyn-core/src/preview.rs`, porté par le bus et implémenté dans les **deux** drivers. 16 tests, dont `un_ordre_total_est_exige_par_le_tri_autant_que_par_la_page`, `le_texte_de_l_utilisateur_n_est_pas_reecrit`, `preview_reclassifies_driver_sql_and_refuses_writes_for_both_actors`, `preview_sqlite_is_bounded_preserves_hostile_table_and_correlates_events_and_audit`, `preview_enforces_read_only_and_row_limit_even_for_an_incorrect_driver`, `two_consecutive_pages_do_not_overlap` |
-| **2 — sécurité et IA** | tenu | `PrivacyTier` gouverne `oxyn-ai/src/context.rs` au titre d'[I-04](../CLAUDE.md#i-04) ; `un_appel_d_outil_devient_une_commande_portant_actor_agent` tient [I-07](../CLAUDE.md#i-07) ; `declarer_un_fournisseur_n_atteint_aucune_base_et_reste_refuse_a_un_agent` et `une_reference_de_secret_vide_est_refusee` tiennent la configuration des fournisseurs ; `un_point_d_acces_non_resolu_est_traite_comme_distant` retient le parti prudent ; `sous_sampled_le_message_du_serveur_arrive_entier` couvre la sortie serveur brute |
-| **3 — reprise et bibliothèque** | tenu le 2026-09-14, **dans l'interface GPUI** : les tests cités ici vivaient dans `oxyn-app` et ont disparu avec `6ecb8ce` ; l'état dans `apps/desktop` est à la [porte de la migration](#migration-vers-linterface-tauri) | `recovery_opens_only_after_an_abnormal_shutdown` et `l_ecran_de_reprise_annonce_l_arret_anormal_et_seulement_alors` tiennent le marqueur d'arrêt ([ADR-0021](adr/0021-marqueur-d-arret.md)) ; `returning_to_a_connection_restores_all_of_its_console_entities` la restauration ; `a_deleted_connection_stays_choosable_in_the_history_filter`, `merging_history_connections_appends_and_marks_without_moving_ranks` et `history_and_recent_results_read_the_same_execution_without_replaying_it` les filtres inter-workspaces |
-| **4 — fidélité Figma et accessibilité** | tenu, **sauf une surface** | `la_marque_et_les_actions_de_l_accueil_ne_se_superposent_pas` éprouve l'accueil **aux quatre largeurs × deux thèmes** ; `chaque_theme_garde_son_texte_lisible` tient le contraste WCAG ; `un_controle_focalise_nest_pas_active_par_le_clavier` et `production_focus_stays_inside_review_and_enter_never_approves` tiennent [I-02](../CLAUDE.md#i-02) au clavier. Reste `Messages` — voir ci-dessous |
-| **5 — validation finale** | tenu | `make qualite` verte à chaque lot, sortie réelle citée ; budgets mesurés et datés dans [PERFORMANCE](PERFORMANCE.md), « non mesuré » assumé là où ils ne le sont pas |
+| **0 — state and split** | held | Authoritative documents reread, Figma boards compared through the MCP server, file ownership distributed without overlap between subagents |
+| **1 — sorted, filtered, paginated preview** | held | `PreviewShape { sort, predicate, offset }` in `oxyn-core/src/preview.rs`, carried by the bus and implemented in **both** drivers. 16 tests, including `un_ordre_total_est_exige_par_le_tri_autant_que_par_la_page`, `le_texte_de_l_utilisateur_n_est_pas_reecrit`, `preview_reclassifies_driver_sql_and_refuses_writes_for_both_actors`, `preview_sqlite_is_bounded_preserves_hostile_table_and_correlates_events_and_audit`, `preview_enforces_read_only_and_row_limit_even_for_an_incorrect_driver`, `two_consecutive_pages_do_not_overlap` |
+| **2 — security and AI** | held | `PrivacyTier` governs `oxyn-ai/src/context.rs` under [I-04](../CLAUDE.md#i-04); `un_appel_d_outil_devient_une_commande_portant_actor_agent` holds [I-07](../CLAUDE.md#i-07); `declarer_un_fournisseur_n_atteint_aucune_base_et_reste_refuse_a_un_agent` and `une_reference_de_secret_vide_est_refusee` hold provider configuration; `un_point_d_acces_non_resolu_est_traite_comme_distant` keeps the cautious side; `sous_sampled_le_message_du_serveur_arrive_entier` covers raw server output |
+| **3 — recovery and library** | held on 2026-09-14, **in the GPUI interface**: the tests cited here lived in `oxyn-app` and disappeared with `6ecb8ce`; the state in `apps/desktop` is at the [migration gate](#migration-to-the-tauri-interface) | `recovery_opens_only_after_an_abnormal_shutdown` and `l_ecran_de_reprise_annonce_l_arret_anormal_et_seulement_alors` hold the shutdown marker ([ADR-0021](adr/0021-marqueur-d-arret.md)); `returning_to_a_connection_restores_all_of_its_console_entities` restoration; `a_deleted_connection_stays_choosable_in_the_history_filter`, `merging_history_connections_appends_and_marks_without_moving_ranks` and `history_and_recent_results_read_the_same_execution_without_replaying_it` the cross-workspace filters |
+| **4 — Figma fidelity and accessibility** | held, **except one surface** | `la_marque_et_les_actions_de_l_accueil_ne_se_superposent_pas` tests the home screen **at four widths × two themes**; `chaque_theme_garde_son_texte_lisible` holds WCAG contrast; `un_controle_focalise_nest_pas_active_par_le_clavier` and `production_focus_stays_inside_review_and_enter_never_approves` hold [I-02](../CLAUDE.md#i-02) on the keyboard. `Messages` remains — see below |
+| **5 — final validation** | held | `make qualite` green at each batch, real output cited; budgets measured and dated in [PERFORMANCE](PERFORMANCE.md), "not measured" stated where they are not |
 
-**Ce qui empêche de marquer le `/goal` achevé**, et c'est désormais une seule
-surface de la planche `191:1521`, qui n'attend pas du code mais une contrainte
-en amont.
+**What prevents marking the `/goal` as complete**, and it is now a single
+surface of board `191:1521`, which is not waiting for code but for an upstream
+constraint.
 
-* `Messages` attend l'amont : `sqlx-postgres 0.9.0` jette les notices dans un
-  événement `tracing` sans identité de connexion, et `Notice` n'est pas exporté.
-  Attendre plutôt que réécrire le driver en `tokio-postgres` est décidé depuis le
-  2026-09-24 (D13) ; l'état amont est suivi dans
-  [RESEARCH-NOTES](RESEARCH-NOTES.md#suivis-amont).
+* `Messages` waits for upstream: `sqlx-postgres 0.9.0` throws notices into a
+  `tracing` event without connection identity, and `Notice` is not exported.
+  Waiting rather than rewriting the driver in `tokio-postgres` has been decided since
+  2026-09-24 (D13); the upstream state is tracked in
+  [RESEARCH-NOTES](RESEARCH-NOTES.md#upstream-follow-ups).
 
-Tout le reste de la maquette était alors implémenté et éprouvé — dans
-l'interface GPUI. Ce que le portage vers `apps/desktop` n'a pas repris est listé
-à la [porte de la migration](#migration-vers-linterface-tauri).
+Everything else in the mockup was then implemented and proven — in
+the GPUI interface. What the port to `apps/desktop` did not take over is listed
+at the [migration gate](#migration-to-the-tauri-interface).
 
-### Vérification exigence par exigence
+### Requirement-by-requirement verification
 
-Reprise le **2026-09-15**, porte de qualité franchie, **1 719 tests** — somme des
-lignes `test result: ok` de `make test`, doctests compris. Répartition réelle :
+Resumed on **2026-09-15**, quality gate passed, **1,719 tests** — sum of the
+`test result: ok` lines of `make test`, doctests included. Actual breakdown:
 `oxyn` 194, `oxyn-core` 167, `oxyn-ui` 156, `oxyn-llm` 151, `oxyn-query` 136,
 `oxyn-store` 124, `oxyn-ai` 100, `oxyn-data` 90, `oxyn-exec` 84,
 `oxyn-catalog` 83.
 
-« Tenu » veut dire : vérifié par une sortie réelle, et non par lecture du code.
-**Deux lignes ne sont pas tenues**, et elles sont écrites comme telles — un
-tableau dont toutes les lignes sont vertes n'apprend rien.
+"Held" means: checked by real output, and not by reading the code.
+**Two rows are not held**, and they are written as such — a
+table whose rows are all green teaches nothing.
 
-| Exigence | État | Ce qui l'établit |
+| Requirement | State | What establishes it |
 |---|---|---|
-| **Code** | tenu | `make qualite` : format, Clippy `-D warnings`, tests, doc, socle, TODO datés |
-| **Bus** | tenu | Aucune seconde API d'exécution. Les déclarations de fournisseur **et d'agent** sont refusées à un `Actor::Agent` — `un_agent_ne_declare_pas_dagent_externe`, dont la déclaration hostile est `/bin/sh -c "curl … \| sh"`. Un test d'`oxyn-ui` interdit à tout composant de construire une `Command`, et un second vérifie que **toutes** les sources sont couvertes par ce garde-fou |
-| **Drivers** | tenu, avec sa réserve | 136 tests passent sans serveur ; **34 restent ignorés** faute de PostgreSQL. Ils passaient deux fois de suite lors de la campagne du 2026-09-11 avec un cluster jetable ; ils ne sont pas rejoués à chaque porte |
-| **UI native** | **non tenu** | La recette native est **interdite** : l'utilisateur a demandé le 2026-09-10 qu'on cesse de manipuler ses fenêtres, et la consigne n'a pas été levée. C'est la seule preuve pixel possible ; tout le reste de l'interface est éprouvé sans écran, ce qui ne la remplace pas |
-| **Figma** | tenu, **sauf `Messages`** | Planches confrontées par le serveur MCP ; `Propose change…`, `Find in loaded results…`, le fuseau d'affichage et la réserve de colonnes masquées implémentés depuis. `Messages` est bloqué **en amont** : `sqlx-postgres 0.9.0` jette les notices dans un événement `tracing` sans identité de connexion, `mod message` étant privé |
-| **Sécurité** | tenu | Deux relectures indépendantes le 2026-09-14 ont trouvé le **même** défaut grave — un saut de ligne sortant d'un commentaire SQL — qu'aucun test écrit en même temps que le code ne voyait ; corrigé structurellement. Six autres constats corrigés. **RUSTSEC-2026-0285** sur `rustls` signalé par `cargo deny` et corrigé le jour même |
-| **Accessibilité** | tenu | **32** `tab_index` dans l'interface, **15** tests de clavier et de focus, contraste WCAG des deux thèmes, et `production_focus_stays_inside_review_and_enter_never_approves` qui tient [I-02](../CLAUDE.md#i-02) au clavier |
-| **Performance** | tenu, avec ses trous écrits | Démarrage 235–274 ms / 1 s ✓ ; nœud en cache 6,70 µs / 50 ms ✓ ; RSS 82 Mio ✓ ; trame 0 à-coup au repos et à la saisie ✓ ; relecture d'un lot débordé 4,5 µs ✓. Restent **non mesurés** et dits tels quels : la RSS du budget de 256 Mo, et le défilement d'une grille peuplée sous instrument |
-| **Qualité** | tenu | Porte verte à chaque lot, sortie réelle citée. Un échec inexpliqué le 2026-09-14 a été signalé plutôt que taillé dans le silence : six passages ultérieurs sont verts, la cause probable est CleanMyMac qui fauche `target/debug`, et cela reste une hypothèse |
+| **Code** | held | `make qualite`: format, Clippy `-D warnings`, tests, doc, foundation, dated TODOs |
+| **Bus** | held | No second execution API. Provider **and agent** declarations are refused to an `Actor::Agent` — `un_agent_ne_declare_pas_dagent_externe`, whose hostile declaration is `/bin/sh -c "curl … \| sh"`. An `oxyn-ui` test forbids any component from building a `Command`, and a second one checks that **all** sources are covered by this guard |
+| **Drivers** | held, with its reservation | 136 tests pass without a server; **34 remain ignored** for lack of PostgreSQL. They passed twice in a row during the 2026-09-11 campaign with a disposable cluster; they are not replayed at every gate |
+| **Native UI** | **not held** | The native acceptance test is **forbidden**: the user asked on 2026-09-10 that we stop handling their windows, and the instruction has not been lifted. It is the only possible pixel proof; everything else in the interface is proven without a screen, which does not replace it |
+| **Figma** | held, **except `Messages`** | Boards compared through the MCP server; `Propose change…`, `Find in loaded results…`, the display time zone and the hidden-columns reservation implemented since. `Messages` is blocked **upstream**: `sqlx-postgres 0.9.0` throws notices into a `tracing` event without connection identity, `mod message` being private |
+| **Security** | held | Two independent reviews on 2026-09-14 found the **same** serious defect — a line break escaping an SQL comment — which no test written at the same time as the code saw; fixed structurally. Six other findings fixed. **RUSTSEC-2026-0285** on `rustls` reported by `cargo deny` and fixed the same day |
+| **Accessibility** | held | **32** `tab_index` in the interface, **15** keyboard and focus tests, WCAG contrast of both themes, and `production_focus_stays_inside_review_and_enter_never_approves` which holds [I-02](../CLAUDE.md#i-02) on the keyboard |
+| **Performance** | held, with its gaps written down | Startup 235–274 ms / 1 s ✓; cached node 6.70 µs / 50 ms ✓; RSS 82 MiB ✓; frame 0 hitches at idle and while typing ✓; rereading a spilled batch 4.5 µs ✓. Remaining **unmeasured** and stated as such: the RSS of the 256 MB budget, and scrolling a populated grid under instrumentation |
+| **Quality** | held | Gate green at each batch, real output cited. An unexplained failure on 2026-09-14 was reported rather than silently trimmed: six later runs are green, the probable cause is CleanMyMac wiping `target/debug`, and it remains a hypothesis |
 
-**Ce qui empêche de marquer ce `/goal` achevé**, en une phrase : la recette
-native est interdite par une consigne qui n'a pas été levée, et `Messages` est
-bloqué chez une dépendance. Aucune des deux ne se lève par du code.
+**What prevents marking this `/goal` as complete**, in one sentence: the native
+acceptance test is forbidden by an instruction that has not been lifted, and `Messages` is
+blocked in a dependency. Neither can be lifted by code.
 
-Trois décisions restent par ailleurs à l'utilisateur, sans bloquer le reste : le
-**second réacteur** qu'apporte `agent-client-protocol`, l'**arbitrage
-export/affichage** des colonnes masquées, et le choix entre attendre `sqlx` ou
-réécrire le driver PostgreSQL en `tokio-postgres`.
+Three decisions also remain with the user, without blocking the rest: the
+**second reactor** that `agent-client-protocol` brings, the **export/display
+decision** on hidden columns, and the choice between waiting for `sqlx` or
+rewriting the PostgreSQL driver in `tokio-postgres`.
 
-Les ADR y font référence sans les définir. Les jalons ci-dessous marqués
-**[ADR]** sont des contraintes déjà tranchées, extraites des ADR :
+The ADRs refer to them without defining them. The milestones below marked
+**[ADR]** are constraints already settled, extracted from the ADRs:
 
-| Contrainte | Source |
+| Constraint | Source |
 |---|---|
-| L'UI conditionnelle aux capacités est une discipline **dès la phase 0** | [ADR-0003](adr/0003-driver-capabilities.md) |
-| ~~La bascule vers egui reste possible jusqu'à la fin de la phase 1~~ — sans objet depuis le remplacement de GPUI | [ADR-0001](adr/0001-ui-toolkit.md), remplacé par [ADR-0029](adr/0029-interface-tauri-shadcn.md) |
-| Aucun driver des **phases 0 à 3** n'a besoin du sidecar | [ADR-0007](adr/0007-driver-sidecar.md) |
-| Les plugins WASM arrivent en **phase 4**, après 6+ drivers natifs | [ADR-0005](adr/0005-wasm-plugins.md) |
-| Le sidecar arrive en **phase 4** | [ADR-0007](adr/0007-driver-sidecar.md) |
+| UI conditional on capabilities is a discipline **from phase 0** | [ADR-0003](adr/0003-driver-capabilities.md) |
+| ~~Switching to egui remains possible until the end of phase 1~~ — moot since GPUI was replaced | [ADR-0001](adr/0001-ui-toolkit.md), superseded by [ADR-0029](adr/0029-interface-tauri-shadcn.md) |
+| No driver of **phases 0 to 3** needs the sidecar | [ADR-0007](adr/0007-driver-sidecar.md) |
+| WASM plugins arrive in **phase 4**, after 6+ native drivers | [ADR-0005](adr/0005-wasm-plugins.md) |
+| The sidecar arrives in **phase 4** | [ADR-0007](adr/0007-driver-sidecar.md) |
 
-Le reste — le contenu de chaque phase et sa porte de sortie — est **proposé** et
-demande validation. Il n'a pas valeur d'autorité tant que le premier commit de
-code ne l'a pas éprouvé.
+The rest — the content of each phase and its exit gate — is **proposed** and
+requires validation. It has no authority until the first code
+commit has proven it.
 
-Ce que l'ancien §11 d'ARCHITECTURE ordonnait sans que ces phases le placent a
-été rangé le 2026-09-25 : le client SQL qui se suffit à lui-même en fin de
-[phase 2](#phase-2--les-protocoles-qui-comptent), les protocoles non
-relationnels en [phase 3 bis](#phase-3-bis--au-delà-du-relationnel),
-l'élargissement en [phase 4](#phase-4--extension-et-isolation).
+What the former §11 of ARCHITECTURE ordered without these phases placing it was
+sorted on 2026-09-25: the self-sufficient SQL client at the end of
+[phase 2](#phase-2--the-protocols-that-matter), the non-relational
+protocols in [phase 3 bis](#phase-3-bis--beyond-the-relational),
+the broadening in [phase 4](#phase-4--extension-and-isolation).
 
-## Phase 0 — Charpente
+## Phase 0 — Framework
 
-Le but n'est pas d'afficher quelque chose, c'est de rendre les décisions
-exécutables. Une phase 0 bâclée se paie sur toutes les suivantes.
+The goal is not to display something, it is to make the decisions
+executable. A botched phase 0 is paid for in every following one.
 
-- workspace Cargo, `rust-toolchain.toml` épinglé ([ADR-0008](adr/0008-chaine-outils-rust.md)) ;
-- `oxyn-core`, `oxyn-core` avec `Command`, `Actor`, `PolicyGate` ([ADR-0004](adr/0004-command-bus.md)) ;
-- `oxyn-driver` : `Driver`, `Session`, `Capabilities`, `QueryLanguage` ([ADR-0003](adr/0003-driver-capabilities.md)) ;
-- `oxyn-data` : `ResultBuffer` Arrow avec débordement disque ([ADR-0002](adr/0002-arrow-result-model.md)) ;
-- un driver de référence : **SQLite**, en processus, sans réseau ;
-- la commande de qualité `make qualite` qui passe.
+- Cargo workspace, pinned `rust-toolchain.toml` ([ADR-0008](adr/0008-chaine-outils-rust.md));
+- `oxyn-core`, `oxyn-core` with `Command`, `Actor`, `PolicyGate` ([ADR-0004](adr/0004-command-bus.md));
+- `oxyn-driver`: `Driver`, `Session`, `Capabilities`, `QueryLanguage` ([ADR-0003](adr/0003-driver-capabilities.md));
+- `oxyn-data`: Arrow `ResultBuffer` with spill to disk ([ADR-0002](adr/0002-arrow-result-model.md));
+- a reference driver: **SQLite**, in process, without network;
+- the quality command `make qualite` passing.
 
-**Porte de sortie** : une `Command` de lecture émise par un test traverse le
-`PolicyGate`, atteint SQLite, et revient en `RecordBatch`. Sans interface.
+**Exit gate**: a read `Command` emitted by a test goes through the
+`PolicyGate`, reaches SQLite, and comes back as a `RecordBatch`. Without an interface.
 
-> Le choix de SQLite en premier n'est pas un raccourci : c'est le seul driver
-> qui isole le contrat de tout ce qui vient du réseau. Un bug à ce stade est un
-> bug de contrat, pas de protocole.
+> Choosing SQLite first is not a shortcut: it is the only driver
+> that isolates the contract from everything that comes from the network. A bug at this stage is a
+> contract bug, not a protocol bug.
 
-## Phase 1 — Premier trajet visible
+## Phase 1 — First visible path
 
-- fenêtre, éditeur de requête, grille virtualisée sur `RecordBatch` — livrés
-  d'abord en GPUI dans `oxyn-ui`, câblés par `oxyn-app`, puis portés dans
-  `apps/desktop` et `oxyn-desktop` ; les deux crates GPUI ont été retirées le
-  2026-09-18 ([ADR-0029](adr/0029-interface-tauri-shadcn.md)) ;
-- annulation de bout en bout, y compris côté serveur ;
-- les cinq états de vue ([UX-SPEC](UX-SPEC.md#états-dune-vue)).
+- window, query editor, grid virtualized over `RecordBatch` — delivered
+  first in GPUI in `oxyn-ui`, wired by `oxyn-app`, then ported to
+  `apps/desktop` and `oxyn-desktop`; the two GPUI crates were removed on
+  2026-09-18 ([ADR-0029](adr/0029-interface-tauri-shadcn.md));
+- end-to-end cancellation, including on the server side;
+- the five view states ([UX-SPEC](UX-SPEC.md#states-of-a-view)).
 
-**Porte de sortie** : les budgets de [PERFORMANCE](PERFORMANCE.md) sont
-**mesurés**, pas supposés — c'est la première campagne de mesure, et elle
-confirme ou amende les budgets par un ADR.
+**Exit gate**: the budgets of [PERFORMANCE](PERFORMANCE.md) are
+**measured**, not assumed — it is the first measurement campaign, and it
+confirms or amends the budgets through an ADR.
 
-> **Repris du §11 d'ARCHITECTURE**, retiré le 2026-09-25 au profit de ce plan.
-> Son critère de sortie éprouve la porte ci-dessus sur un cas précis : un
-> `SELECT` de 10 M de lignes, premier affichage dans le
-> [budget de PERFORMANCE](PERFORMANCE.md#budgets-dinteraction), mémoire stable,
-> `Échap` qui annule vraiment. **Mesuré**
-> ([PERFORMANCE](PERFORMANCE.md#confrontation-aux-budgets)) : le premier lot en
-> 2,6 ms quelle que soit la taille de la table, et 2 Gio qui traversent un tampon
-> de 256 Mo pour 195 Mio de croissance RSS. **Reste à produire** : ce `SELECT` de
-> bout en bout, et le défilement d'une grille peuplée sous instrument, désormais
-> dans la webview. L'éditeur est CodeMirror 6, coloré par dialecte, avec la
-> complétion de base de `basicSetup` ; une complétion nourrie du catalogue n'y est
-> pas branchée.
+> **Taken over from §11 of ARCHITECTURE**, removed on 2026-09-25 in favor of this plan.
+> Its exit criterion tests the gate above on a specific case: a
+> `SELECT` of 10 M rows, first display within the
+> [PERFORMANCE budget](PERFORMANCE.md#interaction-budgets), stable memory,
+> `Escape` that really cancels. **Measured**
+> ([PERFORMANCE](PERFORMANCE.md#comparison-with-the-budgets)): the first batch in
+> 2.6 ms regardless of the table's size, and 2 GiB going through a buffer
+> of 256 MB for 195 MiB of RSS growth. **Still to produce**: this `SELECT`
+> end to end, and scrolling a populated grid under instrumentation, now
+> in the webview. The editor is CodeMirror 6, highlighted per dialect, with the
+> basic completion of `basicSetup`; a completion fed by the catalog is not
+> wired to it.
 
-> **[ADR]** ~~C'est la dernière phase où la bascule vers egui reste une réécriture
-> de deux crates ([ADR-0001](adr/0001-ui-toolkit.md)). Après, le coût change de
-> nature. Si GPUI doit être remis en cause, c'est ici.~~ — GPUI a été remis en
-> cause par [ADR-0029](adr/0029-interface-tauri-shadcn.md) et retiré le
-> 2026-09-18 ; ce sont désormais les conditions de reconsidération d'ADR-0029
-> qui valent.
+> **[ADR]** ~~This is the last phase where switching to egui remains a rewrite
+> of two crates ([ADR-0001](adr/0001-ui-toolkit.md)). After that, the cost changes
+> in nature. If GPUI is to be called into question, it is here.~~ — GPUI was called into
+> question by [ADR-0029](adr/0029-interface-tauri-shadcn.md) and removed on
+> 2026-09-18; the reconsideration conditions of ADR-0029 now
+> apply.
 
-## Phase 2 — Les protocoles qui comptent
+## Phase 2 — The protocols that matter
 
-- `oxyn-driver-postgres`, `oxyn-driver-mysql` — **ce dernier reporté**, voir
-  ci-dessous ;
-- `oxyn-catalog` : introspection, cache, arborescence ;
-- marquage d'environnement des connexions et stockage au trousseau
+- `oxyn-driver-postgres`, `oxyn-driver-mysql` — **the latter postponed**, see
+  below;
+- `oxyn-catalog`: introspection, cache, tree;
+- environment marking of connections and storage in the keychain
   ([SECURITY](SECURITY.md)).
 
-**Porte de sortie** : la [liste de contrôle driver](../.claude/checklists/revue-driver.md)
-passe intégralement sur les trois drivers, annulation côté serveur comprise.
+**Exit gate**: the [driver checklist](../.claude/checklists/revue-driver.md)
+passes entirely on the three drivers, server-side cancellation included.
 
-**`oxyn-driver-mysql` est reporté après la porte de sortie de la phase 3** —
-décision du 2026-09-24. La phase 3 a un lot daté au plus tard au 2026-10-31
-(ci-dessous) ; le driver MySQL s'écrit juste après, par
-[`/driver`](../.claude/commands/driver.md) et sa liste de contrôle,
-`KILL QUERY` compris. **Raison :** la phase 3 est engagée et a une échéance
-datée ; ouvrir un troisième protocole en même temps disperserait le travail,
-alors que deux drivers livrés, PostgreSQL et SQLite, suffisent à éprouver les traits de
-[`oxyn-driver`](../crates/oxyn-driver/src/traits.rs). Tant que MySQL manque, la
-porte de sortie de la phase 2 n'est **pas franchie** : elle nomme trois drivers,
-et ce report ne la réduit pas à deux.
+**`oxyn-driver-mysql` is postponed until after the exit gate of phase 3** —
+decision of 2026-09-24. Phase 3 has a batch dated 2026-10-31 at the latest
+(below); the MySQL driver is written right after, through
+[`/driver`](../.claude/commands/driver.md) and its checklist,
+`KILL QUERY` included. **Reason:** phase 3 is under way and has a dated
+deadline; opening a third protocol at the same time would scatter the work,
+whereas two delivered drivers, PostgreSQL and SQLite, are enough to test the traits of
+[`oxyn-driver`](../crates/oxyn-driver/src/traits.rs). As long as MySQL is missing, the
+exit gate of phase 2 is **not passed**: it names three drivers,
+and this postponement does not reduce it to two.
 
-**Proposé — le client SQL qui se suffit à lui-même.** Rangé ici le 2026-09-25
-depuis l'ancien §11 d'ARCHITECTURE, qui le plaçait avant l'IA : à ce stade,
-Oxyn est un bon client SQL sans une ligne d'IA.
+**Proposed — the self-sufficient SQL client.** Placed here on 2026-09-25
+from the former §11 of ARCHITECTURE, which put it before AI: at this stage,
+Oxyn is a good SQL client without a single line of AI.
 
-- `oxyn-driver-duckdb` et `oxyn-driver-clickhouse` — **à écrire**, par
-  [`/driver`](../.claude/commands/driver.md) ;
-- l'export d'un résultat — **existe** : CSV, JSON et Arrow IPC, écrits en flux
-  depuis le `ResultBuffer` (`crates/oxyn-data/src/export.rs`), offerts par
-  `ExportMenu` sous la console, l'aperçu Data et le résultat retenu ;
-- l'historique des exécutions — **existe** : la table `query_history`
-  (`crates/oxyn-store/src/history.rs`), séparée des brouillons et des requêtes
-  sauvegardées par [ADR-0014](adr/0014-documents-et-historique.md) ;
-- l'édition de données avec aperçu du DML — **à écrire**. Ce qui existe est
-  l'aperçu Data d'une table, en lecture seule
+- `oxyn-driver-duckdb` and `oxyn-driver-clickhouse` — **to be written**, through
+  [`/driver`](../.claude/commands/driver.md);
+- exporting a result — **exists**: CSV, JSON and Arrow IPC, streamed
+  from the `ResultBuffer` (`crates/oxyn-data/src/export.rs`), offered by
+  `ExportMenu` under the console, the Data preview and the retained result;
+- the execution history — **exists**: the `query_history` table
+  (`crates/oxyn-store/src/history.rs`), separated from drafts and saved
+  queries by [ADR-0014](adr/0014-documents-et-historique.md);
+- data editing with a DML preview — **to be written**. What exists is
+  the Data preview of a table, read-only
   (`apps/desktop/src/features/workspace/object-view.tsx`,
   [ADR-0020](adr/0020-apercu-trie-filtre-parcouru.md),
-  [ADR-0028](adr/0028-pas-dordre-par-defaut-pas-de-page-sans-ordre-total.md)) :
-  c'est la surface où l'édition se posera. Ni l'édition ni le DML montré avant
-  envoi n'existent.
+  [ADR-0028](adr/0028-pas-dordre-par-defaut-pas-de-page-sans-ordre-total.md)):
+  it is the surface where editing will sit. Neither editing nor DML shown before
+  sending exist.
 
-## Phase 3 — Le workspace IA
+## Phase 3 — The AI workspace
 
-- `oxyn-ai` : fournisseurs local et distant, point de passage unique ;
-- niveaux de confidentialité par connexion ([ADR-0006](adr/0006-ai-privacy-tiers.md)) ;
-- agents proposant des `Command` portant `Actor::Agent`.
+- `oxyn-ai`: local and remote providers, single gateway;
+- privacy tiers per connection ([ADR-0006](adr/0006-ai-privacy-tiers.md));
+- agents proposing `Command`s carrying `Actor::Agent`.
 
-**Porte de sortie** : Oxyn reste un client complet, sans dégradation, avec zéro
-fournisseur configuré — vérifié par un test, pas par conviction.
+**Exit gate**: Oxyn remains a complete client, without degradation, with zero
+providers configured — checked by a test, not by conviction.
 
-**Fait le 2026-09-24 — l'échantillon ne lit que les colonnes cochées.** La
-lecture d'un échantillon, épinglé ou demandé par un agent
-([ADR-0034](adr/0034-echantillon-pour-toute-destination.md)), est un
-`PreviewRelation` dont la forme porte une projection : `PreviewShape::columns`,
-des noms que le driver vérifie contre la relation et cite
-([I-10](../CLAUDE.md#i-10), [DRIVER-CONTRACT](DRIVER-CONTRACT.md#6-il-échappe-tout-identifiant-quil-compose)).
-Le serveur ne rend que les colonnes approuvées, PostgreSQL et SQLite compris ;
-rien de non coché n'entre dans le `ResultBuffer`.
+**Done on 2026-09-24 — the sample only reads the checked columns.** Reading
+a sample, pinned or requested by an agent
+([ADR-0034](adr/0034-echantillon-pour-toute-destination.md)), is a
+`PreviewRelation` whose shape carries a projection: `PreviewShape::columns`,
+names the driver checks against the relation and quotes
+([I-10](../CLAUDE.md#i-10), [DRIVER-CONTRACT](DRIVER-CONTRACT.md#6-it-escapes-every-identifier-it-composes)).
+The server only returns the approved columns, PostgreSQL and SQLite included;
+nothing unchecked enters the `ResultBuffer`.
 
-**Reste à faire, noté le 2026-09-24 — le journal des commandes ne montre pas la
-projection.** `audit_journal` n'enregistre aucun texte pour un
-`PreviewRelation` : ni tri, ni prédicat, ni colonnes. La projection se retrouve
-dans la `Command` et dans l'audit `ai_egress`, relié à l'entrée du journal par
-`command_id`, mais pas dans le journal lui-même. Y écrire le SQL composé ferait
-entrer le prédicat de l'utilisateur au journal : c'est une décision à part
-entière, pas un effet de bord de la projection. **Ce qui le débloque** : cette
-décision, prise pour tous les aperçus et non pour le seul échantillon.
-**Échéance** : avant la porte de sortie de cette phase, et au plus tard le
+**Still to do, noted on 2026-09-24 — the command journal does not show the
+projection.** `audit_journal` records no text for a
+`PreviewRelation`: no sort, no predicate, no columns. The projection is found
+in the `Command` and in the `ai_egress` audit, linked to the journal entry through
+`command_id`, but not in the journal itself. Writing the composed SQL there would
+put the user's predicate into the journal: it is a decision in its own
+right, not a side effect of the projection. **What unblocks it**: that
+decision, taken for all previews and not for the sample alone.
+**Deadline**: before the exit gate of this phase, and at the latest on
 2026-10-31.
 
-**Reste à faire, noté le 2026-09-25 — la sortie de lignes vers un agent se
-confirme encore dans la webview.** [ADR-0037](adr/0037-dialogue-natif-pour-les-confirmations-critiques.md)
-décide qu'une écriture en `production`, une sortie de lignes vers un agent et
-un changement de marquage se confirment dans un dialogue natif. Le port
-`HostConfirm` existe (`crates/oxyn-desktop/src/backend/confirm.rs`), et
-`decide`, `decide_connection`, `decide_connection_change` et
-`update_connection` le traversent. Restent la famille 2 — `ai_answer_sample`
-et le champ `sample` d'`ai_ask` accordent toujours sur un simple appel — et
-`ai_save_external_agent`, qui ouvre encore son dialogue sans passer par le
-port. **Ce qui le débloque** : la fin des travaux en cours sur l'assistant
-(`commands/ai.rs`, `backend/ai`), puis un commit par chemin, avec les tests du
-§ 4 de l'ADR. **Échéance** : au plus tard le 2026-10-31.
+**Still to do, noted on 2026-09-25 — sending rows to an agent is still
+confirmed in the webview.** [ADR-0037](adr/0037-dialogue-natif-pour-les-confirmations-critiques.md)
+decides that a write on `production`, sending rows to an agent and
+a change of marking are confirmed in a native dialog. The
+`HostConfirm` port exists (`crates/oxyn-desktop/src/backend/confirm.rs`), and
+`decide`, `decide_connection`, `decide_connection_change` and
+`update_connection` go through it. What remains is family 2 — `ai_answer_sample`
+and the `sample` field of `ai_ask` still grant on a simple call — and
+`ai_save_external_agent`, which still opens its dialog without going through the
+port. **What unblocks it**: the end of the work in progress on the assistant
+(`commands/ai.rs`, `backend/ai`), then one commit per path, with the tests of
+§ 4 of the ADR. **Deadline**: at the latest on 2026-10-31.
 
-## Phase 3 bis — Au-delà du relationnel
+## Phase 3 bis — Beyond the relational
 
-Proposée le 2026-09-25, reprise de l'ancien §11 d'ARCHITECTURE. Numérotée
-« 3 bis » pour ne déplacer ni l'ancre ni les renvois de la phase 4.
+Proposed on 2026-09-25, taken over from the former §11 of ARCHITECTURE. Numbered
+"3 bis" so as to move neither the anchor nor the references of phase 4.
 
 - `oxyn-driver-mongodb`, `oxyn-driver-redis`, `oxyn-driver-elasticsearch` —
-  OpenSearch parle le protocole d'Elasticsearch, il n'a pas de driver à lui
+  OpenSearch speaks the Elasticsearch protocol, it has no driver of its own
   ([ADR-0003](adr/0003-driver-capabilities.md)).
 
-**Pourquoi ici, avant les plugins.** C'est ici que le modèle de capacités
-([ADR-0003](adr/0003-driver-capabilities.md)) et `QueryLanguage` sont mis à
-l'épreuve : Redis n'a pas de schéma, Elasticsearch pas de SQL, MongoDB pas de
-colonnes fixes. S'ils sont mal conçus, mieux vaut le découvrir maintenant
-qu'au vingtième driver — et avant que la phase 4 n'ouvre ces traits aux
-plugins, où une erreur se supporte indéfiniment. Le sidecar reste en phase 4
-([ADR-0007](adr/0007-driver-sidecar.md)) : un driver de cette phase qui en
-aurait besoin rouvrirait cet ADR.
+**Why here, before plugins.** This is where the capability model
+([ADR-0003](adr/0003-driver-capabilities.md)) and `QueryLanguage` are put to
+the test: Redis has no schema, Elasticsearch no SQL, MongoDB no fixed
+columns. If they are badly designed, better to find out now
+than at the twentieth driver — and before phase 4 opens these traits to
+plugins, where a mistake has to be supported indefinitely. The sidecar stays in phase 4
+([ADR-0007](adr/0007-driver-sidecar.md)): a driver of this phase that
+needed it would reopen that ADR.
 
-**Porte de sortie** proposée : les trois drivers passent la
-[liste de contrôle driver](../.claude/checklists/revue-driver.md), et aucune
-surface de l'interface ni aucun agent ne teste le nom d'un driver pour savoir
-quoi offrir — seulement ses `Capabilities` et ses `QueryLanguage`. Une capacité
-ou un langage qu'il a fallu ajouter pour eux est consigné dans un ADR qui
-précise [ADR-0003](adr/0003-driver-capabilities.md), pas glissé dans le trait.
+**Exit gate** proposed: the three drivers pass the
+[driver checklist](../.claude/checklists/revue-driver.md), and no
+interface surface nor any agent tests a driver's name to know
+what to offer — only its `Capabilities` and its `QueryLanguage`. A capability
+or a language that had to be added for them is recorded in an ADR that
+clarifies [ADR-0003](adr/0003-driver-capabilities.md), not slipped into the trait.
 
-## Phase 4 — Extension et isolation
+## Phase 4 — Extension and isolation
 
-**[ADR]** Ce qui a été délibérément reporté ici :
+**[ADR]** What was deliberately postponed here:
 
-- `oxyn-plugin` : hôte wasmtime, interfaces WIT ([ADR-0005](adr/0005-wasm-plugins.md)) ;
-- `oxyn-driverd` : sidecar pour Oracle, Couchbase, SDK cloud ([ADR-0007](adr/0007-driver-sidecar.md)) ;
-- élargissement aux familles NoSQL, vectorielle, graphe, séries temporelles —
-  Neo4j, Qdrant, Cassandra, DynamoDB, Influx — et, repris de l'ancien §11
-  d'ARCHITECTURE le 2026-09-25, les agents restants, les diagrammes ER, les
-  dictionnaires de données et la comparaison de versions.
+- `oxyn-plugin`: wasmtime host, WIT interfaces ([ADR-0005](adr/0005-wasm-plugins.md));
+- `oxyn-driverd`: sidecar for Oracle, Couchbase, cloud SDKs ([ADR-0007](adr/0007-driver-sidecar.md));
+- broadening to the NoSQL, vector, graph and time-series families —
+  Neo4j, Qdrant, Cassandra, DynamoDB, Influx — and, taken over from the former §11
+  of ARCHITECTURE on 2026-09-25, the remaining agents, ER diagrams, data
+  dictionaries and version comparison.
 
-**Condition d'entrée**, et non de sortie : au moins six drivers natifs livrés.
-Ouvrir une frontière d'extension sur des traits que trop peu d'implémentations
-ont éprouvés fige des erreurs qu'il faudra ensuite supporter indéfiniment.
+**Entry condition**, not exit condition: at least six native drivers delivered.
+Opening an extension boundary on traits that too few implementations
+have tested freezes mistakes that will then have to be supported indefinitely.
 
-## Vérification exigence par exigence — 2026-09-15
+## Requirement-by-requirement verification — 2026-09-15
 
-Chaque ligne nomme **le test ou le code qui la tient**, pas une impression. Une
-exigence sans preuve nommée est marquée non tenue, même si le code semble la
-couvrir.
+Each row names **the test or the code that holds it**, not an impression. A
+requirement without named evidence is marked not held, even if the code seems to
+cover it.
 
-### Aperçu de table — tenu
+### Table preview — held
 
-| Exigence | Ce qui la tient |
+| Requirement | What holds it |
 |---|---|
-| `PreviewSort`, `PreviewFilter`, pagination dans la commande | `oxyn-core/src/preview.rs` (`PreviewShape` : `sort`, `filter`, `offset`), porté par `Command::PreviewRelation` |
-| Capacités | `Capabilities::PREVIEW_SORT`, `PREVIEW_FILTER` |
-| SQL composé avec identifiants cités, les deux drivers | `quote_identifier` dans `drivers/oxyn-driver-sqlite/src/preview.rs` et `.../postgres/src/preview.rs` |
-| Tri déterministe | `a_page_is_offered_only_where_the_order_is_total` — une page suivante n'est offerte que si l'ordre est total |
-| Annulation | `escape_in_the_filter_field_still_stops_the_read_at_the_server` |
-| Pas de réexécution involontaire | `a_stale_answer_never_overwrites_a_newer_filter` |
-| État vide | `a_predicate_that_matches_nothing_is_empty_not_failed`, `an_empty_answer_says_whether_a_filter_caused_it` |
-| État en cours | `typing_dispatches_nothing_and_the_bar_says_the_draft_is_not_in_force` |
-| État erreur | `an_invalid_predicate_shows_the_server_message_and_keeps_no_false_rows` |
-| Filtré / trié | `a_predicate_filters_the_real_rows_and_leaves_the_sql_draft_alone`, `a_sort_changes_the_order_the_server_returns` |
-| Page suivante | `two_consecutive_pages_do_not_overlap` |
-| Capacité absente | `a_session_without_the_capabilities_has_no_bar_and_dispatches_nothing` |
+| `PreviewSort`, `PreviewFilter`, pagination in the command | `oxyn-core/src/preview.rs` (`PreviewShape`: `sort`, `filter`, `offset`), carried by `Command::PreviewRelation` |
+| Capabilities | `Capabilities::PREVIEW_SORT`, `PREVIEW_FILTER` |
+| SQL composed with quoted identifiers, both drivers | `quote_identifier` in `drivers/oxyn-driver-sqlite/src/preview.rs` and `.../postgres/src/preview.rs` |
+| Deterministic sort | `a_page_is_offered_only_where_the_order_is_total` — a next page is only offered if the order is total |
+| Cancellation | `escape_in_the_filter_field_still_stops_the_read_at_the_server` |
+| No involuntary re-execution | `a_stale_answer_never_overwrites_a_newer_filter` |
+| Empty state | `a_predicate_that_matches_nothing_is_empty_not_failed`, `an_empty_answer_says_whether_a_filter_caused_it` |
+| Running state | `typing_dispatches_nothing_and_the_bar_says_the_draft_is_not_in_force` |
+| Error state | `an_invalid_predicate_shows_the_server_message_and_keeps_no_false_rows` |
+| Filtered / sorted | `a_predicate_filters_the_real_rows_and_leaves_the_sql_draft_alone`, `a_sort_changes_the_order_the_server_returns` |
+| Next page | `two_consecutive_pages_do_not_overlap` |
+| Missing capability | `a_session_without_the_capabilities_has_no_bar_and_dispatches_nothing` |
 
-### Sécurité et IA — tenu, sauf une garantie de type
+### Security and AI — held, except for one type guarantee
 
-| Exigence | Ce qui la tient |
+| Requirement | What holds it |
 |---|---|
-| Refus d'écriture production à un agent | `oxyn-core/src/policy.rs` : `actor.is_agent() && mutating && env.is_production()` rend `Decision::deny` — un refus, pas une confirmation ([I-02](../CLAUDE.md#i-02)). Test : `un_agent_n_est_jamais_moins_restreint_qu_un_humain` |
-| Point de passage unique du contexte | `ContextBuilder::build` (`oxyn-ai/src/context.rs`), seule fabrique d'`AgentContext` |
-| Aucune sortie serveur brute | `FailureReport` filtre **à la construction**, sous le niveau de la connexion |
-| Aucune sortie IA exécutée | `open_proposal` ouvre une console et n'exécute rien ; refuse même d'écrire sans provenance |
-| Provenance persistante | colonne `documents.provenance`, `coalesce` à l'écriture, visible sur l'onglet **et** dans la bibliothèque |
-| Test de sentinelle | `aucune_sentinelle_natteint_le_fichier_de_workspace` — balaie **toutes** les tables et colonnes via `sqlite_master`, sans en nommer aucune |
-| Porte d'I-04 typée pour **les deux** destinations | **tenu depuis le 2026-09-15.** `run_turn` prend un `AgentPrompt`, dont le seul constructeur exige le niveau ([ADR-0027](adr/0027-porte-unique-pour-les-deux-destinations.md), option B). `run_turn` garde sa propre vérification : la porte protège l'assemblage, la vérification protège le lancement. Tests : `sous_local_aucune_invite_ne_se_compose`, plus deux `compile_fail` qui interdisent tout constructeur naïf |
-| I-03 — canal journal | Test **préventif** : rien ne formate un secret sur ce chemin aujourd'hui, donc retirer une garde ailleurs ne le fait pas rougir tout seul ; vérifié à la main en ajoutant un `tracing::debug!` qui formate une clé de fournisseur dans `save_ai_provider`, en confirmant le rouge, puis en revenant en arrière. `no_sentinel_reaches_the_journal` (`crates/oxyn-desktop/src/sentinel_tests.rs`) — toute la sortie tracing du binaire à `OXYN_LOG=trace`, à travers les deux filtres réels de `logging::layer`, pendant une connexion refusée et une édition de fournisseur |
-| I-03 — canal erreur affichée | Éprouve le retrait d'une garde existante — `redact_key` (`oxyn-llm`). `no_sentinel_reaches_an_error_shown_to_the_front` (`crates/oxyn-desktop/src/sentinel_tests.rs`) — `IpcError` sérialisée et tous les messages du `Channel<AiUpdate>`, avec un fournisseur hostile qui recopie la clé reçue et une URL de fournisseur qui porte un secret |
-| I-03 — canal invite IA | Test **préventif** : `ContextBuilder::build` ne prend ni la connexion ni le fournisseur en argument, donc rien n'y formate le secret aujourd'hui ; vérifié à la main en faisant porter la clé du fournisseur dans la question assemblée par `converse` (`backend/ai/conversation.rs`), en confirmant le rouge, puis en revenant en arrière. `no_sentinel_reaches_the_prompt_sent_to_a_provider` (`crates/oxyn-desktop/src/sentinel_tests.rs`) — le corps exact de la requête `chat/completions` envoyée au fournisseur, prompt assemblé par `ContextBuilder` compris |
-| I-03 — canal presse-papiers | Éprouve le retrait d'une garde existante — le choix de l'appelant de `copyToClipboard` de ne jamais lui passer un identifiant de connexion ou de session. `describe("copying from an open connection's object inspector")` / `it("copies the qualified name only, never the connection or session that opened it")` (`apps/desktop/src/features/metadata/clipboard.test.tsx`) — limité aux copies qui passent par `copyToClipboard` (`src/features/metadata/clipboard.ts`) ; les copies directes d'`assistant-panel.tsx` et de `result-grid.tsx` n'y sont pas couvertes |
-| I-03 — canal rapport de plantage | **N'existe pas.** Aucune crate de rapport de plantage (`sentry`, `minidump`, `crashpad` absents de `Cargo.lock`), aucun `std::panic::set_hook`, et `panic = "abort"` en profil `release` (racine `Cargo.toml`). Le seul texte d'un plantage est le message de panique par défaut sur `stderr` : rien à balayer |
+| Refusal of production writes to an agent | `oxyn-core/src/policy.rs`: `actor.is_agent() && mutating && env.is_production()` returns `Decision::deny` — a refusal, not a confirmation ([I-02](../CLAUDE.md#i-02)). Test: `un_agent_n_est_jamais_moins_restreint_qu_un_humain` |
+| Single context gateway | `ContextBuilder::build` (`oxyn-ai/src/context.rs`), the only factory of `AgentContext` |
+| No raw server output | `FailureReport` filters **at construction**, under the connection's tier |
+| No AI output executed | `open_proposal` opens a console and runs nothing; it even refuses to write without provenance |
+| Persistent provenance | `documents.provenance` column, `coalesce` on write, visible on the tab **and** in the library |
+| Sentinel test | `aucune_sentinelle_natteint_le_fichier_de_workspace` — sweeps **all** tables and columns via `sqlite_master`, without naming any |
+| I-04 gate typed for **both** destinations | **held since 2026-09-15.** `run_turn` takes an `AgentPrompt`, whose only constructor requires the tier ([ADR-0027](adr/0027-porte-unique-pour-les-deux-destinations.md), option B). `run_turn` keeps its own check: the gate protects assembly, the check protects launch. Tests: `sous_local_aucune_invite_ne_se_compose`, plus two `compile_fail` that forbid any naive constructor |
+| I-03 — log channel | **Preventive** test: nothing formats a secret on this path today, so removing a guard elsewhere does not turn it red on its own; checked by hand by adding a `tracing::debug!` that formats a provider key in `save_ai_provider`, confirming the red, then reverting. `no_sentinel_reaches_the_journal` (`crates/oxyn-desktop/src/sentinel_tests.rs`) — the binary's whole tracing output at `OXYN_LOG=trace`, through the two real filters of `logging::layer`, during a refused connection and a provider edit |
+| I-03 — displayed error channel | Tests the removal of an existing guard — `redact_key` (`oxyn-llm`). `no_sentinel_reaches_an_error_shown_to_the_front` (`crates/oxyn-desktop/src/sentinel_tests.rs`) — serialized `IpcError` and all messages of the `Channel<AiUpdate>`, with a hostile provider that copies the key it receives and a provider URL that carries a secret |
+| I-03 — AI prompt channel | **Preventive** test: `ContextBuilder::build` takes neither the connection nor the provider as an argument, so nothing formats the secret there today; checked by hand by making the provider key appear in the question assembled by `converse` (`backend/ai/conversation.rs`), confirming the red, then reverting. `no_sentinel_reaches_the_prompt_sent_to_a_provider` (`crates/oxyn-desktop/src/sentinel_tests.rs`) — the exact body of the `chat/completions` request sent to the provider, prompt assembled by `ContextBuilder` included |
+| I-03 — clipboard channel | Tests the removal of an existing guard — the choice of the caller of `copyToClipboard` never to pass it a connection or session identifier. `describe("copying from an open connection's object inspector")` / `it("copies the qualified name only, never the connection or session that opened it")` (`apps/desktop/src/features/metadata/clipboard.test.tsx`) — limited to copies that go through `copyToClipboard` (`src/features/metadata/clipboard.ts`); the direct copies of `assistant-panel.tsx` and `result-grid.tsx` are not covered |
+| I-03 — crash report channel | **Does not exist.** No crash report crate (`sentry`, `minidump`, `crashpad` absent from `Cargo.lock`), no `std::panic::set_hook`, and `panic = "abort"` in the `release` profile (root `Cargo.toml`). The only text of a crash is the default panic message on `stderr`: nothing to sweep |
 
-### Reprise et bibliothèque — tenu en partie
+### Recovery and library — partly held
 
-Relu le 2026-09-25 : les tests marqués « supprimé » vivaient dans `oxyn-app` et
-ont disparu avec `6ecb8ce`, sans équivalent dans `apps/desktop`. Leur ligne
-n'est plus tenue ; la [porte de la migration](#migration-vers-linterface-tauri)
-dit ce qui manque.
+Reread on 2026-09-25: the tests marked "deleted" lived in `oxyn-app` and
+disappeared with `6ecb8ce`, with no equivalent in `apps/desktop`. Their row
+is no longer held; the [migration gate](#migration-to-the-tauri-interface)
+says what is missing.
 
-| Exigence | Ce qui la tient |
+| Requirement | What holds it |
 |---|---|
-| Marqueur d'arrêt propre/anormal | `PreviousShutdown { Never, Clean, Abnormal }` ([ADR-0021](adr/0021-marqueur-d-arret.md)) |
-| Tests de crash/restart | `une_premiere_ouverture_ne_signale_aucun_arret_anormal`, `une_fermeture_ordinaire_ne_declenche_pas_la_reprise`, `une_session_laissee_ouverte_et_muette_est_un_arret_anormal`, `une_instance_qui_bat_encore_n_est_pas_un_plantage`, `un_battement_ne_ressuscite_pas_une_session_fermee` (`oxyn-store/src/sessions.rs`) |
-| Emplacement d'objet et sous-onglet restaurés sans lecture | **fait le 2026-09-25.** Le champ unique `object_location` d'[ADR-0013](adr/0013-preferences-workspace.md), lu et écrit par `read_object_location` / `write_object_location`. Côté Rust, `a_restored_location_and_its_sub_tab_come_back_without_reading_anything` (`crates/oxyn-desktop/src/backend/settings/location_tests.rs`) prouve que relire l'emplacement n'émet que des commandes de préférences, sans session. Côté front, `a restored object tab` (`apps/desktop/src/features/workspace/object-view.test.tsx`) prouve que l'onglet rouvert ne rend l'aperçu visible ni ne charge de métadonnée avant « Read it now », et ne déplace pas l'emplacement enregistré ; l'écran de reprise le propose (story `Oxyn/RecoveryList`, `WithAnObjectTab`) |
-| Restauration sans écraser les données | **fait le 2026-09-25.** `a_restored_object_that_vanished_is_explained_and_never_erased` (même fichier Rust) prouve que ni une lecture ni une autre écriture ne l'efface, et que seule la fermeture de l'onglet l'oublie. L'explication (story `Oxyn/RestoredObjectNotice`, `Vanished`) paraît quand la relecture des colonnes ne trouve plus la relation — sur Structure, Indexes et Relations sortantes ; ailleurs, c'est l'erreur du serveur qui le dit |
-| Connexions supprimées ou hors workspace dans les filtres | **non tenu côté interface** — `a_deleted_connection_stays_choosable_in_the_history_filter` et `merging_history_connections_appends_and_marks_without_moving_ranks` supprimés |
-| Pagination bornée | `document_pages_are_bounded_literal_and_do_not_open_oversized_bodies` (`oxyn-store`) |
-| Inspection en lecture seule | `history_and_recent_results_read_the_same_execution_without_replaying_it` (`oxyn-desktop/src/backend/library.rs`) ; les stories `LibraryEntryView` (`History`, `NeedsInspection`, `SavedWithWorkingCopy`) et `LibraryPanel` (`RecentResults`) tiennent la vue Tauri |
+| Clean/abnormal shutdown marker | `PreviousShutdown { Never, Clean, Abnormal }` ([ADR-0021](adr/0021-marqueur-d-arret.md)) |
+| Crash/restart tests | `une_premiere_ouverture_ne_signale_aucun_arret_anormal`, `une_fermeture_ordinaire_ne_declenche_pas_la_reprise`, `une_session_laissee_ouverte_et_muette_est_un_arret_anormal`, `une_instance_qui_bat_encore_n_est_pas_un_plantage`, `un_battement_ne_ressuscite_pas_une_session_fermee` (`oxyn-store/src/sessions.rs`) |
+| Object location and sub-tab restored without reading | **done on 2026-09-25.** The single field `object_location` of [ADR-0013](adr/0013-preferences-workspace.md), read and written by `read_object_location` / `write_object_location`. On the Rust side, `a_restored_location_and_its_sub_tab_come_back_without_reading_anything` (`crates/oxyn-desktop/src/backend/settings/location_tests.rs`) proves that rereading the location only emits preference commands, without a session. On the front-end side, `a restored object tab` (`apps/desktop/src/features/workspace/object-view.test.tsx`) proves that the reopened tab neither makes the preview visible nor loads metadata before "Read it now", and does not move the saved location; the recovery screen offers it (story `Oxyn/RecoveryList`, `WithAnObjectTab`) |
+| Restoration without overwriting data | **done on 2026-09-25.** `a_restored_object_that_vanished_is_explained_and_never_erased` (same Rust file) proves that neither a read nor another write erases it, and that only closing the tab forgets it. The explanation (story `Oxyn/RestoredObjectNotice`, `Vanished`) appears when rereading the columns no longer finds the relation — on Structure, Indexes and outgoing Relations; elsewhere, the server's error says so |
+| Deleted or out-of-workspace connections in the filters | **not held on the interface side** — `a_deleted_connection_stays_choosable_in_the_history_filter` and `merging_history_connections_appends_and_marks_without_moving_ranks` deleted |
+| Bounded pagination | `document_pages_are_bounded_literal_and_do_not_open_oversized_bodies` (`oxyn-store`) |
+| Read-only inspection | `history_and_recent_results_read_the_same_execution_without_replaying_it` (`oxyn-desktop/src/backend/library.rs`); the stories `LibraryEntryView` (`History`, `NeedsInspection`, `SavedWithWorkingCopy`) and `LibraryPanel` (`RecentResults`) hold the Tauri view |
 
-### Ce qui reste non tenu, et pourquoi
+### What remains not held, and why
 
-> **Une exigence a été écartée par son commanditaire, et c'est une contradiction
-> qu'il faut lire comme telle.** Le plan de travail de cette session demandait
-> « lancer la recette native de l'application à plusieurs tailles et dans les
-> deux thèmes » **et**, dans la même phrase, « sans perturber l'ordinateur de
-> l'utilisateur ». Interrogé le 2026-09-15, celui-ci a maintenu son instruction
-> du 2026-09-10 : aucune fenêtre ne s'ouvre sur son écran.
+> **One requirement was set aside by the person who asked for it, and it is a contradiction
+> that must be read as such.** This session's work plan asked to
+> "run the application's native acceptance test at several sizes and in both
+> themes" **and**, in the same sentence, "without disturbing the user's
+> computer". Asked on 2026-09-15, the user maintained their instruction
+> of 2026-09-10: no window opens on their screen.
 >
-> Les deux moitiés de l'exigence ne peuvent donc pas être satisfaites ensemble
-> sur cette machine. Ce n'est pas un arbitrage qu'un agent peut rendre à sa
-> place, et il a été rendu : **la seconde moitié l'emporte**. Les trois lignes
-> ci-dessous en découlent, et n'ont pas vocation à être comblées tant que cette
-> décision tient.
+> Both halves of the requirement therefore cannot be satisfied together
+> on this machine. It is not a decision an agent can make in their
+> place, and it was made: **the second half wins**. The three rows
+> below follow from it, and are not meant to be filled as long as that
+> decision holds.
 
 
-| Exigence | État |
+| Requirement | State |
 |---|---|
-| **UI native** — recette à plusieurs tailles et dans les deux thèmes | **non tenu, et c'est une décision.** Interrogé le 2026-09-15, l'utilisateur a **maintenu** son instruction du 2026-09-10 : aucune fenêtre n'est ouverte sur son écran. Ce n'est donc pas un reste à faire qu'on aurait oublié, mais un arbitrage assumé entre la preuve pixel et le fait de ne pas interrompre son travail. Aucun test GPUI ne la remplace : le harnais installe une métrique de texte déterministe *et* fausse |
-| **Accessibilité** — recette clavier complète | partiel. Les points bloquants de [revue-ui](../.claude/checklists/revue-ui.md) ont leurs tests ; le `Close` d'onglet a été rendu atteignable **sans** test, pour une raison écrite à côté du code |
-| **Performance** — défilement d'une grille peuplée | non mesuré : demande `xcrun xctrace` attaché au processus, donc l'application lancée. La **valeur 256 Mo du tampon**, elle, est désormais mesurée — 2 Gio poussés, RSS +195 Mio, 1,84 Gio sur disque ([PERFORMANCE](PERFORMANCE.md)) ; seule son **automatisation** reste bloquée par [I-03](../CLAUDE.md#i-03) ou `unsafe_code = "deny"` |
-| **Figma** — fidélité visuelle | les neuf planches sont confrontées *en mesures et en textes* ; la fidélité **pixel** relève de la recette native |
+| **Native UI** — acceptance test at several sizes and in both themes | **not held, and it is a decision.** Asked on 2026-09-15, the user **maintained** their instruction of 2026-09-10: no window is opened on their screen. It is therefore not a forgotten to-do item, but a deliberate trade-off between pixel proof and not interrupting their work. No GPUI test replaces it: the harness installs text metrics that are deterministic *and* wrong |
+| **Accessibility** — full keyboard acceptance test | partial. The blocking points of [revue-ui](../.claude/checklists/revue-ui.md) have their tests; the tab `Close` was made reachable **without** a test, for a reason written next to the code |
+| **Performance** — scrolling a populated grid | not measured: requires `xcrun xctrace` attached to the process, hence the application launched. The **256 MB buffer value**, for its part, is now measured — 2 GiB pushed, RSS +195 MiB, 1.84 GiB on disk ([PERFORMANCE](PERFORMANCE.md)); only its **automation** remains blocked by [I-03](../CLAUDE.md#i-03) or `unsafe_code = "deny"` |
+| **Figma** — visual fidelity | the nine boards are compared *in measurements and texts*; **pixel** fidelity is a matter for the native acceptance test |
 
-## Journal de validation du 2026-09-15
+## Validation log of 2026-09-15
 
-Trois relectures indépendantes à périmètres disjoints — invariants, sécurité,
-divergences code/docs — puis confrontation des frames Figma au serveur. Ce qui
-suit est le relevé de ce qui a été **trouvé**, pas de ce qui a été parcouru.
+Three independent reviews with disjoint scopes — invariants, security,
+code/docs divergences — then comparison of the Figma frames against the server. What
+follows is the record of what was **found**, not of what was gone through.
 
-### Défauts de code trouvés et corrigés
+### Code defects found and fixed
 
-Chacun est fermé par un test, et chaque test a été éprouvé par sabotage : la
-garde retirée, le test rougit. Les sabotages ont été défaits.
+Each one is closed by a test, and each test was tested by sabotage: the
+guard removed, the test turns red. The sabotages were undone.
 
-| Défaut | Pourquoi il ne rougissait nulle part |
+| Defect | Why it turned red nowhere |
 |---|---|
-| **Le mode agent externe était inatteignable** — la garde de `ask_assistant` et `provider_for` décidaient séparément, avec des conditions qui se recouvraient : passé la garde, `provider_for` rendait toujours `Some`, et un utilisateur n'ayant déclaré qu'un agent voyait « aucune IA » | tout le lot ACP compilait, et sa sécurité — permissions, refus par défaut, contrôle de niveau — n'était exercée par aucun chemin réel |
-| **Le bouton d'arrêt d'un tour d'agent ne coupait rien** : le jeton était créé, rendu au panneau, jamais transmis à `run_turn` | l'affichage passait bien en « arrêt en cours » ; seul le sous-processus continuait |
-| **Le panneau mourait après un tour d'agent** — pas de remise à zéro d'`active` | le chemin fournisseur, lui, l'avait ; rien ne comparait les deux |
-| **`Debug` d'`AiProviderConfig` rendait l'URL entière**, en se fiant à `validate()` — qui n'est appelée qu'à l'autre bout du bus | une clé collée dans le champ « point d'accès » vivait en clair dans une valeur en transit |
-| **Les valeurs d'environnement d'un agent n'étaient ni bornées ni assainies** | un NUL y est tronqué en silence au lancement : l'agent reçoit autre chose que ce qui est affiché **et** persisté |
-| **La provenance d'agent manquait dans la bibliothèque** — `DocumentSummary` n'avait aucun champ pour elle | la marque était visible sur l'onglet, c'est-à-dire là où l'on n'en a pas besoin, et absente là où l'on relit un texte un an plus tard ([ADR-0023](adr/0023-fournisseurs-declares-et-provenance.md)) |
-| **`Metrics::toolbar_height` valait 52 ; la maquette dit 48** | documenté, sourcé, daté **et** ancré par un test vert — mais le champ n'avait aucun lecteur, la vue écrivant `48` en dur. Cas d'école d'[I-12](../CLAUDE.md#i-12) |
-| `Open Indexes` absent (`229:8021`), titre de l'avertissement d'écriture absent (`232:9100`), infobulle d'`Edit rows…` absente, message à vingt espaces | écarts d'interface qu'aucune compilation ne voit |
-| **Le bandeau d'[I-13](../CLAUDE.md#i-13) de la bibliothèque n'existait pas** (`268:36866`) — le texte était là, en fin d'une ligne grise, après deux autres mentions | ce que cette garantie permet, c'est de parcourir son historique **sans craindre qu'un clic rejoue une écriture** ; une note de bas de ligne ne porte pas cela, et c'est précisément l'entrée à l'issue inconnue qu'on a le plus besoin d'inspecter |
-| **Le `Close` d'un onglet de console était inutilisable au clavier** — visible, cliquable, sans `tab_index` | `⌘W` ne le couvre pas : il ferme la console **active**, et seulement depuis le panneau SQL. Fermer un autre onglet n'avait donc aucun chemin clavier — le point bloquant de [revue-ui](../.claude/checklists/revue-ui.md). Corrigé **sans test** : le vérifier demanderait d'atteindre ce bouton par tabulations depuis un point connu, or leur nombre dépend des onglets ouverts ; un test qui poserait le focus par un clic serait vert sans rien prouver |
+| **The external agent mode was unreachable** — the guard of `ask_assistant` and `provider_for` decided separately, with overlapping conditions: past the guard, `provider_for` always returned `Some`, and a user who had only declared an agent saw "no AI" | the whole ACP batch compiled, and its security — permissions, default refusal, tier check — was exercised by no real path |
+| **The stop button of an agent turn cut nothing**: the token was created, given to the panel, never passed to `run_turn` | the display did switch to "stopping"; only the subprocess kept going |
+| **The panel died after an agent turn** — no reset of `active` | the provider path had it; nothing compared the two |
+| **`Debug` of `AiProviderConfig` rendered the whole URL**, relying on `validate()` — which is only called at the other end of the bus | a key pasted into the "endpoint" field lived in clear text in a value in transit |
+| **An agent's environment values were neither bounded nor sanitized** | a NUL there is silently truncated at launch: the agent receives something other than what is displayed **and** persisted |
+| **Agent provenance was missing from the library** — `DocumentSummary` had no field for it | the mark was visible on the tab, that is where it is not needed, and absent where one rereads a text a year later ([ADR-0023](adr/0023-fournisseurs-declares-et-provenance.md)) |
+| **`Metrics::toolbar_height` was 52; the mockup says 48** | documented, sourced, dated **and** anchored by a green test — but the field had no reader, the view hard-coding `48`. A textbook case of [I-12](../CLAUDE.md#i-12) |
+| `Open Indexes` absent (`229:8021`), write warning title absent (`232:9100`), `Edit rows…` tooltip absent, message with twenty spaces | interface deviations no compilation sees |
+| **The library's [I-13](../CLAUDE.md#i-13) banner did not exist** (`268:36866`) — the text was there, at the end of a grey line, after two other mentions | what this guarantee allows is browsing one's history **without fearing that a click replays a write**; a footnote does not carry that, and it is precisely the entry with the unknown outcome that one most needs to inspect |
+| **The `Close` of a console tab was unusable with the keyboard** — visible, clickable, without `tab_index` | `⌘W` does not cover it: it closes the **active** console, and only from the SQL panel. Closing another tab therefore had no keyboard path — the blocking point of [revue-ui](../.claude/checklists/revue-ui.md). Fixed **without a test**: checking it would require reaching that button by tabbing from a known point, but their number depends on the open tabs; a test that set focus with a click would be green without proving anything |
 
-### Mesure de mémoire
+### Memory measurement
 
-400 Mio poussés dans un `ResultBuffer` borné à 4 Mio : croissance du RSS de
-**4,25 Mio**, 404 Mio débordés sur disque. Contrôle de sensibilité : le même
-scénario sous un budget de 400 Mio fait croître le RSS de 317 Mio. La mesure
-discrimine donc d'un facteur ~75, et [I-06](../CLAUDE.md#i-06) tient sur la
-mémoire du **processus**, pas seulement sur la comptabilité du tampon. Détail et
-raison de sa non-automatisation : [PERFORMANCE](PERFORMANCE.md).
+400 MiB pushed into a `ResultBuffer` bounded at 4 MiB: RSS growth of
+**4.25 MiB**, 404 MiB spilled to disk. Sensitivity check: the same
+scenario under a 400 MiB budget grows the RSS by 317 MiB. The measurement
+therefore discriminates by a factor of ~75, and [I-06](../CLAUDE.md#i-06) holds on the
+memory of the **process**, not only on the buffer's accounting. Details and
+the reason it is not automated: [PERFORMANCE](PERFORMANCE.md).
 
-### Frames confrontées au serveur Figma
+### Frames compared against the Figma server
 
-Aperçu et inspecteur (`190:1163`), contraintes (`229:7637`), relations
-(`229:32690`), reprise (`232:9100`), barre de console (`191:1958`), barre
-latérale (`221:4573`), préférences (`47:8222`). Relevés et écarts assumés :
+Preview and inspector (`190:1163`), constraints (`229:7637`), relations
+(`229:32690`), recovery (`232:9100`), console bar (`191:1958`), side
+bar (`221:4573`), preferences (`47:8222`). Surveys and accepted deviations:
 [FIGMA-HANDOFF](FIGMA-HANDOFF.md).
 
-La planche de bibliothèque (`47:7638`) a d'abord été crue introuvable : la
-liste de pages rendue par le serveur n'en montrait que trois, alors que le
-fichier en compte trente. Elle a été retrouvée en énumérant `figma.root.children`
-par l'API Plugin, en lecture seule. **Les neuf planches sont donc confrontées.**
+The library board (`47:7638`) was first believed impossible to find: the
+page list returned by the server showed only three of them, whereas the
+file has thirty. It was found by enumerating `figma.root.children`
+through the Plugin API, read-only. **All nine boards are therefore compared.**
 
-### Ce que cette session n'a pas pu faire
+### What this session could not do
 
-- **La recette native**, donc toute preuve pixel. L'instruction de l'utilisateur
-  du 2026-09-10 — « les interactions de bureau ont été arrêtées à sa remarque »
-  — n'a pas été levée, et elle n'a pas été contournée. « UI native » reste donc
-  **non tenu**, et aucun test GPUI headless ne le remplace : le harnais installe
-  une métrique de texte déterministe *et* fausse
+- **The native acceptance test**, hence any pixel proof. The user's instruction
+  of 2026-09-10 — "desktop interactions were stopped at their remark"
+  — has not been lifted, and it was not bypassed. "Native UI" therefore remains
+  **not held**, and no headless GPUI test replaces it: the harness installs
+  text metrics that are deterministic *and* wrong
   ([tests.md](../.claude/rules/tests.md#interface-tests)).
-- Les questions ci-dessous, qui demandent un arbitrage.
+- The questions below, which require a decision.
 
-## Questions ouvertes — non tranchées
+## Open questions — not settled
 
-Relevées le **2026-09-15** en confrontant les documents d'autorité au code.
-**Aucune n'est tranchée ici** : chacune oppose deux documents d'autorité, ou un
-document d'autorité au code, et c'est un arbitrage qui les départage — pas une
-correction de rédaction. Elles sont listées pour qu'elles cessent d'être
-invisibles, pas pour être résolues dans ce fichier.
+Found on **2026-09-15** by comparing the authoritative documents with the code.
+**None is settled here**: each one pits two authoritative documents against each other, or an
+authoritative document against the code, and it is a decision that settles them — not an
+editorial fix. They are listed so that they stop being
+invisible, not to be resolved in this file.
 
-### 1. Le tri par défaut d'un aperçu : l'ADR dit l'inverse du code
+### 1. The default sort of a preview: the ADR says the opposite of the code
 
-[ADR-0020](adr/0020-apercu-trie-filtre-parcouru.md) affirme deux fois que, sans
-tri demandé, le driver ordonne par la clé primaire seule, et compte parmi ses
-conséquences « un tri imposé par défaut sur la clé primaire ».
+[ADR-0020](adr/0020-apercu-trie-filtre-parcouru.md) states twice that, without
+a requested sort, the driver orders by the primary key alone, and counts among its
+consequences "a sort imposed by default on the primary key".
 
-**Le code fait l'inverse.** Les deux drivers ne composent aucun `ORDER BY` en
-l'absence de demande — le test `un_apercu_sans_demande_ne_compose_ni_where_ni_order_by`
-le tient explicitement dans `oxyn-driver-sqlite` comme dans `oxyn-driver-postgres`.
-[UX-SPEC](UX-SPEC.md) confirme le code : « sans tri demandé, l'ordre des lignes
-n'est pas garanti ».
+**The code does the opposite.** Neither driver composes any `ORDER BY` in
+the absence of a request — the test `un_apercu_sans_demande_ne_compose_ni_where_ni_order_by`
+holds it explicitly in `oxyn-driver-sqlite` as in `oxyn-driver-postgres`.
+[UX-SPEC](UX-SPEC.md) confirms the code: "without a requested sort, the order of rows
+is not guaranteed".
 
-**Ce qui n'est pas tranché.** Laquelle des deux positions est la bonne. L'ADR
-justifiait l'ordre par défaut par la correction de `OFFSET` : paginer sur un ordre
-non garanti duplique et omet des lignes en silence. Cet argument n'a pas été
-réfuté — il a été contourné. Un ADR ne se réécrit pas en douce : c'est un
-**nouvel ADR** qui doit dire lequel des deux comportements est voulu, et pourquoi
-la pagination reste correcte dans le cas retenu.
+**What is not settled.** Which of the two positions is right. The ADR
+justified the default order by the correctness of `OFFSET`: paginating on an order
+that is not guaranteed silently duplicates and omits rows. This argument was not
+refuted — it was bypassed. An ADR is not rewritten on the quiet: it is a
+**new ADR** that must say which of the two behaviors is intended, and why
+pagination remains correct in the chosen case.
 
-**Répondue par [ADR-0028](adr/0028-pas-dordre-par-defaut-pas-de-page-sans-ordre-total.md)**,
-le nouvel ADR que ce paragraphe demandait : aucun ordre imposé, aucune page
-offerte tant que l'ordre n'est pas total — c'est ainsi que la pagination reste
-correcte. Il porte `accepté` depuis la
-[revue du 2026-09-24](#3-le-statut-des-adr--revue-du-2026-09-24), qui cite ses deux
-tests. Le statut d'ADR-0020, qu'il précise, relève de cette même revue.
+**Answered by [ADR-0028](adr/0028-pas-dordre-par-defaut-pas-de-page-sans-ordre-total.md)**,
+the new ADR this paragraph asked for: no imposed order, no page
+offered as long as the order is not total — this is how pagination remains
+correct. It carries `accepted` since the
+[review of 2026-09-24](#3-the-status-of-adrs-review-of-2026-09-24), which cites its two
+tests. The status of ADR-0020, which it clarifies, falls under that same review.
 
-### 2. Deux valeurs pour le seuil de premier affichage
+### 2. Two values for the first-display threshold
 
-**Résolue.** [ARCHITECTURE](ARCHITECTURE.md) ne chiffre plus ce seuil depuis le
-2026-09-15 et renvoie aux
-[budgets d'interaction de PERFORMANCE](PERFORMANCE.md#budgets-dinteraction) :
-**300 ms après la première réponse du serveur**. Son §11, qui portait ce renvoi,
-renvoie lui-même à ce plan depuis le 2026-09-25. Le constat d'origine suit.
+**Resolved.** [ARCHITECTURE](ARCHITECTURE.md) no longer puts a number on this threshold since
+2026-09-15 and points to the
+[interaction budgets of PERFORMANCE](PERFORMANCE.md#interaction-budgets):
+**300 ms after the server's first response**. Its §11, which carried this reference,
+itself points to this plan since 2026-09-25. The original finding follows.
 
-[ARCHITECTURE](ARCHITECTURE.md) fixe le critère de sortie de la phase 0 à un
-premier affichage **sous 100 ms** et déclare le critère non mesuré.
-[PERFORMANCE](PERFORMANCE.md), qui **fait autorité sur les budgets chiffrés**,
-fixe **300 ms** après la première réponse du serveur, et déclare le budget
-confirmé pour SQLite (2,6 ms mesurées).
+[ARCHITECTURE](ARCHITECTURE.md) sets the exit criterion of phase 0 at a
+first display **under 100 ms** and declares the criterion unmeasured.
+[PERFORMANCE](PERFORMANCE.md), which **is authoritative on the numeric budgets**,
+sets **300 ms** after the server's first response, and declares the budget
+confirmed for SQLite (2.6 ms measured).
 
-Les deux valeurs n'ont peut-être pas la même origine de comptage — l'une part du
-lancement de la requête, l'autre de la première réponse du serveur. C'est
-précisément ce qui rend l'écart inexploitable : **aucune régression ne peut être
-arbitrée** tant que le seuil et son point de départ ne sont pas uniques.
+The two values may not have the same counting origin — one starts from
+launching the query, the other from the server's first response. That is
+precisely what makes the gap unusable: **no regression can be
+arbitrated** as long as the threshold and its starting point are not unique.
 
-**Ce qui n'est pas tranché.** Quelle valeur, comptée depuis quel instant. Une fois
-décidé, un seul document porte le chiffre et l'autre y renvoie.
+**What is not settled.** Which value, counted from which instant. Once
+decided, a single document carries the number and the other points to it.
 
-### 3. Le statut des ADR : revue du 2026-09-24
+### 3. The status of ADRs: review of 2026-09-24
 
-**Tranché le 2026-09-24.** Critère : un ADR passe `accepté` quand sa décision,
-**telle qu'écrite**, est implémentée et tenue par au moins un test. ADR-0009
-porte `remplacé` ([ADR-0029](adr/0029-interface-tauri-shadcn.md)).
+**Settled on 2026-09-24.** Criterion: an ADR becomes `accepted` when its decision,
+**as written**, is implemented and held by at least one test. ADR-0009
+carries `superseded` ([ADR-0029](adr/0029-interface-tauri-shadcn.md)).
 
-| ADR | Statut | Test qui la tient, ou raison du maintien |
+| ADR | Status | Test that holds it, or reason for keeping it |
 |---|---|---|
-| [0021](adr/0021-marqueur-d-arret.md) | accepté | `une_session_laissee_ouverte_et_muette_est_un_arret_anormal` (`oxyn-store/src/sessions.rs`), `an_abandoned_session_is_reported_as_abnormal` (`oxyn-desktop/src/backend/recovery.rs`) |
-| [0023](adr/0023-fournisseurs-declares-et-provenance.md) | accepté | `aucune_url_porteuse_d_identifiants_n_atteint_le_disque` (`oxyn-store/src/providers.rs`), `un_point_d_acces_non_resolu_ne_beneficie_pas_du_doute` (`oxyn-llm/src/reach.rs`) |
-| [0026](adr/0026-agents-externes-acp.md) | accepté | `un_agent_externe_ne_sert_jamais_une_connexion_locale` (`oxyn-ai/src/privacy.rs`), `la_table_na_aucune_colonne_de_secret` (`oxyn-store/src/agents/tests.rs`) |
-| [0027](adr/0027-porte-unique-pour-les-deux-destinations.md) | accepté | `sous_local_aucune_invite_ne_se_compose` (`oxyn-ai/src/external/prompt/tests.rs`), `le_niveau_local_refuse_avant_meme_de_lancer_le_processus` (`oxyn-ai/src/external/tests.rs`) |
-| [0028](adr/0028-pas-dordre-par-defaut-pas-de-page-sans-ordre-total.md) | accepté | `un_apercu_sans_demande_ne_compose_ni_where_ni_order_by` (les deux drivers), `no_page_is_offered_without_a_total_order` (`oxyn-desktop/src/ipc/metadata.rs`) |
-| [0029](adr/0029-interface-tauri-shadcn.md) | accepté | `controler_graphe_dependances` de `.claude/verifier_socle.py` (par `make socle`), `a_window_crosses_batches_and_stays_bounded` (`oxyn-desktop/src/backend/results.rs`). La campagne de mesure est sa condition de **reconsidération**, pas un préalable |
-| [0031](adr/0031-validation-des-reponses-ipc.md) | accepté | « rejects what the grid could not draw, rather than letting it through » (`apps/desktop/src/lib/ipc/types.test.ts`), « degrades an unknown ending instead of refusing the event » (`ai.test.ts`) |
-| [0032](adr/0032-agent-externe-confine-au-lancement.md) | accepté | `claude_agent_keeps_no_tool_of_its_own` (`oxyn-ai/src/external/confine.rs`), `a_confined_agent_is_put_in_its_mode_first_and_cut_off_as_soon_as_it_leaves` (`external/session/tests.rs`) |
-| [0033](adr/0033-couches-de-configuration-codex.md) | accepté | `every_readable_layer_is_switched_off_by_name_each_once` (`oxyn-ai/src/external/confine/codex_layers.rs`) |
-| [0034](adr/0034-echantillon-pour-toute-destination.md) | proposé | **écart code/ADR** : son § 2 dit que les colonnes « ne rejoignent aucune instruction », alors que depuis `d6cf80b` elles entrent dans le `PreviewRelation` par `PreviewShape::columns`, citées par le driver ([Phase 3](#phase-3--le-workspace-ia)). Le reste est tenu (`an_external_agent_receives_only_the_columns_the_user_ticked_and_only_after`) ; la phrase est à préciser avant d'accepter |
-| [0005](adr/0005-wasm-plugins.md) | proposé | WIT et instanciation des composants renvoient « phase 4 » (`oxyn-plugin/src/host.rs`) |
-| [0007](adr/0007-driver-sidecar.md) | proposé | aucun sidecar, reporté en phase 4 |
-| [0020](adr/0020-apercu-trie-filtre-parcouru.md) | proposé | son ordre par défaut sur la clé primaire est contredit par le code et par ADR-0028, qui le précise |
-| [0022](adr/0022-rafraichissement-automatique.md) | proposé | un DDL ne relit pas l'aperçu visible, alors que l'ADR le prévoit ; `RefreshSignal::of` n'a aucun test |
-| [0024](adr/0024-autosauvegarde-au-repos-de-frappe.md) | proposé | implémenté (`DRAFT_IDLE_MS`), mais ni le délai ni les trois écritures immédiates ne sont testés |
-| [0025](adr/0025-proposition-de-changement-de-schema.md) | proposé | le composeur Rust est testé, mais le geste n'est pas monté : `useSchemaProposal` n'a aucun appelant |
-| [0030](adr/0030-outils-oxyn-exposes-a-un-agent-externe.md) | proposé | **écart code/ADR** : le § 2 bis promet une écriture par question, `WriteGate` applique « une demande en attente à la fois » (`nothing_runs_while_a_request_waits_even_from_an_earlier_question`) — à arbitrer |
+| [0021](adr/0021-marqueur-d-arret.md) | accepted | `une_session_laissee_ouverte_et_muette_est_un_arret_anormal` (`oxyn-store/src/sessions.rs`), `an_abandoned_session_is_reported_as_abnormal` (`oxyn-desktop/src/backend/recovery.rs`) |
+| [0023](adr/0023-fournisseurs-declares-et-provenance.md) | accepted | `aucune_url_porteuse_d_identifiants_n_atteint_le_disque` (`oxyn-store/src/providers.rs`), `un_point_d_acces_non_resolu_ne_beneficie_pas_du_doute` (`oxyn-llm/src/reach.rs`) |
+| [0026](adr/0026-agents-externes-acp.md) | accepted | `un_agent_externe_ne_sert_jamais_une_connexion_locale` (`oxyn-ai/src/privacy.rs`), `la_table_na_aucune_colonne_de_secret` (`oxyn-store/src/agents/tests.rs`) |
+| [0027](adr/0027-porte-unique-pour-les-deux-destinations.md) | accepted | `sous_local_aucune_invite_ne_se_compose` (`oxyn-ai/src/external/prompt/tests.rs`), `le_niveau_local_refuse_avant_meme_de_lancer_le_processus` (`oxyn-ai/src/external/tests.rs`) |
+| [0028](adr/0028-pas-dordre-par-defaut-pas-de-page-sans-ordre-total.md) | accepted | `un_apercu_sans_demande_ne_compose_ni_where_ni_order_by` (both drivers), `no_page_is_offered_without_a_total_order` (`oxyn-desktop/src/ipc/metadata.rs`) |
+| [0029](adr/0029-interface-tauri-shadcn.md) | accepted | `controler_graphe_dependances` of `.claude/verifier_socle.py` (through `make socle`), `a_window_crosses_batches_and_stays_bounded` (`oxyn-desktop/src/backend/results.rs`). The measurement campaign is its **reconsideration** condition, not a prerequisite |
+| [0031](adr/0031-validation-des-reponses-ipc.md) | accepted | "rejects what the grid could not draw, rather than letting it through" (`apps/desktop/src/lib/ipc/types.test.ts`), "degrades an unknown ending instead of refusing the event" (`ai.test.ts`) |
+| [0032](adr/0032-agent-externe-confine-au-lancement.md) | accepted | `claude_agent_keeps_no_tool_of_its_own` (`oxyn-ai/src/external/confine.rs`), `a_confined_agent_is_put_in_its_mode_first_and_cut_off_as_soon_as_it_leaves` (`external/session/tests.rs`) |
+| [0033](adr/0033-couches-de-configuration-codex.md) | accepted | `every_readable_layer_is_switched_off_by_name_each_once` (`oxyn-ai/src/external/confine/codex_layers.rs`) |
+| [0034](adr/0034-echantillon-pour-toute-destination.md) | proposed | **code/ADR deviation**: its § 2 says that the columns "join no statement", whereas since `d6cf80b` they enter the `PreviewRelation` through `PreviewShape::columns`, quoted by the driver ([Phase 3](#phase-3--the-ai-workspace)). The rest is held (`an_external_agent_receives_only_the_columns_the_user_ticked_and_only_after`); the sentence must be clarified before accepting |
+| [0005](adr/0005-wasm-plugins.md) | proposed | WIT and component instantiation return "phase 4" (`oxyn-plugin/src/host.rs`) |
+| [0007](adr/0007-driver-sidecar.md) | proposed | no sidecar, postponed to phase 4 |
+| [0020](adr/0020-apercu-trie-filtre-parcouru.md) | proposed | its default order on the primary key is contradicted by the code and by ADR-0028, which clarifies it |
+| [0022](adr/0022-rafraichissement-automatique.md) | proposed | a DDL does not reread the visible preview, whereas the ADR plans it; `RefreshSignal::of` has no test |
+| [0024](adr/0024-autosauvegarde-au-repos-de-frappe.md) | proposed | implemented (`DRAFT_IDLE_MS`), but neither the delay nor the three immediate writes are tested |
+| [0025](adr/0025-proposition-de-changement-de-schema.md) | proposed | the Rust composer is tested, but the gesture is not mounted: `useSchemaProposal` has no caller |
+| [0030](adr/0030-outils-oxyn-exposes-a-un-agent-externe.md) | proposed | **code/ADR deviation**: § 2 bis promises one write per question, `WriteGate` applies "one pending request at a time" (`nothing_runs_while_a_request_waits_even_from_an_earlier_question`) — to be decided |
 
-ADR-0035 était déjà `accepté` ; ADR-0036, écrit le jour même, n'a pas été revu.
+ADR-0035 was already `accepted`; ADR-0036, written the same day, was not reviewed.
 
-**Depuis la revue.** [ADR-0040](adr/0040-inscrire-la-fermeture-d-une-sortie-forcee.md)
-passe `accepté` le 2026-09-25, une fois son code fusionné (PR #59), selon le
-même critère : `a_forced_exit_records_the_close_and_is_not_offered_recovery` et
+**Since the review.** [ADR-0040](adr/0040-inscrire-la-fermeture-d-une-sortie-forcee.md)
+becomes `accepted` on 2026-09-25, once its code was merged (PR #59), according to the
+same criterion: `a_forced_exit_records_the_close_and_is_not_offered_recovery` and
 `a_forced_exit_over_a_pending_write_is_bounded_and_leaves_the_close_unwritten`
-(`oxyn-desktop/src/backend/recovery.rs`) le tiennent.
+(`oxyn-desktop/src/backend/recovery.rs`) hold it.
 
-**Ce qui reste signalé, sans être corrigé ici.** Plusieurs ADR acceptés citent
-encore `oxyn-app` ou GPUI comme lieu d'implémentation (0021, 0023, 0026, 0029) :
-leur décision tient, leur texte a vieilli, et un ADR accepté ne se réécrit pas.
-Les deux doctests `compile_fail` d'ADR-0027 (`prompt/tests.rs`) vivent dans un
-module `#[cfg(test)]` que rustdoc ne parcourt pas : ils ne s'exécutent jamais.
+**What remains reported, without being fixed here.** Several accepted ADRs still cite
+`oxyn-app` or GPUI as the place of implementation (0021, 0023, 0026, 0029):
+their decision holds, their text has aged, and an accepted ADR is not rewritten.
+The two `compile_fail` doctests of ADR-0027 (`prompt/tests.rs`) live in a
+`#[cfg(test)]` module that rustdoc does not go through: they never run.
 
-Ce qui suit est l'état relevé le 2026-09-15, conservé.
+What follows is the state found on 2026-09-15, kept.
 
-Seuls six ADR étaient alors au statut `accepté` (0008, 0010, 0014, 0015, 0016,
-0017) ; les vingt autres restaient `proposé`, alors que la décision de la plupart
-d'entre eux était implémentée et éprouvée par des tests.
+Only six ADRs then had the `accepted` status (0008, 0010, 0014, 0015, 0016,
+0017); the twenty others remained `proposed`, whereas the decision of most
+of them was implemented and proven by tests.
 
-**Pourquoi ce n'est pas cosmétique.**
-[.claude/rules/documentation.md](../.claude/rules/documentation.md) fait reposer
-sur ce statut la protection « un ADR **accepté** ne se réécrit pas ». Tant que
-tout est `proposé`, cette protection ne s'applique **nulle part**. Ce n'est pas
-théorique : c'est par réécriture successive qu'[ADR-0026](adr/0026-agents-externes-acp.md)
-s'est retrouvé à porter, sur une même page, une affirmation et son contraire au
-sujet de la dépendance `agent-client-protocol`.
+**Why it is not cosmetic.**
+[.claude/rules/documentation.md](../.claude/rules/documentation.md) rests
+the protection "an **accepted** ADR is not rewritten" on this status. As long as
+everything is `proposed`, this protection applies **nowhere**. It is not
+theoretical: it is through successive rewriting that [ADR-0026](adr/0026-agents-externes-acp.md)
+ended up carrying, on the same page, a claim and its opposite about
+the `agent-client-protocol` dependency.
 
-**Ce qui n'était pas tranché** — et l'est depuis, voir le tableau ci-dessus.
-Quels ADR passent à `accepté`, et selon quel critère — la décision prise, ou la
-décision implémentée et mesurée. Le passage au
-statut `accepté` verrouille la réécriture : c'est une décision de gouvernance, pas
-un balayage de champs à faire en lot sans relecture.
+**What was not settled** — and is since, see the table above.
+Which ADRs become `accepted`, and according to which criterion — the decision taken, or the
+decision implemented and measured. Moving to the
+`accepted` status locks rewriting: it is a governance decision, not
+a sweep of fields to be done in bulk without review.
 
-### 4. Le budget des conversations est écrit, mais rien ne l'applique
+### 4. The conversation budget is written, but nothing applies it
 
-Relevé le **2026-09-23**. [PERFORMANCE](PERFORMANCE.md) fixe le budget disque de
-l'historique de l'assistant — 200 fils, 90 jours d'inactivité, 32 Mio de
-transcript par workspace — « appliqués par `Conversations::prune` ».
-`Conversations::prune` et `RetentionPolicy::default()` existent dans
-`oxyn-store` et sont éprouvés par ses tests, mais **aucun appelant hors de ces
-tests** : l'application n'élague jamais. Le budget ne tient donc pas, et c'est
-précisément la croissance qu'il devait empêcher.
+Found on **2026-09-23**. [PERFORMANCE](PERFORMANCE.md) sets the disk budget of
+the assistant's history — 200 threads, 90 days of inactivity, 32 MiB of
+transcript per workspace — "applied by `Conversations::prune`".
+`Conversations::prune` and `RetentionPolicy::default()` exist in
+`oxyn-store` and are proven by its tests, but **no caller outside these
+tests**: the application never prunes. The budget therefore does not hold, and that is
+precisely the growth it was meant to prevent.
 
-**Corrigé le 2026-09-23.** `Backend::prune_conversations` applique
-`RetentionPolicy::default()` une fois par lancement, sur le pool bloquant, sans
-retarder l'ouverture. On élague au lancement plutôt qu'après chaque échange : le
-budget borne des mois d'usage, pas une session, et une suppression en pleine
-conversation pourrait emporter le fil que l'utilisateur lit.
+**Fixed on 2026-09-23.** `Backend::prune_conversations` applies
+`RetentionPolicy::default()` once per launch, on the blocking pool, without
+delaying opening. Pruning happens at launch rather than after each exchange: the
+budget bounds months of use, not a session, and a deletion in the middle of a
+conversation could take away the thread the user is reading.
 
-**Tranché le 2026-09-24, fait le 2026-09-25 :** l'utilisateur est prévenu.
-Le rapport de l'élagage est gardé en mémoire par le backend (`ai_pruned_history`)
-et la liste « Conversations » affiche une note qui dit combien de fils ont été
-retirés et selon quelle règle, avec les nombres de `RetentionPolicy`
-([UX-SPEC](UX-SPEC.md#une-conversation-reste-dans-le-workspace-pas-ce-quon-lui-a-montré)).
-Le journal `info` reste. Tenu par
+**Settled on 2026-09-24, done on 2026-09-25:** the user is warned.
+The pruning report is kept in memory by the backend (`ai_pruned_history`)
+and the "Conversations" list displays a note that says how many threads were
+removed and according to which rule, with the numbers of `RetentionPolicy`
+([UX-SPEC](UX-SPEC.md#a-conversation-stays-in-the-workspace-not-what-was-shown-to-it)).
+The `info` log remains. Held by
 `the_launch_prune_is_transmitted_with_its_rule`.
 
-## Licence : ce qui reste avant le passage en public
+## License: what remains before going public
 
-[ADR-0044](adr/0044-licence-gpl-et-contrat-apache.md) est en place depuis le
-2026-09-25 : licences, `NOTICE`, `CLA.md`, `CONTRIBUTING.md`, mentions tierces
-dans l'application. Il reste quatre gestes qui ne sont pas des fichiers du dépôt,
-ou qui ne se font qu'une fois :
+[ADR-0044](adr/0044-licence-gpl-et-contrat-apache.md) has been in place since
+2026-09-25: licenses, `NOTICE`, `CLA.md`, `CONTRIBUTING.md`, third-party notices
+in the application. Four gestures remain that are not files of the repository,
+or that are only done once:
 
-- **activer la signature du CLA** au passage du dépôt en public. Le choix
-  prévu est CLA Assistant (<https://cla-assistant.io>) sur `so-keyldzn/oxyn`,
-  qui pointe vers `CLA.md`. `CONTRIBUTING.md` annonce déjà le bot. Tant qu'il
-  n'est pas actif, aucune contribution externe ne se fusionne ;
-- **offrir le source avec tout binaire distribué** (GPLv3, § 6). Le dépôt
-  public y suffit. Avant cela, aucun binaire ne sort du cercle du titulaire ;
-- **faire relire `CLA.md` par un avocat**, en même temps que la cession des
-  droits à la société. `NOTICE`, le champ `copyright` de
-  `crates/oxyn-desktop/tauri.conf.json` et la § 1 du CLA changent alors de
-  titulaire ;
-- **publier les interfaces WIT sous Apache-2.0** en phase 4, dans un
-  répertoire ou une crate qui porte cette licence seule.
+- **enable CLA signing** when the repository goes public. The planned
+  choice is CLA Assistant (<https://cla-assistant.io>) on `so-keyldzn/oxyn`,
+  pointing to `CLA.md`. `CONTRIBUTING.md` already announces the bot. As long as it
+  is not active, no external contribution is merged;
+- **offer the source with any distributed binary** (GPLv3, § 6). The public
+  repository is enough for that. Before then, no binary leaves the holder's circle;
+- **have `CLA.md` reviewed by a lawyer**, at the same time as the transfer of
+  rights to the company. `NOTICE`, the `copyright` field of
+  `crates/oxyn-desktop/tauri.conf.json` and § 1 of the CLA then change
+  holder;
+- **publish the WIT interfaces under Apache-2.0** in phase 4, in a
+  directory or a crate that carries that license alone.
 
-## Ce qui n'a pas sa place ici
+## What does not belong here
 
-Les décisions. Une phase qui a besoin d'un arbitrage écrit un ADR
-([`/adr`](../.claude/commands/adr.md)) ; elle ne tranche pas dans ce fichier.
+Decisions. A phase that needs a decision writes an ADR
+([`/adr`](../.claude/commands/adr.md)); it does not settle it in this file.

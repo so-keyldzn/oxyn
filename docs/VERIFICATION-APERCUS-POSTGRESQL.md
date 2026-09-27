@@ -1,63 +1,63 @@
-# Vérification des aperçus PostgreSQL — 2026-09-07
+# Verification of PostgreSQL previews — 2026-09-07
 
-La correction couvre les captures de `pg_database`, `pg_attrdef`,
-`pg_aggregate` et l'affichage des colonnes `timestamptz`.
+The fix covers the screenshots of `pg_database`, `pg_attrdef`,
+`pg_aggregate` and the display of `timestamptz` columns.
 
-## Changements
+## Changes
 
-- Préparation asynchrone et annulable de l'aperçu : lecture des types de
-  colonnes, puis projection citée. Les types internes, les types sans sortie
-  binaire et les alias d'OID sont convertis explicitement en texte côté serveur.
-  La résolution suit les domaines et les éléments de tableaux.
-- Conservation des types natifs des autres colonnes et des limites de lecture.
-  La variante Redshift conserve sa composition précédente.
-- Les types binaires inconnus restent des octets Arrow avec leur nom de type.
-  Ils ne sont plus interprétés comme du texte ni tronqués lors du décodage.
-- Activation du support des fuseaux nommés d'Arrow pour la grille et les exports.
+- Asynchronous and cancellable preparation of the preview: reading the column
+  types, then a quoted projection. Internal types, types without binary output
+  and OID aliases are explicitly converted to text on the server side.
+  Resolution follows domains and array elements.
+- The native types of the other columns and the read limits are kept.
+  The Redshift variant keeps its previous composition.
+- Unknown binary types stay Arrow bytes with their type name.
+  They are no longer interpreted as text nor truncated during decoding.
+- Support for Arrow named time zones is enabled for the grid and exports.
 
-## Contrôles exécutés
+## Checks run
 
-Le dépôt contenait déjà une fusion non résolue au début du travail. Une copie
-temporaire de `HEAD`, complétée par les fichiers de cette correction, a permis
-de vérifier celle-ci sans résoudre ni remplacer les changements préexistants.
-Les résultats ci-dessous ne valident donc pas l'intégration complète de la fusion.
+The repository already contained an unresolved merge when the work started. A
+temporary copy of `HEAD`, completed with the files of this fix, made it possible
+to verify it without resolving or replacing the pre-existing changes.
+The results below therefore do not validate the complete integration of the merge.
 
-| Contrôle | Résultat |
+| Check | Result |
 |---|---|
-| `cargo fmt --all`, puis contrôle du format dans la copie | Succès |
-| `cargo test -q -p oxyn-driver-postgres -p oxyn-data -p oxyn-exec -p oxyn-driver-sqlite --lib` | 323 réussis, 13 tests PostgreSQL ignorés par défaut |
-| Tests ignorés de `oxyn-driver-postgres`, avec serveur temporaire et exécution séquentielle | 13 réussis, aucun ignoré |
-| Régression des aperçus après ajout du domaine ACL et du contrôle des octets/OID | Succès |
-| Clippy ciblé, `--no-deps --all-targets -- -D warnings` | Succès sur les quatre crates ci-dessus |
-| `cargo doc --no-deps` des quatre crates et d'`oxyn-driver`, avec `RUSTDOCFLAGS=-D warnings` | Succès |
-| `make qualite` dans le dépôt principal | Échec au formatage : conflits préexistants dans `oxyn-app` et `oxyn-ui` |
+| `cargo fmt --all`, then format check in the copy | Success |
+| `cargo test -q -p oxyn-driver-postgres -p oxyn-data -p oxyn-exec -p oxyn-driver-sqlite --lib` | 323 passed, 13 PostgreSQL tests ignored by default |
+| Ignored tests of `oxyn-driver-postgres`, with a temporary server and sequential execution | 13 passed, none ignored |
+| Preview regression after adding the ACL domain and the bytes/OID check | Success |
+| Targeted Clippy, `--no-deps --all-targets -- -D warnings` | Success on the four crates above |
+| `cargo doc --no-deps` of the four crates and of `oxyn-driver`, with `RUSTDOCFLAGS=-D warnings` | Success |
+| `make qualite` in the main repository | Failure at formatting: pre-existing conflicts in `oxyn-app` and `oxyn-ui` |
 
-Les tests de hooks ont réussi leurs 42 cas et le socle a passé, avec son
-avertissement préexistant sur le motif `paths:` de la règle de tests.
-Clippy sans `--no-deps` a rencontré trois avertissements préexistants
-`wrong_self_convention` dans `oxyn-catalog/src/model.rs`.
+The hook tests passed their 42 cases and the foundation passed, with its
+pre-existing warning on the `paths:` pattern of the tests rule.
+Clippy without `--no-deps` hit three pre-existing
+`wrong_self_convention` warnings in `oxyn-catalog/src/model.rs`.
 
-Les tests PostgreSQL ont utilisé un cluster jetable créé pour cette vérification,
-sans accès à la connexion montrée sur les captures. Ils couvrent notamment
-l'annulation vérifiée côté serveur, les trois catalogues, les noms de colonnes
-contenant un guillemet, les valeurs nulles, les ACL imbriquées dans un domaine
-et les noms de fonctions. Le test de flux de deux millions de lignes a aussi
-été exécuté avec surveillance externe du processus : pic RSS échantillonné de
-13 408 Kio, sous une borne d'arrêt de 128 Mio. Cette mesure ponctuelle ne vaut
-pas validation de tous les budgets de performance du produit.
+The PostgreSQL tests used a throwaway cluster created for this verification,
+without access to the connection shown in the screenshots. They cover in
+particular cancellation verified on the server side, the three catalogs, column
+names containing a quote, null values, ACLs nested in a domain
+and function names. The two-million-row streaming test was also
+run with external monitoring of the process: sampled RSS peak of
+13,408 KiB, under a stop bound of 128 MiB. This one-off measurement does not
+amount to validating all the product's performance budgets.
 
-## Relecture et limites
+## Review and limits
 
-Relecture locale des invariants et de la frontière driver : aucun nouveau
-blocage identifié. Politique avant préparation, valeurs de métadonnées liées,
-identifiants cités, annulation propagée, résultat en flux, aucun rejeu SQL.
-Les colonnes explicitement converties pour l'aperçu sont annoncées comme texte.
-Le SQL libre reste inchangé et peut encore rencontrer les limites de types de
-SQLx ; ce correctif ne remplace pas son protocole de décodage.
+Local review of the invariants and of the driver boundary: no new
+blocker identified. Policy before preparation, bound metadata values,
+quoted identifiers, propagated cancellation, streamed result, no SQL replay.
+The columns explicitly converted for the preview are announced as text.
+Free SQL is unchanged and can still hit SQLx's type limits;
+this fix does not replace its decoding protocol.
 
-Contradiction documentaire préexistante signalée : `DRIVER-CONTRACT.md` interdit
-la dépendance des drivers à `oxyn-core`, alors que leurs manifestes et la liste
-de revue driver la prévoient. Cette décision de découpage n'est pas modifiée ici.
+Pre-existing documentation contradiction reported: `DRIVER-CONTRACT.md` forbids
+drivers from depending on `oxyn-core`, whereas their manifests and the driver
+review list provide for it. This split decision is not changed here.
 
-L'application graphique n'a pas été reconstruite ni revalidée visuellement.
-La porte `make qualite` complète reste à franchir après résolution de la fusion.
+The graphical application was neither rebuilt nor visually revalidated.
+The complete `make qualite` gate remains to be passed after the merge is resolved.

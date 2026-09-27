@@ -10,8 +10,8 @@ paths:
 
 # Workspace IA — conventions
 
-Fait autorité : [AI-PROVIDERS](../../../../docs/AI-PROVIDERS.md) et
-[ADR-0006](../../../../docs/adr/0006-ai-privacy-tiers.md). Cette règle porte ce qui se
+Fait autorité : [AI-PROVIDERS](../../docs/AI-PROVIDERS.md) et
+[ADR-0006](../../docs/adr/0006-ai-privacy-tiers.md). Cette règle porte ce qui se
 rate à l'écriture.
 
 ## Le point de passage est unique
@@ -33,7 +33,7 @@ ce dont il a besoin contourne à la fois le point de passage et le command bus.
 ## Une proposition est une `Command`
 
 Portant `Actor::Agent`, traversant le `PolicyGate`
-([ADR-0004](../../../../docs/adr/0004-command-bus.md)). Il n'y a pas d'API « outils »
+([ADR-0004](../../docs/adr/0004-command-bus.md)). Il n'y a pas d'API « outils »
 séparée : c'est précisément ce que l'ADR-0004 refuse, parce qu'un second chemin
 est toujours le moins audité.
 
@@ -59,12 +59,12 @@ dans le protocole ne permet de lui demander où va son modèle. Il vaut donc
 `Reach::Unresolved` — toujours —, ce qui le ferme à une connexion `Local`. Le
 refus tombe **avant le lancement**, pas avant l'envoi : démarrer l'agent peut
 suffire à lui faire contacter son service
-([ADR-0026](../../../../docs/adr/0026-agents-externes-acp.md)).
+([ADR-0026](../../docs/adr/0026-agents-externes-acp.md)).
 
 ## Sans fournisseur
 
 Le workspace IA est **absent de l'interface**, et Oxyn reste un client complet
-([ADR-0006](../../../../docs/adr/0006-ai-privacy-tiers.md)). Un chemin qui appelle un
+([ADR-0006](../../docs/adr/0006-ai-privacy-tiers.md)). Un chemin qui appelle un
 modèle pour produire un résultat attendu comme déterministe — un tri, un
 formatage, une complétion de nom de table — est un défaut de conception.
 

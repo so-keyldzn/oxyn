@@ -12,7 +12,7 @@ Purpose: add or modify **$ARGUMENTS** in the Tauri interface.
    file to create does not exist yet: a `paths:` rule only loads when a matching
    file is read, and otherwise the first file of an area is written without it.
 2. [UX-SPEC](../../docs/UX-SPEC.md) — behaviors and states are authoritative.
-3. [ARCHITECTURE § 2 bis](../../docs/ARCHITECTURE.md#2-bis-linterface-tauri) — the
+3. [ARCHITECTURE § 2 bis](../../docs/ARCHITECTURE.md#2-bis-the-tauri-interface) — the
    IPC bridge and what does not cross it.
 4. [FIGMA-HANDOFF](../../docs/FIGMA-HANDOFF.md) — the board, if it exists.
 

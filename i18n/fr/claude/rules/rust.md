@@ -3,7 +3,7 @@ paths:
   - "**/*.rs"
 ---
 
-<!-- oxyn-translation source=".claude/rules/rust.md" sha256="01e6acfde45b" -->
+<!-- oxyn-translation source=".claude/rules/rust.md" sha256="318d41a7287e" -->
 
 > Traduction française de [.claude/rules/rust.md](../../../../.claude/rules/rust.md). **La version anglaise fait foi.**
 
@@ -21,7 +21,7 @@ règle porte ce qui ne vaut que pour du code Rust.
 | Jamais | `Box<dyn Error>` dans une API publique | efface l'information au moment précis où elle sert |
 
 Une erreur de driver porte sa **classe** — transitoire, permanente, ambiguë
-([DRIVER-CONTRACT](../../../../docs/DRIVER-CONTRACT.md#4-il-distingue-trois-familles-derreurs-et-il-les-classe)).
+([DRIVER-CONTRACT](../../docs/DRIVER-CONTRACT.md#4-il-distingue-trois-familles-derreurs-et-il-les-classe)).
 La classe est une donnée, pas une déduction faite par l'appelant à partir du
 message : un message change, un appelant qui l'analysait casse en silence.
 
@@ -43,7 +43,7 @@ Quand il est utilisé, son message dit **l'invariant supposé**, pas « échec �
 ## Async
 
 - une fonction `async` publique ne bloque jamais : tout appel bloquant part sur
-  le pool bloquant ([ARCHITECTURE](../../../../docs/ARCHITECTURE.md#le-modèle-de-threads)) ;
+  le pool bloquant ([ARCHITECTURE](../../docs/ARCHITECTURE.md#le-modèle-de-threads)) ;
 - toute opération qui peut durer accepte l'annulation **et la propage jusqu'au
   serveur** — un futur abandonné ne libère pas une requête distante
   ([I-13](../../CLAUDE.md#i-13) et le contrat de driver) ;
@@ -58,7 +58,7 @@ Quand il est utilisé, son message dit **l'invariant supposé**, pas « échec �
 Pas de règle mécanique. Une seule qui tient :
 
 **On ne remplace pas du code clair par du code rapide sans la mesure qui montre
-que ça valait la peine** ([PERFORMANCE](../../../../docs/PERFORMANCE.md#la-règle-qui-empêche-loptimisation-gratuite)).
+que ça valait la peine** ([PERFORMANCE](../../docs/PERFORMANCE.md#la-règle-qui-empêche-loptimisation-gratuite)).
 
 En revanche, sur un chemin **par ligne ou par valeur** — la conversion vers
 `RecordBatch` en est un —, une allocation par élément est un défaut de
@@ -72,12 +72,12 @@ conception dès l'écriture, pas une optimisation à faire plus tard.
 - pas de trait public à une seule implémentation qui n'est pas une frontière
   ([CLAUDE.md](../../CLAUDE.md#organisation-du-code)) ;
 - un trait destiné à traverser la frontière WASM respecte les contraintes de
-  [PLUGIN-CONTRACT](../../../../docs/PLUGIN-CONTRACT.md#ce-que-ce-contrat-impose-aux-traits-daujourdhui)
+  [PLUGIN-CONTRACT](../../docs/PLUGIN-CONTRACT.md#ce-que-ce-contrat-impose-aux-traits-daujourdhui)
   **dès aujourd'hui** : les corriger en phase 4 coûtera une refonte.
 
 ## `unsafe`
 
-Politique dans [SECURITY](../../../../docs/SECURITY.md#politique-unsafe). Le point qui
+Politique dans [SECURITY](../../docs/SECURITY.md#politique-unsafe). Le point qui
 se rate : un `// SAFETY:` qui paraphrase le code ne vaut rien. Il dit **pourquoi**
 la condition est vraie ici et **qui** la maintiendra vraie.
 

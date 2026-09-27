@@ -2,68 +2,67 @@
 
 > The modern database workspace.
 
-Oxyn est un workspace de bureau, au backend natif et haute performance, pour explorer,
-comprendre, interroger et gérer tout type de base de données. Un point d'accès unique aux
-bases SQL, NoSQL, vectorielles, cloud et locales.
+Oxyn is a desktop workspace, with a native high-performance backend, to explore,
+understand, query and manage any kind of database. A single access point to SQL,
+NoSQL, vector, cloud and local databases.
 
-Au-delà d'un client de base de données traditionnel, Oxyn embarque des assistants IA
-qui aident à comprendre les schémas, optimiser les requêtes, documenter les bases,
-investiguer les incidents et répondre à des questions complexes sur les données.
-Qu'ils soient servis par des modèles locaux ou des APIs cloud, les agents travaillent
-*aux côtés* de l'utilisateur — jamais à sa place.
+Beyond a traditional database client, Oxyn ships AI assistants that help
+understand schemas, optimize queries, document databases, investigate incidents
+and answer complex questions about the data. Whether served by local models or
+cloud APIs, the agents work *alongside* the user — never in their place.
 
-## Principes fondateurs
+## Founding principles
 
-* **Native first** — un backend natif en Rust, aucun serveur, et une interface
-  soumise à des budgets de trame chiffrés, qui se mesurent
-  ([PERFORMANCE](PERFORMANCE.md)). La webview de Tauri affiche et
-  saisit ; ce qui exécute une requête, parle à une base ou conserve un secret
-  vit dans le processus Rust ([ADR-0029](adr/0029-interface-tauri-shadcn.md)).
-* **Blazing fast** — la latence perçue est une fonctionnalité.
-* **Open by default** — formats ouverts, pas de verrouillage.
-* **AI when it adds value** — jamais imposée, jamais dans le chemin critique.
-* **Privacy first** — hors-ligne par défaut, aucune donnée ne sort sans consentement.
+* **Native first** — a native Rust backend, no server, and an interface held to
+  numeric frame budgets, which are measured
+  ([PERFORMANCE](PERFORMANCE.md)). Tauri's webview displays and takes input;
+  what runs a query, talks to a database or keeps a secret lives in the Rust
+  process ([ADR-0029](adr/0029-interface-tauri-shadcn.md)).
+* **Blazing fast** — perceived latency is a feature.
+* **Open by default** — open formats, no lock-in.
+* **AI when it adds value** — never imposed, never on the critical path.
+* **Privacy first** — offline by default, no data leaves without consent.
 * **Extensible through plugins**
 * **Built for professionals**
 
-## Bases de données visées
+## Target databases
 
-| Famille | Systèmes |
+| Family | Systems |
 |---|---|
-| Relationnel | PostgreSQL, MySQL, MariaDB, SQLite, SQL Server, Oracle |
-| Analytique | DuckDB, ClickHouse, Snowflake, BigQuery, Redshift |
+| Relational | PostgreSQL, MySQL, MariaDB, SQLite, SQL Server, Oracle |
+| Analytical | DuckDB, ClickHouse, Snowflake, BigQuery, Redshift |
 | NoSQL | MongoDB, Redis, Cassandra, DynamoDB, Couchbase |
-| Vectoriel | pgvector, Milvus, Weaviate, Pinecone, Qdrant, ChromaDB |
-| Graphe | Neo4j, Memgraph |
-| Séries temporelles | TimescaleDB, InfluxDB |
-| Recherche | Elasticsearch, OpenSearch |
+| Vector | pgvector, Milvus, Weaviate, Pinecone, Qdrant, ChromaDB |
+| Graph | Neo4j, Memgraph |
+| Time series | TimescaleDB, InfluxDB |
+| Search | Elasticsearch, OpenSearch |
 
-## Workspace IA
+## AI workspace
 
-Expliquer des schémas complexes · comprendre les relations entre tables · générer du SQL ·
-améliorer les performances · détecter les anti-patterns · trouver les index manquants ·
-relire les migrations · expliquer les plans d'exécution · repérer les tables inutilisées ·
-détecter les données dupliquées · trouver les enregistrements incohérents · générer la
-documentation · produire des diagrammes ER · construire des dictionnaires de données ·
-répondre en langage naturel · suggérer des optimisations · assister le débogage ·
-résumer de gros jeux de données · comparer des versions de base · expliquer les procédures
-stockées · auditer permissions et sécurité.
+Explain complex schemas · understand relationships between tables · generate SQL ·
+improve performance · detect anti-patterns · find missing indexes ·
+review migrations · explain execution plans · spot unused tables ·
+detect duplicated data · find inconsistent records · generate
+documentation · produce ER diagrams · build data dictionaries ·
+answer in natural language · suggest optimizations · assist debugging ·
+summarize large datasets · compare database versions · explain stored
+procedures · audit permissions and security.
 
-## Architecture multi-agents
+## Multi-agent architecture
 
-Agents spécialisés et collaboratifs : SQL · Schema · Performance · Migration · Security ·
+Specialized, collaborating agents: SQL · Schema · Performance · Migration · Security ·
 Documentation · Data Quality · Analytics · Visualization.
 
-## Fournisseurs IA
+## AI providers
 
-Local : Ollama, LM Studio, llama.cpp.
-Cloud : OpenAI, Anthropic, Google Gemini, OpenRouter, Azure OpenAI, AWS Bedrock, APIs
-compatibles OpenAI.
+Local: Ollama, LM Studio, llama.cpp.
+Cloud: OpenAI, Anthropic, Google Gemini, OpenRouter, Azure OpenAI, AWS Bedrock,
+OpenAI-compatible APIs.
 
-**Aucun fournisseur n'est requis. Tout doit fonctionner hors-ligne autant que possible.**
+**No provider is required. Everything must work offline as much as possible.**
 
-## Vision long terme
+## Long-term vision
 
-Devenir le *système d'exploitation des bases de données*. Pas seulement un client SQL.
-Pas seulement un outil IA. Un workspace complet où humains et IA collaborent pour
-comprendre, maintenir, optimiser et faire évoluer les systèmes de données modernes.
+Become the *operating system of databases*. Not just a SQL client.
+Not just an AI tool. A complete workspace where humans and AI collaborate to
+understand, maintain, optimize and evolve modern data systems.

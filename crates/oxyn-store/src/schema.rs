@@ -683,7 +683,7 @@ const M0014_AI_EXCHANGE_MENTIONS: &str =
 /// La table `catalog_cache` de la migration 1 n'a jamais eu d'appelant : le
 /// catalogue vit en mémoire dans `oxyn-exec`, se relit du serveur à chaque
 /// connexion, et Oxyn n'offre pas de consultation hors ligne
-/// ([ARCHITECTURE §6](../../../docs/ARCHITECTURE.md#6-le-catalogue)). Une
+/// ([ARCHITECTURE §6](../../../docs/ARCHITECTURE.md#6-the-catalog)). Une
 /// table sans écrivain laisse croire à un lecteur du fichier qu'elle compte.
 ///
 /// Rien de l'utilisateur ne se perd : ce qu'elle aurait pu contenir est une
