@@ -1,70 +1,69 @@
 ---
-description: Mesurer une performance avant de l'optimiser
-argument-hint: "<ce qu'il faut mesurer>"
+description: Measure a performance before optimizing it
+argument-hint: "<what to measure>"
 allowed-tools: Bash, Read, Write, Edit, Grep, Glob
 ---
 
-Objet : mesurer **$ARGUMENTS**.
+Purpose: measure **$ARGUMENTS**.
 
-## La règle qui gouverne les autres
+## The rule that governs the others
 
-**On ne remplace pas du code clair par du code rapide sans la mesure qui montre
-que ça valait la peine.** Un banc d'essai avant, un banc d'essai après, le
-chiffre dans le message de commit
-(`docs/PERFORMANCE.md` § la règle qui empêche l'optimisation gratuite).
+**Clear code is not replaced by fast code without the measurement that shows it
+was worth it.** A benchmark before, a benchmark after, the number in the commit
+message (`docs/PERFORMANCE.md` § the rule that prevents gratuitous
+optimization).
 
-Sans cela, la complexité est payée d'avance et le gain est supposé. Le corollaire
-vaut dans l'autre sens : un `.clone()` sur un chemin appelé une fois par
-ouverture de fenêtre n'est pas un problème, et le transformer en emprunt qui
-contamine cinq signatures est une perte nette.
+Without it, the complexity is paid up front and the gain is assumed. The
+corollary holds the other way: a `.clone()` on a path called once per window
+opening is not a problem, and turning it into a borrow that contaminates five
+signatures is a net loss.
 
-## Choisir l'instrument
+## Choosing the instrument
 
-| Ce qu'on mesure | Avec quoi | Pas avec |
+| What is measured | With what | Not with |
 |---|---|---|
-| Code pur : conversion vers `RecordBatch`, analyse, formatage, diff de schéma | `criterion` | — |
-| Rendu, latence de trame, réactivité | les instruments du système (Instruments, `perf`) | `criterion` — un banc `criterion` ne voit ni la webview ni son rendu |
-| Empreinte mémoire au repos | observation sur plusieurs heures | un test unitaire — une fuite ne se voit pas en trois secondes |
+| Pure code: conversion to `RecordBatch`, parsing, formatting, schema diff | `criterion` | — |
+| Rendering, frame latency, responsiveness | the system's instruments (Instruments, `perf`) | `criterion` — a `criterion` bench sees neither the webview nor its rendering |
+| Idle memory footprint | observation over several hours | a unit test — a leak does not show in three seconds |
 
-**Une mesure contre une base réelle n'est pas un banc d'essai.** Le réseau et
-l'état du serveur dominent le signal. Ce qui se mesure, c'est le temps passé
-*dans* Oxyn, pas le temps d'aller-retour.
+**A measurement against a real database is not a benchmark.** The network and
+the server's state dominate the signal. What is measured is the time spent
+*inside* Oxyn, not the round-trip time.
 
-## Le premier endroit à regarder
+## The first place to look
 
-La conversion ligne-à-lot est un point chaud **attendu**, pas une hypothèse : les
-drivers construits sur des pilotes ligne-à-ligne y passent par chaque valeur de
-chaque ligne. C'est le premier endroit à mesurer, et le dernier à optimiser sans
-mesure.
+Row-to-batch conversion is an **expected** hot spot, not a hypothesis: drivers
+built on row-by-row clients go through every value of every row there. It is
+the first place to measure, and the last to optimize without measuring.
 
-## Les pièges
+## The traps
 
-**Le banc sur une entrée trop petite.** Mille lignes tiennent dans le cache L2 :
-le banc mesure le cache, pas l'algorithme. Le volume du banc doit être du même
-ordre que le volume réel — et pour Oxyn, le volume réel est celui qui ne tient
-pas en mémoire.
+**The benchmark on too small an input.** A thousand rows fit in the L2 cache:
+the benchmark measures the cache, not the algorithm. The benchmark volume must
+be of the same order as the real volume — and for Oxyn, the real volume is the
+one that does not fit in memory.
 
-**Le budget ajusté pour faire passer le test.** Si un budget de
-`docs/PERFORMANCE.md` ne peut pas être tenu, il s'amende **par un ADR**, jamais
-en silence. Un budget qu'on déplace à chaque échec ne mesure plus rien.
+**The budget adjusted to make the test pass.** If a budget of
+`docs/PERFORMANCE.md` cannot be met, it is amended **by an ADR**, never
+silently. A budget moved at every failure no longer measures anything.
 
-**La mesure sur une machine occupée.** Un `cargo build` en arrière-plan invalide
-le résultat, et le bruit ressemble à un signal.
+**The measurement on a busy machine.** A `cargo build` in the background
+invalidates the result, and the noise looks like a signal.
 
-## Vérifier
+## Verify
 
 ```bash
 make qualite
 ```
 
-Le chiffre avant et après va dans le message de commit. Une optimisation sans
-son chiffre sera refusée en revue — non par formalisme, mais parce que personne
-ne pourra la remettre en cause plus tard.
+The before and after numbers go into the commit message. An optimization without
+its number will be refused in review — not out of formalism, but because nobody
+will be able to challenge it later.
 
-## Rappels
+## Reminders
 
-- les budgets actuels sont **décidés**, pas mesurés : aucune campagne n'a encore
-  eu lieu. La première doit les confirmer ou les amender par un ADR
-  (`docs/PERFORMANCE.md` § statut des chiffres) ;
-- `criterion` est en `0.8.2` au 2026-09-05 — vérifier avec
-  [`/versions`](versions.md) avant de l'ajouter.
+- the current budgets are **decided**, not measured: no campaign has taken
+  place yet. The first one must confirm them or amend them by an ADR
+  (`docs/PERFORMANCE.md` § status of the numbers);
+- `criterion` is at `0.8.2` as of 2026-09-05 — check with
+  [`/versions`](versions.md) before adding it.

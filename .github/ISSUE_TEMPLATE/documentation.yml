@@ -1,5 +1,5 @@
 name: Documentation
-description: Signaler une contradiction, une lacune ou une information périmée.
+description: Report a contradiction, a gap or outdated information.
 title: "[Documentation] "
 labels:
   - documentation
@@ -7,25 +7,25 @@ body:
   - type: input
     id: document
     attributes:
-      label: Document concerné
+      label: Document concerned
       placeholder: docs/ARCHITECTURE.md
     validations:
       required: true
   - type: textarea
     id: discrepancy
     attributes:
-      label: Contradiction ou lacune
-      description: Citez l'affirmation actuelle et l'état observé dans le code ou GitHub.
+      label: Contradiction or gap
+      description: Quote the current statement and the state observed in the code or on GitHub.
     validations:
       required: true
   - type: textarea
     id: proposal
     attributes:
-      label: Correction proposée
+      label: Proposed correction
   - type: checkboxes
     id: checks
     attributes:
-      label: Vérifications
+      label: Checks
       options:
-        - label: J'ai vérifié le document et les fichiers concernés dans la branche main.
+        - label: I checked the document and the files concerned on the main branch.
           required: true

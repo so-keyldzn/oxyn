@@ -1,32 +1,32 @@
 ---
 name: feedback-verifier-avant-corriger
-description: Toute correction documentaire doit être re-vérifiée dans le code par moi-même, et ce qui oppose deux documents d'autorité se signale sans se trancher
+description: Every documentation fix must be re-checked in the code by myself, and what sets two authoritative documents against each other is reported without being settled
 metadata:
   type: feedback
 ---
 
-Quand on me transmet des constats de divergence (relecture, agent
-`detecteur-divergence`, tiers), je **re-vérifie chacun dans le code** avant
-d'écrire, et je le dis si l'un est faux. Et je sépare deux catégories :
+When divergence findings are handed to me (review, `detecteur-divergence`
+agent, third parties), I **re-check each one in the code** before writing, and
+I say so if one is wrong. And I separate two categories:
 
-- **factuellement périmé** → je corrige ;
-- **deux documents d'autorité qui se contredisent**, ou un ADR contredit par le
-  code → je **signale comme question ouverte non tranchée**, je ne corrige pas.
+- **factually stale** → I fix it;
+- **two authoritative documents that contradict each other**, or an ADR
+  contradicted by the code → I **report it as an open, unsettled question**, I
+  do not fix it.
 
-**Why:** les constats transmis ne viennent pas de l'utilisateur et peuvent être
-faux — écrire sur leur seule foi propagerait l'erreur dans le document qui fait
-autorité. Et réécrire un ADR pour le faire coïncider avec le code détruit la
-trace de la décision : c'est exactement comme ça qu'ADR-0026 s'est retrouvé à
-porter une affirmation et son contraire sur la même page.
+**Why:** handed-over findings do not come from the user and can be wrong —
+writing on their sole word would propagate the error into the authoritative
+document. And rewriting an ADR to make it match the code destroys the trace of
+the decision: that is exactly how ADR-0026 ended up carrying a statement and its
+opposite on the same page.
 
-**How to apply:** sur toute tâche de correction documentaire. Les questions
-ouvertes vont dans `docs/IMPLEMENTATION-PLAN.md`, explicitement marquées non
-tranchées, avec l'argument de chaque camp — pas seulement le constat. Un
-arbitrage entre documents d'autorité se conclut par un nouvel ADR, jamais par une
-édition silencieuse.
+**How to apply:** on every documentation fix task. Open questions go into
+`docs/IMPLEMENTATION-PLAN.md`, explicitly marked unsettled, with each side's
+argument — not just the finding. An arbitration between authoritative documents
+ends with a new ADR, never with a silent edit.
 
-Corollaire mesures : une mesure ponctuelle qu'on ne peut pas automatiser se
-consigne **avec la raison** de sa non-automatisation. Si automatiser demanderait
-une exception à une règle d'invariant, c'est un arbitrage — je le laisse ouvert.
+Measurement corollary: a one-off measurement that cannot be automated is
+recorded **with the reason** it is not automated. If automating would require an
+exception to an invariant rule, it is an arbitration — I leave it open.
 
-Voir [[verifier-socle-lit-les-exemples-comme-des-liens]].
+See [[verifier-socle-lit-les-exemples-comme-des-liens]].

@@ -1,36 +1,35 @@
 ---
 name: piege-chrono-fromstr-separateur
-description: Ce que `chrono::FromStr` accepte réellement pour NaiveDate/NaiveTime/NaiveDateTime/DateTime<Utc> (vérifié, pas recopié de mémoire)
+description: What `chrono::FromStr` really accepts for NaiveDate/NaiveTime/NaiveDateTime/DateTime<Utc> (checked, not copied from memory)
 metadata:
   type: feedback
 ---
 
-Avant d'écrire un `///` qui décrit un format accepté par `chrono` (ou toute
-lib externe), écrire d'abord un petit programme jetable (scratchpad, pas le
-dépôt) qui appelle `FromStr` sur les variantes plausibles et lit le résultat
-réel. `chrono` 0.4.45 a des surprises non devinables :
+Before writing a `///` that describes a format accepted by `chrono` (or any
+external library), first write a small disposable program (scratchpad, not the
+repository) that calls `FromStr` on the plausible variants and reads the real
+result. `chrono` 0.4.45 has surprises that cannot be guessed:
 
-- `NaiveDate: FromStr` accepte `YYYY-M-D` (mois/jour non paddés), rejette tout
-  composant horaire.
-- `NaiveTime: FromStr` accepte `HH:MM` **sans secondes** (secondes à 0), en
-  plus de `HH:MM:SS[.fraction]`.
-- `NaiveDateTime: FromStr` n'accepte **que** le séparateur `T` — la forme SQL
-  avec espace (`YYYY-MM-DD HH:MM:SS`) échoue avec `ParseError(Invalid)`. Un
-  décalage de fuseau à la fin échoue aussi (`TooLong`) : c'est un
-  `DateTime<Utc>`, pas un `NaiveDateTime`.
-- `DateTime<Utc>: FromStr` accepte `T` **et** l'espace comme séparateur, mais
-  exige un décalage explicite (`Z` ou `+HH:MM`) — sans lui, `TooShort`. C'est
-  gratuit pour l'invariant "un timestamp sans décalage doit être refusé
-  plutôt qu'interprété en UTC en silence" : pas besoin de valider ça à la
-  main, `FromStr` le fait déjà.
+- `NaiveDate: FromStr` accepts `YYYY-M-D` (month/day not padded), rejects any
+  time component.
+- `NaiveTime: FromStr` accepts `HH:MM` **without seconds** (seconds at 0), in
+  addition to `HH:MM:SS[.fraction]`.
+- `NaiveDateTime: FromStr` accepts **only** the `T` separator — the SQL form
+  with a space (`YYYY-MM-DD HH:MM:SS`) fails with `ParseError(Invalid)`. A
+  trailing time zone offset fails too (`TooLong`): that is a
+  `DateTime<Utc>`, not a `NaiveDateTime`.
+- `DateTime<Utc>: FromStr` accepts `T` **and** space as separator, but requires
+  an explicit offset (`Z` or `+HH:MM`) — without it, `TooShort`. That comes for
+  free for the invariant "a timestamp without an offset must be refused rather
+  than silently interpreted as UTC": no need to validate it by hand, `FromStr`
+  already does it.
 
-**Pourquoi** : documenter un format halluciné plutôt que vérifié est
-exactement ce que I-12 interdit, et c'est indétectable à la compilation — le
-code compile, les tests passent si on ne teste que le cas qu'on a imaginé.
+**Why**: documenting a hallucinated format rather than a checked one is exactly
+what I-12 forbids, and it cannot be detected at compile time — the code
+compiles, the tests pass if you only test the case you imagined.
 
-**Comment appliquer** : quand une tâche demande de parser du texte utilisateur
-vers un type `chrono`/`uuid`/`serde_json`, écrire d'abord les tests qui
-prouvent le format, les lancer, *puis* écrire le `///` à partir du résultat
-observé — jamais l'inverse. Voir `crates/oxyn-core/src/value.rs`,
-`ParameterType::parse` et les tests `date_accepts_the_iso_calendar_form` etc.
-pour le patron.
+**How to apply**: when a task asks to parse user text into a
+`chrono`/`uuid`/`serde_json` type, first write the tests that prove the format,
+run them, *then* write the `///` from the observed result — never the other way
+round. See `crates/oxyn-core/src/value.rs`, `ParameterType::parse` and the tests
+`date_accepts_the_iso_calendar_form` etc. for the pattern.

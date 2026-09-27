@@ -1,17 +1,17 @@
 ---
 name: story-menu-ouvert-axe
-description: Une story qui finit avec un menu Base UI encore ouvert ou en fermeture échoue sur axe (aria-hidden-focus des focus guards)
+description: A story that ends with a Base UI menu still open or closing fails on axe (aria-hidden-focus of the focus guards)
 metadata:
   type: feedback
 ---
 
-Une story qui clique une entrée de menu contextuel (ou de sous-menu) et se termine
-aussitôt échoue dans `make front` sur `aria-hidden-focus` : axe tourne après le
-`play` et trouve les `span[data-base-ui-focus-guard]` du menu encore montés.
+A story that clicks a context menu (or submenu) item and ends right away fails
+in `make front` on `aria-hidden-focus`: axe runs after the `play` and finds the
+menu's `span[data-base-ui-focus-guard]` still mounted.
 
-**Why:** le menu Base UI se démonte après son animation de fermeture ; axe passe avant.
+**Why:** the Base UI menu unmounts after its closing animation; axe runs before.
 
-**How to apply:** terminer chaque `play` qui ouvre un menu par
+**How to apply:** end every `play` that opens a menu with
 `await waitFor(() => expect(within(document.body).queryByRole("menu")).toBeNull())`,
-y compris après un clic qui ferme le menu de lui-même. Entre deux ouvertures
-successives, attendre aussi la fermeture, sinon `Escape` vise l'ancien popup.
+including after a click that closes the menu by itself. Between two successive
+openings, also wait for the closing, otherwise `Escape` targets the old popup.

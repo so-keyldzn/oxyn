@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
-"""PreToolUse sur Bash(git commit *) : impose le format de message.
+"""PreToolUse on Bash(git commit *): enforce the message format.
 
-Un format de commit n'est pas une coquetterie : c'est ce qui rend l'historique
-consultable quand on cherche pourquoi une décision a été prise. La violation est
-silencieuse — un message mal formé passe, et le coût n'apparaît qu'au moment où
-personne ne retrouve plus rien.
+A commit format is not a nicety: it is what keeps history searchable when
+looking for why a decision was made. The violation is silent — a malformed
+message goes through, and the cost only appears when nobody can find anything
+anymore.
+
+The language (English, ADR-0047) is stated but not detected: a language
+heuristic would misfire on identifiers and proper nouns, and a false positive
+here blocks every commit.
 """
 
 from __future__ import annotations
@@ -25,8 +29,8 @@ LIMITE = 72
 
 
 def _sujets(commande: str) -> list[str]:
-    """Les valeurs de -m / --message. Un commit sans -m ouvre l'éditeur : rien
-    à vérifier ici."""
+    """The values of -m / --message. A commit without -m opens the editor:
+    nothing to check here."""
     try:
         jetons = shlex.split(commande, posix=True)
     except ValueError:
@@ -56,34 +60,34 @@ def verifier(sujet: str) -> None:
     if not correspondance:
         p.refuser(
             EVENEMENT,
-            f"Message de commit non conforme : « {premiere} ». Format attendu : "
-            "`type(portee): sujet` en français, à l'impératif, sans majuscule "
-            "initiale ni point final. Types : " + ", ".join(TYPES) + ". "
-            "La portée est le nom de crate sans le préfixe `oxyn-` "
-            "(`driver-postgres`, `ui`, `command`) ou `docs`, `socle`.",
+            f"Non-compliant commit message: \"{premiere}\". Expected format: "
+            "`type(scope): subject` in English (ADR-0047), imperative mood, "
+            "no initial capital, no final period. Types: "
+            + ", ".join(TYPES) + ". "
+            "The scope is the crate name without the `oxyn-` prefix "
+            "(`driver-postgres`, `ui`, `command`) or `docs`, `socle`.",
         )
 
     description = correspondance.group(3)
     if len(premiere) > LIMITE:
         p.refuser(
             EVENEMENT,
-            f"Sujet de commit trop long ({len(premiere)} caractères, maximum "
-            f"{LIMITE}) : il est tronqué dans `git log --oneline` et dans "
-            "l'interface des forges. Déplacer le détail dans le corps du "
-            "message.",
+            f"Commit subject too long ({len(premiere)} characters, maximum "
+            f"{LIMITE}): it is truncated in `git log --oneline` and in forge "
+            "interfaces. Move the details into the message body.",
         )
     if description[0].isupper() and not description.split()[0].isupper():
         p.refuser(
             EVENEMENT,
-            f"Le sujet commence par une majuscule : « {description} ». "
-            "Convention du dépôt : minuscule initiale, sauf pour un nom propre "
-            "ou un identifiant de code.",
+            f"The subject starts with a capital letter: \"{description}\". "
+            "Repository convention: lowercase initial, except for a proper "
+            "noun or a code identifier.",
         )
     if description.endswith("."):
         p.refuser(
             EVENEMENT,
-            "Le sujet se termine par un point. Convention du dépôt : pas de "
-            "point final sur la première ligne.",
+            "The subject ends with a period. Repository convention: no final "
+            "period on the first line.",
         )
 
 

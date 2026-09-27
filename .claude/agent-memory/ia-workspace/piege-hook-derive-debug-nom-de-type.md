@@ -1,29 +1,28 @@
 ---
 name: piege-hook-derive-debug-nom-de-type
-description: Le hook I-03 refuse `#[derive(Debug)]` sur tout type dont le NOM contient Token/Secret/ApiKey/Credential/Password/Dsn/ConnectionString, même sans secret dedans
+description: The I-03 hook refuses `#[derive(Debug)]` on any type whose NAME contains Token/Secret/ApiKey/Credential/Password/Dsn/ConnectionString, even with no secret inside
 metadata:
   type: feedback
 ---
 
-`.claude/hooks/code_interdit.py` refuse un `#[derive(Debug)]` dès que le **nom du
-type** correspond à `(?:Credential|Secret|Password|Passwd|Token|ApiKey|Dsn|ConnectionString)`.
-Il ne regarde pas les champs.
+`.claude/hooks/code_interdit.py` refuses a `#[derive(Debug)]` as soon as the
+**type name** matches `(?:Credential|Secret|Password|Passwd|Token|ApiKey|Dsn|ConnectionString)`.
+It does not look at the fields.
 
-**Why:** la règle implémente le corollaire vérifiable d'I-03 — aucun type portant
-un secret ne dérive `Debug`, parce que c'est le `tracing::debug!("{x:?}")` ajouté
-six mois plus tard qui fuit. Le hook est un mur, pas un rappel : il n'a pas de
-dérogation, et un test sur le nom est le seul critère qu'une regex peut appliquer.
+**Why:** the rule implements the checkable corollary of I-03 — no type carrying
+a secret derives `Debug`, because it is the `tracing::debug!("{x:?}")` added six
+months later that leaks. The hook is a wall, not a reminder: it has no
+exemption, and a test on the name is the only criterion a regex can apply.
 
-**How to apply:** le faux positif qui coûte du temps est un type de **comptage de
-jetons** — `PromptTokensDetails`, `TokenUsage`, `TokenCount` contiennent tous
-« Token » alors qu'ils ne portent que des entiers. Deux sorties, les deux
-acceptables :
+**How to apply:** the false positive that costs time is a **token counting**
+type — `PromptTokensDetails`, `TokenUsage`, `TokenCount` all contain "Token"
+while they only carry integers. Two ways out, both acceptable:
 
-* nommer le type sans le mot déclencheur (`CountResponse` plutôt que
-  `TokenCount`, `UsageDetails` plutôt que `PromptTokensDetails`) ;
-* garder le nom et écrire `impl fmt::Debug` à la main.
+* name the type without the trigger word (`CountResponse` rather than
+  `TokenCount`, `UsageDetails` rather than `PromptTokensDetails`);
+* keep the name and write `impl fmt::Debug` by hand.
 
-Ne pas contourner le hook par le shell : `code_interdit.py` ne voit que les
-écritures passant par Write et Edit, et un `perl -0pi -e` sur un fichier source
-échappe à *toutes* les vérifications d'invariants — le hook `PreToolUse` le
-signale d'ailleurs explicitement.
+Do not work around the hook through the shell: `code_interdit.py` only sees
+writes going through Write and Edit, and a `perl -0pi -e` on a source file
+escapes *all* invariant checks — the `PreToolUse` hook says so explicitly
+anyway.

@@ -24,7 +24,14 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from verifier_socle import MOTIF_TITRE, _ancres, _slug, erreurs_agregat  # noqa: E402
+from verifier_socle import (  # noqa: E402
+    MOTIF_TITRE,
+    _ancres,
+    _slug,
+    empreinte,
+    erreurs_agregat,
+    erreurs_traductions,
+)
 
 
 def _charger_zones_ci():
@@ -123,6 +130,30 @@ def echecs_ci() -> list[str]:
     return echecs
 
 
+def echecs_traductions() -> list[str]:
+    """A fresh mirror passes; an edited source or a missing header fails."""
+    echecs = []
+    with tempfile.TemporaryDirectory() as dossier:
+        racine = Path(dossier)
+        source = racine / "CLAUDE.md"
+        source.write_text("# Oxyn\n", encoding="utf-8")
+        miroir = racine / "i18n" / "fr" / "CLAUDE.md"
+        miroir.parent.mkdir(parents=True)
+        miroir.write_text(
+            f'<!-- oxyn-translation source="CLAUDE.md" sha256="{empreinte(source)}" -->\n# Oxyn\n',
+            encoding="utf-8",
+        )
+        if erreurs_traductions(racine):
+            echecs.append(f"fresh mirror refused: {erreurs_traductions(racine)}")
+        source.write_text("# Oxyn\n\nA new rule.\n", encoding="utf-8")
+        if not any("stale" in e for e in erreurs_traductions(racine)):
+            echecs.append("a mirror older than its source is not refused")
+        miroir.write_text("# Oxyn\n", encoding="utf-8")
+        if not any("header" in e for e in erreurs_traductions(racine)):
+            echecs.append("a mirror without a header is not refused")
+    return echecs
+
+
 def principal() -> int:
     echecs = [
         f"_slug({titre!r}) = {_slug(titre)!r}, attendu {attendu!r}"
@@ -143,10 +174,11 @@ def principal() -> int:
             echecs.append(f"_ancres = {sorted(obtenues)}, attendu {sorted(attendues)}")
 
     echecs += echecs_ci()
+    echecs += echecs_traductions()
 
     for echec in echecs:
         print(f"ÉCHEC  {echec}")
-    total = len(SLUGS) + len(TITRES) + 1 + len(ZONES) + 6
+    total = len(SLUGS) + len(TITRES) + 1 + len(ZONES) + 6 + 3
     print(f"\n{total - len(echecs)}/{total} cas conformes")
     return 1 if echecs else 0
 

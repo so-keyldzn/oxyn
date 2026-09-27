@@ -1,93 +1,96 @@
-# Oxyn — consignes pour Codex
+# Oxyn — instructions for Codex
 
-Ces consignes s'appliquent uniquement à ce dépôt. Ne pas modifier la
-configuration globale de Codex pour les installer.
+These instructions apply to this repository only. Do not modify the global
+Codex configuration to install them.
 
-## Source commune
+## Common source
 
-Avant de travailler, lire [CLAUDE.md](CLAUDE.md) : présentation du produit,
-langue, documents d'autorité, invariants I-01 à I-13 et organisation du code.
-Ces consignes métier s'appliquent aussi à Codex. Les adaptations d'outillage
-ci-dessous remplacent les indications propres à Claude Code.
+Before working, read [CLAUDE.md](CLAUDE.md): product overview, language,
+authoritative documents, invariants I-01 to I-13 and code organization. These
+domain instructions apply to Codex too. The tooling adaptations below replace
+the indications specific to Claude Code.
 
-Code, identifiants, commentaires et erreurs en anglais ; documentation, ADR,
-commits et échanges en français. Les documents de `docs/` font autorité sur
-le domaine ; signaler toute contradiction avec le code.
+The repository is in English — code, identifiers, comments, errors,
+documentation, ADRs, commits; French documents in `docs/` stay authoritative
+until translated, and `i18n/fr/` holds French mirrors, English being
+authoritative ([ADR-0047](docs/adr/0047-english-as-the-repository-language.md)).
+The documents of `docs/` are authoritative on the domain; report any
+contradiction with the code.
 
-## Début de tâche
+## Start of task
 
-Lire `git status --short`, puis les manifestes et le plan d'implémentation
-pertinents pour établir l'état réel. Préserver les changements préexistants.
-Ne pas supposer que le dépôt est vide à partir d'une ancienne note.
-Le hook Claude `SessionStart` n'est pas activé par cette adaptation.
-Les versions effectives se lisent dans `rust-toolchain.toml`, `Cargo.toml`
-et `Cargo.lock` ; leur justification dans `docs/RESEARCH-NOTES.md`.
+Read `git status --short`, then the relevant manifests and implementation plan
+to establish the real state. Preserve pre-existing changes. Do not assume the
+repository is empty based on an old note. The Claude `SessionStart` hook is not
+enabled by this adaptation. The effective versions are read in
+`rust-toolchain.toml`, `Cargo.toml` and `Cargo.lock`; their justification in
+`docs/RESEARCH-NOTES.md`.
 
-## Règles à lire avant de modifier ou créer un fichier
+## Rules to read before modifying or creating a file
 
-Le frontmatter `paths:` des règles Claude ne déclenche aucun chargement dans
-cette adaptation Codex. Lire explicitement toutes les règles applicables,
-y compris pour un fichier neuf. Résoudre les liens depuis le fichier qui
-les contient ; les chemins de commandes shell partent de la racine du dépôt.
+The `paths:` frontmatter of Claude rules triggers no loading in this Codex
+adaptation. Explicitly read all applicable rules, including for a new file.
+Resolve links from the file that contains them; shell command paths start from
+the repository root.
 
-| Fichiers concernés | Règle commune |
+| Files concerned | Common rule |
 |---|---|
-| Tout fichier Rust | [rust](.claude/rules/rust.md) |
+| Any Rust file | [rust](.claude/rules/rust.md) |
 | `drivers/oxyn-driver-*/**`, `crates/oxyn-driver/**`, `crates/oxyn-driver-*/**` | [drivers](.claude/rules/drivers.md) |
 | `apps/desktop/**`, `crates/oxyn-desktop/**` | [front](.claude/rules/front.md) |
 | `crates/oxyn-ai/**` | [ia](.claude/rules/ia.md) |
-| Tout répertoire `tests/` ou `benches/` | [tests](.claude/rules/tests.md) |
-| Markdown, y compris les compétences de projet | [documentation](.claude/rules/documentation.md) |
+| Any `tests/` or `benches/` directory | [tests](.claude/rules/tests.md) |
+| Markdown, including project skills | [documentation](.claude/rules/documentation.md) |
 | `Cargo.toml`, `Cargo.lock`, `rust-toolchain.toml`, `Makefile`, `deny.toml` | [manifestes](.claude/rules/manifestes.md) |
 
-## Procédures et compétences
+## Procedures and skills
 
-Les dix procédures communes de [.claude/commands/](.claude/commands/) sont
-accessibles par les compétences locales décrites dans
-[.agents/README.md](.agents/README.md), par exemple `$oxyn-driver`,
-`$oxyn-commande` et `$oxyn-relire`.
-Pour un driver, une commande du bus ou un écran, lire la procédure spécialisée
-avant de coder, même si la demande n'invoque pas explicitement la compétence.
+The ten common procedures of [.claude/commands/](.claude/commands/) are
+reachable through the local skills described in
+[.agents/README.md](.agents/README.md), for example `$oxyn-driver`,
+`$oxyn-commande` and `$oxyn-relire`.
+For a driver, a bus command or a screen, read the specialized procedure before
+coding, even if the request does not explicitly invoke the skill.
 
-Dans les procédures partagées :
+In the shared procedures:
 
-- `/nom` signifie lire et suivre `.claude/commands/nom.md`, ou utiliser
-  `$oxyn-nom` ; ce n'est pas une commande slash Codex à exécuter.
-- `$ARGUMENTS` désigne la demande et le périmètre donnés par l'utilisateur.
-- Les blocs marqués `!` sont des commandes à exécuter explicitement si utiles,
-  avec les outils disponibles et les permissions de la session.
-- `allowed-tools`, `tools`, `model`, `memory`, `permissions.allow` et les
-  événements de hooks sont des métadonnées Claude, pas une configuration Codex.
-- Les profils de [.claude/agents/](.claude/agents/) servent de guides de
-  spécialité. Lire ceux qui concernent la tâche ; effectuer leurs vérifications
-  localement. Déléguer seulement si l'utilisateur ou les instructions de la
-  session le demandent et si les outils sont disponibles. Ne pas prétendre
-  avoir lancé un agent ou activé sa mémoire. Une relecture produit des constats,
-  sans modifier les sources relues ; les corrections sont une étape distincte.
+- `/name` means read and follow `.claude/commands/name.md`, or use
+  `$oxyn-name`; it is not a Codex slash command to run.
+- `$ARGUMENTS` stands for the request and the scope given by the user.
+- Blocks marked `!` are commands to run explicitly when useful, with the
+  available tools and the session's permissions.
+- `allowed-tools`, `tools`, `model`, `memory`, `permissions.allow` and hook
+  events are Claude metadata, not Codex configuration.
+- The profiles in [.claude/agents/](.claude/agents/) serve as specialty
+  guides. Read those relevant to the task; perform their checks locally.
+  Delegate only if the user or the session instructions ask for it and if the
+  tools are available. Do not claim to have launched an agent or enabled its
+  memory. A review produces findings, without modifying the reviewed sources;
+  corrections are a separate step.
 
-## Permissions et contrôles
+## Permissions and checks
 
-Cette adaptation n'installe aucun hook Codex et ne transpose pas les permissions
-de `.claude/settings.json`. Les hooks Claude ne bloquent donc pas les outils
-Codex. `make socle` teste ces hooks ; il ne les installe pas et ne constitue pas
-un audit automatique de tout le code Rust.
+This adaptation installs no Codex hook and does not transpose the permissions
+of `.claude/settings.json`. Claude hooks therefore do not block Codex tools.
+`make socle` tests these hooks; it does not install them and is not an
+automatic audit of all the Rust code.
 
-Respecter les invariants lors des écritures et de la relecture. En particulier,
-ne pas lire ni exposer les secrets (`.env`, `.env.*`, clés privées, certificats
-privés, `secrets/`, `.ssh/`, identifiants Cargo ou AWS). Ne pas contourner les
-contrôles avec `--no-verify`, un push forcé ou un script téléchargé puis exécuté.
-Les permissions effectives sont celles de la session ; une procédure du dépôt
-ne vaut pas autorisation de publication ni d'accès à une base réelle.
+Respect the invariants when writing and reviewing. In particular, do not read
+or expose secrets (`.env`, `.env.*`, private keys, private certificates,
+`secrets/`, `.ssh/`, Cargo or AWS credentials). Do not bypass checks with
+`--no-verify`, a forced push or a downloaded-then-executed script. The
+effective permissions are those of the session; a repository procedure is not
+an authorization to publish nor to access a real database.
 
-## Fin de tâche
+## End of task
 
-Après modification Rust, formater avec `cargo fmt --all`, puis exécuter
-`make qualite`. Pour toute modification, suivre la
-[liste de fin de tâche](.claude/checklists/fin-de-tache.md), en adaptant les
-relectures comme indiqué ci-dessus. Ne pas créer de commit sans demande.
-Si un commit est demandé : `type(portee): sujet`, sujet français en minuscule,
-sans point final, première ligne de 72 caractères maximum.
+After a Rust change, format with `cargo fmt --all`, then run `make qualite`.
+For any change, follow the
+[end-of-task checklist](.claude/checklists/fin-de-tache.md), adapting the
+reviews as indicated above. Do not create a commit unless asked. If a commit is
+asked for: `type(scope): subject`, English subject in lowercase, imperative, no
+final period, first line of 72 characters at most.
 
-Rapporter les contrôles réellement exécutés et leurs résultats. Si une commande
-échoue ou ne peut pas tourner, donner la cause et la limite de validation ;
-ne pas annoncer une porte de qualité franchie sans succès effectif.
+Report the checks actually run and their results. If a command fails or cannot
+run, give the cause and the limit of validation; do not announce a quality gate
+passed without actual success.

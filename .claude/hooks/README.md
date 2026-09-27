@@ -1,80 +1,79 @@
 # Hooks
 
-Ce que `CLAUDE.md` ne peut que **demander**, un hook l'**impose**. Un hook n'est
-pas un rappel : c'est un mur.
+What `CLAUDE.md` can only **ask for**, a hook **enforces**. A hook is not a
+reminder: it is a wall.
 
-Un hook n'est écrit que pour un invariant dont la violation est **silencieuse**
-et **détectable par une expression régulière**. Ce qui se voit à la compilation
-ou aux tests appartient à une règle, pas ici.
+A hook is only written for an invariant whose violation is **silent** and
+**detectable by a regular expression**. What shows up at compile time or in
+tests belongs to a rule, not here.
 
-## Les quatre faits de protocole
+## The four protocol facts
 
-Ils décident du code. Ils sont écrits ici pour ne pas être re-découverts à
-chaque hook ajouté.
+They decide the code. They are written here so they are not rediscovered with
+every hook added.
 
-**1. `deny` parle au modèle, `ask` parle à l'utilisateur.**
-Sur un `deny`, `permissionDecisionReason` est transmise **à Claude** : elle doit
-donc dire quoi faire à la place. Sur un `ask`, elle va **à l'utilisateur seul** ;
-sans `additionalContext`, Claude voit son action suspendue sans savoir par quoi
-et retente à l'identique. `protocole_hook.demander()` reprend donc la raison dans
-les deux champs.
+**1. `deny` speaks to the model, `ask` speaks to the user.**
+On a `deny`, `permissionDecisionReason` is passed **to Claude**: it must
+therefore say what to do instead. On an `ask`, it goes **to the user only**;
+without `additionalContext`, Claude sees its action suspended without knowing
+by what, and retries identically. `protocole_hook.demander()` therefore repeats
+the reason in both fields.
 
-**2. `systemMessage` est un champ de premier niveau, et `Stop` ne le jette pas.**
-C'est le canal d'un rappel de fin de tour. `additionalContext` au même endroit
-relancerait le travail au lieu d'informer.
+**2. `systemMessage` is a top-level field, and `Stop` does not drop it.**
+It is the channel for an end-of-turn reminder. `additionalContext` in the same
+place would restart the work instead of informing.
 
-**3. Le champ `if:` de `settings.json` est best-effort.**
-On ne s'en sert que là où ne pas s'exécuter est sans conséquence — le formateur.
-**Jamais** sur un hook de refus : il y ouvrirait une faille silencieuse.
+**3. The `if:` field of `settings.json` is best-effort.**
+It is only used where not running has no consequence — the formatter.
+**Never** on a refusal hook: it would open a silent gap there.
 
-**4. Un hook défaillant n'interrompt jamais le travail.**
-Toute erreur d'exécution se termine en sortie 0 silencieuse. Seul un refus
-délibéré parle. C'est le rôle du `except Exception: sys.exit(0)` qui clôt chaque
-hook.
+**4. A failing hook never interrupts the work.**
+Any runtime error ends in a silent exit 0. Only a deliberate refusal speaks.
+That is the role of the `except Exception: sys.exit(0)` that closes every hook.
 
-## Les fichiers
+## The files
 
-| Fichier | Événement | Rôle |
+| File | Event | Role |
 |---|---|---|
-| `protocole_hook.py` | — | lire l'événement, écrire la décision. **Rien d'autre** : ce n'est pas un fourre-tout |
-| `code_interdit.py` | `PreToolUse` sur `Write\|Edit` | refuse les motifs interdits, interroge sur les douteux |
-| `bash_interdit.py` | `PreToolUse` sur `Bash` | refuse les commandes interdites, **et interroge dès qu'une commande écrit un fichier du dépôt** |
-| `message_commit.py` | `PreToolUse` sur `Bash` | format du message de commit |
-| `formater.py` | `PostToolUse` | `rustfmt` sur le fichier écrit |
-| `contexte_session.py` | `SessionStart` | injecte l'état réel — c'est ce qui permet à `CLAUDE.md` de ne rien contenir de périssable |
-| `rappel_qualite.py` | `Stop` | rappelle `make qualite`, **une fois par session** |
-| `verifier_versions.py` | — | outil de [I-12](../../CLAUDE.md#i-12), appelé par [`/versions`](../commands/versions.md) |
-| `test_hooks.py` | — | fige les décisions attendues |
+| `protocole_hook.py` | — | read the event, write the decision. **Nothing else**: it is not a catch-all |
+| `code_interdit.py` | `PreToolUse` on `Write\|Edit` | refuses forbidden patterns, asks about doubtful ones |
+| `bash_interdit.py` | `PreToolUse` on `Bash` | refuses forbidden commands, **and asks as soon as a command writes a repository file** |
+| `message_commit.py` | `PreToolUse` on `Bash` | commit message format |
+| `formater.py` | `PostToolUse` | `rustfmt` on the written file |
+| `contexte_session.py` | `SessionStart` | injects the real state — that is what lets `CLAUDE.md` hold nothing perishable |
+| `rappel_qualite.py` | `Stop` | reminds of `make qualite`, **once per session** |
+| `verifier_versions.py` | — | tool for [I-12](../../CLAUDE.md#i-12), called by [`/versions`](../commands/versions.md) |
+| `test_hooks.py` | — | pins the expected decisions |
 
-## Pourquoi `bash_interdit.py` intercepte les écritures
+## Why `bash_interdit.py` intercepts writes
 
-Sans cela, **tous** les garde-fous de `code_interdit.py` se contournent par
-`cat > fichier.rs`, `sed -i` ou `python3 -c`. Un hook d'écriture qui ne couvre
-pas le shell ne couvre rien.
+Without it, **all** the safeguards of `code_interdit.py` are bypassed by
+`cat > file.rs`, `sed -i` or `python3 -c`. A write hook that does not cover the
+shell covers nothing.
 
-C'est pour la même raison que le hook **déplie les lanceurs** (`uv run`, `npx`,
-`xargs`, `timeout`…) : sans cela, `timeout 30 git push --force` passe. Ce cas
-précis est un défaut qui a été trouvé par les tests, pas à la relecture — d'où
-la règle suivante.
+For the same reason the hook **unfolds launchers** (`uv run`, `npx`, `xargs`,
+`timeout`…): without it, `timeout 30 git push --force` gets through. This exact
+case is a defect found by the tests, not in review — hence the next rule.
 
-## Ajouter un motif
+## Adding a pattern
 
-Un motif ajouté sans son faux positif dans `test_hooks.py` sera refusé en revue.
+A pattern added without its false positive in `test_hooks.py` will be refused in
+review.
 
-Le filtrage se fait sur les **mots** de la commande, jamais sur la ligne brute :
-sinon `echo "ne jamais faire git push --force"` se fait refuser. Pour le code, on
-ignore les lignes de commentaire, sinon une mention de `tauri` dans un `//` est
-prise pour un import.
+Filtering is done on the **words** of the command, never on the raw line:
+otherwise `echo "never run git push --force"` gets refused. For code, comment
+lines are ignored, otherwise a mention of `tauri` in a `//` is taken for an
+import.
 
-**Un faux positif bloque le travail à chaque tour, et le hook finit désactivé —
-emportant les vrais positifs avec lui.** C'est le mode de panne d'un hook zélé,
-et il est pire que l'absence de hook.
+**A false positive blocks work at every turn, and the hook ends up disabled —
+taking the true positives with it.** It is the failure mode of an overzealous
+hook, and it is worse than no hook at all.
 
-## Vérifier
+## Checking
 
 ```bash
 python3 .claude/hooks/test_hooks.py
 ```
 
-Les tests lancent les hooks en sous-processus avec de vrais événements : ils
-vérifient le comportement réel, pas les intentions.
+The tests launch the hooks as subprocesses with real events: they check the
+actual behavior, not the intentions.

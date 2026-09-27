@@ -1,10 +1,9 @@
 #!/usr/bin/env python3
-"""PostToolUse : passe le formateur du projet sur le fichier qui vient d'être
-écrit.
+"""PostToolUse: run the project formatter on the file just written.
 
-C'est le seul hook où le champ `if:` de settings.json est acceptable : ne pas
-s'exécuter est sans conséquence — `make qualite` rattrapera. Sur un hook de
-refus, `if:` étant best-effort, il ouvrirait une faille silencieuse.
+This is the only hook where the `if:` field of settings.json is acceptable: not
+running has no consequence — `make qualite` will catch up. On a refusal hook,
+`if:` being best-effort, it would open a silent hole.
 """
 
 from __future__ import annotations
@@ -39,7 +38,7 @@ def principal() -> None:
             check=False,
         )
     except (subprocess.SubprocessError, OSError):
-        pass  # Un formateur indisponible n'interrompt pas le travail.
+        pass  # An unavailable formatter does not interrupt the work.
     p.laisser_passer()
 
 

@@ -1,0 +1,101 @@
+---
+paths:
+  - "**/*_tests.rs"
+  - "**/tests.rs"
+  - "**/benches/**"
+  - "**/tests/**"
+---
+
+<!-- oxyn-translation source=".claude/rules/tests.md" sha256="61d78f2ad470" -->
+
+> Traduction française de [.claude/rules/tests.md](../../../../.claude/rules/tests.md). **La version anglaise fait foi.**
+
+# Tests et bancs d'essai — conventions
+
+## Ce qu'on teste ici, et ce qu'on ne teste pas
+
+| Teste | Ne teste pas |
+|---|---|
+| Le contrat : classification d'erreurs, capacités, conversion de types | que `sqlx` sait parler à PostgreSQL |
+| Ce qui panique aujourd'hui si l'entrée est hostile | des accesseurs |
+| Les cas de perte documentés de la table de types | le chemin nominal seul |
+
+Un test qui ne peut pas échouer ne prouve rien et coûte à chaque exécution.
+
+## Les entrées hostiles sont le sujet, pas un bonus
+
+Un test de driver qui n'envoie que des réponses bien formées ne teste pas
+[I-09](../../CLAUDE.md#i-09). Le corpus minimal : type inconnu, `NULL` sur une
+colonne `NOT NULL`, entier hors bornes, encodage invalide, réponse tronquée en
+plein flux, nom d'objet contenant un guillemet ou un point-virgule.
+
+Ce dernier point est le plus négligé : une table nommée
+`"users"; DROP TABLE audit; --` est légale dans PostgreSQL, et c'est le test qui
+prouve [I-10](../../CLAUDE.md#i-10).
+
+## Les deux tests qu'un driver ne contourne pas
+
+1. **L'annulation atteint le serveur.** Vérifiée côté serveur — la vue des
+   processus, pas le retour de la fonction. Un test qui vérifie que le futur
+   s'est arrêté ne teste rien.
+2. **Le flux tient sur un volume qui ne rentre pas en mémoire.** Avec une borne
+   sur la mémoire du processus, sinon le test passe par accident sur une machine
+   de développement bien dotée.
+
+## Les tests d'interface
+
+Deux niveaux, qui ne prouvent pas la même chose.
+
+**1. La logique, sans DOM.** Ce qu'un composant calcule avant de dessiner —
+fenêtre de lignes visibles, bornes du focus, largeur d'une colonne, réduction
+d'un flux d'événements — vit dans une fonction libre et se teste en Vitest
+unitaire, sans rendu. C'est le niveau le plus rentable, et le seul qui survit à
+un changement de bibliothèque. Un composant dont rien ne se teste à ce niveau
+porte trop de logique dans son rendu : c'est un signal de découpage.
+
+**2. Les composants et les interactions : les stories.** Chaque composant de
+`apps/desktop/src/components/oxyn` a une story par état, rendue dans Chromium
+avec axe en mode `error` ([front.md](front.md)). Ce qui mérite un `play`, c'est
+ce dont la régression est **silencieuse** — les points bloquants de
+[revue-ui](../checklists/revue-ui.md) :
+
+- la confirmation qui **nomme** la connexion avant une écriture sur `production`,
+  et le bouton par défaut qui n'est pas l'action destructrice
+  ([I-02](../../CLAUDE.md#i-02)) ;
+- l'atteignabilité au clavier, le focus visible, l'ordre de tabulation ;
+- l'état **vide**, visiblement distinct de l'erreur ;
+- le moyen d'annuler présent pendant l'état « en cours ».
+
+Aucune de ces quatre régressions ne casse une compilation ni ne rougit un test
+existant. C'est précisément le critère qui en fait des tests.
+
+**Le piège**, et il est vicieux : `toBeVisible` ne tient pas compte de ce qu'une
+zone de défilement coupe. Une ligne dessinée hors de la zone visible reste
+« visible » pour le test. Ce qui s'asserte, ce sont les positions et les
+hauteurs qu'Oxyn **décide** lui-même, mesurées par rapport au conteneur.
+
+Une chose qui n'est pas un test d'interface : vérifier qu'un composant se rend.
+Il ne peut échouer que sur une exception, et il restera vert le jour où le
+composant n'affichera plus rien.
+
+## Bancs d'essai
+
+`criterion` pour le code pur : conversion vers `RecordBatch`, analyse,
+formatage, diff de schéma
+([PERFORMANCE](../../../../docs/PERFORMANCE.md#ce-qui-se-mesure-et-comment)).
+
+Deux choses qui ne sont **pas** des bancs d'essai :
+
+- une mesure contre une base réelle — le réseau et l'état du serveur dominent le
+  signal ; ce qui se mesure, c'est le temps passé *dans* Oxyn ;
+- un banc `criterion` sur l'interface — il ne mesure rien d'utile ; les budgets
+  de trame se mesurent avec les instruments du navigateur et du système.
+
+Une optimisation arrive avec son chiffre avant et après, dans le message de
+commit ([`/benchmark`](../commands/benchmark.md)).
+
+## Ce qui ne va pas dans un test
+
+Un identifiant réel, une chaîne de connexion, un jeton
+([I-03](../../CLAUDE.md#i-03)) — y compris dans une fixture « de test » : elle
+sera commitée, et elle est souvent réelle.

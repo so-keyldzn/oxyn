@@ -1,32 +1,31 @@
 ---
 name: piege-rustdoc-lien-vers-item-prive
-description: "Piège d'outillage : rustdoc en -D warnings refuse qu'une doc publique lie un item privé — cargo test/clippy ne le voient pas, make qualite si"
+description: "Tooling trap: rustdoc under -D warnings refuses that a public doc links a private item — cargo test/clippy do not see it, make qualite does"
 metadata:
   type: feedback
 ---
 
-Un lien intra-doc `[`nom`]` placé dans un `///` sur un item **public** (une
-méthode `pub` par exemple) qui pointe vers un item **privé** du même module
-(une fonction libre non `pub`, un helper interne) déclenche
-`rustdoc::private_intra_doc_links`, donc une **erreur** sous
-`RUSTDOCFLAGS="-D warnings"` — même si le lien est syntaxiquement correct et
-résout bien dans le module.
+An intra-doc link `[`name`]` placed in a `///` on a **public** item (a `pub`
+method for example) that points to a **private** item of the same module (a
+non-`pub` free function, an internal helper) triggers
+`rustdoc::private_intra_doc_links`, hence an **error** under
+`RUSTDOCFLAGS="-D warnings"` — even if the link is syntactically correct and
+does resolve in the module.
 
-**Why:** `cargo test -p …` et `cargo clippy -p … --all-targets` compilent tous
-les deux sans rien dire, puisque ce n'est pas un problème de code mais de
-visibilité de la documentation publiée. Seul l'étage `doc` de `make qualite`
-(`cargo doc --workspace --no-deps --all-features` sous `-D warnings`) l'attrape,
-et seulement quand l'item ciblé n'est pas `pub`. Exemple rencontré :
-`crates/oxyn-core/src/ai.rs:482`, `same_endpoint_as` (méthode `pub`) référence
-`[`validate_base_url`]`, une fonction privée du module.
+**Why:** `cargo test -p …` and `cargo clippy -p … --all-targets` both compile
+without saying anything, since it is not a code problem but one of visibility of
+the published documentation. Only the `doc` stage of `make qualite`
+(`cargo doc --workspace --no-deps --all-features` under `-D warnings`) catches
+it, and only when the targeted item is not `pub`. Example encountered:
+`crates/oxyn-core/src/ai.rs:482`, `same_endpoint_as` (`pub` method) references
+`[`validate_base_url`]`, a private function of the module.
 
-**How to apply:** avant de déclarer un lot terminé qui ajoute un lien intra-doc
-depuis un item public vers un helper du même fichier, vérifier que la cible est
-`pub` (ou `pub(crate)` suffit rarement — `cargo doc` sans `--document-private-items`
-ne la documente pas). Sinon, soit rendre la cible publique si elle a vocation à
-l'être, soit remplacer le lien par du texte simple (pas de crochets), soit
-lancer `RUSTDOCFLAGS="-D warnings" cargo doc -p <crate> --no-deps` avant de
-conclure le lot — ne pas se fier à `cargo test`/`clippy` verts. Voir aussi
-[[piege-rustdoc-liens-explicites-redondants]], un autre lint doc qui échappe
-aux mêmes commandes pour une raison différente (forme longue vs courte, pas
-visibilité).
+**How to apply:** before declaring done a batch that adds an intra-doc link from
+a public item to a helper of the same file, check that the target is `pub` (or
+`pub(crate)` rarely suffices — `cargo doc` without `--document-private-items`
+does not document it). Otherwise, either make the target public if it is meant
+to be, or replace the link with plain text (no brackets), or run
+`RUSTDOCFLAGS="-D warnings" cargo doc -p <crate> --no-deps` before concluding
+the batch — do not trust green `cargo test`/`clippy`. See also
+[[piege-rustdoc-liens-explicites-redondants]], another doc lint that escapes the
+same commands for a different reason (long vs short form, not visibility).

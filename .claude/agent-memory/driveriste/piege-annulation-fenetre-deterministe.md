@@ -1,64 +1,64 @@
 ---
 name: piege-annulation-fenetre-deterministe
-description: sqlite3_interrupt vise la connexion et son drapeau s'efface au démarrage d'instruction ; pg_cancel_backend vise un processus réutilisé par le bassin — et comment rendre ces fenêtres reproductibles en test
+description: sqlite3_interrupt targets the connection and its flag is cleared at statement start; pg_cancel_backend targets a process reused by the pool — and how to make these windows reproducible in tests
 metadata:
   type: reference
 ---
 
-Relevés le 2026-09-16 en corrigeant deux annulations mal ciblées.
+Found on 2026-09-16 while fixing two mistargeted cancellations.
 
-## SQLite (source 3.50.2 embarquée par libsqlite3-sys 0.35.0)
+## SQLite (source 3.50.2 embedded by libsqlite3-sys 0.35.0)
 
-`sqlite3_interrupt` pose `db->u1.isInterrupted` sur la **connexion**. Il est remis
-à 0 dans `sqlite3Step` et `sqlite3RunParser` seulement si `nVdbeActive == 0`.
-Donc : une interruption qui arrive pendant le `step` de la requête **suivante**
-la tue ; une interruption posée entre deux instructions ou pendant une
-préparation **se perd**. Il faut vérifier sous verrou que la tâche visée est
-bien celle en cours, et garder un drapeau propre à la tâche.
+`sqlite3_interrupt` sets `db->u1.isInterrupted` on the **connection**. It is
+reset to 0 in `sqlite3Step` and `sqlite3RunParser` only if `nVdbeActive == 0`.
+So: an interruption arriving during the `step` of the **next** query kills it;
+an interruption set between two statements or during a preparation **is lost**.
+You have to check under lock that the targeted task is indeed the running one,
+and keep a flag specific to the task.
 
-Test déterministe : une tâche qui lit **une** ligne (instruction active), signale,
-attend un feu vert sur un canal std, puis lit le reste. L'état « instruction
-active » est alors garanti au moment où le test interrompt.
+Deterministic test: a task that reads **one** row (active statement), signals,
+waits for a go-ahead on a std channel, then reads the rest. The "active
+statement" state is then guaranteed at the moment the test interrupts.
 
 ## PostgreSQL
 
-`pg_cancel_backend(pid)` vise un processus ; le bassin sqlx rend la même
-connexion — même pid — à l'emprunt suivant. Seul qui **tient** la connexion peut
-annuler sans risque. `PoolConnection` revient au bassin de façon asynchrone
-(tâche lancée au drop) : quelques ms.
+`pg_cancel_backend(pid)` targets a process; the sqlx pool hands out the same
+connection — same pid — on the next borrow. Only whoever **holds** the
+connection can cancel safely. `PoolConnection` returns to the pool
+asynchronously (task spawned on drop): a few ms.
 
-Outils de test qui ont marché :
-* **verrous consultatifs** tenus par une connexion de contrôle
-  (`pg_advisory_xact_lock($1)` dans la requête testée), attente sur
-  `pg_locks WHERE locktype='advisory' AND NOT granted AND classid=0 AND objid=($1::bigint)::oid` ;
-* bassin de **deux** connexions : une seule inactive ⇒ sqlx la rend à coup sûr ;
-* `pg_stat_activity.wait_event = 'ClientWrite'` prouve que le client ne lit plus
-  sa socket (contre-pression côté tâche de flux) ;
-* une assertion « le processus a disparu » est propre à une conception qui ferme
-  la connexion : pour une preuve valable dans les deux sens d'une mutation,
-  préférer « `state <> 'active'` ».
+Test tools that worked:
+* **advisory locks** held by a control connection
+  (`pg_advisory_xact_lock($1)` in the tested query), waiting on
+  `pg_locks WHERE locktype='advisory' AND NOT granted AND classid=0 AND objid=($1::bigint)::oid`;
+* a pool of **two** connections: a single idle one ⇒ sqlx hands it out for sure;
+* `pg_stat_activity.wait_event = 'ClientWrite'` proves the client no longer
+  reads its socket (back-pressure on the streaming task side);
+* an assertion "the process is gone" is specific to a design that closes the
+  connection: for a proof valid in both directions of a mutation, prefer
+  "`state <> 'active'`".
 
-## Bloquer `execute` entre le `SET` et la préparation (2026-09-17)
+## Blocking `execute` between the `SET` and the preparation (2026-09-17)
 
-Préparer (Parse) prend `ACCESS SHARE` sur les tables citées : une connexion de
-contrôle en `BEGIN; LOCK TABLE t IN ACCESS EXCLUSIVE MODE` bloque `execute`
-**après** `SET search_path` et `BEGIN READ ONLY`, visible dans `pg_locks`
-(`NOT granted`, jointure `pg_class`). `SET` et `BEGIN` eux-mêmes ne bloquent
-jamais : pas de barrière serveur pour leur propre aller-retour.
+Preparing (Parse) takes `ACCESS SHARE` on the cited tables: a control connection
+in `BEGIN; LOCK TABLE t IN ACCESS EXCLUSIVE MODE` blocks `execute` **after**
+`SET search_path` and `BEGIN READ ONLY`, visible in `pg_locks`
+(`NOT granted`, join on `pg_class`). `SET` and `BEGIN` themselves never block:
+no server barrier for their own round trip.
 
-sqlx-core 0.9.0 : `PoolConnection::close_on_drop` ne se relève pas ; `Drop` sans
-ce drapeau rend la connexion telle quelle. Pour « fermer sauf si remise au
-défaut », une garde qui ne l'appelle que dans son propre `Drop`.
+sqlx-core 0.9.0: `PoolConnection::close_on_drop` cannot be reverted; `Drop`
+without this flag returns the connection as is. For "close unless reset to
+default", a guard that only calls it in its own `Drop`.
 
-Protocole : `ROLLBACK`/`COMMIT` hors transaction ne sont **pas** des erreurs —
-`WARNING: there is no transaction in progress`, invisible côté sqlx. Sur un
-bassin, `BEGIN; INSERT; ROLLBACK` exécutés séparément « réussissent » et
-l'`INSERT` reste validé (vérifié 17.11, 2026-09-17). Un texte ouvre un bloc de
-transaction seulement par `BEGIN` ou `START TRANSACTION` en tête ; sqlx-postgres
-0.9.0 garde `in_transaction` en `pub(crate)`.
+Protocol: `ROLLBACK`/`COMMIT` outside a transaction are **not** errors —
+`WARNING: there is no transaction in progress`, invisible on the sqlx side. On a
+pool, `BEGIN; INSERT; ROLLBACK` executed separately "succeed" and the `INSERT`
+stays committed (checked 17.11, 2026-09-17). A text opens a transaction block
+only with `BEGIN` or `START TRANSACTION` at its head; sqlx-postgres 0.9.0 keeps
+`in_transaction` as `pub(crate)`.
 
-Piège de mutation : un `SET` correctif posé par le curseur après chaque
-exécution **masque** l'absence d'un réglage posé à l'ouverture. Tester le réglage
-d'ouverture sur une session neuve, avant toute exécution inscriptible.
+Mutation trap: a corrective `SET` issued by the cursor after each execution
+**masks** the absence of a setting applied at opening. Test the opening setting
+on a fresh session, before any writable execution.
 
-Voir [[outil-cluster-postgres-jetable]].
+See [[outil-cluster-postgres-jetable]].

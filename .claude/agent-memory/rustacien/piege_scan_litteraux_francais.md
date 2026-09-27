@@ -1,28 +1,25 @@
 ---
 name: piege-scan-litteraux-francais
-description: Un grep ligne à ligne rate deux tiers des messages français d'un crate — continuations `\` et chaînes courtes sans accent
+description: A line-by-line grep misses two thirds of a crate's French messages — `\` continuations and short strings without accents
 metadata:
   type: feedback
 ---
 
-Pour recenser du texte destiné à l'utilisateur dans du Rust, un `grep` par ligne
-sur les accents **ne suffit pas**. Deux angles morts, chacun m'a fait rater des
-messages :
+To inventory user-facing text in Rust, a line-by-line `grep` on accents **is not
+enough**. Two blind spots, each made me miss messages:
 
-- une chaîne coupée par une continuation `\` en fin de ligne : le littéral
-  s'étend sur plusieurs lignes, la regex `"..."` d'une seule ligne ne le voit
-  pas. Il faut lire le fichier entier en `re.S` ;
-- une chaîne courte **sans accent** : `"nom trop long"`, `"le genre est vide"`,
-  `"{} lignes / {} octets"`. Il faut une seconde passe sur un lexique de mots
-  français fréquents, pas seulement sur `[àâçéèêë…]`.
+- a string broken by a `\` continuation at the end of a line: the literal spans
+  several lines, a single-line `"..."` regex does not see it. The whole file has
+  to be read with `re.S`;
+- a short string **without accents**: `"nom trop long"`, `"le genre est vide"`,
+  `"{} lignes / {} octets"`. A second pass on a lexicon of frequent French words
+  is needed, not only on `[àâçéèêë…]`.
 
-**Why:** les deux passes ont trouvé chacune une quinzaine de messages que
-l'autre manquait ; s'en tenir à la première laisse du français en production
-sans que rien n'échoue.
+**Why:** each pass found about fifteen messages the other missed; sticking to
+the first leaves French in production without anything failing.
 
-**How to apply:** pour tout inventaire de littéraux (traduction, fuite de
-secret, audit de message), écrire le scan au scratchpad avec les deux passes,
-couper au premier `\n#[cfg(test)]\nmod ` et **ne pas filtrer** les résultats
-multi-lignes à l'affichage — c'est en les masquant que je les ai perdus une
-première fois. Vérifier ensuite par `cargo test`, qui débusque les tests
-comparant un message.
+**How to apply:** for any inventory of literals (translation, secret leak,
+message audit), write the scan in the scratchpad with both passes, cut at the
+first `\n#[cfg(test)]\nmod ` and **do not filter** multi-line results on display
+— hiding them is how I lost them the first time. Then check with `cargo test`,
+which flushes out tests comparing a message.

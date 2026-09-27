@@ -5,91 +5,91 @@ paths:
 
 # Rust — conventions
 
-Les interdits de fond sont dans [CLAUDE.md](../../CLAUDE.md#invariants). Cette
-règle porte ce qui ne vaut que pour du code Rust.
+The fundamental prohibitions are in [CLAUDE.md](../../CLAUDE.md#invariants).
+This rule carries what only holds for Rust code.
 
-## Erreurs
+## Errors
 
-| Où | Quoi | Pourquoi |
+| Where | What | Why |
 |---|---|---|
-| Crate de bibliothèque | `thiserror`, une énumération par frontière | l'appelant doit pouvoir distinguer les cas sans lire une chaîne |
-| `oxyn-desktop`, tests, bancs | `anyhow` | personne ne rattrape par variante en haut de la pile |
-| Jamais | `Box<dyn Error>` dans une API publique | efface l'information au moment précis où elle sert |
+| Library crate | `thiserror`, one enum per boundary | the caller must be able to tell cases apart without reading a string |
+| `oxyn-desktop`, tests, benches | `anyhow` | nobody matches on variants at the top of the stack |
+| Never | `Box<dyn Error>` in a public API | erases the information at the very moment it is needed |
 
-Une erreur de driver porte sa **classe** — transitoire, permanente, ambiguë
+A driver error carries its **class** — transient, permanent, ambiguous
 ([DRIVER-CONTRACT](../../docs/DRIVER-CONTRACT.md#4-il-distingue-trois-familles-derreurs-et-il-les-classe)).
-La classe est une donnée, pas une déduction faite par l'appelant à partir du
-message : un message change, un appelant qui l'analysait casse en silence.
+The class is data, not a deduction the caller makes from the message: a message
+changes, and a caller that parsed it breaks silently.
 
-## Constructions à utiliser / jamais
+## Constructs to use / never
 
-| Utiliser | Jamais | Pourquoi |
+| Use | Never | Why |
 |---|---|---|
-| `?`, `let … else`, `match` | `unwrap()`, `expect()` hors tests | [I-09](../../CLAUDE.md#i-09) |
-| `u32::try_from(n)?` | `n as u32` | `as` tronque en silence ; un `id` de 5 milliards devient 705 032 704 |
-| `slice.get(i)` | `slice[i]` sur un index venu d'une donnée | panique sur entrée serveur |
-| `#[non_exhaustive]` sur les énumérations publiques | énumération publique fermée | ajouter une variante devient une rupture majeure |
-| `impl Trait` en argument | générique inutile | moins de monomorphisation, signatures lisibles |
-| `Cow<'_, str>` quand la copie est rare | `String` systématique | mais ne pas contaminer cinq signatures pour un appel par ouverture de fenêtre |
+| `?`, `let … else`, `match` | `unwrap()`, `expect()` outside tests | [I-09](../../CLAUDE.md#i-09) |
+| `u32::try_from(n)?` | `n as u32` | `as` truncates silently; an `id` of 5 billion becomes 705,032,704 |
+| `slice.get(i)` | `slice[i]` on an index that comes from data | panics on server input |
+| `#[non_exhaustive]` on public enums | closed public enum | adding a variant becomes a major break |
+| `impl Trait` as argument | needless generic | less monomorphization, readable signatures |
+| `Cow<'_, str>` when copying is rare | `String` everywhere | but do not contaminate five signatures for one call per window opening |
 
-`expect()` est toléré dans un test, un banc, ou une initialisation dont l'échec
-est un bug de programmation — jamais sur un chemin atteignable depuis le réseau.
-Quand il est utilisé, son message dit **l'invariant supposé**, pas « échec ».
+`expect()` is tolerated in a test, a bench, or an initialization whose failure
+is a programming bug — never on a path reachable from the network. When it is
+used, its message states **the assumed invariant**, not "failed".
 
 ## Async
 
-- une fonction `async` publique ne bloque jamais : tout appel bloquant part sur
-  le pool bloquant ([ARCHITECTURE](../../docs/ARCHITECTURE.md#le-modèle-de-threads)) ;
-- toute opération qui peut durer accepte l'annulation **et la propage jusqu'au
-  serveur** — un futur abandonné ne libère pas une requête distante
-  ([I-13](../../CLAUDE.md#i-13) et le contrat de driver) ;
-- pas de `tokio::spawn` détaché dont personne ne tient la poignée : une tâche
-  qu'on ne peut pas annuler ni attendre survit à la fermeture de l'onglet ;
-- attention à l'annulation au milieu d'un `select!` : le futur abandonné peut
-  l'être **après** avoir consommé des octets du flux, laissant le décodeur
-  désynchronisé. Un point de reprise se conçoit, il ne s'improvise pas.
+- a public `async` function never blocks: every blocking call goes to the
+  blocking pool ([ARCHITECTURE](../../docs/ARCHITECTURE.md#le-modèle-de-threads));
+- every operation that can take time accepts cancellation **and propagates it to
+  the server** — a dropped future does not release a remote query
+  ([I-13](../../CLAUDE.md#i-13) and the driver contract);
+- no detached `tokio::spawn` whose handle nobody holds: a task that can be
+  neither cancelled nor awaited outlives the closing of the tab;
+- beware of cancellation in the middle of a `select!`: the dropped future may be
+  dropped **after** consuming bytes from the stream, leaving the decoder out of
+  sync. A resumption point is designed, not improvised.
 
 ## Allocations
 
-Pas de règle mécanique. Une seule qui tient :
+No mechanical rule. A single one that holds:
 
-**On ne remplace pas du code clair par du code rapide sans la mesure qui montre
-que ça valait la peine** ([PERFORMANCE](../../docs/PERFORMANCE.md#la-règle-qui-empêche-loptimisation-gratuite)).
+**Clear code is not replaced by fast code without the measurement showing it
+was worth it** ([PERFORMANCE](../../docs/PERFORMANCE.md#la-règle-qui-empêche-loptimisation-gratuite)).
 
-En revanche, sur un chemin **par ligne ou par valeur** — la conversion vers
-`RecordBatch` en est un —, une allocation par élément est un défaut de
-conception dès l'écriture, pas une optimisation à faire plus tard.
+On the other hand, on a **per-row or per-value** path — conversion to
+`RecordBatch` is one —, one allocation per element is a design defect from the
+moment it is written, not an optimization for later.
 
-## API publiques
+## Public APIs
 
-- tout élément public porte un `///` qui dit ce qui n'est pas dans la signature :
-  les préconditions, ce qui panique, ce qui alloue, ce qui bloque ;
-- `#[must_use]` sur ce dont ignorer le résultat est un bug ;
-- pas de trait public à une seule implémentation qui n'est pas une frontière
-  ([CLAUDE.md](../../CLAUDE.md#organisation-du-code)) ;
-- un trait destiné à traverser la frontière WASM respecte les contraintes de
+- every public item carries a `///` that says what is not in the signature:
+  preconditions, what panics, what allocates, what blocks;
+- `#[must_use]` on anything whose ignored result is a bug;
+- no public trait with a single implementation that is not a boundary
+  ([CLAUDE.md](../../CLAUDE.md#code-organization));
+- a trait meant to cross the WASM boundary respects the constraints of
   [PLUGIN-CONTRACT](../../docs/PLUGIN-CONTRACT.md#ce-que-ce-contrat-impose-aux-traits-daujourdhui)
-  **dès aujourd'hui** : les corriger en phase 4 coûtera une refonte.
+  **starting today**: fixing them in phase 4 will cost a redesign.
 
 ## `unsafe`
 
-Politique dans [SECURITY](../../docs/SECURITY.md#politique-unsafe). Le point qui
-se rate : un `// SAFETY:` qui paraphrase le code ne vaut rien. Il dit **pourquoi**
-la condition est vraie ici et **qui** la maintiendra vraie.
+Policy in [SECURITY](../../docs/SECURITY.md#politique-unsafe). The point that
+gets missed: a `// SAFETY:` that paraphrases the code is worthless. It says
+**why** the condition is true here and **who** will keep it true.
 
 ## Tests
 
-Les conventions vivent dans [tests.md](tests.md) : ce qui se teste, les entrées
-hostiles, les trois niveaux de test d'interface, les bancs d'essai.
+The conventions live in [tests.md](tests.md): what gets tested, hostile inputs,
+the levels of interface tests, benches.
 
-Le renvoi reste nécessaire, mais pas pour la raison qu'on lisait ici : le
-`paths:` de [tests.md](tests.md) couvre désormais `**/*_tests.rs` et
-`**/tests.rs` en plus des répertoires. Ce qu'il ne couvre toujours pas, c'est un
-`#[cfg(test)] mod tests` écrit **au bas d'un fichier source** — et c'est la forme
-majoritaire ici. La conclusion tenait ; l'exemple qui la justifiait avait
-vieilli.
+The pointer is still needed, but not for the reason that used to be given here:
+the `paths:` of [tests.md](tests.md) now covers `**/*_tests.rs` and
+`**/tests.rs` in addition to directories. What it still does not cover is a
+`#[cfg(test)] mod tests` written **at the bottom of a source file** — and that
+is the prevailing form here. The conclusion held; the example that justified it
+had aged.
 
-## Vérifier
+## Verify
 
 ```bash
 make qualite

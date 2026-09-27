@@ -156,7 +156,7 @@ listé ici sauf quand la valeur se vérifie ailleurs ; ce qui manquait l'est.
 
 | Maquette | Oxyn | Raison |
 |---|---|---|
-| `Explain` (96 px) | `Explain query` | plus explicite hors contexte, mais **plus large que le segment de 96 px** que la maquette dessine. L'effet réel sur la mise en page ne se mesure pas sans pixels : une story mesure la mise en page d'un DOM sans rendu, et une assertion de largeur y serait verte à tort ([tests.md](../.claude/rules/tests.md#les-tests-dinterface)). À trancher à la recette native |
+| `Explain` (96 px) | `Explain query` | plus explicite hors contexte, mais **plus large que le segment de 96 px** que la maquette dessine. L'effet réel sur la mise en page ne se mesure pas sans pixels : une story mesure la mise en page d'un DOM sans rendu, et une assertion de largeur y serait verte à tort ([tests.md](../.claude/rules/tests.md#interface-tests)). À trancher à la recette native |
 | `Run   ⌘↵` | `Run · ⌘Enter` | le raccourci en toutes lettres plutôt qu'en symboles ; même réserve de largeur |
 | `Restore selected drafts` | `Restore N selected items` | délibéré et déjà décrit plus haut : le bouton annonce son décompte |
 | `Start with an empty workspace` | `Continue without restoring` | dit ce que fait le geste plutôt que l'état d'arrivée ; rien ne se perd, les brouillons restent en base |

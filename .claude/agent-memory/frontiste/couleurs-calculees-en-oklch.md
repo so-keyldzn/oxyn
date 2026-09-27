@@ -1,23 +1,23 @@
 ---
 name: couleurs-calculees-en-oklch
-description: Le thème est en OKLCH depuis le 2026-09-23 ; getComputedStyle rend oklch(...), donc une story qui lit une couleur par regex rgb() échoue — passer par un canvas
+description: The theme is in OKLCH since 2026-09-23; getComputedStyle returns oklch(...), so a story that reads a color with an rgb() regex fails — go through a canvas
 metadata:
   type: feedback
 ---
 
-Une story qui mesure un contraste ne lit **jamais** une couleur calculée par
-une regex `rgba?\(` : la peindre sur un canvas 1×1 et relire `getImageData`,
-comme `paint()` dans `theme-contrast.stories.tsx`.
+A story that measures a contrast **never** reads a computed color with an
+`rgba?\(` regex: paint it on a 1×1 canvas and read back `getImageData`, like
+`paint()` in `theme-contrast.stories.tsx`.
 
-**Why:** `styles.css` est écrit en OKLCH depuis la refonte du 2026-09-23, et
-Chromium rend alors `getComputedStyle(el).borderTopColor` sous la forme
-`oklch(0.545 0.01 60)`. `assistant-sample-approval.stories.tsx` analysait du
-`rgb()` : ses deux stories de contraste ont échoué sur « Unreadable colour »,
-alors que le contraste réel passait. Heureusement l'analyseur échouait fort ; un
-repli silencieux aurait mesuré 1:1 ou n'importe quoi.
+**Why:** `styles.css` is written in OKLCH since the 2026-09-23 redesign, and
+Chromium then returns `getComputedStyle(el).borderTopColor` in the form
+`oklch(0.545 0.01 60)`. `assistant-sample-approval.stories.tsx` parsed
+`rgb()`: its two contrast stories failed on "Unreadable colour", while the real
+contrast passed. Fortunately the parser failed loudly; a silent fallback would
+have measured 1:1 or anything.
 
-**How to apply:** toute nouvelle mesure de couleur dans une story passe par un
-canvas avec la sentinelle `#010203` (une couleur illisible garde la sentinelle
-et fait échouer la story). Et une teinte de statut se vérifie aussi **sur sa
-propre teinte** : `ui/` écrit `bg-destructive/10` en clair, `/20` en sombre,
-`/30` au survol — c'est là qu'axe a trouvé 4,4:1, pas sur les surfaces nues.
+**How to apply:** any new color measurement in a story goes through a canvas
+with the `#010203` sentinel (an unreadable color keeps the sentinel and makes
+the story fail). And a status tint is also checked **on its own tint**: `ui/`
+writes `bg-destructive/10` in light, `/20` in dark, `/30` on hover — that is
+where axe found 4.4:1, not on the bare surfaces.

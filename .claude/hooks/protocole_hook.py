@@ -1,10 +1,10 @@
-"""Protocole des hooks : lire l'événement, écrire la décision. Rien d'autre.
+"""Hook protocol: read the event, write the decision. Nothing else.
 
-Ce module n'est pas un fourre-tout. Il ne connaît aucun motif interdit, aucune
-règle du projet : il traduit entre le format d'échange de Claude Code et des
-fonctions Python. Toute règle vit dans le hook qui la porte.
+This module is not a catch-all. It knows no forbidden pattern and no project
+rule: it translates between Claude Code's exchange format and Python functions.
+Every rule lives in the hook that carries it.
 
-Les quatre faits de protocole qui décident du code sont expliqués dans README.md.
+The four protocol facts that shape the code are explained in README.md.
 """
 
 from __future__ import annotations
@@ -16,8 +16,8 @@ from typing import Any
 
 
 def lire_evenement() -> dict[str, Any]:
-    """L'événement arrive sur stdin. Une entrée illisible n'est pas une erreur
-    du hook : on rend un dictionnaire vide et l'appelant sortira sans décision."""
+    """The event arrives on stdin. Unreadable input is not a hook error: we
+    return an empty dict and the caller exits without a decision."""
     try:
         brut = sys.stdin.read()
     except Exception:
@@ -37,18 +37,18 @@ def _emettre(charge: dict[str, Any]) -> None:
 
 
 def laisser_passer() -> None:
-    """Aucune décision : le flux de permission normal s'applique.
+    """No decision: the normal permission flow applies.
 
-    C'est la sortie par défaut, et la seule qu'un hook défaillant doit produire.
+    This is the default exit, and the only one a failing hook may produce.
     """
     sys.exit(0)
 
 
 def refuser(evenement: str, raison: str) -> None:
-    """Refus délibéré.
+    """Deliberate refusal.
 
-    Sur un `deny`, `permissionDecisionReason` est transmise **au modèle** : elle
-    doit donc dire quoi faire à la place, pas seulement constater.
+    On a `deny`, `permissionDecisionReason` is sent **to the model**: it must
+    therefore say what to do instead, not merely state the problem.
     """
     _emettre(
         {
@@ -63,11 +63,11 @@ def refuser(evenement: str, raison: str) -> None:
 
 
 def demander(evenement: str, raison: str) -> None:
-    """Demande d'arbitrage à l'utilisateur.
+    """Ask the user to decide.
 
-    Sur un `ask`, `permissionDecisionReason` va **à l'utilisateur seul**. Sans
-    `additionalContext`, Claude voit son action suspendue sans savoir par quoi,
-    et retente à l'identique. La raison est donc répétée dans les deux champs.
+    On an `ask`, `permissionDecisionReason` goes **to the user only**. Without
+    `additionalContext`, Claude sees its action suspended without knowing why,
+    and retries it unchanged. The reason is therefore repeated in both fields.
     """
     _emettre(
         {
@@ -76,8 +76,8 @@ def demander(evenement: str, raison: str) -> None:
                 "permissionDecision": "ask",
                 "permissionDecisionReason": raison,
                 "additionalContext": (
-                    "Une vérification du dépôt demande l'arbitrage de "
-                    f"l'utilisateur : {raison}"
+                    "A repository check asks the user to decide: "
+                    f"{raison}"
                 ),
             }
         }
@@ -86,7 +86,7 @@ def demander(evenement: str, raison: str) -> None:
 
 
 def injecter_contexte(evenement: str, texte: str) -> None:
-    """Ajoute du contexte lisible par Claude (SessionStart, UserPromptSubmit)."""
+    """Add context readable by Claude (SessionStart, UserPromptSubmit)."""
     _emettre(
         {
             "hookSpecificOutput": {
@@ -99,11 +99,11 @@ def injecter_contexte(evenement: str, texte: str) -> None:
 
 
 def message_systeme(texte: str) -> None:
-    """Message affiché à l'utilisateur en fin de tour.
+    """Message shown to the user at the end of a turn.
 
-    `systemMessage` est un champ de premier niveau, et `Stop` ne le jette pas —
-    c'est le canal d'un rappel de fin de tour, là où `additionalContext`
-    relancerait le travail.
+    `systemMessage` is a top-level field, and `Stop` does not drop it — it is
+    the channel for an end-of-turn reminder, where `additionalContext` would
+    restart the work.
     """
     _emettre({"systemMessage": texte})
     sys.exit(0)
@@ -115,7 +115,7 @@ def chemin_outil(evenement: dict[str, Any]) -> str:
 
 
 def contenu_outil(evenement: dict[str, Any]) -> str:
-    """Le texte que l'outil s'apprête à écrire, quel que soit l'outil."""
+    """The text the tool is about to write, whatever the tool."""
     entree = evenement.get("tool_input") or {}
     morceaux: list[str] = []
     for cle in ("content", "new_string"):
@@ -141,7 +141,7 @@ def racine_projet() -> str:
 
 
 def chemin_relatif(chemin: str) -> str:
-    """Chemin relatif à la racine du projet, en séparateurs POSIX."""
+    """Path relative to the project root, with POSIX separators."""
     if not chemin:
         return ""
     racine = racine_projet()

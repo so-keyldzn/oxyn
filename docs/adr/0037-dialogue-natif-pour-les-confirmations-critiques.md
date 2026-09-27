@@ -206,7 +206,7 @@ non avant la file de ce thread, qu'un script de la webview peut remplir. Reste
 la latence entre cet instant et l'alerte à l'écran, hors de portée d'un
 script, que la vérification à la main mesure. Arrivé à l'échéance avant son
 tour, le dialogue ne se dessine pas. Deux implémentations, c'est une frontière
-avec l'hôte et non une indirection ([CLAUDE.md](../../CLAUDE.md#organisation-du-code)) :
+avec l'hôte et non une indirection ([CLAUDE.md](../../CLAUDE.md#code-organization)) :
 
 * **`NativeDialog`**, sur le plugin `tauri-plugin-dialog`, comme
   `ai_save_external_agent` aujourd'hui — qui rejoint ce port ;

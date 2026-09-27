@@ -1,96 +1,95 @@
-# Audit multi-agents du dépôt
+# Multi-agent repository audit
 
-Point d'entrée : [`/audit`](../commands/audit.md). Le workflow exécutable
-[`audit-multi-agents.js`](audit-multi-agents.js) utilise les mêmes primitives
-que [`implementer-senior.js`](implementer-senior.js) : il requiert le moteur de
-workflows, ce n'est ni un programme Node autonome ni une GitHub Action.
+Entry point: [`/audit`](../commands/audit.md). The executable workflow
+[`audit-multi-agents.js`](audit-multi-agents.js) uses the same primitives as
+[`implementer-senior.js`](implementer-senior.js): it requires the workflow
+engine, it is neither a standalone Node program nor a GitHub Action.
 
-Arguments : `{ perimetre: "dépôt entier", publier: false }`. Mettre `publier`
-à `true` uniquement lorsque la demande de l'utilisateur inclut la création
-d'issues. Les agents héritent du modèle de la session.
+Arguments: `{ perimetre: "whole repository", publier: false }`. Set `publier`
+to `true` only when the user's request includes creating issues. The agents
+inherit the session's model.
 
-## 1. Fixer la référence
+## 1. Fix the reference
 
-Lire [AGENTS.md](../../AGENTS.md), [CLAUDE.md](../../CLAUDE.md), le statut Git,
-le SHA, les manifestes et le plan d'implémentation. Inventorier les fichiers
-suivis et répartir les domaines réels ; ne pas réutiliser une ancienne carte.
-Relever les modifications préexistantes. Aucun agent ne les annule.
+Read [AGENTS.md](../../AGENTS.md), [CLAUDE.md](../../CLAUDE.md), the Git status,
+the SHA, the manifests and the implementation plan. Inventory the tracked files
+and split the real domains; do not reuse an old map. Record the pre-existing
+modifications. No agent reverts them.
 
-Résoudre la cible GitHub depuis `origin`, puis vérifier avec
-`gh repo view --json nameWithOwner,url,isPrivate`. Lister les issues ouvertes
-**et fermées**, avec pagination si nécessaire, avant toute création. Ne jamais
-déduire le propriétaire GitHub depuis une ancienne URL de documentation.
-Ne pas afficher ou extraire de jeton ; employer l'authentification de `gh`.
+Resolve the GitHub target from `origin`, then check with
+`gh repo view --json nameWithOwner,url,isPrivate`. List the open **and closed**
+issues, with pagination if needed, before any creation. Never infer the GitHub
+owner from an old documentation URL. Do not display or extract any token; use
+`gh`'s authentication.
 
-## 2. Audits indépendants en lecture seule
+## 2. Independent read-only audits
 
-| Lot | Périmètre | Guide de relecture |
+| Batch | Scope | Review guide |
 |---|---|---|
-| Cœur et drivers | core, catalog, data, driver, query, exec, drivers | [invariants](../agents/relecteur-invariants.md), [frontières](../agents/relecteur-frontiere.md) |
-| Sécurité et IA | ai, llm, plugin, secrets, store, MCP/ACP | [sécurité](../agents/relecteur-securite.md) |
-| Interface | apps/desktop, bridge desktop et parcours réels | [divergences](../agents/detecteur-divergence.md), [revue UI](../checklists/revue-ui.md) |
-| Outillage et preuves | CI, scripts, manifestes, socle, couverture et budgets | [divergences](../agents/detecteur-divergence.md) |
+| Core and drivers | core, catalog, data, driver, query, exec, drivers | [invariants](../agents/relecteur-invariants.md), [boundaries](../agents/relecteur-frontiere.md) |
+| Security and AI | ai, llm, plugin, secrets, store, MCP/ACP | [security](../agents/relecteur-securite.md) |
+| Interface | apps/desktop, desktop bridge and real user flows | [divergences](../agents/detecteur-divergence.md), [UI review](../checklists/revue-ui.md) |
+| Tooling and evidence | CI, scripts, manifests, foundation, coverage and budgets | [divergences](../agents/detecteur-divergence.md) |
 
-Trois agents au plus en parallèle ; le coordinateur peut prendre le quatrième
-lot. Chaque agent lit les règles et documents de son périmètre, suit les appels
-et livre une liste de fichiers examinés, les limites et les constats. Aucun
-secret, aucune base réelle, aucun fournisseur payant ni lancement d'interface
-visible ne sont nécessaires à cette revue. Les tests utilisent des données
-synthétiques et des ressources temporaires.
+Three agents at most in parallel; the coordinator can take the fourth batch.
+Each agent reads the rules and documents of its scope, follows the calls and
+delivers a list of examined files, the limits and the findings. No secret, no
+real database, no paid provider and no visible interface launch are needed for
+this review. Tests use synthetic data and temporary resources.
 
-Un constat contient : priorité P1/P2/P3, emplacement exact, scénario concret,
-comportement attendu et observé, preuve, contrat concerné, correction proposée
-et critères d'acceptation. Une fonctionnalité explicitement reportée dans le
-plan n'est pas un bug déjà livré. Un budget non mesuré n'est pas un dépassement.
+A finding contains: priority P1/P2/P3, exact location, concrete scenario,
+expected and observed behavior, evidence, contract concerned, proposed fix and
+acceptance criteria. A feature explicitly deferred in the plan is not a bug
+already shipped. An unmeasured budget is not an overrun.
 
-Pour toute affirmation sur une bibliothèque ou un protocole, consulter la
-documentation officielle et relever sa date, son URL précise et la version
-concernée. Recouper avec le source installé si la documentation suit `latest`
-ou une autre version. Distinguer le contrat externe, le raisonnement sur Oxyn
-et la reproduction effectivement exécutée : un lien générique ne prouve pas un
-défaut du produit. Consigner les faits externes dans
-[RESEARCH-NOTES](../../docs/RESEARCH-NOTES.md), sans changer de dépendance.
+For any claim about a library or a protocol, consult the official documentation
+and record its date, its precise URL and the version concerned. Cross-check with
+the installed source if the documentation follows `latest` or another version.
+Distinguish the external contract, the reasoning about Oxyn and the reproduction
+actually executed: a generic link does not prove a product defect. Record the
+external facts in [RESEARCH-NOTES](../../docs/RESEARCH-NOTES.md), without
+changing any dependency.
 
-## 3. Réfuter puis consolider
+## 3. Refute then consolidate
 
-Un autre relecteur cherche pour chaque constat le garde-fou, l'appelant ou le
-test qui l'invalide. Un désaccord reste une hypothèse dans le rapport ; il ne
-devient pas une issue de bug confirmé. Un relecteur absent ou un domaine non
-couvert reste explicite. Dédupliquer par cause racine et scénario, puis vérifier
-que le code n'a pas changé depuis l'examen. Les liens de preuves GitHub visent
-le SHA audité ; une preuve sur un fichier modifié localement le dit.
+Another reviewer looks, for each finding, for the safeguard, the caller or the
+test that invalidates it. A disagreement stays a hypothesis in the report; it
+does not become a confirmed-bug issue. A missing reviewer or an uncovered
+domain stays explicit. Deduplicate by root cause and scenario, then check that
+the code has not changed since the examination. GitHub evidence links target
+the audited SHA; evidence on a locally modified file says so.
 
-Le coordinateur exécute `make qualite` une seule fois, sans réparation implicite.
-Consigner code retour, étapes exécutées, contrôles omis et limites. Une porte
-verte ne prouve ni les parcours natifs ni l'absence des défauts relevés.
+The coordinator runs `make qualite` once, without implicit repair. Record the
+exit code, steps executed, checks skipped and limits. A green gate proves
+neither the native user flows nor the absence of the reported defects.
 
-## 4. Rapport et issues avec gh
+## 4. Report and issues with gh
 
-Conserver le rapport daté dans `.claude/audits/`, avec référence Git, couverture,
-constats retenus/réfutés, preuves et résultats de validation. Ce relevé n'ajoute
-pas une nouvelle autorité métier à `docs/`.
+Keep the dated report in `.claude/audits/`, with Git reference, coverage,
+findings retained/refuted, evidence and validation results. This survey adds no
+new business authority to `docs/`.
 
-Si la publication est demandée, un seul agent publie, séquentiellement :
+If publication is requested, a single agent publishes, sequentially:
 
-1. Relire les issues existantes et les fichiers concernés au moment de publier.
-2. Préparer un corps français dans un fichier temporaire : SHA, problème,
-   reproduction ou démonstration statique explicitement qualifiée, impact,
-   liens vers le code, contrat, correction et critères d'acceptation.
-3. Créer une issue par cause avec `gh issue create --repo OWNER/REPO --title
-   TITRE --body-file FICHIER`, en utilisant uniquement des labels existants.
-   Les paramètres sont des arguments échappés, jamais du shell construit depuis
-   le texte d'un constat. Ne pas publier les hypothèses comme des faits.
-4. Après une erreur ou un délai réseau ambigu, rechercher l'issue par titre et
-   marqueur de constat avant toute nouvelle tentative. Un doublon fermé n'est
-   pas rouvert automatiquement : constater d'abord une éventuelle régression.
-5. Vérifier les issues créées avec `gh issue view`, puis lier leurs URL dans le
-   rapport. Une issue de synthèse peut suivre les corrections et leurs priorités.
+1. Reread the existing issues and the files concerned at publication time.
+2. Prepare an English body in a temporary file: SHA, problem, reproduction or
+   explicitly qualified static demonstration, impact, links to the code,
+   contract, fix and acceptance criteria.
+3. Create one issue per cause with `gh issue create --repo OWNER/REPO --title
+   TITLE --body-file FILE`, using only existing labels. The parameters are
+   escaped arguments, never shell built from a finding's text. Do not publish
+   hypotheses as facts.
+4. After an error or an ambiguous network timeout, search for the issue by
+   title and finding marker before any new attempt. A closed duplicate is not
+   reopened automatically: first establish a possible regression.
+5. Check the created issues with `gh issue view`, then link their URLs in the
+   report. A summary issue can track the fixes and their priorities.
 
-Lors d'une poursuite explicitement demandée, enrichir les issues du même audit
-avec les nouvelles sources et reproductions, sans recréer leurs causes. Toute
-réfutation corrige explicitement le constat et ses limites ; conserver les
-critères et informations ajoutés entre-temps par d'autres contributeurs.
+When a continuation is explicitly requested, enrich the issues of the same
+audit with the new sources and reproductions, without recreating their causes.
+Any refutation explicitly corrects the finding and its limits; keep the
+criteria and information added in the meantime by other contributors.
 
-Si GitHub est inaccessible, livrer les corps prêts à publier et l'erreur exacte.
-Ne jamais annoncer des issues créées sans URL vérifiée. Ni commit, ni push,
-ni correction du produit ne font partie de ce workflow.
+If GitHub is unreachable, deliver the bodies ready to publish and the exact
+error. Never announce issues as created without a verified URL. Neither commit,
+nor push, nor fixing the product are part of this workflow.

@@ -1,12 +1,12 @@
 ---
 name: base-ui-menus-contextuels-imbriques
-description: Base UI ContextMenu.Trigger arrête la propagation de contextmenu — des menus imbriqués (bloc de code dans une réponse, puce dans une question) s'ouvrent au plus profond, sans code en plus
+description: Base UI ContextMenu.Trigger stops the propagation of contextmenu — nested menus (code block in an answer, chip in a question) open at the deepest level, with no extra code
 metadata:
   type: reference
 ---
 
-`ContextMenu.Trigger` de Base UI (1.8) appelle `stopEvent` (preventDefault + stopPropagation) dans son `onContextMenu` : un trigger imbriqué dans un autre gagne, le parent ne s'ouvre pas. Un `onContextMenu` passé sur l'élément de `render` est fusionné et s'exécute quand même (on y pose l'ancre).
+Base UI's `ContextMenu.Trigger` (1.8) calls `stopEvent` (preventDefault + stopPropagation) in its `onContextMenu`: a trigger nested in another wins, the parent does not open. An `onContextMenu` passed on the `render` element is merged and runs anyway (the anchor is set there).
 
-**Why:** évite d'écrire une détection « qui est sous le pointeur » à la main pour des surfaces imbriquées.
+**Why:** avoids writing a "what is under the pointer" detection by hand for nested surfaces.
 
-**How to apply:** envelopper chaque surface dans son propre `<ContextMenu>` ; pas de `stopPropagation` manuel. Piège voisin : ajouter une story à un composant exempté dans `script/verifier-stories` fait échouer le contrôle (« exemption périmée ») — rendre le composant par la story du parent déjà nommée dans l'exemption, ou retirer l'exemption.
+**How to apply:** wrap each surface in its own `<ContextMenu>`; no manual `stopPropagation`. Neighboring trap: adding a story to a component exempted in `script/verifier-stories` makes the check fail ("stale exemption") — render the component through the parent's story already named in the exemption, or remove the exemption.

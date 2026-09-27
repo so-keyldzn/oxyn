@@ -1,17 +1,17 @@
 #!/usr/bin/env python3
-"""PreToolUse sur Bash : refuse les commandes interdites et intercepte les
-écritures de fichiers passant par le shell.
+"""PreToolUse on Bash: refuse forbidden commands and intercept file writes
+going through the shell.
 
-Sans ce second rôle, tous les garde-fous de code_interdit.py se contournent par
-`cat > fichier.rs`, `sed -i`, ou `python3 -c`. Un hook d'écriture qui ne couvre
-pas le shell ne couvre rien.
+Without this second role, every safeguard of code_interdit.py is bypassed by
+`cat > file.rs`, `sed -i`, or `python3 -c`. A write hook that does not cover the
+shell covers nothing.
 
-Deux exigences de qualité, sans lesquelles ce hook serait inutile ou nuisible :
+Two quality requirements, without which this hook would be useless or harmful:
 
-* on filtre sur les **mots** de la commande, jamais sur la ligne brute — sinon
-  `echo "ne jamais faire git push --force"` se fait refuser ;
-* on **déplie les lanceurs** (`uv run`, `npx`, `xargs`, `env`…), sinon tout
-  interdit passe simplement derrière eux.
+* we filter on the **words** of the command, never on the raw line — otherwise
+  `echo "never run git push --force"` gets refused;
+* we **unwrap launchers** (`uv run`, `npx`, `xargs`, `env`…), otherwise any
+  prohibition simply slips through behind them.
 """
 
 from __future__ import annotations
@@ -28,25 +28,25 @@ EVENEMENT = "PreToolUse"
 
 SEPARATEURS = {"&&", "||", ";", "|", "|&", "&", "\n"}
 
-# Lanceurs qui exécutent leur argument : l'interdit doit être cherché derrière.
+# Launchers that execute their argument: the prohibition must be looked for behind them.
 LANCEURS = {
     "uv", "uvx", "npx", "pnpm", "yarn", "npm", "bunx", "poetry", "pipx",
     "env", "time", "timeout", "nice", "nohup", "stdbuf", "xargs", "command",
     "sudo", "doas", "watch", "mise", "direnv", "devbox", "just",
 }
-# Sous-commandes de lanceur à sauter (`uv run …`, `pnpm exec …`).
+# Launcher subcommands to skip (`uv run …`, `pnpm exec …`).
 SOUS_LANCEURS = {"run", "exec", "x", "dlx", "tool"}
-# Lanceurs dont le premier argument positionnel est une durée, pas la commande.
+# Launchers whose first positional argument is a duration, not the command.
 DUREE_POSITIONNELLE = {"timeout", "nice", "watch"}
 
-# Commandes qui écrivent un fichier ou modifient un fichier en place.
+# Commands that write a file or modify a file in place.
 ECRITURE = {"sed", "tee", "truncate", "install", "patch", "dd", "shred"}
 INTERPRETES = {"python", "python3", "perl", "ruby", "node", "bun", "deno", "osascript"}
 
 
 def _decouper(commande: str) -> list[list[str]]:
-    """Découpe en sous-commandes et tokenise. Une commande illisible ne produit
-    aucune décision : ce hook ne devine pas."""
+    """Split into subcommands and tokenize. An unreadable command produces no
+    decision: this hook does not guess."""
     try:
         jetons = shlex.split(commande, comments=False, posix=True)
     except ValueError:
@@ -66,7 +66,7 @@ def _decouper(commande: str) -> list[list[str]]:
 
 
 def _deplier(jetons: list[str]) -> list[str]:
-    """Retire les lanceurs et leurs options pour atteindre la vraie commande."""
+    """Strip launchers and their options to reach the real command."""
     i = 0
     vus = 0
     while i < len(jetons) and vus < 6:
@@ -79,15 +79,15 @@ def _deplier(jetons: list[str]) -> list[str]:
                 i += 1
             if i < len(jetons) and jetons[i] in SOUS_LANCEURS:
                 i += 1
-            # `timeout 30 …`, `nice 10 …` : l'argument positionnel du lanceur
-            # n'est pas la commande. Sans ce saut, le dépliage s'arrête sur le
-            # nombre et tout interdit passe derrière `timeout`.
+            # `timeout 30 …`, `nice 10 …`: the launcher's positional argument
+            # is not the command. Without this skip, unwrapping stops on the
+            # number and any prohibition slips through behind `timeout`.
             if base in DUREE_POSITIONNELLE and i < len(jetons):
                 if re.match(r"^\d+(?:\.\d+)?[smhd]?$", jetons[i]):
                     i += 1
             continue
         if "=" in jeton and re.match(r"^[A-Za-z_][A-Za-z0-9_]*=", jeton):
-            i += 1  # affectation de variable en préfixe
+            i += 1  # variable assignment as a prefix
             continue
         break
     return jetons[i:]
@@ -103,78 +103,73 @@ def verifier(jetons: list[str], commande_brute: str) -> None:
     args = reels[1:]
     mots = set(args)
 
-    # --- Refus : contournement des garde-fous du dépôt -----------------------
+    # --- Refusal: bypassing the repository's safeguards ----------------------
     if programme == "git":
         if "--no-verify" in mots or "-n" in mots and "commit" in args[:1]:
             p.refuser(
                 EVENEMENT,
-                "`--no-verify` contourne les vérifications de commit du dépôt. "
-                "Si un contrôle bloque à tort, c'est le contrôle qu'il faut "
-                "corriger — le contourner une fois le rend contournable "
-                "toujours.",
+                "`--no-verify` bypasses the repository's commit checks. If a "
+                "check blocks wrongly, it is the check that must be fixed — "
+                "bypassing it once makes it bypassable forever.",
             )
         if "push" in args[:1] and (
             "--force" in mots or "-f" in mots or any(m.startswith("--force=") for m in mots)
         ):
             p.refuser(
                 EVENEMENT,
-                "`git push --force` réécrit l'historique publié et détruit le "
-                "travail des autres sans avertissement. Utiliser "
-                "`--force-with-lease` après avoir vérifié l'état distant, et le "
-                "faire soi-même.",
+                "`git push --force` rewrites published history and destroys "
+                "other people's work without warning. Use `--force-with-lease` "
+                "after checking the remote state, and do it yourself.",
             )
 
     if programme == "cargo" and args[:1] == ["publish"]:
         p.refuser(
             EVENEMENT,
-            "`cargo publish` pousse vers un registre public : c'est "
-            "irréversible, une version publiée ne se retire pas. Cette "
-            "publication se fait à la main, après la liste de contrôle de "
-            "publication.",
+            "`cargo publish` pushes to a public registry: it is irreversible, "
+            "a published version cannot be withdrawn. Publishing is done by "
+            "hand, after the release checklist.",
         )
 
-    # --- Refus : lecture de secrets -----------------------------------------
+    # --- Refusal: reading secrets --------------------------------------------
     if programme in {"cat", "head", "tail", "less", "more", "bat", "strings", "xxd", "od"}:
         for arg in args:
             if re.search(r"\.(?:example|sample|template|dist)$", arg):
-                continue  # gabarit commité, sans valeur réelle
+                continue  # committed template, no real value
             if re.search(r"(?:^|/)\.env(?:\.|$)|\.pem$|\.key$|/secrets?/", arg):
                 p.refuser(
                     EVENEMENT,
-                    f"Lecture d'un fichier de secrets (`{arg}`). Les secrets ne "
-                    "transitent pas par le contexte de la session "
-                    "(I-03, docs/SECURITY.md).",
+                    f"Reading a secrets file (`{arg}`). Secrets do not go "
+                    "through the session context (I-03, docs/SECURITY.md).",
                 )
 
-    # --- Arbitrage : écriture d'un fichier du dépôt par le shell -------------
+    # --- Arbitration: writing a repository file through the shell ------------
     raison_ecriture = None
     if programme in ECRITURE:
         if programme == "sed" and not any(a == "-i" or a.startswith("-i") for a in args):
             raison_ecriture = None
         else:
-            raison_ecriture = f"`{programme}` modifie un fichier en place"
+            raison_ecriture = f"`{programme}` modifies a file in place"
     elif programme in INTERPRETES and any(a in ("-c", "-e") for a in args):
-        raison_ecriture = f"`{programme} -c` peut écrire n'importe quel fichier"
+        raison_ecriture = f"`{programme} -c` can write any file"
     elif re.search(r"(?<![0-9<>])>>?\s*(?!/dev/null)\S", commande_brute):
-        raison_ecriture = "une redirection écrit dans un fichier"
+        raison_ecriture = "a redirection writes to a file"
 
     if raison_ecriture:
         p.demander(
             EVENEMENT,
-            f"{raison_ecriture}. Les écritures passant par le shell échappent "
-            "aux vérifications d'invariants appliquées à Write et Edit : un "
-            "`use tauri` dans le cœur ou un secret en dur passerait sans être "
-            "vu. Préférer Write ou Edit ; si le shell est nécessaire, valider "
-            "cette commande.",
+            f"{raison_ecriture}. Writes going through the shell escape the "
+            "invariant checks applied to Write and Edit: a `use tauri` in the "
+            "core or a hard-coded secret would pass unseen. Prefer Write or "
+            "Edit; if the shell is needed, approve this command.",
         )
 
-    # --- Arbitrage : destruction --------------------------------------------
+    # --- Arbitration: destruction --------------------------------------------
     if programme == "rm" and any(re.match(r"^-[a-zA-Z]*[rf]", a) for a in args):
         p.demander(
             EVENEMENT,
-            "Suppression récursive ou forcée. Vérifier la cible avant : ce "
-            "dépôt n'a pas encore d'historique complet, une suppression y est "
-            "définitive.",
+            "Recursive or forced deletion. Check the target first: this "
+            "repository does not yet have a complete history, a deletion here "
+            "is final.",
         )
 
 

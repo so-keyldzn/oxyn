@@ -1,25 +1,25 @@
 ---
 name: premiere-story-paie-le-demarrage-a-froid
-description: Une story lente sous charge et rapide seule est souvent la première de son fichier — axe-core et les imports à la demande tombent dans son budget de 15 s
+description: A story that is slow under load and fast alone is often the first of its file — axe-core and on-demand imports fall into its 15 s budget
 metadata:
   type: feedback
 ---
 
-Sous addon-vitest, chaque fichier de stories tourne dans un cadre neuf : axe-core
-(chargé par l'`afterEach` d'addon-a11y), le premier rendu et tout `import()` à la
-demande (mermaid, shiki) se paient dans la **première** story du fichier, sur son
-budget de 15 s (défaut de Vitest en mode navigateur). Machine chargée : 15 s
-dépassées, alors que la même story prend 700 ms seule.
+Under addon-vitest, each story file runs in a fresh frame: axe-core (loaded by
+addon-a11y's `afterEach`), the first render and every on-demand `import()`
+(mermaid, shiki) are paid in the **first** story of the file, on its 15 s budget
+(Vitest's default in browser mode). On a loaded machine: 15 s exceeded, while
+the same story takes 700 ms alone.
 
-**Why:** constaté le 2026-09-25 ; mesurer par un `beforeEach`/`afterEach` qui
-logge `performance.now()` a montré que le temps était dans le rendu et l'axe à
-froid, pas dans le `play`.
+**Why:** observed on 2026-09-25; measuring with a `beforeEach`/`afterEach` that
+logs `performance.now()` showed the time was in the cold render and axe, not in
+the `play`.
 
-**How to apply:** ne pas allonger un `timeout` ; déclarer le chargement par
-`preloadBeforeStories` dans le fichier de stories, le `beforeAll` de
-`.storybook/vitest.setup.ts` le paie hors budget. Reproduire en vidant
-`node_modules/.cache/storybook/*/*/sb-vitest/deps` : c'est **là** que vit le
-cache d'optimisation des tests — addon-vitest écrase le `cacheDir` déclaré dans
-`vite.config.ts`. `axe-core` n'est pas résolvable depuis le code du projet
-(dépendance d'addon-a11y seulement) : on le chauffe en lançant une story vide
-par `composeStory(...).run()`.
+**How to apply:** do not lengthen a `timeout`; declare the loading with
+`preloadBeforeStories` in the story file, the `beforeAll` of
+`.storybook/vitest.setup.ts` pays it outside the budget. Reproduce by emptying
+`node_modules/.cache/storybook/*/*/sb-vitest/deps`: **that** is where the tests'
+optimization cache lives — addon-vitest overrides the `cacheDir` declared in
+`vite.config.ts`. `axe-core` cannot be resolved from the project's code
+(dependency of addon-a11y only): it is warmed up by running an empty story
+through `composeStory(...).run()`.

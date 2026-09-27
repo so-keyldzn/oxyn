@@ -1,83 +1,82 @@
 ---
-description: Relire un changement sous l'angle sécurité
-argument-hint: "[chemin ou plage de commits]"
+description: Review a change from a security standpoint
+argument-hint: "[path or commit range]"
 allowed-tools: Bash, Read, Grep, Glob, Agent
 ---
 
-Objet : relecture de sécurité de **$ARGUMENTS**.
+Purpose: security review of **$ARGUMENTS**.
 
-## Le modèle de menace
+## The threat model
 
-Ce n'est pas celui d'un serveur. L'attaquant n'est pas un inconnu sur Internet :
-ce sont **les données que l'utilisateur ouvre** et **les erreurs qu'Oxyn lui
-laisse commettre**. Oxyn tourne avec les droits d'un administrateur sur des
-systèmes de production (`docs/SECURITY.md`).
+It is not a server's. The attacker is not a stranger on the Internet: it is
+**the data the user opens** and **the mistakes Oxyn lets them make**. Oxyn runs
+with an administrator's rights on production systems (`docs/SECURITY.md`).
 
-Une relecture qui cherche des failles d'authentification cherche au mauvais
-endroit.
+A review that looks for authentication flaws is looking in the wrong place.
 
-## Les six canaux de fuite
+## The six leak channels
 
-Il suffit d'en oublier un. Les parcourir tous les six :
+Forgetting one is enough. Go through all six:
 
-| Canal | Le piège concret |
+| Channel | The concrete trap |
 |---|---|
-| Journaux `tracing` | un `Debug` dérivé imprime toute une structure de connexion |
-| Erreurs affichées | `sqlx` inclut parfois l'URL de connexion dans son erreur |
-| Rapports de plantage | une trace de pile capture les variables locales |
-| Fichiers de session et de workspace | la persistance « pour retrouver l'état » |
-| Invites IA | `docs/AI-PROVIDERS.md` |
-| Presse-papiers, export, capture | les fonctions de partage recopient ce qui est affiché |
+| `tracing` logs | a derived `Debug` prints a whole connection structure |
+| Displayed errors | `sqlx` sometimes includes the connection URL in its error |
+| Crash reports | a stack trace captures local variables |
+| Session and workspace files | persistence "to restore the state" |
+| AI prompts | `docs/AI-PROVIDERS.md` |
+| Clipboard, export, screenshot | sharing features copy what is displayed |
 
-Le contrôle mécanique le plus rentable : **chercher `#[derive(` contenant
-`Debug` sur tout type portant un secret.** C'est le mode de fuite le plus
-fréquent parce qu'il est invisible à la relecture — la fuite arrive six mois
-plus tard, avec un `tracing::debug!` ajouté par quelqu'un d'autre.
+The most cost-effective mechanical check: **look for `#[derive(` containing
+`Debug` on any type carrying a secret.** It is the most frequent leak mode
+because it is invisible in review — the leak arrives six months later, with a
+`tracing::debug!` added by someone else.
 
-## Les cinq surfaces d'entrée
+## The five input surfaces
 
-Par ordre de sous-estimation (`docs/SECURITY.md` § surface d'entrée) :
+In order of underestimation (`docs/SECURITY.md` § input surface):
 
-1. les réponses des serveurs — un serveur renvoie ce qu'il veut ;
-2. **les noms d'objets du catalogue** — une table peut s'appeler
-   `"users"; DROP TABLE audit; --`, ou contenir du texte imitant une consigne ;
-3. les fichiers de workspace ;
-4. les plugins — le bac à sable borne les dégâts, il ne dispense pas de ne rien
-   leur confier ;
-5. les réponses des modèles — des propositions, jamais des ordres.
+1. server responses — a server returns whatever it wants;
+2. **catalog object names** — a table can be called
+   `"users"; DROP TABLE audit; --`, or contain text imitating an instruction;
+3. workspace files;
+4. plugins — the sandbox bounds the damage, it does not exempt from entrusting
+   them with nothing;
+5. model responses — proposals, never orders.
 
-## Les points bloquants
+## The blocking points
 
-- un secret atteignant l'un des six canaux ;
-- un identifiant concaténé dans du SQL composé par Oxyn
-  ([I-10](../../CLAUDE.md#i-10)) ;
-- une écriture atteignant une connexion `production` sans passer par le
-  `PolicyGate` ;
-- un `Actor::Agent` obtenant plus que la lecture sur une connexion `production` ;
-- un bloc `unsafe` sans `// SAFETY:` énonçant l'invariant **et qui le maintient**
-  — une paraphrase du code ne vaut rien ;
-- une donnée quittant la machine au-delà du niveau de confidentialité de la
-  connexion ([ADR-0006](../../docs/adr/0006-ai-privacy-tiers.md)).
+- a secret reaching one of the six channels;
+- an identifier concatenated into SQL composed by Oxyn
+  ([I-10](../../CLAUDE.md#i-10));
+- a write reaching a `production` connection without going through the
+  `PolicyGate`;
+- an `Actor::Agent` obtaining more than read access on a `production`
+  connection;
+- an `unsafe` block without a `// SAFETY:` stating the invariant **and what
+  maintains it** — a paraphrase of the code is worth nothing;
+- data leaving the machine beyond the connection's privacy tier
+  ([ADR-0006](../../docs/adr/0006-ai-privacy-tiers.md)).
 
-## Comment procéder
+## How to proceed
 
-Déléguer à l'agent `relecteur-securite` : il est en lecture seule, et c'est ce
-qui rend son verdict crédible.
+Delegate to the `relecteur-securite` agent: it is read-only, and that is what
+makes its verdict credible.
 
-Puis la liste de contrôle : `.claude/checklists/revue-securite.md`.
+Then the checklist: `.claude/checklists/revue-securite.md`.
 
-## Dépendances
+## Dependencies
 
 ```bash
 cargo deny check
 ```
 
-Licences et avis de sécurité. Une crate non maintenue sur une frontière externe
-est un risque à **documenter**, pas à ignorer — le noter dans le rapport même
-s'il n'y a rien à corriger aujourd'hui.
+Licenses and security advisories. An unmaintained crate on an external boundary
+is a risk to **document**, not to ignore — note it in the report even if there
+is nothing to fix today.
 
-## Rappels
+## Reminders
 
-- si une faille est trouvée, décrire la **classe** de problème et la correction ;
-  ne pas rédiger d'exploit fonctionnel ;
-- s'il n'y a rien à signaler, le dire en une phrase.
+- if a flaw is found, describe the **class** of problem and the fix; do not
+  write a working exploit;
+- if there is nothing to report, say so in one sentence.

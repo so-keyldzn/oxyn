@@ -25,7 +25,7 @@
 //! Un agent externe reçoit un texte, et c'est tout : il n'a l'usage ni d'un
 //! message système, ni d'une session de conversation à outils. Lui imposer
 //! l'`AgentSession` du chemin fournisseur serait l'abstraction pour un seul
-//! appelant que [CLAUDE.md](../../../../CLAUDE.md#organisation-du-code)
+//! appelant que [CLAUDE.md](../../../../CLAUDE.md#code-organization)
 //! déconseille. Ce type porte donc le texte — et, quand un schéma l'accompagne,
 //! l'[`AgentContext`] qui l'a rendu, pour que l'appelant dise ce qui est parti.
 //!

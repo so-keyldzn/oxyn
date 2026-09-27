@@ -1,9 +1,9 @@
-- [Piège chrono FromStr](piege_chrono_fromstr_separateur.md) — vérifier au scratchpad ce que FromStr accepte réellement (T vs espace, offset requis) avant de le documenter
-- [Piège cargo fmt et périmètre](piege_cargo_fmt_portee_crate.md) — `-p` reformate toute la crate, y compris les fichiers d'un autre agent ; attendre ses compilations plutôt que corriger
-- [Piège hook code_interdit](piege_hook_code_interdit_diff.md) — le hook lit le texte de l'édition, pas le fichier : `blocking_recv` refusé alors qu'il existe déjà juste au-dessus
-- [Piège socle et liens de mémoire](piege_socle_liens_dans_les_memoires.md) — un lien Markdown dans un .md de .claude/ doit pointer un fichier réel, sinon make qualite s'arrête sur socle
-- [Piège scan des littéraux français](piege_scan_litteraux_francais.md) — un grep par ligne rate les chaînes à continuation `\` et les messages français sans accent
-- [Piège hook NOM_SECRET](piege_hook_nom_secret_token.md) — `derive(Debug)` refusé sur tout type nommé `…Token…`, `…Dsn…` : renommer plutôt que contourner
-- [Piège PG jetable](piege_pg_jetable_scratchpad.md) — socket Unix trop long dans le scratchpad (TCP seul) ; psql découpe au `;`, écrire un client filaire pour le protocole étendu
-- [Piège crate jetable et réseau](piege_crate_jetable_reseau.md) — mesurer un `size_of` dans un projet Cargo jetable déclenche un accès au registre et l'échec SSL ; le faire dans la crate
-- [Piège rustfmt et commentaire de tableau](piege_rustfmt_commentaire_tableau.md) — un `//` d'une ligne au-dessus d'un élément court est recollé à l'élément précédent : écrire deux lignes
+- [chrono FromStr trap](piege_chrono_fromstr_separateur.md) — check in the scratchpad what FromStr really accepts (T vs space, offset required) before documenting it
+- [cargo fmt and scope trap](piege_cargo_fmt_portee_crate.md) — `-p` reformats the whole crate, including another agent's files; wait for its builds rather than fixing
+- [code_interdit hook trap](piege_hook_code_interdit_diff.md) — the hook reads the edit's text, not the file: `blocking_recv` refused while it already exists just above
+- [Foundation and memory links trap](piege_socle_liens_dans_les_memoires.md) — a Markdown link in a .md of .claude/ must point to a real file, otherwise make qualite stops on socle
+- [French literals scan trap](piege_scan_litteraux_francais.md) — a line-by-line grep misses strings with `\` continuations and French messages without accents
+- [NOM_SECRET hook trap](piege_hook_nom_secret_token.md) — `derive(Debug)` refused on any type named `…Token…`, `…Dsn…`: rename rather than work around
+- [Disposable PG trap](piege_pg_jetable_scratchpad.md) — Unix socket path too long in the scratchpad (TCP only); psql splits on `;`, write a wire client for the extended protocol
+- [Disposable crate and network trap](piege_crate_jetable_reseau.md) — measuring a `size_of` in a disposable Cargo project triggers a registry access and the SSL failure; do it in the crate
+- [rustfmt and array comment trap](piege_rustfmt_commentaire_tableau.md) — a one-line `//` above a short element is glued onto the previous element: write two lines

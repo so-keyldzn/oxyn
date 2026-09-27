@@ -1,39 +1,39 @@
-name: Proposition
-description: Proposer une amélioration ou une fonctionnalité avec son besoin produit.
-title: "[Proposition] "
+name: Proposal
+description: Propose an improvement or a feature, with its product need.
+title: "[Proposal] "
 labels:
   - enhancement
 body:
   - type: textarea
     id: problem
     attributes:
-      label: Besoin
-      description: Quel problème utilisateur ou opérationnel cette proposition résout-elle ?
+      label: Need
+      description: What user or operational problem does this proposal solve?
     validations:
       required: true
   - type: textarea
     id: proposal
     attributes:
-      label: Proposition
-      description: Décrivez le comportement attendu, y compris les états d'erreur et d'annulation.
+      label: Proposal
+      description: Describe the expected behavior, including the error and cancellation states.
     validations:
       required: true
   - type: textarea
     id: constraints
     attributes:
-      label: Contraintes et invariants
-      description: Indiquez les documents d'autorité, limites de performance ou règles de sécurité concernés.
+      label: Constraints and invariants
+      description: Name the authoritative documents, performance limits or security rules concerned.
   - type: textarea
     id: alternatives
     attributes:
       label: Alternatives
-      description: Quelles solutions avez-vous envisagées et pourquoi cette proposition ?
+      description: Which solutions did you consider, and why this proposal?
   - type: checkboxes
     id: checks
     attributes:
-      label: Vérifications
+      label: Checks
       options:
-        - label: J'ai recherché les issues et la documentation existantes.
+        - label: I searched the existing issues and documentation.
           required: true
-        - label: Je n'ai pas inclus de secret ou de donnée sensible.
+        - label: I did not include any secret or sensitive data.
           required: true

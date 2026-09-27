@@ -1,77 +1,77 @@
 ---
-description: Ajouter ou modifier un écran de l'interface Tauri
-argument-hint: "<l'écran ou le composant, ex. panneau d'historique>"
+description: Add or modify a screen of the Tauri interface
+argument-hint: "<the screen or component, e.g. history panel>"
 allowed-tools: Bash, Read, Write, Edit, Grep, Glob, WebFetch, Skill
 ---
 
-Objet : ajouter ou modifier **$ARGUMENTS** dans l'interface Tauri.
+Purpose: add or modify **$ARGUMENTS** in the Tauri interface.
 
-## Avant d'écrire
+## Before writing
 
-1. **Lire [.claude/rules/front.md](../rules/front.md) avec `Read`**, même si le
-   fichier à créer n'existe pas encore : une règle `paths:` ne se charge qu'à la
-   lecture d'un fichier correspondant, et le premier fichier d'un domaine s'écrit
-   sinon sans elle.
-2. [UX-SPEC](../../docs/UX-SPEC.md) — les comportements et les états font autorité.
-3. [ARCHITECTURE § 2 bis](../../docs/ARCHITECTURE.md#2-bis-linterface-tauri) — le
-   pont IPC et ce qui ne le traverse pas.
-4. [FIGMA-HANDOFF](../../docs/FIGMA-HANDOFF.md) — la planche, si elle existe.
+1. **Read [.claude/rules/front.md](../rules/front.md) with `Read`**, even if the
+   file to create does not exist yet: a `paths:` rule only loads when a matching
+   file is read, and otherwise the first file of an area is written without it.
+2. [UX-SPEC](../../docs/UX-SPEC.md) — behaviors and states are authoritative.
+3. [ARCHITECTURE § 2 bis](../../docs/ARCHITECTURE.md#2-bis-linterface-tauri) — the
+   IPC bridge and what does not cross it.
+4. [FIGMA-HANDOFF](../../docs/FIGMA-HANDOFF.md) — the board, if it exists.
 
-## Outils plutôt que mémoire
+## Tools rather than memory
 
-| Pour | Utiliser |
+| For | Use |
 |---|---|
-| ajouter ou composer un composant shadcn sur Base UI | le skill `shadcn`, puis `pnpm exec shadcn add` |
-| routes, chargement, état de requête | les skills `tanstack-router-best-practices`, `tanstack-query` |
-| commande, canal, capacités de la webview | le skill `tauri-v2`, puis la page officielle — [I-12](../../CLAUDE.md#i-12) |
-| lire une planche | le MCP Figma (`get_design_context`, `get_screenshot`) |
+| adding or composing a shadcn component on Base UI | the `shadcn` skill, then `pnpm exec shadcn add` |
+| routes, loading, query state | the `tanstack-router-best-practices`, `tanstack-query` skills |
+| command, channel, webview capabilities | the `tauri-v2` skill, then the official page — [I-12](../../CLAUDE.md#i-12) |
+| reading a board | the Figma MCP (`get_design_context`, `get_screenshot`) |
 
-## L'ordre qui évite la réécriture
+## The order that avoids the rewrite
 
-**1. La `Command` d'abord.** Si aucune n'exprime l'action, c'est elle qui manque :
-[`/commande`](commande.md). Un écran qui trouve un raccourci vers le store ou un
-driver crée le second chemin qu'[I-01](../../CLAUDE.md#i-01) interdit.
+**1. The `Command` first.** If none expresses the action, that is what is
+missing: [`/commande`](commande.md). A screen that finds a shortcut to the
+store or to a driver creates the second path that [I-01](../../CLAUDE.md#i-01)
+forbids.
 
-**2. La commande Tauri, `async`, qui émet cette `Command`.** Puis le miroir
-TypeScript de ce qui traverse, **dans le même commit**. Une commande Tauri
-élargit ce qu'un script dans la webview peut faire : [`/securite`](securite.md).
+**2. The Tauri command, `async`, that emits this `Command`.** Then the
+TypeScript mirror of what crosses, **in the same commit**. A Tauri command
+widens what a script in the webview can do: [`/securite`](securite.md).
 
-**3. Le composant, données et rappels par props, et une story par état** —
-initial, en cours, peuplé, **vide**, erreur. Le vide est celui qu'on oublie, et
-c'est le premier que voit un nouvel utilisateur.
+**3. The component, data and callbacks through props, and one story per
+state** — initial, in progress, populated, **empty**, error. Empty is the one
+people forget, and it is the first one a new user sees.
 
-**4. La feature qui relie** le composant à `src/lib/ipc`. C'est la seule couche
-qui parle au backend ; c'est pourquoi les stories n'en ont jamais besoin.
+**4. The feature that connects** the component to `src/lib/ipc`. It is the only
+layer that talks to the backend; that is why stories never need it.
 
-L'ordre inverse — l'écran d'abord, le backend « branché ensuite » — produit un
-composant dont les props épousent un mock, et un miroir IPC écrit pour lui.
+The reverse order — the screen first, the backend "plugged in later" — produces
+a component whose props fit a mock, and an IPC mirror written for it.
 
-## Les pièges propres à ce geste
+## The traps specific to this move
 
-Les constructions interdites vivent dans [front.md](../rules/front.md) ; ce qui
-suit est ce qui se rate **dans l'enchaînement**.
+The forbidden constructs live in [front.md](../rules/front.md); what follows is
+what goes wrong **in the sequence**.
 
-**Le miroir mis à jour d'un seul côté.** Rust renomme `rows` en `cells`, le
-TypeScript lit toujours `rows` : la grille affiche « vide » sur un résultat
-peuplé. Ni `tsc` ni `cargo` ne le voient.
+**The mirror updated on one side only.** Rust renames `rows` to `cells`, the
+TypeScript still reads `rows`: the grid shows "empty" on a populated result.
+Neither `tsc` nor `cargo` sees it.
 
-**L'état d'erreur qui paraphrase.** Le public lit les messages de PostgreSQL : le
-message du serveur, code compris, s'affiche tel qu'`IpcError` le porte.
+**The error state that paraphrases.** The audience reads PostgreSQL messages:
+the server's message, code included, is displayed as `IpcError` carries it.
 
-**L'identifiant de connexion dans une story ou un titre.** Une story est publiée
-avec Storybook ; [I-03](../../CLAUDE.md#i-03) ne s'arrête pas aux journaux.
+**The connection identifier in a story or a title.** A story is published with
+Storybook; [I-03](../../CLAUDE.md#i-03) does not stop at logs.
 
-**L'écran écrit pour PostgreSQL.** Il suppose un schéma et du SQL, et n'existe pas
-pour un driver qui n'en a pas : l'interface se conditionne aux capacités dès
-maintenant ([ADR-0003](../../docs/adr/0003-driver-capabilities.md)).
+**The screen written for PostgreSQL.** It assumes a schema and SQL, and does not
+exist for a driver that has neither: the interface is conditioned on
+capabilities from now on ([ADR-0003](../../docs/adr/0003-driver-capabilities.md)).
 
-## Vérifier
+## Verify
 
 ```bash
-make front          # format, lint, types, stories (axe compris), build
-make desktop-dev    # la vraie fenêtre, sur un workspace temporaire
+make front          # format, lint, types, stories (axe included), build
+make desktop-dev    # the real window, on a temporary workspace
 make qualite
 ```
 
-Puis [revue-ui](../checklists/revue-ui.md), et `relecteur-securite` si une
-commande Tauri a été ajoutée.
+Then [revue-ui](../checklists/revue-ui.md), and `relecteur-securite` if a Tauri
+command was added.

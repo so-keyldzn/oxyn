@@ -1,22 +1,21 @@
 ---
 name: perimetre-cargo-fmt
-description: "Sur oxyn, utiliser cargo fmt -p sur ses seules crates plutôt que cargo fmt --all : d'autres agents éditent le dépôt en même temps"
+description: "On oxyn, use cargo fmt -p on your own crates only rather than cargo fmt --all: other agents edit the repository at the same time"
 metadata:
   type: feedback
 ---
 
-Utiliser `cargo fmt -p <crate>` et `cargo fmt -p <crate> --check` sur les seules
-crates de son périmètre, jamais `cargo fmt --all`.
+Use `cargo fmt -p <crate>` and `cargo fmt -p <crate> --check` on the crates of
+your scope only, never `cargo fmt --all`.
 
-**Why:** Nicolas fait travailler plusieurs agents en parallèle sur des crates
-disjointes du même arbre non committé. `cargo fmt --all` reformate les fichiers
-d'un autre agent, y compris un fichier laissé à mi-édition, et le diff qui en
-résulte n'appartient à personne. Le 2026-09-10, `cargo fmt --all --check`
-échouait sur `crates/oxyn-app/src/root.rs` alors que ce fichier était hors
-périmètre — la vérification globale ne dit donc rien d'utile sur son propre
-travail.
+**Why:** Nicolas has several agents work in parallel on disjoint crates of the
+same uncommitted tree. `cargo fmt --all` reformats another agent's files,
+including a file left mid-edit, and the resulting diff belongs to nobody. On
+2026-09-10, `cargo fmt --all --check` failed on `crates/oxyn-app/src/root.rs`
+while that file was out of scope — so the global check says nothing useful about
+your own work.
 
-**How to apply:** vérifier après coup avec
-`find crates drivers -name '*.rs' -not -path '*/target/*' -newermt '<heure>'`
-si un doute existe sur ce qu'une commande a touché. La porte globale
-(`make qualite`) est lancée par Nicolas, pas par l'agent.
+**How to apply:** check afterwards with
+`find crates drivers -name '*.rs' -not -path '*/target/*' -newermt '<time>'`
+if there is any doubt about what a command touched. The global gate
+(`make qualite`) is launched by Nicolas, not by the agent.

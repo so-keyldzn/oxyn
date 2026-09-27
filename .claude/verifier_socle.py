@@ -11,6 +11,7 @@ Appelé par `make socle`, donc par `make qualite`.
 
 from __future__ import annotations
 
+import hashlib
 import re
 import sys
 import tomllib
@@ -39,7 +40,7 @@ MOTIF_EMPLACEMENT = re.compile(r"XXXX|NNNN|AAAA-MM-JJ")
 
 def _fichiers_markdown() -> list[Path]:
     fichiers = [CLAUDE_MD, RACINE / "AGENTS.md", RACINE / "README.md"]
-    for repertoire in ("docs", ".claude", ".agents"):
+    for repertoire in ("docs", ".claude", ".agents", "i18n"):
         fichiers += sorted((RACINE / repertoire).rglob("*.md"))
     return [f for f in fichiers if f.is_file()]
 
@@ -168,6 +169,51 @@ def controler_regles() -> list[str]:
         if "paths:" not in entete:
             erreurs.append(f"{regle.name} : pas de `paths:` — la règle se charge à chaque session")
     return erreurs
+
+
+# ADR-0047: a French mirror records the fingerprint of the English text it
+# translates. Without it, a rule fixed in English stays wrong in French, and a
+# French reader applies the old rule without any error anywhere.
+MIROIRS = "i18n/fr"
+MOTIF_TRADUCTION = re.compile(
+    r'<!-- oxyn-translation source="([^"]+)" sha256="([0-9a-f]{12})" -->'
+)
+
+
+def empreinte(fichier: Path) -> str:
+    return hashlib.sha256(fichier.read_bytes()).hexdigest()[:12]
+
+
+def erreurs_traductions(racine: Path) -> list[str]:
+    erreurs = []
+    repertoire = racine / MIROIRS
+    if not repertoire.is_dir():
+        return []
+    for miroir in sorted(repertoire.rglob("*.md")):
+        rel = miroir.relative_to(racine)
+        entete = MOTIF_TRADUCTION.search(miroir.read_text(encoding="utf-8"))
+        if not entete:
+            erreurs.append(
+                f"{rel}: no `<!-- oxyn-translation source=\"…\" sha256=\"…\" -->` "
+                "header — nothing tells whether this mirror is up to date"
+            )
+            continue
+        source = racine / entete.group(1)
+        if not source.is_file():
+            erreurs.append(f"{rel}: source « {entete.group(1)} » does not exist")
+            continue
+        attendue = empreinte(source)
+        if entete.group(2) != attendue:
+            erreurs.append(
+                f"{rel}: stale French mirror — « {entete.group(1)} » changed since "
+                f"it was translated. Update the translation, then set "
+                f'sha256="{attendue}" (ADR-0047)'
+            )
+    return erreurs
+
+
+def controler_traductions() -> list[str]:
+    return erreurs_traductions(RACINE)
 
 
 def controler_hooks() -> list[str]:
@@ -442,6 +488,7 @@ def principal() -> int:
         + controler_graphe_dependances()
         + controler_couverture_ci()
         + controler_agregat_ci()
+        + controler_traductions()
     )
     avertissements = controler_paths_inertes()
 

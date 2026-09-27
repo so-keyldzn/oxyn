@@ -1,3 +1,3 @@
-- [Le socle ne vérifie pas l'index des ADR](socle-ne-verifie-pas-index-adr.md) — make socle passe avec un ADR absent de docs/README.md ; vérifier à la main
-- [Lire le source des crates Tauri](lire-le-source-des-crates-tauri.md) — vérifier un comportement Tauri/muda/wry dans ~/.cargo/registry sans buter sur les hooks
-- [Sources Tauri du registre local](sources-tauri-registre-local.md) — sourcer un comportement Tauri (I-12) dans les sources dépaquetées ; piège du hook sur `cd` vers un glob
+- [The foundation does not check the ADR index](socle-ne-verifie-pas-index-adr.md) — make socle passes with an ADR missing from docs/README.md; check by hand
+- [Read the source of the Tauri crates](lire-le-source-des-crates-tauri.md) — check a Tauri/muda/wry behavior in ~/.cargo/registry without running into the hooks
+- [Tauri sources in the local registry](sources-tauri-registre-local.md) — source a Tauri behavior (I-12) in the unpacked sources; hook trap on `cd` to a glob

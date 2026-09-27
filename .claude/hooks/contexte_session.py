@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""SessionStart : injecte l'état réel du dépôt.
+"""SessionStart: inject the real state of the repository.
 
-C'est ce hook qui permet à CLAUDE.md de ne rien contenir de périssable. Tout ce
-qui change — la branche, le dernier commit, l'existence du code, la fraîcheur
-des versions vérifiées — vient d'ici, à jour, à chaque session.
+This hook is what lets CLAUDE.md hold nothing perishable. Everything that
+changes — the branch, the last commit, whether code exists, the freshness of
+checked versions — comes from here, up to date, at every session.
 """
 
 from __future__ import annotations
@@ -33,18 +33,18 @@ def _git(racine: Path, *args: str) -> str:
 
 def _etat_git(racine: Path) -> list[str]:
     if not (racine / ".git").exists():
-        return ["- Dépôt git : **absent**. Les hooks de commit resteront inertes."]
+        return ["- Git repository: **missing**. Commit hooks will stay inert."]
     lignes = []
-    branche = _git(racine, "branch", "--show-current") or "(détachée)"
+    branche = _git(racine, "branch", "--show-current") or "(detached)"
     dernier = _git(racine, "log", "-1", "--format=%h %s")
     modifies = _git(racine, "status", "--porcelain")
-    lignes.append(f"- Branche : `{branche}`")
-    lignes.append(f"- Dernier commit : {dernier}" if dernier else "- **Aucun commit** dans ce dépôt")
+    lignes.append(f"- Branch: `{branche}`")
+    lignes.append(f"- Last commit: {dernier}" if dernier else "- **No commit** in this repository")
     if modifies:
         nb = len(modifies.splitlines())
-        lignes.append(f"- Arbre de travail : {nb} fichier(s) modifié(s) ou non suivi(s)")
+        lignes.append(f"- Working tree: {nb} modified or untracked file(s)")
     else:
-        lignes.append("- Arbre de travail : propre")
+        lignes.append("- Working tree: clean")
     return lignes
 
 
@@ -52,25 +52,25 @@ def _etat_code(racine: Path) -> list[str]:
     crates = racine / "crates"
     if not (racine / "Cargo.toml").exists() and not crates.exists():
         return [
-            "- Code : **aucun**. Pas de `Cargo.toml`, pas de `crates/`.",
-            "  → Les règles `.claude/rules/` à `paths:` ne se déclencheront pas :"
-            " aucun fichier ne leur correspond. Utiliser les commandes"
-            " (`/driver`, `/commande`, `/ecran`) qui chargent la procédure"
-            " explicitement.",
-            "  → La prochaine étape est la phase 0 de docs/IMPLEMENTATION-PLAN.md.",
+            "- Code: **none**. No `Cargo.toml`, no `crates/`.",
+            "  → The `.claude/rules/` rules with `paths:` will not trigger:"
+            " no file matches them. Use the commands"
+            " (`/driver`, `/commande`, `/ecran`) that load the procedure"
+            " explicitly.",
+            "  → The next step is phase 0 of docs/IMPLEMENTATION-PLAN.md.",
         ]
     lignes = []
     if crates.exists():
         noms = sorted(d.name for d in crates.iterdir() if d.is_dir())
-        lignes.append(f"- Crates ({len(noms)}) : {', '.join(noms)}" if noms else "- `crates/` est vide")
+        lignes.append(f"- Crates ({len(noms)}): {', '.join(noms)}" if noms else "- `crates/` is empty")
     toolchain = racine / "rust-toolchain.toml"
     if toolchain.exists():
         texte = toolchain.read_text(encoding="utf-8", errors="replace")
         m = re.search(r'channel\s*=\s*"([^"]+)"', texte)
         if m:
-            lignes.append(f"- Toolchain épinglée : `{m.group(1)}`")
+            lignes.append(f"- Pinned toolchain: `{m.group(1)}`")
     else:
-        lignes.append("- ⚠ `rust-toolchain.toml` absent alors que du code existe (ADR-0008)")
+        lignes.append("- ⚠ `rust-toolchain.toml` missing although code exists (ADR-0008)")
     return lignes
 
 
@@ -88,17 +88,17 @@ def _fraicheur_versions(racine: Path) -> list[str]:
     age = (dt.date.today() - recente).days
     if age > PEREMPTION_JOURS:
         return [
-            f"- ⚠ Versions vérifiées il y a **{age} jours** ({recente.isoformat()}). "
-            "Au-delà de 90 jours, les valeurs de docs/RESEARCH-NOTES.md sont à "
-            "re-vérifier avant d'être citées (I-12). Lancer `/versions`."
+            f"- ⚠ Versions checked **{age} days** ago ({recente.isoformat()}). "
+            "Beyond 90 days, the values of docs/RESEARCH-NOTES.md must be "
+            "re-checked before being cited (I-12). Run `/versions`."
         ]
-    return [f"- Versions vérifiées le {recente.isoformat()} ({age} j)"]
+    return [f"- Versions checked on {recente.isoformat()} ({age} d)"]
 
 
 def principal() -> None:
     p.lire_evenement()
     racine = Path(p.racine_projet())
-    lignes = ["## État du dépôt (injecté par .claude/hooks/contexte_session.py)", ""]
+    lignes = ["## Repository state (injected by .claude/hooks/contexte_session.py)", ""]
     lignes += _etat_git(racine)
     lignes += _etat_code(racine)
     lignes += _fraicheur_versions(racine)

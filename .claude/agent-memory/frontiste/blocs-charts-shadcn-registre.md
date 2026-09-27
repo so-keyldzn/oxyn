@@ -1,16 +1,16 @@
 ---
 name: blocs-charts-shadcn-registre
-description: Les blocs chart-* de la galerie shadcn n'existent que sous le style new-york-v4 ; `shadcn view chart-…` échoue en base-nova
+description: The chart-* blocks of the shadcn gallery only exist under the new-york-v4 style; `shadcn view chart-…` fails in base-nova
 metadata:
   type: reference
 ---
 
-`pnpm exec shadcn view chart-area-stacked` répond 404 : le CLI cherche
-`/r/styles/base-nova/…`, et les blocs de la galerie (`chart-area-*`, `chart-bar-*`,
+`pnpm exec shadcn view chart-area-stacked` answers 404: the CLI looks for
+`/r/styles/base-nova/…`, and the gallery blocks (`chart-area-*`, `chart-bar-*`,
 `chart-line-*`, `chart-pie-*`, `chart-radar-*`, `chart-radial-*`, `chart-tooltip-*`)
-ne sont publiés que sous `https://ui.shadcn.com/r/styles/new-york-v4/<nom>.json`.
-Ils ne dépendent que de `ui/chart`, donc valent pour Base UI.
+are only published under `https://ui.shadcn.com/r/styles/new-york-v4/<name>.json`.
+They depend only on `ui/chart`, so they are valid for Base UI.
 
-**How to apply:** pour partir d'un bloc officiel, `curl` ce JSON dans le scratchpad
-et lire `.files[0].content` avec `jq`. `shadcn search @shadcn -q chart-` ne les liste
-pas non plus.
+**How to apply:** to start from an official block, `curl` this JSON into the
+scratchpad and read `.files[0].content` with `jq`. `shadcn search @shadcn -q chart-`
+does not list them either.

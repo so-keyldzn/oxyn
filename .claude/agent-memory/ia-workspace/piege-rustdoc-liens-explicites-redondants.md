@@ -1,30 +1,30 @@
 ---
 name: piege-rustdoc-liens-explicites-redondants
-description: "Piège d'outillage : rustdoc en -D warnings refuse un lien dont la cible est déjà importée — cargo test ne le voit pas, make qualite si"
+description: "Tooling trap: rustdoc under -D warnings refuses a link whose target is already imported — cargo test does not see it, make qualite does"
 metadata:
   type: feedback
 ---
 
-Dans un `//!` ou un `///`, écrire un lien intra-doc sous sa **forme longue** —
-le libellé entre crochets suivi du chemin complet entre parenthèses — alors que
-le type est **déjà importé dans le module** déclenche
-`rustdoc::redundant_explicit_links`, donc une **erreur** sous
-`RUSTDOCFLAGS="-D warnings"`. La forme attendue est alors la forme courte : le
-libellé entre crochets, sans parenthèses ni chemin.
+In a `//!` or a `///`, writing an intra-doc link in its **long form** — the
+label in brackets followed by the full path in parentheses — while the type is
+**already imported in the module** triggers
+`rustdoc::redundant_explicit_links`, hence an **error** under
+`RUSTDOCFLAGS="-D warnings"`. The expected form is then the short form: the
+label in brackets, without parentheses or path.
 
-**Why:** `cargo test -p …` et `cargo clippy -p … --all-targets` passent tous les
-deux sans rien dire ; seul l'étage doc de `make qualite` échoue. On peut donc
-croire un lot terminé et le faire rougir en CI sur un lien de documentation.
+**Why:** `cargo test -p …` and `cargo clippy -p … --all-targets` both pass
+without saying anything; only the doc stage of `make qualite` fails. So one can
+believe a batch is done and turn CI red on a documentation link.
 
-**How to apply:** avant de déclarer un lot terminé dans une crate où l'on a
-écrit beaucoup de `///`, lancer
-`RUSTDOCFLAGS="-D warnings" cargo doc -p <crate> --no-deps`. N'écrire le chemin
-explicite que lorsque la cible n'est **pas** dans la portée du module — par
-exemple viser `ContextBuilder::build` depuis un module qui n'importe pas
+**How to apply:** before declaring done a batch in a crate where a lot of `///`
+was written, run
+`RUSTDOCFLAGS="-D warnings" cargo doc -p <crate> --no-deps`. Only write the
+explicit path when the target is **not** in the module's scope — for example
+targeting `ContextBuilder::build` from a module that does not import
 `ContextBuilder`.
 
-**Note sur cette note :** les exemples y sont décrits en toutes lettres plutôt
-que montrés. `.claude/verifier_socle.py` cherche la syntaxe de lien Markdown
-dans tout le texte, sans distinguer un exemple d'un vrai lien : écrire la forme
-longue ici ferait échouer le socle sur trois « liens morts » vers des chemins
-Rust. C'est une limite de l'outil, pas une règle de style.
+**Note about this note:** the examples are described in words rather than
+shown. `.claude/verifier_socle.py` looks for Markdown link syntax in the whole
+text, without distinguishing an example from a real link: writing the long form
+here would make the foundation check fail on three "dead links" to Rust paths.
+It is a limit of the tool, not a style rule.

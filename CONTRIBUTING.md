@@ -44,9 +44,14 @@ not ready for review.
 
 A few conventions that the gate cannot check:
 
-- code, identifiers, comments and error messages are in **English**;
-  documentation, ADRs and commit messages are in **French**;
-- commit messages follow Conventional Commits;
+- everything is in **English**: code, identifiers, comments, error messages,
+  documentation, ADRs, commit messages and pull requests. Some documents of
+  `docs/` and ADRs 0001 to 0046 are still in French; they stay authoritative
+  until translated ([ADR-0047](docs/adr/0047-english-as-the-repository-language.md)).
+  [`i18n/fr/`](i18n/fr/README.md) holds French mirrors of the English
+  documents; English is authoritative;
+- commit messages follow Conventional Commits: `type(scope): subject`, in
+  lowercase, imperative, no final period, 72 characters at most;
 - a new dependency is justified in the pull request: what it brings, and what
   doing without it would cost. Its license must be in the list accepted by
   `deny.toml`.

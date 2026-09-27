@@ -4,184 +4,186 @@ paths:
   - "crates/oxyn-desktop/**"
 ---
 
-# Interface Tauri — conventions
+# Tauri interface — conventions
 
-La décision et ses raisons vivent dans
-[ADR-0029](../../docs/adr/0029-interface-tauri-shadcn.md) ; le pont IPC dans
-[ARCHITECTURE](../../docs/ARCHITECTURE.md#2-bis-linterface-tauri) ; les
-comportements dans [UX-SPEC](../../docs/UX-SPEC.md). Cette règle porte ce qui se
-rate en écrivant du code ici.
+The decision and its reasons live in
+[ADR-0029](../../docs/adr/0029-interface-tauri-shadcn.md); the IPC bridge in
+[ARCHITECTURE](../../docs/ARCHITECTURE.md#2-bis-linterface-tauri); behaviors in
+[UX-SPEC](../../docs/UX-SPEC.md). This rule carries what gets missed when
+writing code here.
 
-## Un seul chemin vers le backend
+## A single path to the backend
 
-`invoke` n'est appelé que par `call`, dans `src/lib/ipc/client.ts` ; les modules
-d'un domaine (`src/lib/ipc/<domaine>.ts`) passent par `call`. Une vue qui l'appelle
-elle-même crée le second chemin qu'[I-01](../../CLAUDE.md#i-01) interdit, et c'est
-celui qu'une XSS emprunterait. Une fonctionnalité commence par une commande Tauri
-dans `crates/oxyn-desktop/src/commands.rs` **qui émet une `Command`** — jamais par
-un appel direct au store, au trousseau ou à un driver.
+`invoke` is only called by `call`, in `src/lib/ipc/client.ts`; the modules of a
+domain (`src/lib/ipc/<domain>.ts`) go through `call`. A view that calls it
+itself creates the second path that [I-01](../../CLAUDE.md#i-01) forbids, and it
+is the one an XSS would take. A feature starts with a Tauri command in
+`crates/oxyn-desktop/src/commands.rs` **that emits a `Command`** — never with a
+direct call to the store, the keychain or a driver.
 
-Un domaine vit dans ses modules : `src/backend/<domaine>.rs` (le `impl Backend`),
-`src/commands/<domaine>.rs` (les `#[tauri::command]`), `src/ipc/<domaine>.rs` (ce qui
-traverse), déclarés par une ligne `mod` et un bloc dans `generate_handler!`. Côté
-front, `src/lib/ipc/<domaine>.ts` et `src/features/<domaine>/`.
+A domain lives in its modules: `src/backend/<domain>.rs` (the `impl Backend`),
+`src/commands/<domain>.rs` (the `#[tauri::command]`s), `src/ipc/<domain>.rs`
+(what crosses), declared by one `mod` line and one block in
+`generate_handler!`. On the front-end side, `src/lib/ipc/<domain>.ts` and
+`src/features/<domain>/`.
 
-Ajouter une commande Tauri, c'est élargir ce qu'un script dans la webview peut
-faire : [`/securite`](../commands/securite.md) avant de fusionner.
+Adding a Tauri command widens what a script in the webview can do:
+[`/securite`](../commands/securite.md) before merging.
 
-**Une commande Tauri sans `async` tourne sur le thread principal**
-([RESEARCH-NOTES](../../docs/RESEARCH-NOTES.md#interface-tauri-et-front)). Un corps
-qui lit le store, le trousseau ou un lot débordé sur disque y fige la fenêtre
-([I-05](../../CLAUDE.md#i-05)) — et rien ne le signale, la lecture étant rapide sur
-la machine de dev. `async fn`, ou `#[tauri::command(async)]` ; synchrone seulement
-pour un état déjà en mémoire. `code_interdit.py` pose la question à chaque
-commande synchrone écrite.
+**A Tauri command without `async` runs on the main thread**
+([RESEARCH-NOTES](../../docs/RESEARCH-NOTES.md#interface-tauri-et-front)). A body
+that reads the store, the keychain or a batch spilled to disk freezes the
+window there ([I-05](../../CLAUDE.md#i-05)) — and nothing reports it, since the
+read is fast on the dev machine. `async fn`, or `#[tauri::command(async)]`;
+synchronous only for state already in memory. `code_interdit.py` asks the
+question for every synchronous command written.
 
-`src/lib/ipc/types.ts` est le miroir de `src/ipc.rs`, et chaque `src/lib/ipc/<domaine>.ts`
-celui de `src/ipc/<domaine>.rs`. Un champ renommé d'un seul
-côté ne se voit qu'à l'exécution : les deux changent dans le même commit.
+`src/lib/ipc/types.ts` is the mirror of `src/ipc.rs`, and every
+`src/lib/ipc/<domain>.ts` that of `src/ipc/<domain>.rs`. A field renamed on one
+side only shows up at run time: both change in the same commit.
 
-## Le miroir est un schéma, pas un type
+## The mirror is a schema, not a type
 
-`call` prend un **schéma** et parse la réponse ; `invoke<T>` ne fait que caster
-([ADR-0031](../../docs/adr/0031-validation-des-reponses-ipc.md)). Ce qui en
-découle en écrivant :
+`call` takes a **schema** and parses the response; `invoke<T>` only casts
+([ADR-0031](../../docs/adr/0031-validation-des-reponses-ipc.md)). What follows
+when writing:
 
-- un type de la frontière se déclare **une fois**, en schéma, et son type suit :
-  `export const X = z.object({…})` puis `export type X = z.infer<typeof X>`.
-  Écrire une `interface` à côté d'un schéma recrée le miroir qu'on vient de
-  supprimer ;
-- un `Option<T>` de Rust est `.nullable()`, **jamais** `.optional()` : aucun
-  `skip_serializing_if` n'existe côté `oxyn-desktop`, donc un `None` sort en
-  `"champ": null` et la clé est toujours là ;
-- le tag d'une union n'est pas toujours `type` — `RunTarget` et `DestinationChoice`
-  taguent sur `kind`, `FacetFreshness` sur `state`. Une `z.discriminatedUnion`
-  sur le mauvais tag échoue sur **toutes** les réponses, pas sur un cas rare ;
-- une variante newtype est **aplatie** par serde : le motif est
-  `Inner.extend({ type: z.literal("…") })`, pas un champ imbriqué ;
-- un champ que Rust porte en `&'static str` **sans énumération derrière** ne se
-  valide pas en `z.enum` : il ferait échouer une réponse valide le jour où une
-  valeur s'ajoute. Deux cas, selon ce que le Rust garantit :
+- a boundary type is declared **once**, as a schema, and its type follows:
+  `export const X = z.object({…})` then `export type X = z.infer<typeof X>`.
+  Writing an `interface` next to a schema recreates the mirror that was just
+  removed;
+- a Rust `Option<T>` is `.nullable()`, **never** `.optional()`: no
+  `skip_serializing_if` exists on the `oxyn-desktop` side, so a `None` comes out
+  as `"field": null` and the key is always there;
+- the tag of a union is not always `type` — `RunTarget` and `DestinationChoice`
+  tag on `kind`, `FacetFreshness` on `state`. A `z.discriminatedUnion` on the
+  wrong tag fails on **every** response, not on a rare case;
+- a newtype variant is **flattened** by serde: the pattern is
+  `Inner.extend({ type: z.literal("…") })`, not a nested field;
+- a field that Rust carries as `&'static str` **with no enum behind it** is not
+  validated with `z.enum`: it would fail a valid response the day a value is
+  added. Two cases, depending on what the Rust guarantees:
 
-  | Le Rust | Le schéma | Pourquoi |
+  | The Rust | The schema | Why |
   |---|---|---|
-  | produit un ensemble **ouvert** (un identifiant de préréglage, une classe d'erreur) | `z.string()`, le *type* restreint | une valeur inconnue est légitime et doit passer |
-  | produit un ensemble **clos par un `match` à bras attrape-tout** (`_ => "unknown"`) | `z.enum([…]).catch("unknown")` | le type reste utilisable par un `switch` ou un `Record`, et l'inconnu dégrade **un badge** au lieu de faire échouer toute la réponse |
+  | produces an **open** set (a preset identifier, an error class) | `z.string()`, the *type* narrowed | an unknown value is legitimate and must pass |
+  | produces a set **closed by a `match` with a catch-all arm** (`_ => "unknown"`) | `z.enum([…]).catch("unknown")` | the type stays usable by a `switch` or a `Record`, and the unknown degrades **one badge** instead of failing the whole response |
 
-  **Un `.catch` suppose une valeur qui dit l'ignorance.** `unknown`, `other` :
-  des mots dont le sens est « je n'ai pas su lire ». Là où le type n'en a pas —
-  `ProviderKind` n'a que des noms de protocoles —, tout repli est une
-  **affirmation fausse**, et le champ se valide strictement. La question n'est
-  pas « est-ce gênant d'échouer ? » mais « existe-t-il une valeur honnête ? ».
-  Le cas décisif est `AgentProvenance.kind`, qui *signe* ce qu'une conversation
-  propose ([ADR-0023](../../docs/adr/0023-fournisseurs-declares-et-provenance.md)) :
-  une provenance qui échoue coûte une proposition, une provenance qui ment coûte
-  le mécanisme entier. Si la résilience y devient nécessaire, elle s'obtient en
-  ajoutant une variante d'ignorance **côté Rust**, comme `Ending::Unknown` —
-  jamais en l'inventant dans le front ;
-- un `u64` **que le serveur rapporte** (`estimatedRows`, `sizeBytes`) se valide
-  sans `.int()` : zod y teste `Number.isSafeInteger`, et au-delà de 2^53 il
-  rejetterait une réponse honnête. Les compteurs qu'Oxyn borne lui-même gardent
-  `.int()` ;
-- un message de `Channel` passe par `guarded` : même frontière, mais un message
-  illisible est abandonné avec une trace, parce que personne ne l'attend.
+  **A `.catch` assumes a value that expresses ignorance.** `unknown`, `other`:
+  words whose meaning is "I could not read it". Where the type has none —
+  `ProviderKind` only has protocol names —, any fallback is a **false
+  statement**, and the field is validated strictly. The question is not "is
+  failing annoying?" but "is there an honest value?". The decisive case is
+  `AgentProvenance.kind`, which *signs* what a conversation proposes
+  ([ADR-0023](../../docs/adr/0023-fournisseurs-declares-et-provenance.md)): a
+  provenance that fails costs one proposal, a provenance that lies costs the
+  whole mechanism. If resilience becomes necessary there, it is obtained by
+  adding an ignorance variant **on the Rust side**, like `Ending::Unknown` —
+  never by inventing it in the front end;
+- a `u64` **that the server reports** (`estimatedRows`, `sizeBytes`) is
+  validated without `.int()`: zod tests `Number.isSafeInteger` there, and beyond
+  2^53 it would reject an honest response. Counters that Oxyn bounds itself keep
+  `.int()`;
+- a `Channel` message goes through `guarded`: same boundary, but an unreadable
+  message is dropped with a trace, because nobody is waiting for it.
 
-`Cell` est validé par un test positionnel écrit à la main, et non par une
-`z.union`. C'est une décision **mesurée** — le commentaire porte les chiffres.
-Ne pas la « simplifier ».
+`Cell` is validated by a hand-written positional test, not by a `z.union`. It is
+a **measured** decision — the comment carries the figures. Do not "simplify" it.
 
-## Composants
+## Components
 
-| Utiliser | Jamais | Pourquoi |
+| Use | Never | Why |
 |---|---|---|
-| un composant de `src/components/ui` (shadcn, Base UI) | un `div` stylé qui imite un bouton, un menu, un dialogue | clavier, focus et ARIA viennent de Base UI ; les réécrire, c'est les rater |
-| `pnpm exec shadcn add <composant>` | écrire un composant shadcn à la main | le skill `shadcn` du dépôt décrit le reste — `render` et non `asChild` sur Base UI |
-| jetons sémantiques (`bg-background`, `text-muted-foreground`, `text-env-production`) | couleurs Tailwind brutes, `dark:` manuel | le thème et les contrastes AA sont réglés dans `src/styles.css`, une fois |
-| `@hugeicons/react` | `lucide-react` | [UX-SPEC](../../docs/UX-SPEC.md#navigation-du-premier-workspace) impose Hugeicons |
-| `TextInput`, `TextArea`, `InputGroupTextInput`, `InputGroupTextArea` de `components/oxyn/text-field` | `Input`, `Textarea`, `InputGroupInput`, `InputGroupTextarea` de `components/ui` — ESLint les refuse | macOS remplacerait `'` par `’` dans une chaîne de connexion ([ADR-0041](../../docs/adr/0041-registre-d-actions-menus-et-raccourcis.md) § 8) ; un autre champ (CodeMirror, Lexical, `CommandInput`) reçoit `TEXT_FIELD_ATTRIBUTES` |
-| texte React (`{value}`) | `dangerouslySetInnerHTML` sur une donnée reçue | une cellule, un nom d'objet ou une réponse de modèle sont des entrées hostiles ([SECURITY](../../docs/SECURITY.md#surface-dentrée)) |
+| a component from `src/components/ui` (shadcn, Base UI) | a styled `div` imitating a button, a menu, a dialog | keyboard, focus and ARIA come from Base UI; rewriting them means getting them wrong |
+| `pnpm exec shadcn add <component>` | writing a shadcn component by hand | the repository's `shadcn` skill describes the rest — `render` and not `asChild` on Base UI |
+| semantic tokens (`bg-background`, `text-muted-foreground`, `text-env-production`) | raw Tailwind colors, manual `dark:` | the theme and AA contrasts are set in `src/styles.css`, once |
+| `@hugeicons/react` | `lucide-react` | [UX-SPEC](../../docs/UX-SPEC.md#navigation-du-premier-workspace) mandates Hugeicons |
+| `TextInput`, `TextArea`, `InputGroupTextInput`, `InputGroupTextArea` from `components/oxyn/text-field` | `Input`, `Textarea`, `InputGroupInput`, `InputGroupTextarea` from `components/ui` — ESLint refuses them | macOS would replace `'` with `’` in a connection string ([ADR-0041](../../docs/adr/0041-registre-d-actions-menus-et-raccourcis.md) § 8); any other field (CodeMirror, Lexical, `CommandInput`) receives `TEXT_FIELD_ATTRIBUTES` |
+| React text (`{value}`) | `dangerouslySetInnerHTML` on received data | a cell, an object name or a model response are hostile inputs ([SECURITY](../../docs/SECURITY.md#surface-dentrée)) |
 
-`src/components/ui` est **généré** : il n'est ni formaté ni linté par le projet, et
-une retouche y est écrasée au prochain `shadcn add --overwrite`. Ce qui est propre à
-Oxyn va dans `src/components/oxyn`.
+`src/components/ui` is **generated**: it is neither formatted nor linted by the
+project, and a touch-up there is overwritten at the next
+`shadcn add --overwrite`. What is specific to Oxyn goes in
+`src/components/oxyn`.
 
-**Une seule exception, datée du 2026-09-25** : `src/components/ui/select.tsx`
-transmet à la liste ouverte le nom de son déclencheur — son `aria-labelledby`
-s'il en a un, sinon son `aria-label` — et accepte un `aria-label` explicite sur
-`SelectContent`. Base UI laisse la listbox sans nom : axe relève
-`aria-input-field-name`, et un lecteur d'écran annonce une liste anonyme. Le
-déclencheur n'est pas visé par `aria-labelledby` : un combobox référencé ainsi
-prête sa valeur choisie, pas son libellé. La retouche est commentée en tête du
-fichier ; la story `ListIsNamedAfterItsTrigger` de
-`assistant-reasoning-effort.stories.tsx` échoue si une régénération l'efface.
-Elle tombe le jour où Base UI nomme la liste lui-même.
+**A single exception, dated 2026-09-25**: `src/components/ui/select.tsx` passes
+the name of its trigger to the open list — its `aria-labelledby` if it has one,
+otherwise its `aria-label` — and accepts an explicit `aria-label` on
+`SelectContent`. Base UI leaves the listbox unnamed: axe reports
+`aria-input-field-name`, and a screen reader announces an anonymous list. The
+trigger is not targeted by `aria-labelledby`: a combobox referenced that way
+lends its chosen value, not its label. The touch-up is commented at the top of
+the file; the `ListIsNamedAfterItsTrigger` story of
+`assistant-reasoning-effort.stories.tsx` fails if a regeneration erases it. It
+goes away the day Base UI names the list itself.
 
-## Chaque composant Oxyn a ses stories, et ses stories sont ses tests
+## Every Oxyn component has its stories, and its stories are its tests
 
-Un composant de `src/components/oxyn` qui dépend d'une opération distante a une
-story **par état** : initial, en cours, peuplé, vide, erreur
-([UX-SPEC](../../docs/UX-SPEC.md#états-dune-vue)). `make front` les rend dans
-Chromium et y passe axe en mode `error` : une violation d'accessibilité fait échouer
-la porte.
+A component of `src/components/oxyn` that depends on a remote operation has one
+story **per state**: initial, in progress, populated, empty, error
+([UX-SPEC](../../docs/UX-SPEC.md#états-dune-vue)). `make front` renders them in
+Chromium and runs axe on them in `error` mode: an accessibility violation fails
+the gate.
 
-`make front` refuse un composant qu'aucune story ne rend (`script/verifier-stories`).
-La règle qu'il applique :
+`make front` refuses a component that no story renders
+(`script/verifier-stories`). The rule it applies:
 
-- **un composant** est un fichier `.tsx` de `src/components/oxyn`, hors
-  `*.stories.tsx` et `*.test.tsx`. Ce qui ne rend rien — modèle, fixtures,
-  mesure, utilitaire — s'écrit en `.ts` et n'est pas concerné : l'extension est
-  la frontière, et un `.tsx` sans JSX n'a pas lieu d'être ;
-- **il est couvert** si un `*.stories.tsx` du même répertoire l'importe
-  (`./<nom>` ou `@/components/oxyn/<nom>`) : ses propres stories d'ordinaire, ou celles de la vue qui
-  le rend directement (`result-chart.stories.tsx` pour `assistant-result-chart`) ;
-- **sinon, il est exempté par nom** dans `EXEMPTS` du script, et seulement dans
-  deux cas : une pièce qui n'a de sens qu'à l'intérieur de son parent (greffon
-  Lexical, tracé d'un graphique), dont l'exemption nomme la story qui la rend ;
-  ou une story en attente, dont l'exemption porte un `TODO` daté qui dit ce qui
-  la débloque. Une exemption qui ne sert plus fait échouer le contrôle.
+- **a component** is a `.tsx` file of `src/components/oxyn`, excluding
+  `*.stories.tsx` and `*.test.tsx`. What renders nothing — model, fixtures,
+  measurement, utility — is written as `.ts` and is not concerned: the
+  extension is the boundary, and a `.tsx` without JSX has no reason to exist;
+- **it is covered** if a `*.stories.tsx` in the same directory imports it
+  (`./<name>` or `@/components/oxyn/<name>`): its own stories usually, or those
+  of the view that renders it directly (`result-chart.stories.tsx` for
+  `assistant-result-chart`);
+- **otherwise, it is exempted by name** in the script's `EXEMPTS`, and only in
+  two cases: a piece that only makes sense inside its parent (Lexical plugin,
+  chart plot), whose exemption names the story that renders it; or a pending
+  story, whose exemption carries a dated `TODO` saying what unblocks it. An
+  exemption that is no longer used fails the check.
 
-Les comportements qui protègent l'utilisateur s'écrivent en `play`, pas en
-commentaire : `Cancel` focalisé dans une approbation, Entrée qui n'approuve pas, un
-identifiant de connexion jamais rendu.
+Behaviors that protect the user are written as `play`, not as comments: `Cancel`
+focused in an approval, Enter that does not approve, a connection credential
+never rendered.
 
-Une story ne parle jamais au backend. Le composant reçoit ses données et ses
-rappels par props ; `src/features` fait le lien avec `src/lib/ipc`.
+A story never talks to the backend. The component receives its data and
+callbacks through props; `src/features` makes the link with `src/lib/ipc`.
 
-## Le résultat n'est jamais entier dans la webview
+## The result is never whole in the webview
 
-La grille demande des pages bornées (`result_page`, 2 000 lignes au plus côté Rust)
-pour la seule fenêtre visible. Charger « tout le résultat pour trier en JS »
-réintroduit l'OOM qu'[I-06](../../CLAUDE.md#i-06) interdit, avec une webview qui
-meurt au lieu d'un processus.
+The grid requests bounded pages (`result_page`, at most 2,000 rows on the Rust
+side) for the visible window only. Loading "the whole result to sort in JS"
+reintroduces the OOM that [I-06](../../CLAUDE.md#i-06) forbids, with a webview
+that dies instead of a process.
 
-Le formatage d'une cellule est fait en Rust par `oxyn_data::format_cell`. Le front
-ne reformate pas une date ni un binaire : l'écran divergerait du fichier exporté.
+Cell formatting is done in Rust by `oxyn_data::format_cell`. The front end does
+not reformat a date or a binary: the screen would diverge from the exported file.
 
-## Pas de retry
+## No retry
 
-`QueryClient` est configuré `retry: false`. Un appel au backend qui échoue est une
-réponse, pas un réseau capricieux ; et une écriture ambiguë ne se rejoue pas
-([I-13](../../CLAUDE.md#i-13)). `retryable` vient du backend, jamais d'une analyse du
-message.
+`QueryClient` is configured with `retry: false`. A failed backend call is an
+answer, not a flaky network; and an ambiguous write is not replayed
+([I-13](../../CLAUDE.md#i-13)). `retryable` comes from the backend, never from
+parsing the message.
 
 ## CSP
 
-La CSP de production est dans `crates/oxyn-desktop/tauri.conf.json` et reste
-stricte. `tauri.dev.json5` la retire **en développement seulement**, parce que Tauri
-y injecte des nonces qui bloquent les scripts inline de Vite : la fenêtre reste
-blanche, sans erreur. Une page blanche en production n'est donc jamais « la CSP à
-relâcher » : c'est un script inline nouveau qu'il faut comprendre.
+The production CSP is in `crates/oxyn-desktop/tauri.conf.json` and stays strict.
+`tauri.dev.json5` removes it **in development only**, because Tauri injects
+nonces there that block Vite's inline scripts: the window stays blank, without
+an error. A blank page in production is therefore never "the CSP to loosen": it
+is a new inline script that needs to be understood.
 
 ## Versions
 
-Exactes dans `package.json`, relevées au registre et datées dans
+Exact in `package.json`, read from the registry and dated in
 [RESEARCH-NOTES](../../docs/RESEARCH-NOTES.md#interface-tauri-et-front)
-([I-12](../../CLAUDE.md#i-12)). `shadcn add` écrit des `^` : les retirer dans le même
-commit. Vitest reste en 4 tant que `@storybook/addon-vitest` n'accepte pas la 5.
+([I-12](../../CLAUDE.md#i-12)). `shadcn add` writes `^`s: remove them in the same
+commit. Vitest stays on 4 as long as `@storybook/addon-vitest` does not accept 5.
 
-## Vérifier
+## Verify
 
 ```bash
-make front          # format, lint, types, tests unitaires et stories, build
-make desktop-dev    # la vraie fenêtre, sur un workspace temporaire
+make front          # format, lint, types, unit tests and stories, build
+make desktop-dev    # the real window, on a temporary workspace
 ```

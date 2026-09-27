@@ -1,21 +1,21 @@
 ---
 name: lire-le-source-des-crates-tauri
-description: Vérifier un comportement de Tauri/muda/wry dans ~/.cargo/registry sans buter sur le hook de secrets ni l'alerte de redirection
+description: Check a Tauri/muda/wry behavior in ~/.cargo/registry without running into the secrets hook or the redirection alert
 metadata:
   type: feedback
 ---
 
-Pour vérifier un défaut de Tauri (menu macOS, permissions, options de webview), lire le
-source de la version de `Cargo.lock` dans `~/.cargo/registry/src/index.crates.io-*/<crate>-<version>`.
+To check a Tauri default (macOS menu, permissions, webview options), read the
+source of the `Cargo.lock` version in `~/.cargo/registry/src/index.crates.io-*/<crate>-<version>`.
 
-- Ne pas faire `cd ~/.cargo/registry/src/*/tauri-x && grep src/...` : le hook refuse
-  (« cd whose target cannot be resolved » + règle `./**/secrets/**`). Mettre le chemin
-  dans une variable : `D=$(ls -d /Users/nicolas/.cargo/registry/src/index.crates.io-*/tauri-2.11.5 | head -1); grep ... $D/src/app.rs`.
-- `awk 'NR>=10 && NR<=20'` et `sed -n` déclenchent l'alerte « redirection / sed modifie en place »
-  du hook (faux positif sur `>=`). Sans effet, mais préférer `Read` avec offset/limit.
-- Sources utiles : `tauri/src/app.rs` (menu par défaut), `tauri/src/menu/menu.rs`,
-  `tauri/permissions/`, `tauri-utils/src/config.rs` (doc des options de fenêtre),
-  `muda/src/platform_impl/macos/mod.rs` (sélecteurs des rôles prédéfinis).
+- Do not do `cd ~/.cargo/registry/src/*/tauri-x && grep src/...`: the hook refuses
+  it ("cd whose target cannot be resolved" + rule `./**/secrets/**`). Put the path
+  in a variable: `D=$(ls -d /Users/nicolas/.cargo/registry/src/index.crates.io-*/tauri-2.11.5 | head -1); grep ... $D/src/app.rs`.
+- `awk 'NR>=10 && NR<=20'` and `sed -n` trigger the hook's "redirection / sed edits in place"
+  alert (false positive on `>=`). Harmless, but prefer `Read` with offset/limit.
+- Useful sources: `tauri/src/app.rs` (default menu), `tauri/src/menu/menu.rs`,
+  `tauri/permissions/`, `tauri-utils/src/config.rs` (doc of the window options),
+  `muda/src/platform_impl/macos/mod.rs` (selectors of the predefined roles).
 
-**Why:** la doc en ligne ne dit pas la version ; le source verrouillé fait foi pour I-12.
-**How to apply:** tout fait Tauri cité dans un ADR se vérifie ainsi, daté, versions de Cargo.lock.
+**Why:** the online doc does not state the version; the locked source is authoritative for I-12.
+**How to apply:** every Tauri fact cited in an ADR is checked this way, dated, with the Cargo.lock versions.

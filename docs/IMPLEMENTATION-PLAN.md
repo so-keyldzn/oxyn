@@ -1864,7 +1864,7 @@ l'interface.**
 et son `DeclaredProvider` porte `kind`, `base_url`, `model`, `key` et `reach` :
 aucun de ces cinq champs n'a de sens pour un agent. Dupliquer la liste, la ligne,
 le focus et la confirmation aurait recopié 400 lignes de parcours, ce que
-[CLAUDE.md](../CLAUDE.md#organisation-du-code) interdit.
+[CLAUDE.md](../CLAUDE.md#code-organization) interdit.
 
 La voie prise est celle que la règle d'interface prescrit — « le calcul sort, la
 vue dessine ». `row_display` rend, pour les deux sortes, **les mêmes six champs
@@ -2315,7 +2315,7 @@ par l'API Plugin, en lecture seule. **Les neuf planches sont donc confrontées.*
   — n'a pas été levée, et elle n'a pas été contournée. « UI native » reste donc
   **non tenu**, et aucun test GPUI headless ne le remplace : le harnais installe
   une métrique de texte déterministe *et* fausse
-  ([tests.md](../.claude/rules/tests.md#les-tests-dinterface)).
+  ([tests.md](../.claude/rules/tests.md#interface-tests)).
 - Les questions ci-dessous, qui demandent un arbitrage.
 
 ## Questions ouvertes — non tranchées

@@ -82,7 +82,7 @@ vraie sans réserve.
 *Coût* : `AgentContext` a été conçu pour une conversation à outils — il porte le
 schéma, les capacités, le dialecte. Un agent externe n'en a l'usage d'aucun : il
 ne reçoit qu'un texte. Faire passer un contexte riche là où une phrase suffit est
-le genre d'abstraction que [CLAUDE.md](../../CLAUDE.md#organisation-du-code)
+le genre d'abstraction que [CLAUDE.md](../../CLAUDE.md#code-organization)
 déconseille — « pas d'abstraction pour un seul appelant ».
 
 ### B — Un type d'invite dédié, mince, produit par la même porte

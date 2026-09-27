@@ -1,39 +1,41 @@
 ---
 name: tabslist-line-souligne-coupe
-description: Un TabsList shadcn variant="line" avec overflow-x-auto perd son soulignement d'onglet actif, et un h-* passé en className ne gagne pas contre le défaut du composant
+description: A shadcn TabsList variant="line" with overflow-x-auto loses its active tab underline, and an h-* passed in className does not win against the component's default
 metadata:
   type: feedback
 ---
 
-Deux pièges du `TabsList` généré (`components/ui/tabs.tsx`, Base UI), qui se
-manifestent ensemble et ne cassent aucun test :
+Two traps of the generated `TabsList` (`components/ui/tabs.tsx`, Base UI), which
+show up together and break no test:
 
-**1. `variant="line"` dessine le repère d'onglet actif en `after:bottom-[-5px]`,
-donc *hors* de la boîte du `TabsList`.** Ajouter `overflow-x-auto` pour faire
-défiler une barre d'onglets rend aussi l'axe vertical scrollable (CSS : si un
-axe n'est pas `visible`, `visible` devient `auto`) et **coupe le soulignement**.
-L'onglet actif n'a alors plus aucun repère visible — ni fond ni bordure, le
-variant `line` les mettant à `transparent`. Il faut donner au `TabsList` une
-hauteur qui laisse les ~8 px sous le trigger (p. ex. remplir la barre de 48 px
-plutôt que rester à 32 px).
+**1. `variant="line"` draws the active tab marker with `after:bottom-[-5px]`,
+so *outside* the `TabsList` box.** Adding `overflow-x-auto` to scroll a tab bar
+also makes the vertical axis scrollable (CSS: if one axis is not `visible`,
+`visible` becomes `auto`) and **cuts off the underline**. The active tab then
+has no visible marker at all — neither background nor border, the `line` variant
+setting them to `transparent`. The `TabsList` must be given a height that leaves
+the ~8 px under the trigger (e.g. fill the 48 px bar rather than staying at
+32 px).
 
-**2. Un `h-8` sur le trigger dépasse la boîte de contenu d'un `TabsList` en
-`h-8 p-[3px]`** (26 px utiles) : combiné au point 1, la rangée peut glisser
-verticalement sous le pointeur. Vérifier `list.scrollHeight <= list.clientHeight`.
+**2. An `h-8` on the trigger exceeds the content box of a `TabsList` in
+`h-8 p-[3px]`** (26 useful px): combined with point 1, the row can slide
+vertically under the pointer. Check `list.scrollHeight <= list.clientHeight`.
 
-**Why:** trouvé sur la barre d'onglets du workspace Oxyn ; l'onglet actif n'était
-distinguable que par la graisse du texte, et personne ne l'avait vu parce
-qu'aucune story ne regarde la géométrie du `::after`.
+**Why:** found on the Oxyn workspace tab bar; the active tab could only be told
+apart by the text weight, and nobody had seen it because no story looks at the
+geometry of the `::after`.
 
-**How to apply:** dès qu'on met `overflow-x-auto` sur un `TabsList variant="line"`,
-écrire une story qui assert `trigger.bottom + 5 + 2 < list.bottom` **et**
+**How to apply:** as soon as `overflow-x-auto` is put on a
+`TabsList variant="line"`, write a story that asserts
+`trigger.bottom + 5 + 2 < list.bottom` **and**
 `list.scrollHeight <= list.clientHeight`.
 
-**Le corollaire tailwind-merge :** le défaut vient de la cva sous le variant
-`group-data-horizontal/tabs:h-8`. Un `h-12` nu dans `className` ne le remplace
-pas — tailwind-merge les traite comme deux clés différentes et la spécificité
-CSS (`.group[data-orientation=horizontal] .h-8`, 0-2-1) l'emporte sur `.h-12`
-(0-1-0). L'override doit **porter le même variant** : `group-data-horizontal/tabs:h-12`.
-Vaut pour tout utilitaire que le composant généré pose déjà sous un variant.
+**The tailwind-merge corollary:** the default comes from the cva under the
+`group-data-horizontal/tabs:h-8` variant. A bare `h-12` in `className` does not
+replace it — tailwind-merge treats them as two different keys and CSS
+specificity (`.group[data-orientation=horizontal] .h-8`, 0-2-1) wins over `.h-12`
+(0-1-0). The override must **carry the same variant**:
+`group-data-horizontal/tabs:h-12`. Applies to any utility the generated
+component already sets under a variant.
 
-Voir [[userevent-escape-nattend-pas-un-trigger-base-ui]].
+See [[userevent-escape-nattend-pas-un-trigger-base-ui]].

@@ -1,2 +1,2 @@
-- [Mesurer sur cette machine](mesurer-sur-cette-machine.md) — la charge moyenne ment ; criterion sans `--bench` ne mesure rien ; échantillonnage plat au-delà de 100 ms/itération
-- [Périmètre de cargo fmt](perimetre-cargo-fmt.md) — `cargo fmt -p`, jamais `--all` : d'autres agents éditent le dépôt en même temps
+- [Measuring on this machine](mesurer-sur-cette-machine.md) — the load average lies; criterion without `--bench` measures nothing; flat sampling beyond 100 ms/iteration
+- [Scope of cargo fmt](perimetre-cargo-fmt.md) — `cargo fmt -p`, never `--all`: other agents edit the repository at the same time

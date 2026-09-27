@@ -1,53 +1,51 @@
 ---
-description: Préparer un plan d'implémentation avant d'écrire du code
-argument-hint: "<ce qu'il faut construire>"
+description: Prepare an implementation plan before writing code
+argument-hint: "<what to build>"
 allowed-tools: Bash, Read, Grep, Glob, WebFetch, Agent
 ---
 
-Objet : planifier **$ARGUMENTS**. Ne rien écrire dans `crates/` pendant cette
-commande.
+Purpose: plan **$ARGUMENTS**. Write nothing in `crates/` during this command.
 
-## Avant de planifier
+## Before planning
 
-1. `docs/IMPLEMENTATION-PLAN.md` — dans quelle phase ceci tombe-t-il, et la
-   phase précédente a-t-elle passé sa porte de sortie ?
-2. Les documents d'autorité concernés par la frontière touchée
-   (`docs/README.md` donne la correspondance).
-3. `ls docs/adr/` — une décision existante contraint-elle déjà ce travail ?
+1. `docs/IMPLEMENTATION-PLAN.md` — which phase does this fall into, and has the
+   previous phase passed its exit gate?
+2. The authoritative documents concerned by the boundary touched
+   (`docs/README.md` gives the mapping).
+3. `ls docs/adr/` — does an existing decision already constrain this work?
 
-## Ce que le plan doit trancher
+## What the plan must settle
 
-| Question | Pourquoi elle vient avant le code |
+| Question | Why it comes before the code |
 |---|---|
-| Quelle **crate** ? | le sens des dépendances interdit certaines réponses ; le découvrir en codant coûte un déplacement |
-| Faut-il une nouvelle **commande** du bus ? | une fonctionnalité commence par une commande, pas par une vue |
-| Quels **invariants** sont en jeu ? | les nommer maintenant, pas les découvrir en revue |
-| Qu'est-ce qui n'est **pas** tranché ? | un point non tranché se règle par un ADR, pas au fil de l'implémentation |
-| Comment saura-t-on que c'est **fini** ? | sans critère écrit, « fini » veut dire « je n'ai plus d'idées » |
+| Which **crate**? | the direction of dependencies forbids some answers; finding out while coding costs a move |
+| Is a new bus **command** needed? | a feature starts with a command, not with a view |
+| Which **invariants** are at stake? | name them now, not discover them in review |
+| What is **not** settled? | an unsettled point is resolved by an ADR, not along the way during implementation |
+| How will we know it is **done**? | without a written criterion, "done" means "I have no more ideas" |
 
-## Ce qui doit remonter comme une décision, pas comme un détail
+## What must come up as a decision, not as a detail
 
-Si le plan touche l'un de ces points, il s'arrête et propose un ADR
-([`/adr`](adr.md)) :
+If the plan touches one of these points, it stops and proposes an ADR
+([`/adr`](adr.md)):
 
-- le sens des dépendances entre crates ;
-- ce qui traverse une frontière externe
-  (`docs/ARCHITECTURE.md` § les frontières externes) ;
-- un format persisté ([I-11](../../CLAUDE.md#i-11)) ;
-- une nouvelle dépendance directe engageant l'architecture ;
-- un budget de `docs/PERFORMANCE.md` qu'on ne peut pas tenir.
+- the direction of dependencies between crates;
+- what crosses an external boundary
+  (`docs/ARCHITECTURE.md` § the external boundaries);
+- a persisted format ([I-11](../../CLAUDE.md#i-11));
+- a new direct dependency that commits the architecture;
+- a budget of `docs/PERFORMANCE.md` that cannot be met.
 
-## Le piège
+## The trap
 
-**Le plan qui décrit des fichiers au lieu de décrire des décisions.** « Créer
-`mod.rs`, ajouter une struct, écrire un test » n'est pas un plan : c'est une
-liste de gestes qui suppose que tout est déjà tranché. Le plan sert à trouver ce
-qui ne l'est pas.
+**The plan that describes files instead of decisions.** "Create `mod.rs`, add a
+struct, write a test" is not a plan: it is a list of moves that assumes
+everything is already settled. The plan is there to find what is not.
 
-## Livrable
+## Deliverable
 
-Une note courte : la crate visée, les commandes du bus concernées, les
-invariants en jeu, les points non tranchés, le critère de fin. Pas de code.
+A short note: the target crate, the bus commands concerned, the invariants at
+stake, the unsettled points, the completion criterion. No code.
 
-Pour une exploration large du dépôt, déléguer à un agent plutôt que remplir le
-contexte de lectures — mais le plan, lui, se décide ici.
+For a broad exploration of the repository, delegate to an agent rather than
+filling the context with reads — but the plan itself is decided here.

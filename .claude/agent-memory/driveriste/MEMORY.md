@@ -1,6 +1,6 @@
-# Mémoire — driveriste
+# Memory — driveriste
 
-- [Cluster PostgreSQL jetable](outil-cluster-postgres-jetable.md) — le recréer (initdb, `-k ''`), rôle `oxyn_test`, les tests rouges qui ne sont pas des régressions
-- [Annulation mal ciblée, fenêtre reproductible](piege-annulation-fenetre-deterministe.md) — drapeau `sqlite3_interrupt` par connexion, pid réutilisé par le bassin, verrous consultatifs et `ClientWrite` en test
-- [Bassin PostgreSQL et cache sqlx](piege-bassin-postgres-et-cache-sqlx.md) — forcer plusieurs connexions dans un test, connexion abandonnée = connexion fermée, préparation servie par le cache
-- [SQL composé autour du texte de l'utilisateur](piege-sql-compose-autour-du-texte-utilisateur.md) — saut de ligne contre le `--`, parenthèses contre le `/*` non fermé, et le `;` qui s'exécute vraiment en SQLite
+- [Disposable PostgreSQL cluster](outil-cluster-postgres-jetable.md) — recreate it (initdb, `-k ''`), `oxyn_test` role, the red tests that are not regressions
+- [Mistargeted cancellation, reproducible window](piege-annulation-fenetre-deterministe.md) — per-connection `sqlite3_interrupt` flag, pid reused by the pool, advisory locks and `ClientWrite` in tests
+- [PostgreSQL pool and sqlx cache](piege-bassin-postgres-et-cache-sqlx.md) — force several connections in a test, abandoned connection = closed connection, preparation served by the cache
+- [SQL composed around the user's text](piege-sql-compose-autour-du-texte-utilisateur.md) — newline against `--`, parentheses against an unclosed `/*`, and the `;` that really runs in SQLite

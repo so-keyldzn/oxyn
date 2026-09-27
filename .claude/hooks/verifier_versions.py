@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Compare les versions citées dans docs/RESEARCH-NOTES.md avec le registre.
+"""Compare the versions cited in docs/RESEARCH-NOTES.md with the registry.
 
-Ce n'est pas un hook : c'est l'outil qui rend l'invariant I-12 praticable.
-Il ne modifie rien — décider d'une montée de version appartient à un humain.
+This is not a hook: it is the tool that makes invariant I-12 practical. It
+modifies nothing — deciding on an upgrade belongs to a human.
 
     python3 .claude/hooks/verifier_versions.py
 """
@@ -50,7 +50,7 @@ def version_rust_stable() -> str | None:
 
 
 def versions_citees() -> dict[str, str]:
-    """Les lignes de tableau `| \\`crate\\` | \\`x.y.z\\` |` de RESEARCH-NOTES."""
+    """The `| \\`crate\\` | \\`x.y.z\\` |` table rows of RESEARCH-NOTES."""
     if not NOTES.exists():
         return {}
     citees: dict[str, str] = {}
@@ -64,31 +64,31 @@ def versions_citees() -> dict[str, str]:
 def principal() -> int:
     citees = versions_citees()
     if not citees:
-        print("Aucune version citée dans docs/RESEARCH-NOTES.md.", file=sys.stderr)
+        print("No version cited in docs/RESEARCH-NOTES.md.", file=sys.stderr)
         return 1
 
     ecarts = 0
-    print(f"{'crate':<14} {'cité':<14} {'registre':<14} état")
+    print(f"{'crate':<14} {'cited':<14} {'registry':<14} status")
     print("-" * 56)
     for nom, citee in sorted(citees.items()):
         amont = version_crate(nom)
         if amont is None:
-            print(f"{nom:<14} {citee:<14} {'?':<14} registre injoignable")
+            print(f"{nom:<14} {citee:<14} {'?':<14} registry unreachable")
             continue
-        etat = "à jour" if amont == citee else "ÉCART"
-        if etat == "ÉCART":
+        etat = "up to date" if amont == citee else "MISMATCH"
+        if etat == "MISMATCH":
             ecarts += 1
         print(f"{nom:<14} {citee:<14} {amont:<14} {etat}")
 
     stable = version_rust_stable()
     if stable:
-        print(f"\nRust stable au registre : {stable}")
+        print(f"\nRust stable in the registry: {stable}")
 
     if ecarts:
         print(
-            f"\n{ecarts} écart(s). Ce n'est pas une erreur : une version citée "
-            "peut être délibérément figée. Mettre à jour docs/RESEARCH-NOTES.md "
-            "avec la date du jour, ou justifier l'écart sur place.",
+            f"\n{ecarts} mismatch(es). This is not an error: a cited version "
+            "may be deliberately frozen. Update docs/RESEARCH-NOTES.md with "
+            "today's date, or justify the mismatch in place.",
         )
     return 0
 

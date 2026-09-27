@@ -1,1 +1,1 @@
-- [Vérifier avant de corriger](feedback_verifier_avant_corriger.md) — re-vérifier tout constat dans le code ; signaler sans trancher ce qui oppose deux documents d'autorité
+- [Check before fixing](feedback_verifier_avant_corriger.md) — re-check every finding in the code; report without settling what sets two authoritative documents against each other

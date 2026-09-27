@@ -1,54 +1,56 @@
-# Fin de tâche
+# End of task
 
-Ce qui doit être vrai avant d'annoncer qu'une tâche est terminée.
+What must be true before announcing that a task is done.
 
-**Une tâche annoncée comme faite sans que `make qualite` soit passé est une tâche
-non vérifiée.** Ne jamais annoncer vert un contrôle qui n'a pas été lancé.
+**A task announced as done without `make qualite` having passed is an
+unverified task.** Never announce green a check that was not run.
 
-## La porte
+## The gate
 
-- [ ] `make qualite` passe — format, clippy en `-D warnings`, tests,
+- [ ] `make qualite` passes — format, clippy with `-D warnings`, tests,
       documentation
-- [ ] Aucun avertissement laissé « pour plus tard »
+- [ ] No warning left "for later"
 
-Si `Cargo.toml` n'existe pas encore, `make qualite` le **dit** et ne prétend pas
-au succès complet. Lire sa sortie plutôt que son code de retour.
+If `Cargo.toml` does not exist yet, `make qualite` **says so** and does not
+claim full success. Read its output rather than its exit code.
 
 ## Invariants
 
-- [ ] `relecteur-invariants` lancé sur le changement, rien de bloquant
-- [ ] Si une frontière externe est touchée : `relecteur-frontiere`
-- [ ] Si des secrets, du `unsafe` ou l'IA sont touchés : `relecteur-securite`
+- [ ] `relecteur-invariants` run on the change, nothing blocking
+- [ ] If an external boundary is touched: `relecteur-frontiere`
+- [ ] If secrets, `unsafe` or AI are touched: `relecteur-securite`
 
 ## Documentation
 
-- [ ] Aucun document de `docs/` rendu faux par ce changement — sinon c'est un bug
-      à corriger dans le **même** commit
-- [ ] Toute décision structurante prise en chemin a son ADR
-- [ ] Toute version externe ajoutée est dans `docs/RESEARCH-NOTES.md`, avec sa
+- [ ] No document of `docs/` made wrong by this change — otherwise it is a bug
+      to fix in the **same** commit
+- [ ] Every structuring decision taken along the way has its ADR
+- [ ] Every external version added is in `docs/RESEARCH-NOTES.md`, with its
       date
-- [ ] `make socle` passe
+- [ ] An English file that has a French mirror in `i18n/fr/`: the mirror is
+      updated, or the pull request says who will update it
+- [ ] `make socle` passes
 
-## Hygiène
+## Hygiene
 
-- [ ] Aucun code mort, aucun code commenté « au cas où »
-- [ ] Aucun `TODO` sans date ni sans ce qui le débloque
-- [ ] Aucune abstraction pour un seul appelant
-- [ ] Aucun module ou crate au nom fourre-tout
-- [ ] Les commentaires disent *pourquoi*, pas ce que le code dit déjà
+- [ ] No dead code, no code commented out "just in case"
+- [ ] No `TODO` without a date and without what unblocks it
+- [ ] No abstraction for a single caller
+- [ ] No module or crate with a catch-all name
+- [ ] Comments say *why*, not what the code already says
 
 ## Commit
 
-- [ ] Format `type(portee): sujet`, en français, minuscule, sans point final,
-      72 caractères maximum
-- [ ] Si le changement est une optimisation : le chiffre avant et après est dans
-      le message
-- [ ] Aucun `--no-verify`
+- [ ] Format `type(scope): subject`, in English, imperative, lowercase, no
+      trailing period, 72 characters maximum
+- [ ] If the change is an optimization: the before and after figures are in the
+      message
+- [ ] No `--no-verify`
 
-## Ce qu'il faut dire dans le rapport
+## What to say in the report
 
-- ce qui a été **réellement vérifié**, et par quelle commande ;
-- ce qui reste ouvert : les doutes, les pièges soupçonnés sans être confirmés ;
-- ce qui a été laissé de côté, et pourquoi.
+- what was **actually verified**, and by which command;
+- what remains open: doubts, traps suspected without being confirmed;
+- what was left aside, and why.
 
-Un doute signalé vaut mieux qu'une certitude fabriquée.
+A reported doubt is worth more than a fabricated certainty.

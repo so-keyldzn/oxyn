@@ -1,23 +1,23 @@
 ---
 name: piege-reqwest-delai-de-connexion
-description: reqwest marque un délai de connexion à la fois is_connect() et is_timeout() — tester is_timeout() d'abord classe ambigu ce qui n'est jamais parti
+description: reqwest marks a connect timeout as both is_connect() and is_timeout() — testing is_timeout() first classifies as ambiguous what never left
 metadata:
   type: reference
 ---
 
-Dans reqwest 0.13.4, `connect_timeout` est appliqué **dans le connecteur**
-(`src/connect.rs`, `crate::error::TimedOut`), et hyper-util enveloppe toute erreur
-de connecteur en `ErrorKind::Connect`. Une erreur de délai de connexion répond donc
-`is_connect() == true` **et** `is_timeout() == true`. Un délai `.timeout()` global
-expiré après l'envoi répond `is_timeout()` seul.
+In reqwest 0.13.4, `connect_timeout` is applied **in the connector**
+(`src/connect.rs`, `crate::error::TimedOut`), and hyper-util wraps every
+connector error as `ErrorKind::Connect`. A connect timeout error therefore
+answers `is_connect() == true` **and** `is_timeout() == true`. A global
+`.timeout()` expired after sending answers `is_timeout()` alone.
 
-**Why:** l'ordre des tests décide de la famille d'erreur (I-13). `is_timeout()` en
-premier classe « ambigu, peut-être facturé » une requête qui n'a jamais quitté la
-machine ; l'inverse rend rejouable une requête partie.
+**Why:** the order of the tests decides the error family (I-13). `is_timeout()`
+first classifies as "ambiguous, maybe billed" a request that never left the
+machine; the reverse makes a request that left replayable.
 
-**How to apply:** toujours `is_connect()` avant `is_timeout()`. Re-vérifier dans les
-sources du registre (`~/.cargo/registry/src/*/reqwest-*/src/error.rs`, `connect.rs`)
-à chaque montée de reqwest. Un délai de connexion ne se provoque pas sans réseau
-(il faut un SYN sans réponse) : un test local ne couvre que le refus et le délai de
-réponse. `#[tokio::test]` compile dans `oxyn-llm` grâce aux fonctionnalités tokio
-tirées par reqwest/hyper-util, pas par son propre manifeste.
+**How to apply:** always `is_connect()` before `is_timeout()`. Re-check in the
+registry sources (`~/.cargo/registry/src/*/reqwest-*/src/error.rs`, `connect.rs`)
+at every reqwest upgrade. A connect timeout cannot be provoked without a network
+(it needs a SYN without an answer): a local test only covers refusal and
+response timeout. `#[tokio::test]` compiles in `oxyn-llm` thanks to the tokio
+features pulled in by reqwest/hyper-util, not by its own manifest.

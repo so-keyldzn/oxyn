@@ -1,30 +1,30 @@
-- [cn supprime les tailles de thème](cn-supprime-les-tailles-de-theme.md) — `text-caption` est lu comme une couleur et avalé : écrire `text-[length:var(--reading-caption)]`
-- [Première story, démarrage à froid](premiere-story-paie-le-demarrage-a-froid.md) — axe et les `import()` tombent dans son budget : `preloadBeforeStories`, pas un timeout
-- [Stories instables sous charge](stories-instables-sous-charge.md) — un échec de story sur une animation Base UI se relance avant d'être pris pour une régression
-- [TabsList line : soulignement coupé](tabslist-line-souligne-coupe.md) — `variant="line"` avec `overflow-x-auto` perd le soulignement de l'onglet actif, et un `h-*` en `className` ne gagne pas contre le défaut
-- [userEvent Escape n'atteint pas un trigger Base UI](userevent-escape-nattend-pas-un-trigger-base-ui.md) — dans un `play`, `{Escape}` sur un `TooltipTrigger` ne déclenche aucun `onKeyDown`, là où une vraie touche marche
-- [Écritures par le shell](outillage-ecritures-par-le-shell.md) — `cat > … <<EOF` déclenche l'arbitrage du hook : utiliser Write/Edit
-- [Éprouver un schéma hors du dépôt](eprouver-un-schema-hors-du-depot.md) — un script Node dans le scratchpad ne résout pas `zod` : importer par chemin absolu depuis `.pnpm`
-- [z.discriminatedUnion veut un tuple](zod-discriminated-union-veut-un-tuple.md) — un `.map()` sur `.options` échoue au typecheck (TS2345)
-- [Région défilante sans focus](axe-region-defilante-sans-focus.md) — `overflow-*` sans contrôle dedans fait échouer axe en mode `error` ; `tabIndex={0}`
-- [Vérifier un nom d'icône Hugeicons](verifier-un-nom-dicone-hugeicons.md) — `require()` rend tout « manquant » ; grepper `dist/types/index.d.ts`
-- [Pièges de la porte front](pieges-de-la-porte-front.md) — ordre prettier → tsc → eslint → vitest ; gardes de focus Base UI, Tooltip qui remonte, `InputGroup` terni
-- [Un non argumenté plutôt qu'un composant de plus](non-argumente-plutot-que-composant-de-plus.md) — refuser un doublon de geste, et ne jamais dessiner une prop sans source vérifiée
-- [Mémoire à la racine du dépôt](memoire-a-la-racine-du-depot.md) — l'écrire sous `apps/desktop` la soumet à prettier et fait échouer `make qualite`
-- [axe ne teste pas le contraste non textuel](axe-ne-teste-pas-le-contraste-non-textuel.md) — garde dans `theme-contrast.stories.tsx` ; mesurer par canvas, jamais par regex sur `rgba()`
-- [Passe visuelle sans serveur](passe-visuelle-sans-serveur.md) — build statique + Playwright qui s'arrête seul ; le clair et les largeurs échappent aux stories
-- [wrap-anywhere dans une grille](wrap-anywhere-dans-une-grille.md) — `break-words` n'abaisse pas la min-content : un long identifiant élargit la page
-- [Couleurs calculées en OKLCH](couleurs-calculees-en-oklch.md) — `getComputedStyle` rend `oklch(...)` : mesurer par canvas, jamais par regex `rgb()` ; vérifier un statut sur sa propre teinte
-- [prettier écrit un octet NUL](prettier-ecrit-un-octet-nul.md) — `"\u0000"` dans une chaîne TS devient un NUL réel dans le source
-- [Spinner et nom du bouton](spinner-change-le-nom-du-bouton.md) — un `Spinner` dans un `Button` ajoute « Loading » au nom : chercher par `/Declare$/`
-- [Spinner porte role="status"](spinner-porte-role-status.md) — chaque spinner visible est une région live : `aria-hidden` à côté d'un libellé
-- [Port Vitest partagé](port-vitest-browser-partage.md) — « Port 63315 already in use » + « no tests » : un autre agent teste, relancer
-- [Lexical dans les stories](lexical-dans-les-stories.md) — `type` marche, `toHaveValue` non ; le menu typeahead réécrit son `aria-label` à chaque frappe
-- [Puce inline : ligne de base](puce-inline-ligne-de-base.md) — une icône SVG en premier enfant d'un inline-flex fait flotter la puce : texte seul en `self-baseline`
-- [Requête désactivée = pending](query-desactivee-est-pending.md) — `enabled: false` reste `isPending` : « en cours » = `fetchStatus !== "idle"`
-- [Blocs charts shadcn](blocs-charts-shadcn-registre.md) — les `chart-*` de la galerie ne sont que sous new-york-v4 ; `shadcn view` échoue en base-nova
-- [Select Base UI et axe](select-base-ui-listbox-sans-nom-axe.md) — attendre la fermeture de la listbox avant la fin du play, sinon aria-input-field-name
-- [base-ui-menus-contextuels-imbriques](base-ui-menus-contextuels-imbriques.md) — Base UI ContextMenu.Trigger arrête la propagation de contextmenu — des menus imbriqués (bloc de code dans une réponse, puce dans une question) s'ouvrent au plus profond, sans code en plus
-- [menu-rend-le-focus](menu-rend-le-focus.md) — Un menu Base UI rend le focus à son déclencheur après l'animation de fermeture, par-dessus un focus donné par le handler d'une entrée
-- [pieges-context-menu-et-stories](pieges-context-menu-et-stories.md) — Pièges d'outillage Base UI ContextMenu (select-none, refus d'ouverture) et Storybook (vi absent, dialogue animé, pointer coords)
-- [story-menu-ouvert-axe](story-menu-ouvert-axe.md) — Une story qui finit avec un menu Base UI encore ouvert ou en fermeture échoue sur axe (aria-hidden-focus des focus guards)
+- [cn drops theme sizes](cn-supprime-les-tailles-de-theme.md) — `text-caption` is read as a color and swallowed: write `text-[length:var(--reading-caption)]`
+- [First story, cold start](premiere-story-paie-le-demarrage-a-froid.md) — axe and the `import()`s fall into its budget: `preloadBeforeStories`, not a timeout
+- [Stories unstable under load](stories-instables-sous-charge.md) — a story failure on a Base UI animation is rerun before being taken for a regression
+- [TabsList line: underline cut off](tabslist-line-souligne-coupe.md) — `variant="line"` with `overflow-x-auto` loses the active tab's underline, and an `h-*` in `className` does not win against the default
+- [userEvent Escape does not reach a Base UI trigger](userevent-escape-nattend-pas-un-trigger-base-ui.md) — in a `play`, `{Escape}` on a `TooltipTrigger` triggers no `onKeyDown`, where a real key works
+- [Writes through the shell](outillage-ecritures-par-le-shell.md) — `cat > … <<EOF` triggers the hook's arbitration: use Write/Edit
+- [Testing a schema outside the repository](eprouver-un-schema-hors-du-depot.md) — a Node script in the scratchpad does not resolve `zod`: import by absolute path from `.pnpm`
+- [z.discriminatedUnion wants a tuple](zod-discriminated-union-veut-un-tuple.md) — a `.map()` over `.options` fails the typecheck (TS2345)
+- [Scrolling region without focus](axe-region-defilante-sans-focus.md) — `overflow-*` without a control inside makes axe fail in `error` mode; `tabIndex={0}`
+- [Checking a Hugeicons icon name](verifier-un-nom-dicone-hugeicons.md) — `require()` returns everything "missing"; grep `dist/types/index.d.ts`
+- [Front gate traps](pieges-de-la-porte-front.md) — order prettier → tsc → eslint → vitest; Base UI focus guards, Tooltip that remounts, dimmed `InputGroup`
+- [A reasoned no rather than one more component](non-argumente-plutot-que-composant-de-plus.md) — refuse a duplicated gesture, and never design a prop without a checked source
+- [Memory at the repository root](memoire-a-la-racine-du-depot.md) — writing it under `apps/desktop` subjects it to prettier and makes `make qualite` fail
+- [axe does not test non-text contrast](axe-ne-teste-pas-le-contraste-non-textuel.md) — guard in `theme-contrast.stories.tsx`; measure through a canvas, never with a regex on `rgba()`
+- [Visual pass without a server](passe-visuelle-sans-serveur.md) — static build + Playwright that stops on its own; light mode and widths escape the stories
+- [wrap-anywhere in a grid](wrap-anywhere-dans-une-grille.md) — `break-words` does not lower min-content: a long identifier widens the page
+- [Colors computed in OKLCH](couleurs-calculees-en-oklch.md) — `getComputedStyle` returns `oklch(...)`: measure through a canvas, never with an `rgb()` regex; check a status on its own tint
+- [prettier writes a NUL byte](prettier-ecrit-un-octet-nul.md) — `"\u0000"` in a TS string becomes a real NUL in the source
+- [Spinner and button name](spinner-change-le-nom-du-bouton.md) — a `Spinner` in a `Button` adds "Loading" to the name: search with `/Declare$/`
+- [Spinner carries role="status"](spinner-porte-role-status.md) — every visible spinner is a live region: `aria-hidden` next to a label
+- [Shared Vitest port](port-vitest-browser-partage.md) — "Port 63315 already in use" + "no tests": another agent is testing, rerun
+- [Lexical in stories](lexical-dans-les-stories.md) — `type` works, `toHaveValue` does not; the typeahead menu rewrites its `aria-label` at every keystroke
+- [Inline chip: baseline](puce-inline-ligne-de-base.md) — an SVG icon as first child of an inline-flex makes the chip float: text alone with `self-baseline`
+- [Disabled query = pending](query-desactivee-est-pending.md) — `enabled: false` stays `isPending`: "in progress" = `fetchStatus !== "idle"`
+- [shadcn chart blocks](blocs-charts-shadcn-registre.md) — the gallery's `chart-*` are only under new-york-v4; `shadcn view` fails in base-nova
+- [Base UI Select and axe](select-base-ui-listbox-sans-nom-axe.md) — wait for the listbox to close before the end of the play, otherwise aria-input-field-name
+- [base-ui-menus-contextuels-imbriques](base-ui-menus-contextuels-imbriques.md) — Base UI ContextMenu.Trigger stops the propagation of contextmenu — nested menus (code block in an answer, chip in a question) open at the deepest level, with no extra code
+- [menu-rend-le-focus](menu-rend-le-focus.md) — A Base UI menu gives focus back to its trigger after the closing animation, overriding a focus given by an item's handler
+- [pieges-context-menu-et-stories](pieges-context-menu-et-stories.md) — Tooling traps of Base UI ContextMenu (select-none, refusing to open) and Storybook (vi missing, animated dialog, pointer coords)
+- [story-menu-ouvert-axe](story-menu-ouvert-axe.md) — A story that ends with a Base UI menu still open or closing fails on axe (aria-hidden-focus of the focus guards)

@@ -1,12 +1,12 @@
 ---
 name: piege-methode-par-defaut-non-relayee
-description: Ajouter une méthode à défaut à un trait (async_trait compris) — les impl qui enveloppent un autre implémenteur ne la relaient pas, et rien ne l'annonce
+description: Adding a default method to a trait (async_trait included) — impls that wrap another implementor do not forward it, and nothing announces it
 metadata:
   type: feedback
 ---
 
-Une méthode ajoutée **avec un corps par défaut** à un trait déjà implémenté compile partout sans un avertissement. Une impl qui **enveloppe** un autre implémenteur (un garde, un décorateur, un puits qui délègue à `inner`) hérite alors du défaut au lieu de déléguer : l'appel s'arrête à l'enveloppe, et l'implémentation réelle derrière n'est jamais atteinte.
+A method added **with a default body** to an already implemented trait compiles everywhere without a warning. An impl that **wraps** another implementor (a guard, a decorator, a sink delegating to `inner`) then inherits the default instead of delegating: the call stops at the wrapper, and the real implementation behind it is never reached.
 
-**Why:** constaté le 2026-09-24 : un test passant par une enveloppe recevait le refus du défaut alors que l'implémentation testée répondait autre chose. Ni `cargo build`, ni clippy, ni les tests qui appelaient l'implémentation directement ne l'ont vu — seul un test de bout en bout à travers l'enveloppe.
+**Why:** observed on 2026-09-24: a test going through a wrapper received the default's refusal while the tested implementation answered something else. Neither `cargo build`, nor clippy, nor the tests calling the implementation directly saw it — only an end-to-end test through the wrapper.
 
-**How to apply:** avant d'ajouter une méthode à défaut, lister les implémenteurs (`grep -rn "impl <Trait> for"`) et relayer explicitement dans chaque enveloppe ; puis écrire au moins un test qui traverse l'enveloppe, pas seulement l'implémentation.
+**How to apply:** before adding a default method, list the implementors (`grep -rn "impl <Trait> for"`) and forward explicitly in each wrapper; then write at least one test that goes through the wrapper, not just the implementation.

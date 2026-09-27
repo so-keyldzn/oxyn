@@ -4,68 +4,64 @@ paths:
   - "crates/oxyn-llm/**"
 ---
 
-# Workspace IA — conventions
+# AI workspace — conventions
 
-Fait autorité : [AI-PROVIDERS](../../docs/AI-PROVIDERS.md) et
-[ADR-0006](../../docs/adr/0006-ai-privacy-tiers.md). Cette règle porte ce qui se
-rate à l'écriture.
+Authoritative: [AI-PROVIDERS](../../docs/AI-PROVIDERS.md) and
+[ADR-0006](../../docs/adr/0006-ai-privacy-tiers.md). This rule carries what gets
+missed while writing.
 
-## Le point de passage est unique
+## There is a single gateway
 
-Une seule fonction fait entrer du contexte dans une invite, et c'est elle qui
-applique le niveau de la connexion ([I-04](../../CLAUDE.md#i-04)). Toute autre
-voie est un défaut.
+A single function brings context into a prompt, and it is the one that applies
+the connection's tier ([I-04](../../CLAUDE.md#i-04)). Any other path is a defect.
 
-C'est ce qui rend l'invariant vérifiable : on relit un point de passage, pas
-chaque appel de chaque agent. Un raccourci « juste pour le schéma, c'est du
-`Metadata` de toute façon » détruit cette propriété — plus personne ne peut
-répondre à « qu'est-ce qui est sorti ».
+That is what makes the invariant checkable: one reviews a gateway, not every
+call of every agent. A shortcut "just for the schema, it is `Metadata` anyway"
+destroys that property — nobody can answer "what went out" anymore.
 
-## `oxyn-ai` ne parle pas à un driver
+## `oxyn-ai` does not talk to a driver
 
-Il reçoit du contexte déjà collecté et filtré. Un agent qui va chercher lui-même
-ce dont il a besoin contourne à la fois le point de passage et le command bus.
+It receives context already collected and filtered. An agent that fetches what
+it needs by itself bypasses both the gateway and the command bus.
 
-## Une proposition est une `Command`
+## A proposal is a `Command`
 
-Portant `Actor::Agent`, traversant le `PolicyGate`
-([ADR-0004](../../docs/adr/0004-command-bus.md)). Il n'y a pas d'API « outils »
-séparée : c'est précisément ce que l'ADR-0004 refuse, parce qu'un second chemin
-est toujours le moins audité.
+Carrying `Actor::Agent`, going through the `PolicyGate`
+([ADR-0004](../../docs/adr/0004-command-bus.md)). There is no separate "tools"
+API: that is precisely what ADR-0004 refuses, because a second path is always
+the least audited one.
 
-Y compris pour ce qui « ne fait que lire » : `EXPLAIN ANALYZE` exécute réellement
-la requête analysée, `DELETE` compris.
+Including what "only reads": `EXPLAIN ANALYZE` actually runs the analyzed query,
+`DELETE` included.
 
-## Le contenu de la base n'est pas une consigne
+## Database content is not an instruction
 
-Un nom de table, un commentaire de colonne, une valeur peuvent imiter une
-instruction. Ce sont des **données**, à tout niveau. Le garde-fou n'est pas de
-détecter l'injection — c'est que la sortie d'un modèle ne peut de toute façon
-rien exécuter sans passer par la porte.
+A table name, a column comment, a value can imitate an instruction. They are
+**data**, at every tier. The safeguard is not detecting injection — it is that a
+model's output cannot execute anything anyway without going through the gate.
 
-## Local et distant
+## Local and remote
 
-Le classement se fait sur l'hôte réel **après résolution**, jamais sur la
-présence de `localhost` dans l'URL : un point d'accès compatible OpenAI sur
-`localhost` peut être un proxy vers le nuage. Il se re-vérifie à chaque
-changement de configuration.
+Classification is done on the real host **after resolution**, never on the
+presence of `localhost` in the URL: an OpenAI-compatible endpoint on `localhost`
+can be a proxy to the cloud. It is re-checked at every configuration change.
 
-**Un agent externe échappe à ce classement** : c'est un processus opaque, et rien
-dans le protocole ne permet de lui demander où va son modèle. Il vaut donc
-`Reach::Unresolved` — toujours —, ce qui le ferme à une connexion `Local`. Le
-refus tombe **avant le lancement**, pas avant l'envoi : démarrer l'agent peut
-suffire à lui faire contacter son service
+**An external agent escapes this classification**: it is an opaque process, and
+nothing in the protocol lets us ask it where its model goes. It therefore counts
+as `Reach::Unresolved` — always —, which closes it to a `Local` connection. The
+refusal happens **before launch**, not before sending: starting the agent can be
+enough for it to contact its service
 ([ADR-0026](../../docs/adr/0026-agents-externes-acp.md)).
 
-## Sans fournisseur
+## Without a provider
 
-Le workspace IA est **absent de l'interface**, et Oxyn reste un client complet
-([ADR-0006](../../docs/adr/0006-ai-privacy-tiers.md)). Un chemin qui appelle un
-modèle pour produire un résultat attendu comme déterministe — un tri, un
-formatage, une complétion de nom de table — est un défaut de conception.
+The AI workspace is **absent from the interface**, and Oxyn remains a complete
+client ([ADR-0006](../../docs/adr/0006-ai-privacy-tiers.md)). A path that calls
+a model to produce a result expected to be deterministic — a sort, a
+formatting, a table name completion — is a design defect.
 
-## Ce qui ne sort sous aucun niveau
+## What goes out at no tier
 
-Identifiants, chaînes de connexion, jetons, contenu du trousseau
-([I-03](../../CLAUDE.md#i-03)). Il n'y a pas de dialogue pour ça : le code ne
-doit pas offrir le chemin.
+Credentials, connection strings, tokens, keychain content
+([I-03](../../CLAUDE.md#i-03)). There is no dialog for it: the code must not
+offer the path.

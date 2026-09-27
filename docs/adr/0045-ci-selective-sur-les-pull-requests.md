@@ -2,7 +2,7 @@
 
 **Statut :** accepté · **Date :** 2026-09-25
 
-**Précise :** la règle de [CLAUDE.md](../../CLAUDE.md#ce-qui-est-exécuté) selon
+**Précise :** la règle de [CLAUDE.md](../../CLAUDE.md#what-is-executed) selon
 laquelle la CI appelle `make qualite` en jobs parallèles, sans rien ajouter, et
 dont `make socle` vérifie qu'elle n'oublie aucune cible. Cette règle reste
 vraie ; elle cesse de dire que **chaque** poussée exécute **toutes** les cibles.

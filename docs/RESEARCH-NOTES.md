@@ -226,7 +226,7 @@ features par défaut.
 > capture d'image, pas de comparaison de rendu, et **aucune assertion valable sur
 > une dimension qui dépend de la largeur d'un texte**. Un tel test est vert quelle
 > que soit l'interface réelle. Conséquence pour les tests :
-> [tests.md](../.claude/rules/tests.md#les-tests-dinterface).
+> [tests.md](../.claude/rules/tests.md#interface-tests).
 
 ## Ressources de l'interface Figma
 
