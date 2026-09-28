@@ -34,7 +34,11 @@
 //! | `interval` | `Interval(MonthDayNano)` | beyond ±292 years of microsecond component, the conversion to nanoseconds overflows: decoding **fails** instead of truncating |
 //! | `money` | `Binary` | raw representation retained; the currency depends on `lc_monetary`, which is not transmitted |
 //! | arrays with more than one dimension | — | not representable by an Arrow list: decoding **fails** rather than silently flattening |
-//! | `record`, composite types | `Binary` (opaque) | the structure is not split into an Arrow `Struct` |
+//! | `record`, composite types | `Utf8` | the structure is not split into an Arrow `Struct`: text as `record_out` prints it. A field whose type is not built in (an enum, a domain, an extension type) keeps its bytes as `\\x…` |
+//! | `inet`, `cidr`, `macaddr`, `macaddr8`, `bit`, `varbit`, geometric types, `pg_lsn`, `tid`, `pg_snapshot`, `txid_snapshot`, `tsvector`, `tsquery`, ranges | `Utf8` | none: the text the server prints, rebuilt from the binary layout (`render` module) |
+//! | `timestamptz` inside a range or a record | `Utf8` | printed in UTC (`+00`), whatever the session's `TimeZone` |
+//! | `reg*` (`regclass`, `regtype`…), `xid`, `cid` | `UInt32` | the OID, not the name: resolving it needs the catalog, and `::text` in SQL gives it |
+//! | `xid8` | `UInt64` | none |
 //!
 //! # Why `numeric` is not a `Decimal128`
 //!
@@ -126,6 +130,66 @@ pub(crate) mod oid {
     pub const JSONB: u32 = 3802;
     /// `void`
     pub const VOID: u32 = 2278;
+    /// `regproc`
+    pub const REGPROC: u32 = 24;
+    /// `tid`
+    pub const TID: u32 = 27;
+    /// `xid`
+    pub const XID: u32 = 28;
+    /// `cid`
+    pub const CID: u32 = 29;
+    /// `point`
+    pub const POINT: u32 = 600;
+    /// `lseg`
+    pub const LSEG: u32 = 601;
+    /// `path`
+    pub const PATH: u32 = 602;
+    /// `box`
+    pub const BOX: u32 = 603;
+    /// `polygon`
+    pub const POLYGON: u32 = 604;
+    /// `line`
+    pub const LINE: u32 = 628;
+    /// `circle`
+    pub const CIRCLE: u32 = 718;
+    /// `bit`
+    pub const BIT: u32 = 1560;
+    /// `varbit`
+    pub const VARBIT: u32 = 1562;
+    /// `regprocedure`
+    pub const REGPROCEDURE: u32 = 2202;
+    /// `regoper`
+    pub const REGOPER: u32 = 2203;
+    /// `regoperator`
+    pub const REGOPERATOR: u32 = 2204;
+    /// `regclass`
+    pub const REGCLASS: u32 = 2205;
+    /// `regtype`
+    pub const REGTYPE: u32 = 2206;
+    /// `record`: anonymous row type
+    pub const RECORD: u32 = 2249;
+    /// `txid_snapshot`
+    pub const TXID_SNAPSHOT: u32 = 2970;
+    /// `pg_lsn`
+    pub const PG_LSN: u32 = 3220;
+    /// `tsvector`
+    pub const TSVECTOR: u32 = 3614;
+    /// `tsquery`
+    pub const TSQUERY: u32 = 3615;
+    /// `regconfig`
+    pub const REGCONFIG: u32 = 3734;
+    /// `regdictionary`
+    pub const REGDICTIONARY: u32 = 3769;
+    /// `regnamespace`
+    pub const REGNAMESPACE: u32 = 4089;
+    /// `regrole`
+    pub const REGROLE: u32 = 4096;
+    /// `regcollation`
+    pub const REGCOLLATION: u32 = 4191;
+    /// `pg_snapshot`, PostgreSQL 13+
+    pub const PG_SNAPSHOT: u32 = 5038;
+    /// `xid8`, PostgreSQL 13+
+    pub const XID8: u32 = 5069;
 }
 
 /// Metadata key carrying the name of the original PostgreSQL type.
@@ -158,9 +222,22 @@ pub enum PgDecoding {
     Float32,
     /// `float8`.
     Float64,
+    /// `xid8`: unsigned 64-bit integer.
+    UInt64,
     /// Types whose binary representation is already UTF-8: `text`,
-    /// `varchar`, `bpchar`, `name`, `"char"`, `xml`, `json`, `inet`…
+    /// `varchar`, `bpchar`, `name`, `"char"`, `xml`, `json`…
     Text,
+    /// A built-in type with its own binary layout, rendered as the text the
+    /// server itself prints.
+    Rendered(TextFormat),
+    /// A range, rendered as text: its bounds are decoded with the element's
+    /// decoding.
+    Range(Box<PgDecoding>),
+    /// A multirange (PostgreSQL 14+), rendered as text.
+    Multirange(Box<PgDecoding>),
+    /// A `record` or a composite type, rendered as text. The wire carries the
+    /// type of each field, which decides how it is rendered.
+    Record,
     /// `jsonb`: a version byte (equal to 1) then UTF-8.
     Jsonb,
     /// `numeric`: its own binary format, rendered as exact decimal.
@@ -188,6 +265,48 @@ pub enum PgDecoding {
     Opaque,
 }
 
+/// The built-in binary layouts rendered as text by [`PgDecoding::Rendered`].
+///
+/// Each one reproduces the type's `*_out` function, checked against
+/// PostgreSQL's sources in
+/// [RESEARCH-NOTES](../../../docs/RESEARCH-NOTES.md#postgresql-binary-wire-formats--checked-on-2026-09-28).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[non_exhaustive]
+pub enum TextFormat {
+    /// `inet` and `cidr`.
+    Inet,
+    /// `macaddr` and `macaddr8`.
+    MacAddr,
+    /// `bit` and `varbit`.
+    Bits,
+    /// `point`.
+    Point,
+    /// `line`.
+    Line,
+    /// `lseg`.
+    Lseg,
+    /// `box`.
+    Box,
+    /// `path`.
+    Path,
+    /// `polygon`.
+    Polygon,
+    /// `circle`.
+    Circle,
+    /// `pg_lsn`.
+    Lsn,
+    /// `tid`.
+    Tid,
+    /// `pg_snapshot` and `txid_snapshot`.
+    Snapshot,
+    /// `tsvector`.
+    TsVector,
+    /// `tsquery`.
+    TsQuery,
+    /// `void`: no value, rendered as an empty string like the server does.
+    Void,
+}
+
 impl PgDecoding {
     /// The corresponding Arrow type.
     ///
@@ -201,9 +320,18 @@ impl PgDecoding {
             Self::Int32 => DataType::Int32,
             Self::Int64 => DataType::Int64,
             Self::UInt32 => DataType::UInt32,
+            Self::UInt64 => DataType::UInt64,
             Self::Float32 => DataType::Float32,
             Self::Float64 => DataType::Float64,
-            Self::Text | Self::Jsonb | Self::Numeric | Self::Uuid | Self::TimeTz => DataType::Utf8,
+            Self::Text
+            | Self::Jsonb
+            | Self::Numeric
+            | Self::Uuid
+            | Self::TimeTz
+            | Self::Rendered(_)
+            | Self::Range(_)
+            | Self::Multirange(_)
+            | Self::Record => DataType::Utf8,
             Self::Bytes | Self::Opaque => DataType::Binary,
             Self::Date => DataType::Date32,
             Self::Time => DataType::Time64(TimeUnit::Microsecond),
@@ -247,18 +375,40 @@ pub fn decoding_for(ty: &PgTypeInfo) -> PgDecoding {
         PgTypeKind::Array(element) => PgDecoding::List(Box::new(decoding_for(element))),
         // The binary representation of an `enum` is its label in UTF-8.
         PgTypeKind::Enum(_) => PgDecoding::Text,
+        PgTypeKind::Range(element) => PgDecoding::Range(Box::new(decoding_for(element))),
+        // A composite's binary form is the same as an anonymous `record`'s:
+        // each field carries its own type OID.
+        PgTypeKind::Composite(_) => PgDecoding::Record,
         _ => decoding_for_name(ty.name()),
     }
 }
 
 /// Decoding of a built-in type, recognized by its OID.
-fn decoding_for_oid(raw_type: u32) -> Option<PgDecoding> {
+pub(crate) fn decoding_for_oid(raw_type: u32) -> Option<PgDecoding> {
     let decoding = match raw_type {
         oid::BOOL => PgDecoding::Bool,
         oid::INT2 => PgDecoding::Int16,
         oid::INT4 => PgDecoding::Int32,
         oid::INT8 => PgDecoding::Int64,
-        oid::OID => PgDecoding::UInt32,
+        // The `reg*` types are OIDs on the wire. Their name (`pg_class` for a
+        // `regclass`) only exists in the catalog, and resolving it would cost
+        // a query per value: the number is what the server sent, and
+        // `::text` in SQL gives the name.
+        oid::OID
+        | oid::XID
+        | oid::CID
+        | oid::REGPROC
+        | oid::REGPROCEDURE
+        | oid::REGOPER
+        | oid::REGOPERATOR
+        | oid::REGCLASS
+        | oid::REGTYPE
+        | oid::REGCONFIG
+        | oid::REGDICTIONARY
+        | oid::REGNAMESPACE
+        | oid::REGROLE
+        | oid::REGCOLLATION => PgDecoding::UInt32,
+        oid::XID8 => PgDecoding::UInt64,
         oid::FLOAT4 => PgDecoding::Float32,
         oid::FLOAT8 => PgDecoding::Float64,
         oid::NUMERIC => PgDecoding::Numeric,
@@ -269,11 +419,25 @@ fn decoding_for_oid(raw_type: u32) -> Option<PgDecoding> {
         | oid::CHAR
         | oid::XML
         | oid::JSON
-        | oid::UNKNOWN
-        | oid::INET
-        | oid::CIDR
-        | oid::MACADDR
-        | oid::MACADDR8 => PgDecoding::Text,
+        | oid::UNKNOWN => PgDecoding::Text,
+        // Their binary layout is not text: read as UTF-8, `10.0.0.1` came out
+        // as control characters and `192.168.0.1` failed the whole query.
+        oid::INET | oid::CIDR => PgDecoding::Rendered(TextFormat::Inet),
+        oid::MACADDR | oid::MACADDR8 => PgDecoding::Rendered(TextFormat::MacAddr),
+        oid::BIT | oid::VARBIT => PgDecoding::Rendered(TextFormat::Bits),
+        oid::POINT => PgDecoding::Rendered(TextFormat::Point),
+        oid::LINE => PgDecoding::Rendered(TextFormat::Line),
+        oid::LSEG => PgDecoding::Rendered(TextFormat::Lseg),
+        oid::BOX => PgDecoding::Rendered(TextFormat::Box),
+        oid::PATH => PgDecoding::Rendered(TextFormat::Path),
+        oid::POLYGON => PgDecoding::Rendered(TextFormat::Polygon),
+        oid::CIRCLE => PgDecoding::Rendered(TextFormat::Circle),
+        oid::PG_LSN => PgDecoding::Rendered(TextFormat::Lsn),
+        oid::TID => PgDecoding::Rendered(TextFormat::Tid),
+        oid::PG_SNAPSHOT | oid::TXID_SNAPSHOT => PgDecoding::Rendered(TextFormat::Snapshot),
+        oid::TSVECTOR => PgDecoding::Rendered(TextFormat::TsVector),
+        oid::TSQUERY => PgDecoding::Rendered(TextFormat::TsQuery),
+        oid::RECORD => PgDecoding::Record,
         oid::JSONB => PgDecoding::Jsonb,
         oid::BYTEA => PgDecoding::Bytes,
         oid::UUID => PgDecoding::Uuid,
@@ -287,10 +451,112 @@ fn decoding_for_oid(raw_type: u32) -> Option<PgDecoding> {
         // `lc_monetary`, which the protocol does not transmit. Rendering it as
         // `Int64` would invite adding up euros and yen.
         oid::MONEY => PgDecoding::Opaque,
-        oid::VOID => PgDecoding::Opaque,
+        oid::VOID => PgDecoding::Rendered(TextFormat::Void),
         _ => return None,
     };
     Some(decoding)
+}
+
+/// The built-in array types: `(array OID, element OID)`, read in `pg_type`'s
+/// `typarray` of PostgreSQL 17 on 2026-09-28. Built-in OIDs do not change from
+/// one version to the next.
+const BUILTIN_ARRAYS: &[(u32, u32)] = &[
+    (1000, 16),
+    (1001, 17),
+    (1002, 18),
+    (1003, 19),
+    (1016, 20),
+    (1005, 21),
+    (1007, 23),
+    (1008, 24),
+    (1009, 25),
+    (1028, 26),
+    (1010, 27),
+    (1011, 28),
+    (1012, 29),
+    (199, 114),
+    (143, 142),
+    (1017, 600),
+    (1018, 601),
+    (1019, 602),
+    (1020, 603),
+    (1027, 604),
+    (629, 628),
+    (651, 650),
+    (1021, 700),
+    (1022, 701),
+    (719, 718),
+    (775, 774),
+    (791, 790),
+    (1040, 829),
+    (1041, 869),
+    (1014, 1042),
+    (1015, 1043),
+    (1182, 1082),
+    (1183, 1083),
+    (1115, 1114),
+    (1185, 1184),
+    (1187, 1186),
+    (1270, 1266),
+    (1561, 1560),
+    (1563, 1562),
+    (1231, 1700),
+    (2207, 2202),
+    (2208, 2203),
+    (2209, 2204),
+    (2210, 2205),
+    (2211, 2206),
+    (2287, 2249),
+    (2951, 2950),
+    (2949, 2970),
+    (3221, 3220),
+    (3643, 3614),
+    (3645, 3615),
+    (3735, 3734),
+    (3770, 3769),
+    (3807, 3802),
+    (3905, 3904),
+    (3907, 3906),
+    (3909, 3908),
+    (3911, 3910),
+    (3913, 3912),
+    (3927, 3926),
+    (4090, 4089),
+    (4097, 4096),
+    (4192, 4191),
+    (5039, 5038),
+    (271, 5069),
+];
+
+/// The built-in range types and their element: `(range OID, element OID)`.
+const BUILTIN_RANGES: &[(u32, u32)] = &[
+    (3904, oid::INT4),
+    (3906, oid::NUMERIC),
+    (3908, oid::TIMESTAMP),
+    (3910, oid::TIMESTAMPTZ),
+    (3912, oid::DATE),
+    (3926, oid::INT8),
+];
+
+/// Decoding of a built-in type known only by its OID, arrays and ranges
+/// included.
+///
+/// A column's type comes with its kind from `sqlx`, which already says "array
+/// of" or "range of". A record field carries only an OID on the wire: without
+/// this table, an `int4[]` field would fall back to raw bytes.
+pub(crate) fn decoding_for_builtin_oid(raw_type: u32) -> Option<PgDecoding> {
+    if let Some(decoding) = decoding_for_oid(raw_type) {
+        return Some(decoding);
+    }
+    if let Some((_, element)) = BUILTIN_ARRAYS.iter().find(|(array, _)| *array == raw_type) {
+        return Some(PgDecoding::List(Box::new(decoding_for_builtin_oid(
+            *element,
+        )?)));
+    }
+    let (_, element) = BUILTIN_RANGES
+        .iter()
+        .find(|(range, _)| *range == raw_type)?;
+    Some(PgDecoding::Range(Box::new(decoding_for_oid(*element)?)))
 }
 
 /// Decoding of an extension type, recognized by its name.

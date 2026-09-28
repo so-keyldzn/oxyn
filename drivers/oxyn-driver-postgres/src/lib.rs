@@ -123,6 +123,7 @@ pub mod variant;
 pub(crate) mod error;
 pub(crate) mod numeric;
 pub(crate) mod options;
+pub(crate) mod render;
 
 /// The `Session::cancel` tests that need a server. All `#[ignore]`.
 #[cfg(test)]
@@ -137,6 +138,9 @@ mod definition_tests;
 /// The tests that need a server. All `#[ignore]`.
 #[cfg(test)]
 mod integration;
+/// Every rendered type compared with the server's own output. `#[ignore]`.
+#[cfg(test)]
+mod type_render_tests;
 
 pub use catalog::{PostgresCatalog, logical_type};
 pub use cursor::PostgresCursor;
@@ -145,7 +149,7 @@ pub use driver::{PostgresDriver, postgres_metadata};
 pub use error::PostgresError;
 pub use options::{ConnectSpec, DEFAULT_APPLICATION_NAME, DEFAULT_PORT, LEAKY_ENV};
 pub use session::PostgresSession;
-pub use types::{META_FALLBACK, META_PG_TYPE, PgDecoding, decoding_for, schema_for};
+pub use types::{META_FALLBACK, META_PG_TYPE, PgDecoding, TextFormat, decoding_for, schema_for};
 pub use variant::{PostgresFlavor, PostgresVariant, base_capabilities, driver_capabilities};
 
 #[cfg(test)]
